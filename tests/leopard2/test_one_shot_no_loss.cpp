@@ -518,17 +518,23 @@ void require_raw_transient_success(
 {
     require_result(observation.result, LEO2_SUCCESS, operation);
 #if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    const std::string allocation_message = expect_allocation_free
+        ? std::string(operation) +
+            " eligible raw transient decode allocated"
+        : std::string(operation) +
+            " fallback unexpectedly avoided plan allocation";
     if (expect_allocation_free)
         require(observation.allocations == 0,
-            "eligible raw transient decode allocated");
+            allocation_message.c_str());
     else
         require(observation.allocations > 0,
-            "raw transient fallback unexpectedly avoided plan allocation");
+            allocation_message.c_str());
 #else
     (void)expect_allocation_free;
 #endif
-    require(fixture.OutputsMatch(),
-        "raw transient decode restored incorrect bytes");
+    const std::string output_message =
+        std::string(operation) + " restored incorrect bytes";
+    require(fixture.OutputsMatch(), output_message.c_str());
 }
 
 void run_raw_transient_case(
@@ -543,8 +549,14 @@ void run_raw_transient_case(
 {
     RawTransientFixture fixture(context, k, r, bytes);
     fixture.Configure(losses, shape, mixed_recovery);
+    const std::string label =
+        "raw transient one-shot decode K=" + std::to_string(k) +
+        " R=" + std::to_string(r) + " B=" + std::to_string(bytes) +
+        " L=" + std::to_string(losses) +
+        " shape=" + std::to_string(shape) +
+        " mixed=" + std::to_string(mixed_recovery ? 1 : 0);
     require_raw_transient_success(fixture.Observe(), fixture,
-        expect_allocation_free, "raw transient one-shot decode");
+        expect_allocation_free, label.c_str());
 }
 
 void require_raw_transient_failure(
@@ -870,6 +882,29 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     require(raw_native_high_cases == 20992,
         "raw native-high matrix case count drifted");
 
+    /*
+        Dense partial-loss T=64 calls use a separate scratch-owned Algorithm 5
+        view at exactly 64 bytes.  Cover the K/R/loss eligibility boundaries,
+        all three systematic-loss shapes, and surplus/non-prefix recovery
+        subsets.  Allocation audit is the route oracle: a canonical transient
+        plan still allocates, while the promoted terminal does not.
+    */
+    run_raw_transient_case(avx2, 65, 33, 64, 16, 0, true, true);
+    run_raw_transient_case(avx2, 99, 50, 64, 25, 2, true, true);
+    run_raw_transient_case(avx2, 99, 50, 64, 49, 1, true, true);
+    run_raw_transient_case(avx2, 124, 63, 64, 31, 0, true, true);
+    run_raw_transient_case(avx2, 124, 64, 64, 63, 2, true, true);
+    run_raw_transient_case(avx2, 191, 62, 64, 61, 1, true, true);
+
+    /* K=64 is outside this terminal but remains allocation-free through the
+       independently qualified translated-low raw path. */
+    run_raw_transient_case(avx2, 64, 33, 64, 16, 0, true, true);
+    run_raw_transient_case(avx2, 192, 62, 64, 31, 1, true, false);
+    run_raw_transient_case(avx2, 99, 50, 63, 25, 2, true, false);
+    run_raw_transient_case(avx2, 99, 50, 65, 25, 0, true, false);
+    run_raw_transient_case(avx2, 99, 50, 64, 24, 1, true, false);
+    run_raw_transient_case(avx2, 99, 50, 64, 50, 2, false, false);
+
     // Native-high direct execution has separately measured output-major and
     // source-major intervals.  Their gap and the first byte above the latter
     // retain the heap-owned direct-plan fallback.
@@ -888,6 +923,7 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     test_raw_transient_failure_atomicity(avx2, 32, 32, 9, 65);
     test_raw_transient_failure_atomicity(avx2, 16, 8, 8, 7168);
     test_raw_transient_failure_atomicity(avx2, 16, 8, 8, 16384);
+    test_raw_transient_failure_atomicity(avx2, 99, 50, 49, 64);
     test_raw_transient_reusable_plan(avx2, 32, 32, 9);
     test_raw_transient_reusable_plan(avx2, 16, 8, 8);
 

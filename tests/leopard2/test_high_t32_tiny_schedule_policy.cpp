@@ -933,8 +933,24 @@ int main()
             "mixed B577 transient plan omitted schedules");
         require(transient_high_schedule_count(avx2_context,
                 99, 50, random_missing(99, 25, 0xc4b6da1fU), 64,
-                "transient T64 partial") != 0,
-            "T64 partial transient plan entered the T32 policy");
+                "transient T64 partial B64") == 0,
+            "eligible T64 partial transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 2, 0xc4b6da23U), 319,
+                "transient T64 sparse B319") == 0,
+            "eligible T64 sparse B319 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 2, 0xc4b6da24U), 320,
+                "transient T64 sparse B320") != 0,
+            "pruned T64 sparse B320 transient plan omitted schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 25, 0xc4b6da25U), 575,
+                "transient T64 half-loss B575") == 0,
+            "eligible T64 half-loss B575 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 25, 0xc4b6da26U), 576,
+                "transient T64 half-loss B576") != 0,
+            "pruned T64 half-loss B576 transient plan omitted schedules");
 
         std::vector<ByteCase> t64_byte_matrix;
         const size_t t64_regular_sizes[] = {
@@ -960,6 +976,76 @@ int main()
         run_campaign(avx2_context, "t64-striped-byte-matrix",
             99, 50, striped_missing(99, 50), t64_byte_matrix,
             true, false, true, 0x54a32909U);
+
+        std::vector<ByteCase> t64_sparse_partial;
+        const size_t t64_sparse_regular_sizes[] = {
+            1, 63, 64, 65, 127, 128, 129, 255, 256, 257, 319
+        };
+        for (size_t i = 0;
+             i < sizeof(t64_sparse_regular_sizes) /
+                    sizeof(t64_sparse_regular_sizes[0]);
+             ++i)
+        {
+            const ByteCase entry = {
+                t64_sparse_regular_sizes[i], RouteRegularOnly
+            };
+            t64_sparse_partial.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 320, RoutePrunedOnly };
+            t64_sparse_partial.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 321, RouteMixed };
+            t64_sparse_partial.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 512, RoutePrunedOnly };
+            t64_sparse_partial.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 513, RouteMixed };
+            t64_sparse_partial.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 576, RoutePrunedOnly };
+            t64_sparse_partial.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 577, RouteMixed };
+            t64_sparse_partial.push_back(entry);
+        }
+        run_campaign(avx2_context, "t64-sparse-partial-thresholds",
+            99, 50, random_missing(99, 2, 0x2377cb51U),
+            t64_sparse_partial,
+            true, false, true, 0x54a33e1eU);
+
+        std::vector<ByteCase> t64_half_partial;
+        const size_t t64_half_regular_sizes[] = {
+            320, 384, 448, 512, 513, 575
+        };
+        for (size_t i = 0;
+             i < sizeof(t64_half_regular_sizes) /
+                    sizeof(t64_half_regular_sizes[0]);
+             ++i)
+        {
+            const ByteCase entry = {
+                t64_half_regular_sizes[i], RouteRegularOnly
+            };
+            t64_half_partial.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 576, RoutePrunedOnly };
+            t64_half_partial.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 577, RouteMixed };
+            t64_half_partial.push_back(entry);
+        }
+        run_campaign(avx2_context, "t64-half-partial-thresholds",
+            99, 50, random_missing(99, 25, 0x427f89d3U),
+            t64_half_partial,
+            true, false, true, 0x54a33f1fU);
         run_campaign(avx2_context, "t64-lower-k-clustered",
             65, 33, clustered_missing(33),
             one_byte_case(64, RouteRegularOnly),
@@ -976,6 +1062,14 @@ int main()
             124, 64, striped_missing(124, 64),
             one_byte_case(64, RoutePrunedOnly),
             false, false, true, 0x54a32d0dU);
+        run_campaign(avx2_context, "t64-r63-partial",
+            124, 63, striped_missing(124, 31),
+            one_byte_case(512, RouteRegularOnly),
+            true, false, true, 0x54a34020U);
+        run_campaign(avx2_context, "t64-r64-partial",
+            124, 64, striped_missing(124, 32),
+            one_byte_case(512, RouteRegularOnly),
+            true, false, true, 0x54a34121U);
         run_campaign(avx2_context, "t64-k64-neighbor",
             64, 50, striped_missing(64, 50),
             one_byte_case(64, RoutePrunedOnly),
@@ -992,10 +1086,14 @@ int main()
             192, 62, striped_missing(192, 62),
             one_byte_case(64, RoutePrunedOnly),
             false, false, true, 0x54a33111U);
-        run_campaign(avx2_context, "t64-partial-loss-neighbor",
+        run_campaign(avx2_context, "t64-partial-loss-regular",
             99, 50, striped_missing(99, 49),
+            one_byte_case(64, RouteRegularOnly),
+            true, false, true, 0x54a33212U);
+        run_campaign(avx2_context, "t64-k192-partial-neighbor",
+            192, 62, striped_missing(192, 31),
             one_byte_case(64, RoutePrunedOnly),
-            false, false, true, 0x54a33212U);
+            false, false, true, 0x54a34222U);
 
         leo2_context_options scalar_options = {};
         scalar_options.struct_size = sizeof(scalar_options);
@@ -1008,6 +1106,10 @@ int main()
             192, 32, striped_missing(192, 32),
             one_byte_case(64, RoutePrunedOnly),
             false, false, true, 0x54a32808U);
+        run_campaign(scalar_context, "scalar-t64-partial-neighbor",
+            99, 50, striped_missing(99, 25),
+            one_byte_case(64, RoutePrunedOnly),
+            false, false, true, 0x54a34323U);
         leo2_context_destroy(scalar_context);
         leo2_context_destroy(avx2_context);
 
