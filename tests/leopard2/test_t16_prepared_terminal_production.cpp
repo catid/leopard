@@ -299,7 +299,9 @@ int main()
         }
         RequireResult(result, LEO2_SUCCESS,
             "create production prepared T16 context");
-        static const size_t shard_bytes[] = { 512, 1024, 2048 };
+        static const size_t shard_bytes[] = {
+            64, 128, 192, 256, 320, 384, 448, 512, 1024, 2048
+        };
         for (unsigned count = 9; count <= 16; ++count)
         {
             for (size_t i = 0;

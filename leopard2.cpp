@@ -16788,7 +16788,7 @@ static LEO2_HIGH_T16_PREPARED_ENTRY bool ExecuteGF8AVX2HighT16(
     void* const* recovery)
 {
     static const size_t kMaximumBytes = 2048;
-    if (shard_bytes < 512 || shard_bytes > kMaximumBytes ||
+    if (shard_bytes < 64 || shard_bytes > kMaximumBytes ||
         (shard_bytes & 63U) != 0)
         return false;
     alignas(32) static const uint8_t zero_shard[kMaximumBytes] = {};
@@ -16817,10 +16817,13 @@ static LEO_FORCE_INLINE bool IsGF8AVX2HighT16PreparedTerminalEligible(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
-    if (!codec || shard_bytes < 512 || shard_bytes > 2048 ||
+    /* Exact K=16/B=64 already has the earlier generated balanced terminal;
+       keep bindings on that qualified path instead of changing its routing. */
+    if (!codec || shard_bytes < 64 || shard_bytes > 2048 ||
         (shard_bytes & 63U) != 0 ||
         g_high_t16_prepared_terminal_mode != 1U ||
         codec->original_count < 9 || codec->original_count > 16 ||
+        (codec->original_count == 16 && shard_bytes == 64) ||
         codec->recovery_count != codec->original_count ||
         codec->padded_side != 16 ||
         codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||

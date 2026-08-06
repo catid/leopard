@@ -401,21 +401,29 @@ int main()
         RequireResult(result, LEO2_SUCCESS,
             "create prepared T16 AVX2 context");
 
-        static const size_t selected_bytes[] = { 512, 1024, 2048 };
+        static const size_t selected_bytes[] = {
+            64, 128, 192, 256, 320, 384, 448, 512, 1024, 2048
+        };
         for (unsigned count = 9; count <= 16; ++count)
         {
             for (size_t byte_index = 0;
                  byte_index < sizeof(selected_bytes) /
                      sizeof(selected_bytes[0]); ++byte_index)
             {
+                if (count == 16 && selected_bytes[byte_index] == 64)
+                    continue;
                 ExerciseSelectedCell(context, count,
                     selected_bytes[byte_index], 0, 0);
             }
         }
+        ExerciseSelectedCell(context, 9, 64, 1, 3);
         ExerciseSelectedCell(context, 9, 512, 1, 3);
 
+        ExerciseExcludedCell(context, 12, 12, 63, false, false);
+        ExerciseExcludedCell(context, 12, 12, 65, false, false);
         ExerciseExcludedCell(context, 12, 12, 511, false, false);
         ExerciseExcludedCell(context, 12, 12, 513, false, false);
+        ExerciseExcludedCell(context, 16, 16, 64, false, false);
         ExerciseExcludedCell(context, 12, 12, 2112, false, false);
         ExerciseExcludedCell(context, 8, 8, 1024, false, false);
         ExerciseExcludedCell(context, 9, 8, 1024, false, false);
