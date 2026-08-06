@@ -185,6 +185,7 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
     "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": frozenset(("BOOL",)),
@@ -228,6 +229,7 @@ UNCONDITIONAL_AVX2_LIBRARY_SOURCES = frozenset((
 ))
 CONDITIONAL_AVX2_LIBRARY_SOURCES = frozenset((
     "Leopard2BackendAVX2T16B64.cpp",
+    "Leopard2BackendAVX2T16Q2.cpp",
     "Leopard2BackendAVX2T32B256.cpp",
 ))
 PRODUCTION_AVX2_LIBRARY_SOURCES = (
@@ -262,8 +264,10 @@ BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7 = \
     "leopard2-benchmark-build-configuration/v7"
 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8 = \
     "leopard2-benchmark-build-configuration/v8"
-BENCHMARK_BUILD_CONFIGURATION_SCHEMA = \
+BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9 = \
     "leopard2-benchmark-build-configuration/v9"
+BENCHMARK_BUILD_CONFIGURATION_SCHEMA = \
+    "leopard2-benchmark-build-configuration/v10"
 REPRODUCIBLE_BUILD_PROOF_SCHEMA_V2 = \
     "leopard2-reproducible-build-proof/v2"
 REPRODUCIBLE_BUILD_PROOF_SCHEMA = \
@@ -4612,6 +4616,7 @@ def _validate_compile_flags(
             cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") in {
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             } and
             _resolved_compiler_is_gnu(compiler_path)):
@@ -4645,6 +4650,7 @@ def _validate_compile_flags(
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             })
         if current_configuration:
@@ -4689,6 +4695,9 @@ def _validate_compile_flags(
             t32_two_block = t32_available and not t32_generated
         p32_available = (
             name == p32_source_name or p32_source_name in available_names)
+        t16_q2_source_name = "Leopard2BackendAVX2T16Q2.cpp"
+        t16_q2_enabled = _cmake_true(
+            cache.get("LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"))
         if "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL" in cache:
             low_p32_terminal = _cmake_true(
                 cache.get("LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL"))
@@ -4745,6 +4754,7 @@ def _validate_compile_flags(
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA")
             if (name == "leopard2.cpp" and configuration_schema in {
                     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+                    BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
                     BENCHMARK_BUILD_CONFIGURATION_SCHEMA}):
                 dual_direct = cache.get(
                     "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
@@ -4754,8 +4764,9 @@ def _validate_compile_flags(
                 expected_definitions.add(
                     "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=" +
                     ("1" if dual_direct == "ON" else "0"))
-            if (name == "leopard2.cpp" and configuration_schema ==
-                    BENCHMARK_BUILD_CONFIGURATION_SCHEMA):
+            if (name == "leopard2.cpp" and configuration_schema in {
+                    BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
+                    BENCHMARK_BUILD_CONFIGURATION_SCHEMA}):
                 for selector in (
                         "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
                         "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
@@ -4783,6 +4794,11 @@ def _validate_compile_flags(
                 "-DLEO2_HAVE_AVX2_BACKEND=1",
                 "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
             ))
+        elif name == t16_q2_source_name:
+            require(t16_q2_enabled,
+                    "T16/Q2 source contradicts its disabled selector")
+            expected_definitions.add(
+                "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1")
         elif name == t32_source_name:
             require(t32_generated or t32_two_block,
                     "T32/B256 source contradicts its disabled selectors")
@@ -4850,6 +4866,21 @@ def _validate_compile_flags(
                 "benchmark compile configuration digest is not bound to "
                 "the retained CMake cache")
             expected_definitions.add(expected_hash)
+
+        is_benchmark_source = (
+            benchmark_source is True or
+            (benchmark_source is None and source == (
+                source_root / "bench/leopard2/benchmark.cpp").resolve(
+                    strict=True)))
+        if (t16_q2_enabled and
+                ((source in library_sources and not enhanced_backend) or
+                 name in {
+                    "Leopard2BackendAVX2.cpp",
+                    "Leopard2BackendAVX2Xor.cpp",
+                    t16_q2_source_name,
+                 } or is_benchmark_source)):
+            expected_definitions.add(
+                "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1")
 
     require(set(definitions) == expected_definitions,
             f"{profile} source has non-canonical compile definitions: "
@@ -4957,6 +4988,7 @@ def _expected_library_sources(
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             },
             "candidate source-closure configuration schema is unsupported")
@@ -4968,6 +5000,7 @@ def _expected_library_sources(
     if expected_configuration_schema in {
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         names.update(UNCONDITIONAL_AVX2_LIBRARY_SOURCES)
     elif (expected_configuration_schema ==
@@ -4977,6 +5010,8 @@ def _expected_library_sources(
         names.update(UNCONDITIONAL_AVX2_LIBRARY_SOURCES_V5)
     if _cmake_true(cache.get("LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED")):
         names.add("Leopard2BackendAVX2T16B64.cpp")
+    if _cmake_true(cache.get("LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED")):
+        names.add("Leopard2BackendAVX2T16Q2.cpp")
     if (_cmake_true(
             cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED")) or
             _cmake_true(
@@ -5063,6 +5098,7 @@ def _validate_candidate_required_cache(
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             },
             "candidate CMake cache configuration schema is unsupported")
@@ -5071,6 +5107,7 @@ def _validate_candidate_required_cache(
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         required_exact.update({
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
@@ -5083,13 +5120,16 @@ def _validate_candidate_required_cache(
         })
     if expected_configuration_schema in {
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         required_exact["LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = "ON"
     else:
         require("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT" not in cache,
                 "historical candidate CMake cache unexpectedly retains "
                 "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
-    if expected_configuration_schema == BENCHMARK_BUILD_CONFIGURATION_SCHEMA:
+    if expected_configuration_schema in {
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         required_exact.update({
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
             "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
@@ -5101,6 +5141,12 @@ def _validate_candidate_required_cache(
             require(selector not in cache,
                     "historical candidate CMake cache unexpectedly retains " +
                     selector)
+    if expected_configuration_schema == BENCHMARK_BUILD_CONFIGURATION_SCHEMA:
+        required_exact["LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"] = "ON"
+    else:
+        require("LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED" not in cache,
+                "historical candidate CMake cache unexpectedly retains "
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED")
     for name, expected in required_exact.items():
         require(cache.get(name) == expected,
                 f"candidate CMake cache {name} is {cache.get(name)!r}, "
@@ -5145,6 +5191,7 @@ def _reproducible_replay_contract(
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
             require(
                 cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") ==
@@ -5167,14 +5214,22 @@ def _reproducible_replay_contract(
                     "OFF" and
                 cache.get("LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL") ==
                     "ON" and
-                ((configuration_schema ==
-                    BENCHMARK_BUILD_CONFIGURATION_SCHEMA and
+                ((configuration_schema in {
+                    BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
+                    BENCHMARK_BUILD_CONFIGURATION_SCHEMA} and
                   cache.get("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT") == "ON" and
                   cache.get("LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS") ==
                     "ON" and
                   cache.get(
                     "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK") ==
-                    "OFF") or
+                    "OFF" and
+                  ((configuration_schema ==
+                    BENCHMARK_BUILD_CONFIGURATION_SCHEMA and
+                    cache.get(
+                        "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED") == "ON") or
+                   (configuration_schema ==
+                    BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9 and
+                    "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED" not in cache))) or
                  (configuration_schema ==
                     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8 and
                   cache.get("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT") == "ON" and
@@ -5188,7 +5243,7 @@ def _reproducible_replay_contract(
                   "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS" not in cache and
                   "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK" not in
                     cache)),
-                "v6/v7/v8/current reproducible-build closure configuration "
+                "v6/v7/v8/v9/current reproducible-build closure configuration "
                 "contract differs")
             return {
                 "closure_schema": PRODUCTION_BUILD_CLOSURE_SCHEMA,
@@ -5411,8 +5466,10 @@ def candidate_build_provenance(
     require(small_direct_mode in {"0", "1", "2"},
             "candidate small-direct selector is not exactly 0, 1, or 2")
     dual_direct = cache.get("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
-    if (_expected_configuration_schema ==
-            BENCHMARK_BUILD_CONFIGURATION_SCHEMA):
+    if _expected_configuration_schema in {
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         require(dual_direct in {"ON", "OFF"},
                 "candidate GF8 small dual-direct selector is not exactly "
                 "ON or OFF")
@@ -6126,6 +6183,7 @@ def _reproducible_configure_argv(
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         cmake_values["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = \
             cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT")
@@ -6135,6 +6193,7 @@ def _reproducible_configure_argv(
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         cmake_values.update({
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR":
@@ -6155,6 +6214,7 @@ def _reproducible_configure_argv(
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         cmake_values.update({
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED":
@@ -6167,6 +6227,7 @@ def _reproducible_configure_argv(
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         cmake_values.update({
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK":
@@ -6181,16 +6242,22 @@ def _reproducible_configure_argv(
         })
     if configuration_schema in {
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         cmake_values["LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = cache.get(
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
-    if configuration_schema == BENCHMARK_BUILD_CONFIGURATION_SCHEMA:
+    if configuration_schema in {
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         cmake_values.update({
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS":
                 cache.get("LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS"),
             "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK":
                 cache.get("LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"),
         })
+    if configuration_schema == BENCHMARK_BUILD_CONFIGURATION_SCHEMA:
+        cmake_values["LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"] = cache.get(
+            "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED")
     require(all(value is not None for value in cmake_values.values()),
             "candidate build lacks a CMake value needed for clean rebuild")
     for name, value in cmake_values.items():
@@ -9208,6 +9275,7 @@ def _capture_replayed_candidate_provenance(
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             },
             "replayed candidate capture configuration schema is unsupported")
@@ -9236,9 +9304,10 @@ def verify_reproducible_candidate_build(
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             },
-            "clean replay generation supports only v5 through v8 and current "
+            "clean replay generation supports only v5 through v9 and current "
             "configuration contracts")
     source = Path(str(candidate.get("source_root", ""))).resolve(strict=True)
     target = str(candidate.get("executable_target", ""))

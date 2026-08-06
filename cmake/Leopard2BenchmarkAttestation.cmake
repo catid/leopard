@@ -48,6 +48,7 @@ function(leopard2_enable_benchmark_source_attestation target)
             LEO2_BUILD_BENCHMARKS
             LEO2_BUILD_TESTS
             LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+            LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
             LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK
             LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK
             LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
@@ -133,7 +134,7 @@ function(leopard2_enable_benchmark_source_attestation target)
         LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256
         "${build_configuration_sha256}")
     set(LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA
-        "leopard2-benchmark-build-configuration/v9"
+        "leopard2-benchmark-build-configuration/v10"
         CACHE INTERNAL
         "Leopard2 benchmark effective-configuration schema"
         FORCE)
@@ -273,6 +274,14 @@ function(leopard2_enable_benchmark_source_attestation target)
         "LEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=\"${build_configuration_sha256}\""
         "LEO2_BENCHMARK_BUILD_TYPE=\"${benchmark_build_type}\""
         "LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER=\"${output_file}\"")
+    if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+        # Every attested benchmark must expose the same fused-path diagnostic
+        # state as the production archive it identifies.  Keeping this in the
+        # common helper prevents the all-K and prevalidated targets from
+        # silently omitting a production selector that changes linked code.
+        target_compile_definitions("${target}" PRIVATE
+            LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1)
+    endif()
 
     set(LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER
         "${output_file}" PARENT_SCOPE)

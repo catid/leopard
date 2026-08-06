@@ -877,10 +877,6 @@ if(LEO2_BUILD_BENCHMARKS)
     target_link_libraries(bench_leopard leopard)
 
     add_executable(bench_leopard2 bench/leopard2/benchmark.cpp)
-    if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
-        target_compile_definitions(bench_leopard2 PRIVATE
-            LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1)
-    endif()
     target_link_libraries(bench_leopard2 leopard)
     leopard2_enable_benchmark_source_attestation(bench_leopard2)
 

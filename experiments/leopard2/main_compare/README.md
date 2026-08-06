@@ -132,12 +132,13 @@ executable to the exact clean source commit/tree.  Timed calls then use the
 distinct schema-v3 decode-path report, so summaries record the implementation
 actually selected instead of inferring a potentially stale route from K/R.
 
-The current all-K run-contract and manifest generation is v12. It requires the
-production-default exact T32/B256 terminal selector to be `ON`. Historical v11
-remains replayable only with that selector `OFF`; relabeling either body as the
-other generation is rejected. The 2,522-cell matrix uses 4 KiB and 64 KiB
-shards, so the exact 256-byte terminal cannot affect a timed cell, but its value
-still belongs to the authenticated production selector identity.
+The current all-K run-contract and manifest generation is v13. It requires the
+production-default exact T32/B256 terminal and T16/Q2 fused selectors to be
+`ON`. Historical v12 remains replayable with the T32/B256 terminal `ON` but no
+T16/Q2 selector; relabeling either body as the other generation is rejected.
+The 2,522-cell matrix uses 4 KiB and 64 KiB shards, so the exact 256-byte
+T32 terminal and at-most-64-byte T16/Q2 kernel cannot affect a timed cell, but
+their values still belong to the authenticated production selector identity.
 
 ## Counterbalanced comparison
 

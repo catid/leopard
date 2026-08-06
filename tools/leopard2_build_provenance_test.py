@@ -2320,6 +2320,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+            "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
@@ -2363,6 +2364,9 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                 "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE:BOOL=ON",
                 configure)
             self.assertIn(
+                "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED:BOOL=ON",
+                configure)
+            self.assertIn(
                 "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT:BOOL=ON",
                 configure)
             self.assertIn(
@@ -2373,6 +2377,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                 configure)
             v8_cache = dict(cache)
             for selector in (
+                    "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
                     "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
                     "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
                 v8_cache.pop(selector)
@@ -2391,6 +2396,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                 for argument in v8_configure))
             v7_cache = dict(cache)
             for selector in (
+                    "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
                     "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
                     "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
                     "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
@@ -2424,6 +2430,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5
             v5_cache["LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED"] = "OFF"
             for selector in (
+                    "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
                     "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
                     "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
                     "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
@@ -3438,6 +3445,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                     "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
                     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
                     "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+                    "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
                     "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
                     "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
                     "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
@@ -3542,6 +3550,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+            "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
@@ -3552,6 +3561,7 @@ class ExactCommandValidationTests(unittest.TestCase):
         validated = provenance._validate_candidate_required_cache(cache)
         v6_cache = dict(cache)
         for selector in (
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
                 "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
                 "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
                 "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
@@ -3567,6 +3577,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6)
         v7_cache = dict(cache)
         for selector in (
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
                 "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
                 "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
                 "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
@@ -3592,6 +3603,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                     provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7)
         v8_cache = dict(cache)
         for selector in (
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
                 "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
                 "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
             v8_cache.pop(selector)
@@ -3613,6 +3625,16 @@ class ExactCommandValidationTests(unittest.TestCase):
                 v8_with_current_selector,
                 expected_configuration_schema=
                     provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8)
+        v9_cache = dict(cache)
+        v9_cache.pop("LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED")
+        v9_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9
+        v9_validated = provenance._validate_candidate_required_cache(
+            v9_cache,
+            expected_configuration_schema=
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9)
+        self.assertEqual(
+            v9_validated["LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"], "ON")
         selectors = {
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
@@ -3623,6 +3645,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+            "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
@@ -3734,7 +3757,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                 }
                 with self.assertRaisesRegex(
                         provenance.BuildProvenanceError,
-                        "supports only v5 through v8 and current"):
+                        "supports only v5 through v9 and current"):
                     provenance.verify_reproducible_candidate_build(
                         candidate, jobs=1)
 
@@ -3794,6 +3817,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
                 "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
                 "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
                 "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
                 "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
                 "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
@@ -3818,6 +3842,7 @@ class ExactCommandValidationTests(unittest.TestCase):
         }
         v6 = copy.deepcopy(current)
         for selector in (
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
                 "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
                 "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
                 "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
@@ -3827,6 +3852,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6
         v7 = copy.deepcopy(current)
         for selector in (
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
                 "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
                 "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
                 "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
@@ -3836,6 +3862,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7
         v8 = copy.deepcopy(current)
         for selector in (
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
                 "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
                 "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
             v8["validated_cache"].pop(selector)
@@ -3943,6 +3970,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
                 "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE",
                 "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
                 "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
                 "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
                 "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
@@ -3973,7 +4001,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = "ON"
         with self.assertRaisesRegex(
                 provenance.BuildProvenanceError,
-                "v6/v7/v8/current reproducible-build closure"):
+                "v6/v7/v8/v9/current reproducible-build closure"):
             provenance._reproducible_replay_contract(
                 v7_with_current_selector)
 
@@ -3985,7 +4013,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                 v8_with_current_selector["validated_cache"][selector] = value
                 with self.assertRaisesRegex(
                         provenance.BuildProvenanceError,
-                        "v6/v7/v8/current reproducible-build closure"):
+                        "v6/v7/v8/v9/current reproducible-build closure"):
                     provenance._reproducible_replay_contract(
                         v8_with_current_selector)
 
@@ -4419,6 +4447,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
@@ -4441,6 +4470,10 @@ class ExactCommandValidationTests(unittest.TestCase):
             "Leopard2BackendAVX2T16B64.cpp": {
                 "-DLEO2_HAVE_AVX2_BACKEND=1",
                 "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
+            },
+            "Leopard2BackendAVX2T16Q2.cpp": {
+                "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
+                "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
             },
             "Leopard2BackendAVX2T32B256.cpp": {
                 "-DLEO2_HAVE_AVX2_BACKEND=1",
@@ -4500,15 +4533,18 @@ class ExactCommandValidationTests(unittest.TestCase):
                     provenance._validate_compile_flags(
                         missing, source, source_root=SOURCE_ROOT,
                         cache=cache, library_sources=library_sources)
-            mature_selector = list(tokens)
-            mature_selector.insert(
-                1, "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1")
-            with self.subTest(member=name, mature_selector=True), \
+            unexpected_definition = (
+                "-DLEO2_HAVE_AVX2_BACKEND=1"
+                if name == "Leopard2BackendAVX2T16Q2.cpp" else
+                "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1")
+            unexpected = list(tokens)
+            unexpected.insert(1, unexpected_definition)
+            with self.subTest(member=name, unexpected=unexpected_definition), \
                     self.assertRaisesRegex(
                         provenance.BuildProvenanceError,
                         "non-canonical compile definitions"):
                 provenance._validate_compile_flags(
-                    mature_selector, source, source_root=SOURCE_ROOT,
+                    unexpected, source, source_root=SOURCE_ROOT,
                     cache=cache, library_sources=library_sources)
             missing_alignment = [
                 token for token in tokens
@@ -4595,6 +4631,9 @@ class ExactCommandValidationTests(unittest.TestCase):
             "Leopard2BackendAVX2T16B64.cpp": {
                 "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "OFF",
             },
+            "Leopard2BackendAVX2T16Q2.cpp": {
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "OFF",
+            },
             "Leopard2BackendAVX2T32B256.cpp": {
                 "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
                 "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "OFF",
@@ -4630,9 +4669,11 @@ class ExactCommandValidationTests(unittest.TestCase):
             "Leopard2BackendAVX2.cpp": common_definitions | {
                 "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1",
                 "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
+                "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
             },
             "Leopard2BackendAVX2Xor.cpp": common_definitions | {
                 "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
+                "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
             },
         }
         for name, definitions in mature_definitions.items():
@@ -4668,6 +4709,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "-DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1",
             "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
             "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
+            "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
             "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
             "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
             "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1",
@@ -4806,6 +4848,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "-DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1",
             "-DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1",
             "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
+            "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
             "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
             "-DLEO2_HAVE_AVX2_BACKEND=1",
             "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
@@ -4820,6 +4863,7 @@ class ExactCommandValidationTests(unittest.TestCase):
     def test_low_p32_source_discovery_tracks_the_selector(self) -> None:
         p32_name = "Leopard2LowP32B64AVX2.cpp"
         t16_name = "Leopard2BackendAVX2T16B64.cpp"
+        t16_q2_name = "Leopard2BackendAVX2T16Q2.cpp"
         t32_name = "Leopard2BackendAVX2T32B256.cpp"
         tracked_names = set(provenance.CORE_LIBRARY_SOURCES) | {
             "LeopardFF8.cpp",
@@ -4829,6 +4873,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "Leopard2BackendAVX2T2K4.cpp",
             "Leopard2BackendAVX2T8K8B1024.cpp",
             t16_name,
+            t16_q2_name,
             t32_name,
             p32_name,
         }
@@ -4843,6 +4888,7 @@ class ExactCommandValidationTests(unittest.TestCase):
         cache = {
             "LEOPARD_ENABLE_GF16": "OFF",
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+            "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
@@ -4859,6 +4905,8 @@ class ExactCommandValidationTests(unittest.TestCase):
         self.assertIn(t8_k8_b1024_path, expected)
         self.assertIn((SOURCE_ROOT / p32_name).resolve(strict=True), expected)
         self.assertIn((SOURCE_ROOT / t16_name).resolve(strict=True), expected)
+        self.assertIn(
+            (SOURCE_ROOT / t16_q2_name).resolve(strict=True), expected)
         self.assertIn((SOURCE_ROOT / t32_name).resolve(strict=True), expected)
         self.assertNotIn(lookalike, expected)
 
@@ -4891,6 +4939,7 @@ class ExactCommandValidationTests(unittest.TestCase):
 
         disabled_cache = dict(cache)
         disabled_cache["LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED"] = "OFF"
+        disabled_cache["LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"] = "OFF"
         disabled_cache["LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK"] = "OFF"
         disabled_cache["LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL"] = "OFF"
         expected_without_p32 = provenance._expected_library_sources(
@@ -4900,6 +4949,9 @@ class ExactCommandValidationTests(unittest.TestCase):
             expected_without_p32)
         self.assertNotIn(
             (SOURCE_ROOT / t16_name).resolve(strict=True),
+            expected_without_p32)
+        self.assertNotIn(
+            (SOURCE_ROOT / t16_q2_name).resolve(strict=True),
             expected_without_p32)
         self.assertNotIn(
             (SOURCE_ROOT / t32_name).resolve(strict=True),
