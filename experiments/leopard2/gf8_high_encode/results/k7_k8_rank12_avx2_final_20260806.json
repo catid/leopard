@@ -1,0 +1,106 @@
+{
+  "schema": "leopard2-gf8-k7-k8-rank12-avx2-final/v1",
+  "created_utc": "2026-08-06T04:15:00Z",
+  "status": "promoted-and-closed",
+  "scope": {
+    "field": "GF8",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "backend": "pure AVX2",
+    "cells": [
+      {"K": 7, "R": 7, "shard_bytes": 1024},
+      {"K": 8, "R": 8, "shard_bytes": 1024}
+    ]
+  },
+  "source": {
+    "branch": "codex/leopard2",
+    "candidate_commit": "516ee32f9c2b06b2614fcd86fc210f60bfd505a7",
+    "candidate_tree": "ae8c1381a11c8fefa939a40c533d0917119080b3",
+    "candidate_tracked_dirty": false,
+    "implementation_checkpoint": "experiments/leopard2/gf8_high_encode/results/k7_k8_rank12_avx2_checkpoint_20260804.json",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "frozen_inputs": {
+    "candidate_executable_sha256": "cc1b7fbd353a1dbd9dc75fa1f621e5a2844b9f39f111f949d38196a99c3cfd05",
+    "candidate_archive_sha256": "8dad64a4aaaa53699e784a33c066e3a01d6d366690ef191f42362c804f258212",
+    "exact_main_executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "exact_main_archive_sha256": "49250fb7528df955e57e96f84b309cf0c26f203122d112f3f501336c0eb131d0",
+    "candidate_build_profile": "Release AUTO resolving to AVX2, AVX-512 probes forced false",
+    "exact_main_build_profile": "Release -march=x86-64 -mtune=generic -mavx2 -mno-avx512f",
+    "immutability": "Both lane-owned build trees were made read-only before timing; separate hash-identical executable copies were retained. Hashes were verified before and after the campaign."
+  },
+  "campaign": {
+    "raw_directory": "/tmp/leopard-k7k8-516ee32-exact-main-v5",
+    "raw_file_count": 56,
+    "raw_name_length_payload_sha256": "bf60ca3585814965f07c86029bb29dd85fb622223b608de7736c2786a6f4a5d6",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "benchmark_cpu": 28,
+    "reserved_smt_sibling": 12,
+    "sibling_proc_stat_before": [6204497, 68180, 199038, 174939018, 60646, 0, 164, 0, 0, 0],
+    "sibling_proc_stat_after": [6204497, 68180, 199038, 174939096, 60646, 0, 164, 0, 0, 0],
+    "sibling_nonidle_jiffies": 0,
+    "rounds": 7,
+    "order": ["exact_main", "leopard2", "leopard2", "exact_main"],
+    "iterations_per_invocation": 31,
+    "warmup_per_invocation": 8,
+    "reuse": 64,
+    "batch": 1,
+    "threads": 1,
+    "environment": {
+      "OMP_NUM_THREADS": "1",
+      "OMP_THREAD_LIMIT": "1",
+      "OMP_DYNAMIC": "FALSE",
+      "OMP_PROC_BIND": "TRUE"
+    },
+    "statistics": "geometric mean of the two exact-main medians divided by the two Leopard2 medians in each independent ABBA round; Student-t interval over seven log contrasts (df=6)"
+  },
+  "correctness": {
+    "accepted_invocations": 56,
+    "failed_invocations": 0,
+    "all_workload_digests_match": true,
+    "all_parity_digests_match": true,
+    "all_recovery_digests_match": true,
+    "all_round_trips_pass": true,
+    "candidate_source_identity_match": true,
+    "candidate_runtime_identity_match": true
+  },
+  "encode_exact_main_over_leopard2": {
+    "K7_R7_B1024": {
+      "estimate": 1.2525122973504723,
+      "student_t_95_ci": [1.2401129746260748, 1.2650355952345285],
+      "round_contrasts": [
+        1.2463907861232657,
+        1.2680827018637462,
+        1.2355944555657667,
+        1.2701418157199378,
+        1.2533369643453571,
+        1.256095676146318,
+        1.23837862571935
+      ]
+    },
+    "K8_R8_B1024": {
+      "estimate": 1.2666063716943845,
+      "student_t_95_ci": [1.2487350653600173, 1.2847334437223377],
+      "round_contrasts": [
+        1.261618711124428,
+        1.2579647648667998,
+        1.2781966997682948,
+        1.2914985740881886,
+        1.2873388605390579,
+        1.2390266427189363,
+        1.251497347147833
+      ]
+    }
+  },
+  "prior_gates": {
+    "independent_gf2_basis_vectors": 120,
+    "release_tests": "3/3 passed",
+    "asan_ubsan_tests": "3/3 passed",
+    "backend_matrix_checks": 140,
+    "visual_studio_project_checks": "164/164 passed"
+  },
+  "rejected_infrastructure_attempt": {
+    "report": "/tmp/leopard-k7k8-516ee32-affinity-v4.json",
+    "reason": "The strict process-affinity supervisor observed a procfs identity race and terminated before retaining codec timing. It contributed no performance data to this result."
+  },
+  "disposition": "The current-source pure-AVX2 encoder clears the 1.05 lower-bound promotion gate by a wide margin in both cells. The implementation is retained and the residual K7/K8 task is closed."
+}
