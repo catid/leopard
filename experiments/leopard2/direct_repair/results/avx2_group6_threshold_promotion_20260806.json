@@ -1,0 +1,135 @@
+{
+  "schema": "leopard2-avx2-group6-threshold-promotion/v1",
+  "date_utc": "2026-08-06",
+  "disposition": "promoted",
+  "bead": "leopard-79h.38.5.10.26.3",
+  "parent_bead": "leopard-79h.38.5.10.26",
+  "hypothesis": "The existing one-pass pure-AVX2 six-output GF8 repair kernel becomes faster than the two-pass Group4+Group2 composition below its conservative 16-KiB threshold.",
+  "source_identity": {
+    "implementation_commit": "04f3e79",
+    "implementation_tree": "eb86839d915f64e5a836aae5c7db5c275359ef7a",
+    "control_commit": "e776ab2bb386bf1d3cd7d1e4c1d43eb939381f4d",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "change": {
+    "file": "Leopard2BackendAVX2.cpp",
+    "old_minimum_aligned_bytes": 16384,
+    "new_minimum_aligned_bytes": 2048,
+    "required_byte_multiple": 32,
+    "output_count": 6,
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "pure_avx2",
+    "source_passes_before": 2,
+    "source_passes_after": 1,
+    "wire_format_changed": false,
+    "public_abi_changed": false,
+    "scratch_changed": false,
+    "hot_path_allocations_changed": false,
+    "executable_text_bytes_before": 1389595,
+    "executable_text_bytes_after": 1389595
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "sockets": 1,
+    "numa_nodes": 1,
+    "gcc": "13.3.0",
+    "clang": "18.1.3",
+    "timing_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "controller_cpu": 0
+  },
+  "committed_source_same_source_confirmation": {
+    "orientation": "old_16KiB_threshold_time_over_new_2KiB_threshold_time",
+    "control_executable_sha256": "d663389b3760d31eb6deba23e95c07139ee0739d8ef6aa92d1ebfb6b78a82afe",
+    "candidate_executable_sha256": "1a82a7bbc7c7b94c701f106757b52c2ffeecf24d862289899e5449f57ff1c494",
+    "method": "Three independent control-candidate-candidate-control rounds; 31 retained timing samples after three warmups per process; paired log-ratio Student-t 95 percent interval with df=2; reuse eight; all workload digests equal within each round.",
+    "reserved_sibling_nonidle_jiffies": 0,
+    "reserved_sibling_idle_jiffies": 1769,
+    "target_cells": [
+      {"R": 65, "shard_bytes": 2048, "speedup": 1.080014, "ci95": [1.063159, 1.097135]},
+      {"R": 65, "shard_bytes": 4096, "speedup": 1.093244, "ci95": [1.023984, 1.167188]},
+      {"R": 65, "shard_bytes": 8192, "speedup": 1.071878, "ci95": [1.062004, 1.081844]},
+      {"R": 65, "shard_bytes": 12288, "speedup": 1.079551, "ci95": [1.067300, 1.091942]},
+      {"R": 128, "shard_bytes": 2048, "speedup": 1.052730, "ci95": [1.041276, 1.064309]},
+      {"R": 128, "shard_bytes": 4096, "speedup": 1.068072, "ci95": [1.036347, 1.100768]},
+      {"R": 128, "shard_bytes": 8192, "speedup": 1.067053, "ci95": [1.050632, 1.083731]},
+      {"R": 128, "shard_bytes": 12288, "speedup": 1.069965, "ci95": [1.051631, 1.088618]}
+    ],
+    "controls": [
+      {"R": 65, "shard_bytes": 1024, "loss_count": 6, "speedup": 0.998897, "ci95": [0.971501, 1.027065]},
+      {"R": 65, "shard_bytes": 2047, "loss_count": 6, "speedup": 1.007497, "ci95": [0.978782, 1.037055]},
+      {"R": 65, "shard_bytes": 16384, "loss_count": 6, "speedup": 0.996839, "ci95": [0.970548, 1.023843]},
+      {"R": 65, "shard_bytes": 65536, "loss_count": 5, "speedup": 0.999830, "ci95": [0.996652, 1.003018]},
+      {"R": 65, "shard_bytes": 65536, "loss_count": 7, "speedup": 1.002440, "ci95": [0.988154, 1.016934]},
+      {"R": 65, "shard_bytes": 65536, "loss_count": 8, "speedup": 0.998793, "ci95": [0.986933, 1.010795]}
+    ],
+    "summary_sha256": "d33d7fd8fe156bc246108b987ab26f72825bd018425d45eb3b351ef74e0d85ce"
+  },
+  "exact_leopard_main_confirmation": {
+    "orientation": "exact_main_decode_including_pattern_setup_over_leopard2_execution_plus_plan_setup_divided_by_reuse",
+    "exact_main_executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "candidate_executable_sha256": "1a82a7bbc7c7b94c701f106757b52c2ffeecf24d862289899e5449f57ff1c494",
+    "method": "Three independent main-candidate-candidate-main rounds; 21 retained timing samples after three warmups per process; paired log-ratio Student-t 95 percent interval with df=2; all workload digests equal within each round.",
+    "reserved_sibling_nonidle_jiffies": 0,
+    "reserved_sibling_idle_jiffies": 1716,
+    "cells": [
+      {"shard_bytes": 2048, "reuse": 1, "speedup": 6.006207, "ci95": [5.812931, 6.205909]},
+      {"shard_bytes": 2048, "reuse": 8, "speedup": 7.360975, "ci95": [7.133327, 7.595887]},
+      {"shard_bytes": 2048, "reuse": 64, "speedup": 7.241217, "ci95": [7.168232, 7.314946]},
+      {"shard_bytes": 4096, "reuse": 1, "speedup": 7.326180, "ci95": [7.037971, 7.626190]},
+      {"shard_bytes": 4096, "reuse": 8, "speedup": 8.410396, "ci95": [7.643146, 9.254666]},
+      {"shard_bytes": 4096, "reuse": 64, "speedup": 8.186481, "ci95": [7.805911, 8.585605]},
+      {"shard_bytes": 8192, "reuse": 1, "speedup": 7.322479, "ci95": [5.735945, 9.347842]},
+      {"shard_bytes": 8192, "reuse": 8, "speedup": 8.865531, "ci95": [8.670973, 9.064455]},
+      {"shard_bytes": 8192, "reuse": 64, "speedup": 8.842048, "ci95": [8.667090, 9.020538]},
+      {"shard_bytes": 12288, "reuse": 1, "speedup": 7.437117, "ci95": [6.762915, 8.178531]},
+      {"shard_bytes": 12288, "reuse": 8, "speedup": 9.143527, "ci95": [8.972356, 9.317964]},
+      {"shard_bytes": 12288, "reuse": 64, "speedup": 9.207712, "ci95": [9.104934, 9.311651]}
+    ],
+    "summary_sha256": "ff79ca77d171f460abb2b04931a4043f2882be910a7ea3cc34e48ad722239559"
+  },
+  "code_generation": {
+    "gcc_group6_section_bytes": 578,
+    "clang18_group6_section_bytes": 555,
+    "gcc_ymm_stack_references": 0,
+    "clang18_ymm_stack_references": 0,
+    "gcc_evex_zmm_mask_references": 0,
+    "clang18_evex_zmm_mask_references": 0,
+    "candidate_avx2_object_sha256": "b766bda9073969cffba7dbf01601b8954619164b234addf9b3dbfe36a34f0dd3",
+    "clang_strict_build": "passed with -Wall -Wextra -Wpedantic -Werror and a pre-existing -Wno-unused-function exception for three unused T8 helpers"
+  },
+  "correctness": {
+    "backend_boundary_bytes": [2047, 2048, 2049, 4096, 16384, 16385],
+    "coefficient_sets": "dense logs 0,1,17,29,127,254 plus inactive-coefficient fallback",
+    "release": {
+      "tests": ["leopard2_backend_ops", "leopard2_random", "leopard2_direct_repair"],
+      "passed": 3,
+      "failed": 0,
+      "peak_rss_kib": 32512
+    },
+    "clang18_asan_ubsan_lsan": {
+      "tests": ["leopard2_backend_ops", "leopard2_random", "leopard2_direct_repair"],
+      "passed": 3,
+      "failed": 0,
+      "peak_rss_kib": 363520,
+      "build_peak_rss_kib": 529700
+    }
+  },
+  "rejected_variants": [
+    {
+      "candidate": "one-pass Group6 at 1024 bytes",
+      "reason": "The 1024-1792-byte cells were neutral rather than five-percent wins; the credible crossover began at 2048 bytes."
+    },
+    {
+      "candidate": "teach Group6 to execute an arbitrary scalar tail and remove the 32-byte-alignment predicate",
+      "reason": "Ragged cells did not show a consistent credible win, code grew from 578 to 874 bytes under GCC, and an unrelated 2047-byte output-major control regressed about ten percent from code-layout movement. The prototype was reverted completely."
+    }
+  ],
+  "commands": {
+    "release_tests": "OMP_NUM_THREADS=1 OMP_DYNAMIC=FALSE ctest --test-dir BUILD -R 'leopard2_(backend_ops|direct_repair|random)$' -j1 --output-on-failure",
+    "sanitizer_flags": "-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all",
+    "benchmark_candidate": "taskset -c 13 bench_leopard2 --k 65 --r R --profile high --field gf8 --backend avx2 --bytes BYTES --loss 6 --batch 1 --reuse REUSE --iterations 31 --warmup 3 --threads 1 --seed SEED --skip-legacy --retain-samples --report-decode-path --report-direct-executor --json FILE",
+    "benchmark_main": "taskset -c 13 leopard_main_benchmark --k 65 --r 65 --bytes BYTES --loss 6 --batch 1 --reuse REUSE --iterations 21 --warmup 3 --threads 1 --seed SEED --json FILE"
+  }
+}
