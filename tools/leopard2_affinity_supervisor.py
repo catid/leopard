@@ -116,6 +116,15 @@ MAIN_MANIFEST_TO_RAW_SCHEMA = {
     MAIN_MANIFEST_SCHEMA_V15: MAIN_RAW_SCHEMA_V15,
     MAIN_MANIFEST_SCHEMA: MAIN_RAW_SCHEMA,
 }
+PURE_AVX2_MAIN_MANIFEST_SCHEMAS = frozenset((
+    MAIN_MANIFEST_SCHEMA_V10,
+    MAIN_MANIFEST_SCHEMA_V11,
+    MAIN_MANIFEST_SCHEMA_V12,
+    MAIN_MANIFEST_SCHEMA_V13,
+    MAIN_MANIFEST_SCHEMA_V14,
+    MAIN_MANIFEST_SCHEMA_V15,
+    MAIN_MANIFEST_SCHEMA,
+))
 REPORT_TO_MAIN_MANIFEST_SCHEMAS = {
     REPORT_SCHEMA_V8: frozenset((
         MAIN_MANIFEST_SCHEMA_V5,
@@ -3540,7 +3549,7 @@ def safe_relative(root, relative, label):
 
 
 def parse_long_options(arguments):
-    """Parse the exact value-taking option shape used by main_compare/run_abba.py."""
+    """Parse the exact option shape used by main_compare/run_abba.py."""
     allowed = {
         "--baseline", "--candidate", "--baseline-archive", "--candidate-archive",
         "--baseline-build-dir", "--candidate-build-dir", "--baseline-source-root",
@@ -3549,10 +3558,18 @@ def parse_long_options(arguments):
         "--taskset", "--ldd", "--preset", "--cell", "--reuse", "--iterations",
         "--warmup", "--timeout",
     }
+    flags = {"--baseline-pure-avx2"}
     values = {}
     index = 0
     while index < len(arguments):
         option = arguments[index]
+        if option in flags:
+            require(option not in values,
+                    "supervised main-comparison flag is duplicated: {}".format(
+                        option))
+            values[option] = True
+            index += 1
+            continue
         require(option in allowed and index + 1 < len(arguments),
                 "supervised main-comparison command has an unknown/missing option")
         value = arguments[index + 1]
@@ -3637,6 +3654,13 @@ def validate_main_manifest_binding(report, manifest_path):
             runner_identity.get("sha256") == identity["script"]["sha256"],
             "supervised runner identity differs from the retained campaign")
     options = parse_long_options(command[3:])
+    pure_avx2 = manifest["schema"] in PURE_AVX2_MAIN_MANIFEST_SCHEMAS
+    require((options.get("--baseline-pure-avx2") is True) == pure_avx2 and
+            ((specification.get("baseline_pure_avx2") is True)
+             if pure_avx2 else
+             specification.get("baseline_pure_avx2") in (None, False)),
+            "supervised pure-AVX2 baseline selector differs from the retained "
+            "main-comparison generation")
     cwd = identity["cwd"]["path"]
     path_options = {
         "--baseline": "baseline_executable",
@@ -5486,6 +5510,7 @@ def test_binding():
             "--baseline-source-root", str(root),
             "--candidate-source-root", str(root),
             "--candidate-commit", "0" * 40,
+            "--baseline-pure-avx2",
             "--candidate-mode", "auto",
             "--reservation-file", str(root / "reservation.json"),
             "--output", str(evidence), "--cpu", "1",
@@ -5566,6 +5591,7 @@ def test_binding():
                 "baseline_source_root": str(root),
                 "candidate_source_root": str(root),
                 "candidate_commit": "0" * 40,
+                "baseline_pure_avx2": True,
                 "taskset": str(Path("/usr/bin/taskset").resolve()),
                 "ldd": str(Path("/usr/bin/ldd").resolve()),
             },
@@ -5625,6 +5651,20 @@ def test_binding():
         validate_binding(
             binding, binding_path, manifest_path,
             sha256_bytes(manifest_path.read_bytes()))
+        missing_pure_avx2 = json.loads(json.dumps(transaction.report))
+        missing_pure_avx2["command"].remove("--baseline-pure-avx2")
+        missing_pure_avx2["command_sha256"] = sha256_value(
+            missing_pure_avx2["command"])
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                missing_pure_avx2, manifest_path),
+            "current command missing the pure-AVX2 baseline selector")
+        expect_exception(
+            IsolationError,
+            lambda: parse_long_options([
+                "--baseline-pure-avx2", "--baseline-pure-avx2"]),
+            "duplicated pure-AVX2 baseline selector")
         relabeled_binding = json.loads(json.dumps(binding))
         relabeled_binding["schema"] = BINDING_SCHEMA_V4
         relabeled_binding.pop("digest")
@@ -5713,7 +5753,15 @@ def test_binding():
                   MAIN_MANIFEST_SCHEMA_V14: MAIN_RAW_SCHEMA_V14,
                   MAIN_MANIFEST_SCHEMA_V15: MAIN_RAW_SCHEMA_V15,
                   MAIN_MANIFEST_SCHEMA: MAIN_RAW_SCHEMA,
-              }, "main-comparison manifest/raw replay matrix changed")
+              } and PURE_AVX2_MAIN_MANIFEST_SCHEMAS == frozenset((
+                  MAIN_MANIFEST_SCHEMA_V10,
+                  MAIN_MANIFEST_SCHEMA_V11,
+                  MAIN_MANIFEST_SCHEMA_V12,
+                  MAIN_MANIFEST_SCHEMA_V13,
+                  MAIN_MANIFEST_SCHEMA_V14,
+                  MAIN_MANIFEST_SCHEMA_V15,
+                  MAIN_MANIFEST_SCHEMA,
+              )), "main-comparison manifest/raw/ISA replay matrix changed")
 
         pre_t32_raw = json.loads(json.dumps(raw_payload))
         pre_t32_raw["schema"] = MAIN_RAW_SCHEMA_V15
