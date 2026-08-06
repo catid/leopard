@@ -768,6 +768,13 @@ void AVX2FF8HighEncodeT2PackedTail(
     void* const* recovery,
     uint32_t original_count,
     uint64_t byte_count);
+/* Pair-expanded T=2 systematic generator for K=5..16.  The caller has
+   validated two packed slabs and a complete 64-byte-multiple shard. */
+void AVX2FF8HighEncodeT2MultiPacked(
+    const void* const* data,
+    void* const* recovery,
+    uint32_t original_count,
+    uint64_t byte_count);
 /* The K=4 generated circuit additionally uses exact 4/8/16-byte vectors and
    overlapping in-range final vectors, so arbitrary positive byte counts do
    not require scalar fixed-field multiplication once one vector fits. */

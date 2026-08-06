@@ -8519,6 +8519,114 @@ const void* GetAVX2FF16Tables()
 */
 #if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
     !defined(LEO2_GFNI_MEMBER)
+template<uint32_t OriginalCount>
+static LEO_FORCE_INLINE void AVX2FF8HighEncodeT2MultiVector(
+    const uint8_t* const* input,
+    uint8_t* output0,
+    uint8_t* output1,
+    uint64_t offset,
+    const AVX2FF8LinearTable* multipliers)
+{
+    static_assert(OriginalCount >= 5 && OriginalCount <= 16,
+        "T=2 multi-block circuit instantiated outside its K range");
+    __m256i parity0 = _mm256_setzero_si256();
+    __m256i parity1 = _mm256_setzero_si256();
+    uint32_t source = 0;
+    uint32_t pair = 0;
+    for (; source + 1U < OriginalCount; source += 2U, ++pair)
+    {
+        const __m256i a = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[source] + offset));
+        const __m256i b = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[source + 1U] + offset));
+        const __m256i common = AVX2FF8ProductVector(
+            _mm256_xor_si256(a, b),
+            multipliers[pair].low, multipliers[pair].high);
+        parity0 = _mm256_xor_si256(
+            parity0, _mm256_xor_si256(a, common));
+        parity1 = _mm256_xor_si256(
+            parity1, _mm256_xor_si256(b, common));
+    }
+    if (source < OriginalCount)
+    {
+        const __m256i a = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[source] + offset));
+        const __m256i common = AVX2FF8ProductVector(
+            a, multipliers[pair].low, multipliers[pair].high);
+        parity0 = _mm256_xor_si256(
+            parity0, _mm256_xor_si256(a, common));
+        parity1 = _mm256_xor_si256(parity1, common);
+    }
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output0 + offset), parity0);
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output1 + offset), parity1);
+}
+
+template<uint32_t OriginalCount>
+static void AVX2FF8HighEncodeT2MultiPackedShape(
+    const void* const* data,
+    void* const* recovery,
+    uint64_t byte_count)
+{
+    static_assert(OriginalCount >= 5 && OriginalCount <= 16,
+        "T=2 multi-block circuit instantiated outside its K range");
+    static const uint16_t kMultiplierLogs[8] = {
+        85, 17, 34, 153, 102, 51, 187, 219
+    };
+    static const uint16_t kZeroSkew = 255;
+    const uint32_t pair_count = (OriginalCount + 1U) / 2U;
+    AVX2FF8LinearTable multipliers[8];
+    for (uint32_t pair = 0; pair < pair_count; ++pair)
+    {
+        multipliers[pair] = AVX2FF8PrepareLinearTable(
+            kMultiplierLogs[pair], kZeroSkew);
+    }
+    const uint8_t* input[OriginalCount];
+    for (uint32_t i = 0; i < OriginalCount; ++i)
+        input[i] = static_cast<const uint8_t*>(data[i]);
+    uint8_t* const output0 = static_cast<uint8_t*>(recovery[0]);
+    uint8_t* const output1 = static_cast<uint8_t*>(recovery[1]);
+    for (uint64_t offset = 0; offset < byte_count; offset += 32U)
+    {
+        AVX2FF8HighEncodeT2MultiVector<OriginalCount>(
+            input, output0, output1, offset, multipliers);
+    }
+}
+
+void AVX2FF8HighEncodeT2MultiPacked(
+    const void* const* data,
+    void* const* recovery,
+    uint32_t original_count,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(data && recovery && original_count >= 5 &&
+        original_count <= 16 && byte_count >= 64U &&
+        (byte_count & 63U) == 0);
+#define LEO2_T2_MULTI_CASE(K) \
+    case K: AVX2FF8HighEncodeT2MultiPackedShape<K>( \
+        data, recovery, byte_count); return
+    switch (original_count)
+    {
+    LEO2_T2_MULTI_CASE(5);
+    LEO2_T2_MULTI_CASE(6);
+    LEO2_T2_MULTI_CASE(7);
+    LEO2_T2_MULTI_CASE(8);
+    LEO2_T2_MULTI_CASE(9);
+    LEO2_T2_MULTI_CASE(10);
+    LEO2_T2_MULTI_CASE(11);
+    LEO2_T2_MULTI_CASE(12);
+    LEO2_T2_MULTI_CASE(13);
+    LEO2_T2_MULTI_CASE(14);
+    LEO2_T2_MULTI_CASE(15);
+    LEO2_T2_MULTI_CASE(16);
+    default:
+        LEO_DEBUG_BREAK;
+        return;
+    }
+#undef LEO2_T2_MULTI_CASE
+}
+
 void AVX2FF8HighEncodeT2Packed(
     const void* const* data,
     void* const* recovery,

@@ -1918,6 +1918,23 @@ if(LEO2_BUILD_TESTS)
             set_tests_properties(leopard2_t2_k4_production PROPERTIES
                 ENVIRONMENT
                     "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
+            add_executable(leopard2_t2_multi_production_test
+                tests/leopard2/direct_oracle.cpp
+                tests/leopard2/test_t2_multi_production.cpp)
+            target_include_directories(
+                leopard2_t2_multi_production_test PRIVATE tests/leopard2)
+            target_compile_definitions(
+                leopard2_t2_multi_production_test PRIVATE
+                    LEO2_HAVE_AVX2_BACKEND=1)
+            target_link_libraries(
+                leopard2_t2_multi_production_test leopard)
+            add_test(NAME leopard2_t2_multi_production
+                COMMAND leopard2_t2_multi_production_test)
+            set_tests_properties(
+                leopard2_t2_multi_production PROPERTIES
+                ENVIRONMENT
+                    "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
         endif()
 
         if(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING AND

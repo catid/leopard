@@ -201,7 +201,7 @@ void ExercisePackedCell(
     AlignedBuffer output(kRecoveryCount * bytes + 8);
     FillInput(input.bytes() + 1, k, bytes,
         UINT64_C(0x54325041434b4544) ^ (static_cast<uint64_t>(k) << 32) ^ bytes);
-    const void* original[4] = { NULL, NULL, NULL, NULL };
+    const void* original[16] = {};
     void* recovery[kRecoveryCount] = { NULL, NULL };
     SetPackedPointers(
         input.bytes() + 1, output.bytes() + 3, k, bytes,
@@ -265,9 +265,9 @@ void ExercisePackedCell(
             detached_source[i] ^= static_cast<uint8_t>(
                 0x5bU + static_cast<unsigned>(i * 29U));
         }
-        const void* second_original[4] = {
-            original[0], original[1], original[2], original[3]
-        };
+        const void* second_original[16] = {};
+        for (unsigned i = 0; i < k; ++i)
+            second_original[i] = original[i];
         second_original[k - 1] = &detached_source[0];
         void* second_recovery[kRecoveryCount] = {
             second_output.bytes() + 2,
@@ -404,7 +404,7 @@ void ExerciseFallbackAndErrors(leo2_context* context, unsigned k)
     AlignedBuffer input(k * bytes);
     AlignedBuffer output(kRecoveryCount * bytes);
     FillInput(input.bytes(), k, bytes, UINT64_C(0x5432434f4e545241));
-    const void* original[4] = { NULL, NULL, NULL, NULL };
+    const void* original[16] = {};
     void* recovery[kRecoveryCount] = { NULL, NULL };
     SetPackedPointers(
         input.bytes(), output.bytes(), k, bytes, original, recovery);
@@ -545,7 +545,7 @@ void ExerciseNonAVX2Fallback(
     AlignedBuffer output(kRecoveryCount * bytes);
     FillInput(input.bytes(), k, bytes,
         UINT64_C(0x5343414c41525432) ^ k);
-    const void* original[4] = { NULL, NULL, NULL, NULL };
+    const void* original[16] = {};
     void* recovery[kRecoveryCount];
     SetPackedPointers(
         input.bytes(), output.bytes(), k, bytes, original, recovery);
@@ -607,8 +607,22 @@ int main()
                 ExercisePackedCell(context, k, bytes, selected);
             }
         }
+        static const size_t multi_sizes[] = {
+            32, 63, 64, 65, 128, 1024, 1984, 2047, 2048, 2049
+        };
+        for (unsigned k = 5; k <= 16; ++k)
+        {
+            for (size_t i = 0;
+                 i < sizeof(multi_sizes) / sizeof(multi_sizes[0]); ++i)
+            {
+                const size_t bytes = multi_sizes[i];
+                const bool selected = bytes <= 2048 && (bytes & 63U) == 0;
+                ExercisePackedCell(context, k, bytes, selected);
+            }
+        }
         ExerciseFallbackAndErrors(context, 2);
         ExerciseFallbackAndErrors(context, 4);
+        ExerciseFallbackAndErrors(context, 16);
         leo2_context_destroy(context);
         for (unsigned k = 2; k <= 4; k += 2)
         {
