@@ -6425,6 +6425,25 @@ static void CopyAndPad(void* destination, const void* source, size_t bytes, size
         memset(static_cast<uint8_t*>(destination) + bytes, 0, rounded - bytes);
 }
 
+static LEO_FORCE_INLINE void CopyAndPadGF8Exact65To128(
+    void* destination,
+    const void* source)
+{
+    /*
+        The fused N=128/T=32 AVX2 decoder promotes a 65-byte public shard to
+        one exact 128-byte kernel row.  Keeping the two fixed extents visible
+        here lets optimizing compilers lower the copy and zero suffix to
+        straight-line vector moves instead of calling variable-size memcpy
+        and memset once per selected input.  Every source read remains inside
+        the public 65-byte range, including guard-page-backed callers.
+    */
+    uint8_t* const output = static_cast<uint8_t*>(destination);
+    const uint8_t* const input = static_cast<const uint8_t*>(source);
+    memcpy(output, input, 64);
+    output[64] = input[64];
+    memset(output + 65, 0, 63);
+}
+
 static void ScatterGF16CompactTail(
     void* destination,
     const void* source,
@@ -6475,6 +6494,11 @@ static void StageShardForKernel(
     size_t bytes,
     size_t rounded)
 {
+    if (codec->field == LEO2_FIELD_GF8 && bytes == 65 && rounded == 128)
+    {
+        CopyAndPadGF8Exact65To128(destination, source);
+        return;
+    }
     if (codec->field == LEO2_FIELD_GF16 && rounded != bytes)
         ScatterGF16CompactTail(destination, source, bytes, rounded);
     else
@@ -6851,6 +6875,9 @@ static void PopulateDecodeCoordinates(
 {
     const leo2_codec* codec = plan->codec;
     const bool stage_inputs = staging_slots != NULL;
+    const bool stage_gf8_exact65_to128 = stage_inputs &&
+        codec->field == LEO2_FIELD_GF8 && pass_bytes == 65 &&
+        staging_slot_bytes == 128;
     size_t staging_slot = 0;
     std::fill(
         coordinate_data, coordinate_data + codec->parent_count,
@@ -6868,8 +6895,11 @@ static void PopulateDecodeCoordinates(
         {
             uint8_t* const slot = staging_slots +
                 staging_slot++ * staging_slot_bytes;
-            StageShardForKernel(
-                codec, slot, source, pass_bytes, staging_slot_bytes);
+            if (stage_gf8_exact65_to128)
+                CopyAndPadGF8Exact65To128(slot, source);
+            else
+                StageShardForKernel(
+                    codec, slot, source, pass_bytes, staging_slot_bytes);
             coordinate_data[coordinate] = slot;
         }
         else
@@ -6887,8 +6917,11 @@ static void PopulateDecodeCoordinates(
         {
             uint8_t* const slot = staging_slots +
                 staging_slot++ * staging_slot_bytes;
-            StageShardForKernel(
-                codec, slot, source, pass_bytes, staging_slot_bytes);
+            if (stage_gf8_exact65_to128)
+                CopyAndPadGF8Exact65To128(slot, source);
+            else
+                StageShardForKernel(
+                    codec, slot, source, pass_bytes, staging_slot_bytes);
             coordinate_data[coordinate] = slot;
         }
         else
