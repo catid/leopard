@@ -17568,12 +17568,12 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T8PackedTerminalEligible(
     if (!codec)
         return false;
     /* K=5 and K=8 have earlier dedicated B64 terminals.  Reuse this shared
-       terminal for K=6..7/R=5 and the two remaining balanced T=8 shapes. */
+       terminal for K=6..8/R=5 and the two remaining balanced T=8 shapes. */
     const bool qualified_b64 = shard_bytes == 64 &&
         (codec->terminal_r1_t8_shape == kTerminalT8K6R6 ||
          codec->terminal_r1_t8_shape == kTerminalT8K7R7);
     const bool r5_prefix =
-        (codec->original_count == 6 || codec->original_count == 7) &&
+        codec->original_count >= 6 && codec->original_count <= 8 &&
         codec->recovery_count == 5 && codec->padded_side == 8;
     const bool qualified_byte_count = shard_bytes == 256 ||
         shard_bytes == 1024 || qualified_b64 ||
@@ -17630,7 +17630,7 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T8PackedTerminalEligible(
 #endif
 
 /*
-    Dense K=R=5..8 and K=6..7/R=5 T=8 codewords use packed source and
+    Dense K=R=5..8 and K=6..8/R=5 T=8 codewords use packed source and
     destination slabs in the ordinary API.  Two aggregate range proofs plus
     exact pointer-stride checks preserve the general overlap contract without
     sorting K+R ranges or constructing transform geometry.  The partial
@@ -17659,9 +17659,9 @@ TryEncodeGF8T8PackedTerminalFixed(
         (StaticOriginalCount == 0 && StaticRecoveryCount == 0) ||
         (StaticOriginalCount >= 5 && StaticOriginalCount <= 8 &&
          (StaticRecoveryCount == StaticOriginalCount ||
-          ((StaticOriginalCount == 6 || StaticOriginalCount == 7) &&
+          (StaticOriginalCount >= 6 && StaticOriginalCount <= 8 &&
            StaticRecoveryCount == 5))),
-        "fixed T=8 packed terminal supports K=R=5..8 or K=6..7/R=5");
+        "fixed T=8 packed terminal supports K=R=5..8 or K=6..8/R=5");
     static_assert(StaticByteCount == 0 || StaticByteCount == 1024,
         "fixed T=8 packed byte count must be 1024");
     const uint32_t original_count = StaticOriginalCount != 0
@@ -17771,6 +17771,11 @@ TryEncodeGF8T8PackedTerminalFixed(
         leopard::ff8::ReedSolomonEncodeK7R5T8(
             *codec->context->ops, original, recovery, shard_bytes);
     }
+    else if (recovery_count == 5 && original_count == 8)
+    {
+        leopard::ff8::ReedSolomonEncodeK8R5T8(
+            *codec->context->ops, original, recovery, shard_bytes);
+    }
     else if (original_count == 5)
     {
         leopard::ff8::ReedSolomonEncodeK5R5T8(
@@ -17816,16 +17821,21 @@ static LEO_FORCE_INLINE bool TryEncodeGF8T8PackedTerminal(
     size_t scratch_bytes,
     leo2_result& result_out)
 {
-    if (codec->recovery_count == 5 &&
-        (codec->original_count == 6 || codec->original_count == 7))
+    if (codec->recovery_count == 5 && codec->original_count >= 6 &&
+        codec->original_count <= 8)
     {
         if (codec->original_count == 6)
             return TryEncodeGF8T8PackedTerminalFixed<
                 6, 5, 0, ProtectedCount>(
                 codec, protected_ranges, shard_bytes, original, recovery,
                 scratch, scratch_bytes, result_out);
+        if (codec->original_count == 7)
+            return TryEncodeGF8T8PackedTerminalFixed<
+                7, 5, 0, ProtectedCount>(
+                    codec, protected_ranges, shard_bytes, original, recovery,
+                    scratch, scratch_bytes, result_out);
         return TryEncodeGF8T8PackedTerminalFixed<
-            7, 5, 0, ProtectedCount>(
+            8, 5, 0, ProtectedCount>(
                 codec, protected_ranges, shard_bytes, original, recovery,
                 scratch, scratch_bytes, result_out);
     }

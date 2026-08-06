@@ -1403,9 +1403,9 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
                             return false;
             }
 
-            /* Qualify the punctured five-output K=6 and K=7 contracts. */
+            /* Qualify the punctured five-output K=6 through K=8 contracts. */
             for (unsigned active_count = 6;
-                 active_count <= 7; ++active_count)
+                 active_count <= 8; ++active_count)
             {
                 for (unsigned lane = 0; lane < side; ++lane)
                 {
@@ -1423,7 +1423,9 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
                     partial_inverse_skew, partial_forward_skew, kBytes);
                 const uint32_t partial_flag = active_count == 6
                     ? kFF8HighEncodeK6R5Partial
-                    : kFF8HighEncodeK7R5Partial;
+                    : (active_count == 7
+                        ? kFF8HighEncodeK7R5Partial
+                        : kFF8HighEncodeK8R5Partial);
                 ops.ff8_high_encode_one_block(
                     input_pointers, actual_pointers, side | partial_flag,
                     partial_inverse_skew, partial_forward_skew, kBytes);
@@ -1440,57 +1442,41 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
                             return false;
             }
 
-            static const uint32_t kMalformedPartialFlags[] = {
-                kFF8HighEncodeShortenedInput |
-                    kFF8HighEncodeK5R5Partial,
-                kFF8HighEncodeShortenedInput |
-                    kFF8HighEncodeK6R6Partial,
-                kFF8HighEncodeShortenedInput |
-                    kFF8HighEncodeK7R7Partial,
-                kFF8HighEncodeShortenedInput |
-                    kFF8HighEncodeK6R5Partial,
-                kFF8HighEncodeShortenedInput |
-                    kFF8HighEncodeK7R5Partial,
-                kFF8HighEncodeK5R5Partial |
-                    kFF8HighEncodeK6R6Partial,
-                kFF8HighEncodeK5R5Partial |
-                    kFF8HighEncodeK7R7Partial,
-                kFF8HighEncodeK5R5Partial |
-                    kFF8HighEncodeK6R5Partial,
-                kFF8HighEncodeK5R5Partial |
-                    kFF8HighEncodeK7R5Partial,
-                kFF8HighEncodeK6R6Partial |
-                    kFF8HighEncodeK7R7Partial,
-                kFF8HighEncodeK6R6Partial |
-                    kFF8HighEncodeK6R5Partial,
-                kFF8HighEncodeK6R6Partial |
-                    kFF8HighEncodeK7R5Partial,
-                kFF8HighEncodeK7R7Partial |
-                    kFF8HighEncodeK6R5Partial,
-                kFF8HighEncodeK7R7Partial |
-                    kFF8HighEncodeK7R5Partial,
-                kFF8HighEncodeK6R5Partial |
-                    kFF8HighEncodeK7R5Partial
+            static const uint32_t kPartialFlags[] = {
+                kFF8HighEncodeK5R5Partial,
+                kFF8HighEncodeK6R6Partial,
+                kFF8HighEncodeK7R7Partial,
+                kFF8HighEncodeK6R5Partial,
+                kFF8HighEncodeK7R5Partial,
+                kFF8HighEncodeK8R5Partial
             };
-            for (size_t flag_i = 0;
-                 flag_i < sizeof(kMalformedPartialFlags) /
-                    sizeof(kMalformedPartialFlags[0]); ++flag_i)
+            const size_t partial_flag_count =
+                sizeof(kPartialFlags) / sizeof(kPartialFlags[0]);
+            for (size_t first = 0; first < partial_flag_count; ++first)
             {
-                for (unsigned lane = 0; lane < side; ++lane)
+                for (size_t second = first;
+                     second < partial_flag_count; ++second)
                 {
-                    std::memset(actual[lane], 0xc3, sizeof(actual[lane]));
-                    actual_pointers[lane] = actual[lane] + 1;
+                    const uint32_t flags = first == second
+                        ? kFF8HighEncodeShortenedInput |
+                            kPartialFlags[first]
+                        : kPartialFlags[first] | kPartialFlags[second];
+                    for (unsigned lane = 0; lane < side; ++lane)
+                    {
+                        std::memset(
+                            actual[lane], 0xc3, sizeof(actual[lane]));
+                        actual_pointers[lane] = actual[lane] + 1;
+                    }
+                    ops.ff8_high_encode_one_block(
+                        input_pointers, actual_pointers, side | flags,
+                        partial_inverse_skew, partial_forward_skew, kBytes);
+                    if (std::memcmp(input, input_before, sizeof(input)) != 0)
+                        return false;
+                    for (unsigned lane = 0; lane < side; ++lane)
+                        for (size_t i = 0; i < sizeof(actual[lane]); ++i)
+                            if (actual[lane][i] != 0xc3)
+                                return false;
                 }
-                ops.ff8_high_encode_one_block(
-                    input_pointers, actual_pointers,
-                    side | kMalformedPartialFlags[flag_i],
-                    partial_inverse_skew, partial_forward_skew, kBytes);
-                if (std::memcmp(input, input_before, sizeof(input)) != 0)
-                    return false;
-                for (unsigned lane = 0; lane < side; ++lane)
-                    for (size_t i = 0; i < sizeof(actual[lane]); ++i)
-                        if (actual[lane][i] != 0xc3)
-                            return false;
             }
 
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
@@ -1562,6 +1548,7 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
                     kFF8HighEncodeK7R7Partial |
                     kFF8HighEncodeK6R5Partial |
                     kFF8HighEncodeK7R5Partial |
+                    kFF8HighEncodeK8R5Partial |
                     kFF8HighEncodeK9Tail |
                     (5U << kFF8HighEncodeK9OutputCountShift)
             };

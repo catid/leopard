@@ -350,8 +350,9 @@ typedef FFTButterfly4Out IFFTButterfly4Out;
 // side in the low bits and sets kFF8HighEncodeShortenedInput when data_count is
 // side - 1; otherwise data_count is side.  The AVX2 T=8 implementation also
 // accepts kFF8HighEncodeK5R5Partial after its caller has established exactly
-// five input and five output rows.  The K6/R5, K6/R6, K7/R5, and K7/R7 flags
-// analogously expose only their exact source and transmitted-output prefixes.
+// five input and five output rows.  The K6/R5, K6/R6, K7/R5, K7/R7, and
+// K8/R5 flags analogously expose only their exact source and transmitted-
+// output prefixes.
 // kFF8HighEncodeK9Tail identifies the exact
 // nine-source terminal and carries its 5..8 transmitted-output count in the
 // adjacent count field.  Keeping these facts in the existing size argument
@@ -374,6 +375,7 @@ static const uint32_t kFF8HighEncodeK6R6Partial = 0x00800000U;
 static const uint32_t kFF8HighEncodeK7R7Partial = 0x00400000U;
 static const uint32_t kFF8HighEncodeK6R5Partial = 0x00200000U;
 static const uint32_t kFF8HighEncodeK7R5Partial = 0x00100000U;
+static const uint32_t kFF8HighEncodeK8R5Partial = 0x00080000U;
 static const uint32_t kFF8HighEncodeSupportedSides =
     8U | 16U | 32U | 64U;
 

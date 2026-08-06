@@ -479,16 +479,19 @@ void ExercisePromotedMatrix(
     static const Cell cells[] = {
         { 6, 5, 64 },
         { 7, 5, 64 },
+        { 8, 5, 64 },
         { 6, 6, 64 },
         { 7, 7, 64 },
         { 6, 5, 256 },
         { 7, 5, 256 },
+        { 8, 5, 256 },
         { 5, 5, 256 },
         { 6, 6, 256 },
         { 7, 7, 256 },
         { 8, 8, 256 },
         { 6, 5, 1024 },
         { 7, 5, 1024 },
+        { 8, 5, 1024 },
         { 5, 5, 1024 },
         { 6, 6, 1024 },
         { 7, 7, 1024 },
@@ -529,7 +532,7 @@ void ExerciseNonPromotedCells(leo2_context* context)
              ++recovery_count)
         {
             if (original_count == recovery_count ||
-                ((original_count == 6 || original_count == 7) &&
+                (original_count >= 6 && original_count <= 8 &&
                  recovery_count == 5))
                 continue;
             for (size_t byte_i = 0;
@@ -547,6 +550,8 @@ void ExerciseNonPromotedCells(leo2_context* context)
     ExerciseCell(context, Cell{ 6, 6, 65 }, false);
     ExerciseCell(context, Cell{ 7, 5, 63 }, false);
     ExerciseCell(context, Cell{ 7, 5, 65 }, false);
+    ExerciseCell(context, Cell{ 8, 5, 63 }, false);
+    ExerciseCell(context, Cell{ 8, 5, 65 }, false);
     ExerciseCell(context, Cell{ 7, 7, 63 }, false);
     ExerciseCell(context, Cell{ 7, 7, 65 }, false);
     ExerciseCell(context, Cell{ 7, 6, 64 }, false);
@@ -870,12 +875,15 @@ void ExerciseScalarFallbacks()
     static const Cell cells[] = {
         { 6, 5, 64 },
         { 7, 5, 64 },
+        { 8, 5, 64 },
         { 6, 6, 64 }, { 7, 7, 64 },
         { 6, 5, 256 },
         { 7, 5, 256 },
+        { 8, 5, 256 },
         { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 }, { 8, 8, 256 },
         { 6, 5, 1024 },
         { 7, 5, 1024 },
+        { 8, 5, 1024 },
         { 5, 5, 1024 }, { 6, 6, 1024 }, { 7, 7, 1024 },
         { 8, 8, 1024 }, { 8, 8, 64 }
     };
@@ -1019,12 +1027,15 @@ void ExerciseAutoBackend(bool full_parity_terminal_available)
     static const Cell cells[] = {
         { 6, 5, 64 },
         { 7, 5, 64 },
+        { 8, 5, 64 },
         { 6, 6, 64 }, { 7, 7, 64 },
         { 6, 5, 256 },
         { 7, 5, 256 },
+        { 8, 5, 256 },
         { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 }, { 8, 8, 256 },
         { 6, 5, 1024 },
         { 7, 5, 1024 },
+        { 8, 5, 1024 },
         { 5, 5, 1024 }, { 6, 6, 1024 }, { 7, 7, 1024 },
         { 8, 8, 1024 }, { 8, 8, 64 }
     };
@@ -1088,6 +1099,7 @@ int main()
         ExerciseForcedTransform(context, Cell{ 6, 6, 64 });
         ExerciseForcedTransform(context, Cell{ 6, 5, 64 });
         ExerciseForcedTransform(context, Cell{ 7, 5, 64 });
+        ExerciseForcedTransform(context, Cell{ 8, 5, 64 });
         ExerciseForcedTransform(context, Cell{ 7, 7, 64 });
         ExerciseForcedTransform(context, Cell{ 8, 8, 64 });
         ExerciseForcedTransform(context, Cell{ 7, 7, 1024 });
@@ -1099,11 +1111,14 @@ int main()
         static const Cell promoted_cells[] = {
             { 6, 5, 64 },
             { 7, 5, 64 },
+            { 8, 5, 64 },
             { 6, 6, 64 }, { 7, 7, 64 },
             { 6, 5, 256 },
             { 7, 5, 256 },
+            { 8, 5, 256 },
             { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 },
             { 8, 8, 256 }, { 6, 5, 1024 }, { 7, 5, 1024 },
+            { 8, 5, 1024 },
             { 5, 5, 1024 }, { 6, 6, 1024 },
             { 7, 7, 1024 }, { 8, 8, 1024 }, { 8, 8, 64 }
         };

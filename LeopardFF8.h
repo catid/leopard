@@ -216,6 +216,12 @@ void ReedSolomonEncodeK7R5T8(
     void* const* work,
     uint64_t byte_count);
 
+void ReedSolomonEncodeK8R5T8(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* work,
+    uint64_t byte_count);
+
 void ReedSolomonEncodeK6R6T8(
     const backend::Ops& ops,
     const void* const* data,
