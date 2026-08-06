@@ -1,0 +1,137 @@
+{
+  "schema": "leopard2-gf8-k7r5-punctured-t8-avx2/v1",
+  "created_utc": "2026-08-06T23:45:00Z",
+  "status": "promoted",
+  "scope": {
+    "field": "GF8",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "backend": "forced AVX2",
+    "operation": "prepared-codec encode execution",
+    "target_cells": [
+      {"K": 7, "R": 5, "shard_bytes": 64},
+      {"K": 7, "R": 5, "shard_bytes": 256},
+      {"K": 7, "R": 5, "shard_bytes": 1024}
+    ],
+    "change": "Extend the packed T=8 terminal to seven source rows and five transmitted parity rows, reuse the exact seven-source AVX2 parent circuit, and omit all punctured suffix stores."
+  },
+  "source": {
+    "branch": "codex/leopard2",
+    "implementation_commit": "b6e267073da4464952a623c0c057b82ecd88bd6b",
+    "candidate_tree": "c55921aa035f27f70875045172a5388f225e400b",
+    "candidate_tracked_dirty": false,
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_tree": "b7c8830d96a978f6ec14fe747095f066e351ae72"
+  },
+  "frozen_inputs": {
+    "candidate_executable": "/tmp/leopard2-k7r5-committed-b6e2670-v1/bin/bench_leopard2",
+    "candidate_executable_sha256": "6daab2ceafc7011db315283688d41bcc5a0bb14fbaaf2558d3ad6606862055bb",
+    "candidate_cmake_cache_sha256": "5ea315aaf38bedb86426aad3c5cdaab3407d5ac1519ba25e958e8da4fa09f89f",
+    "candidate_compile_commands_sha256": "bfd3dfb26c67fb9b35e7628ab596e7caae9b5ec24b234bf84fa2283979a960ec",
+    "exact_main_executable": "/tmp/leopard2-isolated-b1f334a-v1/bin/main",
+    "exact_main_executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "immutability": "Lane-owned executable copies were read-only and verified unchanged before and after timing."
+  },
+  "campaign": {
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "controller_cpu": 0,
+    "benchmark_cpu": 6,
+    "reserved_smt_sibling": 22,
+    "accepted_sibling_nonidle_jiffies": 0,
+    "batch": 1,
+    "threads": 1,
+    "same_binary": {
+      "raw_directory": "/tmp/leopard2-k7r5-same-binary-b6e2670-v1/raw",
+      "summary": "/tmp/leopard2-k7r5-same-binary-b6e2670-v1/summary.json",
+      "summary_sha256": "cd2b32ff866dbf6bb409c7daa8d0bdc9542eb2ad51593d029ea3f7fcb93ba04b",
+      "raw_file_count": 476,
+      "raw_aggregate_sha256": "b7d83776492fdf842ef30a67f8e77bb5a19cbeaa6959c91bd3fde495c95c10cd",
+      "rounds": 7,
+      "iterations_per_invocation": 15,
+      "warmups_per_invocation": 3,
+      "order": "alternating ABBA/BAAB"
+    },
+    "exact_main": {
+      "raw_directory": "/tmp/leopard2-k7r5-exact-main-b6e2670-v1/raw",
+      "summary": "/tmp/leopard2-k7r5-exact-main-b6e2670-v1/summary.json",
+      "summary_sha256": "99778840427c5d6bf82e7cd394a2f5583c5ab3d21c67be355ccf75a00b18865e",
+      "raw_file_count": 340,
+      "raw_aggregate_sha256": "14d44dd3b69a4b3307a1896b177a857f8dd5b7b8e69edce730d0daa5170cc8d8",
+      "rounds": 5,
+      "iterations_per_invocation": 15,
+      "warmups_per_invocation": 3,
+      "order": "alternating ABBA/BAAB"
+    },
+    "statistics": "One average log-ratio contrast per independent ABBA round with a two-sided 95% Student-t interval."
+  },
+  "correctness": {
+    "accepted_timed_invocations": 816,
+    "failed_invocations": 0,
+    "all_workload_digests_match": true,
+    "all_parity_digests_match": true,
+    "all_recovery_digests_match": true,
+    "all_round_trips_pass": true,
+    "wire_profile_changed": false
+  },
+  "encode_prior_path_over_packed_terminal": {
+    "K7_R5_B64": {
+      "estimate": 3.2524450617914833,
+      "student_t_95_ci": [3.0690800527775925, 3.4467653818277224]
+    },
+    "K7_R5_B256": {
+      "estimate": 1.7677650630137896,
+      "student_t_95_ci": [1.7359998264448884, 1.800111538266536]
+    },
+    "K7_R5_B1024": {
+      "estimate": 1.2896652025836466,
+      "student_t_95_ci": [1.2776880374675237, 1.3017546427465827]
+    }
+  },
+  "encode_exact_main_over_leopard2": {
+    "K7_R5_B64": {
+      "estimate": 1.7697304762064106,
+      "student_t_95_ci": [1.6751635808856782, 1.869635893563226]
+    },
+    "K7_R5_B256": {
+      "estimate": 1.2167701811417209,
+      "student_t_95_ci": [1.183427704567174, 1.2510520651171881]
+    },
+    "K7_R5_B1024": {
+      "estimate": 1.0873806393464451,
+      "student_t_95_ci": [1.0755017299751246, 1.0993907511918473]
+    }
+  },
+  "same_binary_inert_controls": {
+    "cell_count": 14,
+    "point_estimate_range": [0.99634059262066, 1.0058244714281452],
+    "confidence_bound_range": [0.9867721669285544, 1.0199967777068468],
+    "all_intervals_span_one": true,
+    "coverage": "K=7/R=5 byte boundaries 63,65,128,255,257,512,1023,1025 and K=7/R=4 plus K=8/R=5 at 64,256,1024 bytes."
+  },
+  "residual_exact_main_encode_gaps": {
+    "K8_R5_B64": 0.5063631371279117,
+    "K8_R5_B256": 0.6833533859340382,
+    "K8_R5_B1024": 0.9283805118199034,
+    "K12_R8_B256": 0.7662712802893233,
+    "K12_R8_B1024": 0.9686846347254592,
+    "ratio_orientation": "exact Leopard main time / Leopard2 time; values below one identify the next optimization gaps."
+  },
+  "validation": {
+    "focused_release": "4/4 passed: packed-terminal hook/oracle, production-link, context/backend isolation, and AUTO-route tests",
+    "strict_clang18": "2/2 focused tests passed with -Wall -Wextra -Wpedantic -Werror",
+    "clang18_asan_ubsan": "2/2 focused tests passed with leak detection and halt-on-error",
+    "maximum_sanitizer_test_rss_kib": 54016,
+    "assembly": {
+      "specialization": "AVX2FF8HighEncodeK6K7T8Vector<7,5>",
+      "symbol_size_bytes": 2008,
+      "avx512_or_evex_instructions": 0
+    },
+    "coverage": [
+      "independent direct-generator parity for public and one-item batch calls",
+      "backend self-test against the complete T=8 parent transform",
+      "all 15 pairwise malformed partial-flag combinations fail closed",
+      "punctured destination rows remain untouched",
+      "unaligned buffers, scalar fallback, forced transform, sparse fallback, exact scratch, overlap rejection, and failure atomicity"
+    ]
+  },
+  "disposition": "Promote K=7/R=5 at 64, 256, and 1024 bytes. Every exact-main loss became a credible win, same-binary target gains range from 29% to 225%, and every byte/shape control remained statistically inert."
+}
