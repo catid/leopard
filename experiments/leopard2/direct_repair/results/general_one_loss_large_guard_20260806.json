@@ -1,0 +1,190 @@
+{
+  "schema": "leopard2-general-l1-large-guard-evidence/v1",
+  "date_utc": "2026-08-06",
+  "disposition": "passed",
+  "bead": "leopard-79h.38.5.10.39.4",
+  "parent_bead": "leopard-79h.38.5.10.39",
+  "purpose": "Complete the allocation-heavy 16 MiB/reuse-64 promotion guard for generalized GF8 AVX2 one-loss direct repair without exposing the host to the earlier unbounded-memory campaign failure mode.",
+  "source_identity": {
+    "candidate_commit": "37691ef6cb773dc8388f785166373a88f85cd325",
+    "candidate_tree": "bdb597d9de2bbe04b9168e6a7a9cd15aefd740df",
+    "candidate_tracked_dirty": false,
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "candidate_sha256": "1412e8acc9862b17679247e845d864b5ccaef3c3adfc05bdf24c451ff7af9dd0",
+    "exact_main_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "hashes_verified_after_campaign": true
+  },
+  "runner": {
+    "path": "experiments/leopard2/direct_repair/run_large_l1_guard.py",
+    "sha256": "c5b84e094b34a0d8596c1aa711c4e1887358524ac79108ca486b54c54479caa6",
+    "processes_concurrent": 1,
+    "ordering": "alternating control-candidate-candidate-control and candidate-control-control-candidate",
+    "statistic": "paired log-ratio Student-t 95 percent interval",
+    "rounds": 3,
+    "paired_ratios_per_cell": 6,
+    "iterations_per_process": 1,
+    "warmups_per_process": 1,
+    "attempts_rejected_for_sibling_activity": 0,
+    "maximum_accepted_sibling_nonidle_jiffies": 1,
+    "coordinator_cpu": 0,
+    "timing_cpu": 6,
+    "reserved_smt_sibling": 22
+  },
+  "memory_guard": {
+    "cgroup_v2_path": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/leopard2-l1-large-guard-37691ef-v3.service",
+    "memory_max_bytes": 4294967296,
+    "swap_max_bytes": 0,
+    "memory_peak_bytes": 2196553728,
+    "memory_peak_gib": 2.045700,
+    "memory_events_before": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    },
+    "memory_events_after": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    },
+    "maximum_child_rss_kib": {
+      "candidate_across_all_cells": 2131712,
+      "forced_transform_control_across_all_cells": 2131712,
+      "exact_main": 1872384,
+      "high_target_direct": 837376,
+      "high_target_transform": 841728,
+      "low_target_direct": 1083136,
+      "low_target_transform": 2131712
+    }
+  },
+  "workload": {
+    "shard_bytes": 16777216,
+    "batch": 1,
+    "plan_reuse": 64,
+    "field": "gf8",
+    "backend": "avx2",
+    "candidate_and_control_binary_identical": true,
+    "control_option": "--force-specialized",
+    "all_round_trips_passed": true,
+    "all_within_cell_workload_digests_matched": true
+  },
+  "results": [
+    {
+      "id": "high-target",
+      "K": 17,
+      "R": 16,
+      "losses": 1,
+      "profile": "legacy_high_v1",
+      "candidate_path": "direct",
+      "candidate_executor": "output_major",
+      "same_executable_control_path": "tiled",
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "b7ee347b0ce204b1",
+        "transmitted_parity": "2bfe3743700a8db5",
+        "recovered_originals": "0514ba11543cc456"
+      },
+      "execution_control_over_candidate": {
+        "geometric_mean_speedup": 7.969917474211067,
+        "ci95_lower": 7.945170975788237,
+        "ci95_upper": 7.994741049538354
+      },
+      "amortized_reuse64_control_over_candidate": {
+        "geometric_mean_speedup": 7.969884905230952,
+        "ci95_lower": 7.945139412708522,
+        "ci95_upper": 7.994707468698066
+      },
+      "setup_control_over_candidate": {
+        "geometric_mean_speedup": 3.7074261669572435,
+        "ci95_lower": 3.3871678531397666,
+        "ci95_upper": 4.057965054993721
+      },
+      "exact_main_amortized_over_candidate_reuse64": {
+        "geometric_mean_speedup": 56.13340461296682,
+        "ci95_lower": 55.91382696125912,
+        "ci95_upper": 56.35384456203011,
+        "semantics": "Exact Leopard-main decode includes setup on each call; Leopard2 is execution plus immutable plan setup divided by 64. Both use the legacy-compatible high profile and matching bytes."
+      }
+    },
+    {
+      "id": "low-target",
+      "K": 17,
+      "R": 31,
+      "losses": 1,
+      "profile": "low_v1",
+      "candidate_path": "direct",
+      "candidate_executor": "output_major",
+      "same_executable_control_path": "materialized",
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "9cd40479740530a9",
+        "transmitted_parity": "f693d884e27b55ae",
+        "recovered_originals": "992acd46ec1730db"
+      },
+      "execution_control_over_candidate": {
+        "geometric_mean_speedup": 41.066258941560946,
+        "ci95_lower": 40.90381491789668,
+        "ci95_upper": 41.22934808991289
+      },
+      "amortized_reuse64_control_over_candidate": {
+        "geometric_mean_speedup": 41.06598331242114,
+        "ci95_lower": 40.90353309299869,
+        "ci95_upper": 41.22907871018871
+      },
+      "setup_control_over_candidate": {
+        "geometric_mean_speedup": 4.69593399271889,
+        "ci95_lower": 3.980931265249223,
+        "ci95_upper": 5.5393561442443655
+      },
+      "exact_main_comparison": "not applicable because low_v1 has a distinct wire profile"
+    },
+    {
+      "id": "high-neighbor-loss2",
+      "K": 17,
+      "R": 16,
+      "losses": 2,
+      "profile": "legacy_high_v1",
+      "candidate_path": "tiled",
+      "same_executable_control_path": "tiled",
+      "execution_control_over_candidate": {
+        "geometric_mean_speedup": 0.999811266151997,
+        "ci95_lower": 0.9978228023307523,
+        "ci95_upper": 1.0018036925890077,
+        "credible_regression_greater_than_2_percent": false
+      }
+    },
+    {
+      "id": "low-neighbor-loss2",
+      "K": 17,
+      "R": 31,
+      "losses": 2,
+      "profile": "low_v1",
+      "candidate_path": "materialized",
+      "same_executable_control_path": "materialized",
+      "execution_control_over_candidate": {
+        "geometric_mean_speedup": 0.9998884102316746,
+        "ci95_lower": 0.9975739052279049,
+        "ci95_upper": 1.0022082851968923,
+        "credible_regression_greater_than_2_percent": false
+      }
+    }
+  ],
+  "artifacts": {
+    "raw_root": "/tmp/leopard2-general-l1-16m-37691ef-v1/authoritative-v3",
+    "summary_path": "/tmp/leopard2-general-l1-16m-37691ef-v1/authoritative-v3/summary.json",
+    "summary_sha256": "2b2af388a37b47a7290300a5ebc055ecfcb5e81953a4c0ebd747753972146a02",
+    "raw_invocations": 60,
+    "raw_attempts": 60,
+    "wall_time": "11min 14s"
+  },
+  "commands": {
+    "runner_self_test": "PYTHONDONTWRITEBYTECODE=1 python3 -c 'compile(open runner source)' plus an alternating-order paired-summary assertion",
+    "authoritative": "flock -x /tmp/leopard-gf8-authoritative.lock systemd-run --user --unit=leopard2-l1-large-guard-37691ef-v3 --pipe --wait -p MemoryMax=4G -p MemorySwapMax=0 -- taskset -c 0 python3 /home/catid/leopard/experiments/leopard2/direct_repair/run_large_l1_guard.py --candidate /tmp/leopard2-general-l1-16m-37691ef-v1/bin/candidate --main /tmp/leopard2-general-l1-16m-37691ef-v1/bin/main --output /tmp/leopard2-general-l1-16m-37691ef-v1/authoritative-v3 --cpu 6 --sibling 22 --expected-source-commit 37691ef6cb773dc8388f785166373a88f85cd325 --expected-source-tree bdb597d9de2bbe04b9168e6a7a9cd15aefd740df --expected-memory-max 4294967296 --rounds 3 --iterations 1 --warmup 1"
+  },
+  "conclusion": "The generalized GF8 AVX2 one-loss direct route passes the remaining large-shard promotion guard. Both target profiles have overwhelming same-executable gains, the legacy-compatible high profile decisively beats exact Leopard main, neighboring two-loss routes are neutral within a much tighter than 2 percent interval, and the bounded run produced no memory event."
+}
