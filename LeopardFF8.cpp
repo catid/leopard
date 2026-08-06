@@ -2817,14 +2817,14 @@ void ReedSolomonEncode(
     const bool dense_schedule = !sparse_plans ||
         sparse_plans->block_count == 0;
     // Exact-main AVX2 crossover measurements qualify every valid T=2 shape
-    // from 2 KiB.  Below that boundary the generated packed terminal handles
-    // dense public and prevalidated layouts without perturbing this generic
-    // transform.  For T=4, complete sub-2-KiB AVX2 vectors can use the
-    // existing register-resident K=3..7/K=9..11 kernels without staging the
-    // four-row accumulator.  Larger calls retain the established T=4
-    // thresholds and K=8/K>=12 direct-input callback.  Keep the boundaries
-    // explicit: buffer_bytes is the current execution pass, so a padded tail
-    // cannot inherit its aligned prefix's decision.
+    // from 2 KiB.  Below that boundary the generated packed terminals cover
+    // K=2..4, while complete 64-byte-or-larger passes use the direct-input
+    // callback from K=5.  For T=4, the register-resident K=3..7/K=9..11
+    // kernels and the direct-input K>=12 callback cover the same complete
+    // sub-2-KiB passes; K=8 retains its separately qualified packed-terminal
+    // policy.  Keep the boundaries explicit: buffer_bytes is the current
+    // execution pass, so a padded tail cannot inherit its aligned prefix's
+    // decision.
     const bool sub_2k_register_t4 =
         allow_sub_2k_register_kernels &&
         ops.kind == LEO2_BACKEND_AVX2 &&
@@ -2832,10 +2832,26 @@ void ReedSolomonEncode(
         (buffer_bytes & 31U) == 0 &&
         ((original_count >= 3 && original_count <= 7) ||
          (original_count >= 9 && original_count <= 11));
+    /* Multi-block T=2/T=4 calls are dominated by the mature path's per-source
+       copy into the temporary half, even for a single 64-byte vector.  The
+       existing direct-input callback has K-independent scratch and already
+       handles every complete block without that copy.  Restrict selection
+       to complete AVX2 vectors and start immediately after the separately
+       generated small-K terminals/register kernels. */
+    const bool tiny_multi_block_direct_input =
+        allow_sub_2k_register_kernels &&
+        ops.kind == LEO2_BACKEND_AVX2 &&
+        ((m == 2 && original_count >= 5) ||
+         (m == 4 && original_count >= 12)) &&
+        buffer_bytes >= 64U && buffer_bytes < 2U * 1024U &&
+        (buffer_bytes & 31U) == 0;
     const bool small_transform_shape =
-        m == 2 ? original_count >= 2 && buffer_bytes >= 2U * 1024U :
+        m == 2 ? original_count >= 2 &&
+            (buffer_bytes >= 2U * 1024U ||
+             tiny_multi_block_direct_input) :
         m == 4 && original_count >= 3 &&
-            (buffer_bytes >= 2U * 1024U || sub_2k_register_t4);
+            (buffer_bytes >= 2U * 1024U || sub_2k_register_t4 ||
+             tiny_multi_block_direct_input);
     if ((ops.kind == LEO2_BACKEND_AVX2 ||
          ops.kind == LEO2_BACKEND_GFNI) &&
         ops.ff8_high_encode_small && small_transform_shape &&

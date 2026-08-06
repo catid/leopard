@@ -1556,6 +1556,100 @@ void test_high_small_coarse_kernel(
     }
 }
 
+void test_high_t2_t4_tiny_multi_block(
+    const BinaryField& gf8,
+    Counts* counts)
+{
+    leo2_context_options options = {};
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX2;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result created = leo2_context_create(&options, &context);
+    if (created == LEO2_UNSUPPORTED)
+        return;
+    require_result(created, "tiny multi-block AVX2 context create");
+
+    struct Case
+    {
+        unsigned k;
+        unsigned r;
+        size_t bytes;
+        bool expect_small_transform;
+    };
+    const Case cases[] = {
+        // A padded tail is deliberately kept off the direct-input callback.
+        { 5, 2, 32, false },
+        { 5, 2, 63, false },
+        // T=2 begins immediately after the K=2..4 packed terminals.
+        { 5, 2, 64, true },
+        { 11, 2, 65, true },
+        { 15, 2, 1024, true },
+        { 15, 2, 2047, true },
+        { 253, 2, 64, true },
+        { 254, 2, 65, true },
+        // T=4 begins after the K=3..11 terminal/register families.
+        { 12, 3, 64, true },
+        { 13, 4, 65, true },
+        { 15, 4, 1024, true },
+        { 15, 4, 2047, true },
+        { 249, 4, 1024, true },
+        { 252, 4, 2047, true },
+        // The established large-shard callback remains selected at 2 KiB.
+        { 5, 2, 2048, true }
+    };
+
+    for (unsigned case_i = 0;
+         case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
+    {
+        const Case& c = cases[case_i];
+        CodecOwner* owner = make_codec(context, c.k, c.r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        const Shards original = random_shards(c.k, c.bytes,
+            UINT64_C(0x543254344d420000) + case_i);
+        const Shards original_before = original;
+        const ProfileLayout layout = leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh, c.k, c.r);
+        const Matrix generator =
+            leopard2_test::direct_systematic_generator(gf8, layout);
+        const Shards expected = oracle_parity(
+            gf8, generator, original, c.r, LEO2_FIELD_GF8);
+        const std::vector<uint8_t> requested(c.r, 1);
+
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        const EncodeResult actual = encode(owner->codec,
+            LEO2_TEST_ENCODE_AUTO, original, requested);
+        require_result(actual.result, "tiny multi-block encode");
+        compare_requested(actual.recovery, expected, requested, 0xa5,
+            "tiny multi-block/direct oracle", counts);
+        require(original == original_before,
+            "tiny multi-block encode modified caller input");
+        const leopard::ff8::TestOnlyHighEncodeCounts route =
+            leopard::ff8::TestOnlyGetHighEncodeCounts();
+        require((route.small_transform_calls != 0) ==
+                c.expect_small_transform,
+            "tiny multi-block route mismatch: K=" + std::to_string(c.k) +
+                " R=" + std::to_string(c.r) +
+                " bytes=" + std::to_string(c.bytes) +
+                " calls=" + std::to_string(route.small_transform_calls));
+        if (c.expect_small_transform && (c.bytes & 63U) == 0)
+        {
+            const uint64_t expected_tail_copies = c.r == 2
+                ? c.k % 2U
+                : (c.k % 4U == 3U ? 0U : c.k % 4U);
+            require(route.input_copy_shards == expected_tail_copies,
+                "tiny multi-block source-copy count mismatch: K=" +
+                    std::to_string(c.k) + " R=" + std::to_string(c.r) +
+                    " bytes=" + std::to_string(c.bytes) +
+                    " copies=" +
+                        std::to_string(route.input_copy_shards));
+        }
+        ++counts->high_small_transform_checks;
+        delete owner;
+    }
+    leo2_context_destroy(context);
+}
+
 // Mirrors ComputeBalancedExecutionTiles in leopard2.cpp.  A qualifying aligned
 // prefix is split into ceil(prefix / requested) passes carrying equal 64-byte
 // tile counts, and the work rows are sized to the largest pass.  Keeping the
@@ -3057,10 +3151,12 @@ void test_unaligned_guarded_buffers(
         unsigned k;
         unsigned r;
         size_t bytes;
+        bool direct_first;
     };
     const Case cases[] = {
-        { LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 5, 3, 65 },
-        { LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 5, 3, 66 }
+        { LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 5, 3, 65, true },
+        { LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 252, 4, 65, false },
+        { LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 5, 3, 66, true }
     };
     const size_t input_prefix = 3;
     const size_t output_prefix = 5;
@@ -3072,8 +3168,11 @@ void test_unaligned_guarded_buffers(
         const BinaryField& field = c.field == LEO2_FIELD_GF8 ? gf8 : gf16;
         CodecOwner* owner = make_codec(
             context, c.k, c.r, c.profile, c.field);
-        require_result(leo2_test_codec_set_encode_mode(owner->codec,
-            LEO2_TEST_ENCODE_FORCE_DIRECT), "force direct unaligned");
+        if (c.direct_first)
+        {
+            require_result(leo2_test_codec_set_encode_mode(owner->codec,
+                LEO2_TEST_ENCODE_FORCE_DIRECT), "force direct unaligned");
+        }
 
         const Shards original = random_shards(c.k, c.bytes,
             UINT64_C(0x756e616c69676e) + case_i);
@@ -3109,11 +3208,11 @@ void test_unaligned_guarded_buffers(
             owner->codec, c.bytes, &scratch_bytes), "unaligned scratch query");
         AlignedBuffer scratch(scratch_bytes);
         require_result(leo2_encode(owner->codec, c.bytes, &input[0], &output[0],
-            scratch.data(), scratch.size()), "unaligned direct encode");
+            scratch.data(), scratch.size()), "unaligned initial encode");
         for (unsigned i = 0; i < c.r; ++i)
             require(memcmp(&output_storage[i][output_prefix],
                         &expected[i][0], c.bytes) == 0,
-                "unaligned direct encode differs from the oracle");
+                "unaligned initial encode differs from the oracle");
 
         require_result(leo2_test_codec_set_encode_mode(owner->codec,
             LEO2_TEST_ENCODE_FORCE_TRANSFORM), "force transform unaligned");
@@ -3744,6 +3843,7 @@ int main()
         test_high_transform_source_staging(
             context, gf8, gf16, &counts);
         test_high_small_coarse_kernel(context, gf8, &counts);
+        test_high_t2_t4_tiny_multi_block(gf8, &counts);
         test_high_gf16_byte_tiling(context, gf16, &counts);
         test_gf8_high_tail_generator_column(gf8, &counts);
 #if LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN
