@@ -1,0 +1,107 @@
+{
+  "schema": "leopard2-gf8-t2-pair-k5-k16-promotion/v1",
+  "date_utc": "2026-08-06",
+  "authoritative_promotion_evidence": true,
+  "bead": "leopard-79h.38.5.10.49",
+  "scope": "Legacy-high GF8 AVX2 dense two-parity encoding for K=5..16",
+  "source": {
+    "candidate_commit": "05cdcc253d08c58989f4d31904c3228e217fe3e9",
+    "candidate_tree": "44acbcdd4daf86480befd198641419464182c4dc",
+    "candidate_tracked_dirty": false,
+    "candidate_binary_sha256": "ccade0b1fdb29ea0a8d7fbdf9284e91e3e6a63c20b7a8efa9ddc8b4cb26ef50b",
+    "same_source_baseline_commit": "c5ec64a6b4a99d4adaa36b9cb8becdff95901847",
+    "same_source_baseline_binary_sha256": "a8f6b30864dd558c1ccefa6fd2f88a2febf652407f668e7aaf7cc15448ef5ed7",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_binary_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93"
+  },
+  "implementation": {
+    "algebra": "For source pair (a,b) and fixed legacy coefficient c, compute q=c*(a xor b), then p0 xor= a xor q and p1 xor= b xor q. An odd final a contributes q=c*a, p0 xor= a xor q, p1 xor= q.",
+    "legacy_multiplier_logs": [85, 17, 34, 153, 102, 51, 187, 219],
+    "work_reduction": "One AVX2 nibble-table GF8 multiply per source pair feeds both parity outputs, without staging the K source shards into transform scratch.",
+    "public_fast_layout": "Dense packed source and two-parity slabs, complete 64-byte-multiple shards, ordinary native legacy-high profile.",
+    "qualified_byte_limits": [
+      { "K_min": 5, "K_max": 11, "maximum_bytes": 65536 },
+      { "K_min": 12, "K_max": 15, "maximum_bytes": 3072 },
+      { "K_min": 16, "K_max": 16, "maximum_bytes": 2048 }
+    ],
+    "fallback": "Sparse outputs, ragged sizes, detached public slabs, aliases, and sizes above the measured limit retain the general legacy transform path.",
+    "dispatch_isolation": "The existing K=2/3 terminal wrapper remains separate and the new multi-block public dispatch is placed after established neighboring terminal selectors. This removed the first combined wrapper's credible K=2/3 regressions."
+  },
+  "methodology": {
+    "cpu": 6,
+    "reserved_smt_sibling": 22,
+    "controller_cpu": 0,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "rounds": 5,
+    "order": "alternating ABBA/BAAB",
+    "iterations_per_invocation": 15,
+    "warmups_per_invocation": 3,
+    "batch": 1,
+    "threads": 1,
+    "child_address_space_limit_bytes": 536870912,
+    "statistic": "Mean of five independent log-contrasts with two-sided Student-t 95 percent confidence interval.",
+    "ratio_orientation": "Comparator encode time divided by candidate encode time.",
+    "isolation_result": "The reserved SMT sibling accumulated zero non-idle jiffies in both exact-main campaigns; frozen binary hashes were unchanged."
+  },
+  "exact_main": {
+    "small_matrix": {
+      "selected_cells": 72,
+      "K_range": [5, 16],
+      "bytes": [64, 128, 256, 1024, 1984, 2048],
+      "credible_wins": 72,
+      "credible_losses": 0,
+      "minimum_ratio": 1.183533888270159,
+      "minimum_ci95_low": 1.159477204197776,
+      "summary_path": "/tmp/leopard2-t2-exact-main-05cdcc2-v1/summary.json",
+      "summary_sha256": "f7578cb07196a021528657b2235a25f5f09297643e20a85bad3d7f99bba6b277"
+    },
+    "large_matrix": {
+      "selected_cells": 57,
+      "credible_wins": 57,
+      "credible_losses": 0,
+      "minimum_ratio": 1.2546378105143865,
+      "minimum_ci95_low": 1.1853020844724047,
+      "boundary_control_cells": 12,
+      "boundary_control_credible_losses": 0,
+      "summary_path": "/tmp/leopard2-t2-large-exact-main-05cdcc2-v1/summary.json",
+      "summary_sha256": "6445798be1b91cce9f179806439990ae6e5b131bee4b2c1c066629f68fcde7be"
+    },
+    "representative_ratios": [
+      { "K": 5, "R": 2, "bytes": 64, "ratio": 1.7596011944, "ci95": [1.6686966671, 1.8554578699] },
+      { "K": 16, "R": 2, "bytes": 2048, "ratio": 1.2220399906, "ci95": [1.1915908103, 1.2532672505] },
+      { "K": 5, "R": 2, "bytes": 65536, "ratio": 2.2592041070, "ci95": [2.2478914906, 2.2705736546] },
+      { "K": 11, "R": 2, "bytes": 65536, "ratio": 1.6368645432, "ci95": [1.5831286880, 1.6924243449] },
+      { "K": 15, "R": 2, "bytes": 3072, "ratio": 1.3868150369, "ci95": [1.3709531581, 1.4028604371] }
+    ]
+  },
+  "same_source": {
+    "small_selected_cells": 12,
+    "small_credible_wins": 12,
+    "small_credible_losses": 0,
+    "small_minimum_ratio": 1.02773644095814,
+    "small_minimum_ci95_low": 1.0102701714713587,
+    "large_selected_cells": 57,
+    "large_credible_wins": 55,
+    "large_credible_losses": 0,
+    "large_minimum_ratio": 1.0293255701850146,
+    "large_minimum_ci95_low": 0.9771005017918128,
+    "neighbor_or_boundary_credible_regressions_beyond_two_percent": 0,
+    "small_summary_path": "/tmp/leopard2-t2-same-source-05cdcc2-v1/summary.json",
+    "small_summary_sha256": "ebda4a93d5f2482a90bc191ac9a70067e86bb03ac8fd2c306b21ddae2a872722",
+    "large_summary_path": "/tmp/leopard2-t2-large-same-source-05cdcc2-v1/summary.json",
+    "large_summary_sha256": "3b6672ec478bfeb1a4b753195028c045ed7b612db25daaa3612b8f083c5f3891"
+  },
+  "correctness": {
+    "independent_oracle": "Direct systematic generator comparison for every K=5..16 across selected and fallback boundaries.",
+    "routes": ["public encode", "one- and two-item batch", "reusable batch binding", "forced transform fallback"],
+    "contracts": ["sparse output", "ragged size", "detached slab", "input/output overlap", "output/output overlap", "batch metadata overlap", "undersized and misaligned scratch"],
+    "release": "Focused packed and ordinary-production tests passed; the 1024-profile direct encoder suite passed in 76.13 seconds.",
+    "clang18_asan_ubsan_lsan": "Focused packed and ordinary-production tests passed with no diagnostic."
+  },
+  "runner_correction": {
+    "invalidated_result": "The first wrapper run changed ROOT after importing the reusable runner but failed to recompute its derived RAW global, so it reused pre-kernel JSON files with matching cell names.",
+    "resolution": "The wrapper now sets both ROOT and RAW before execution. All reported campaigns used new isolated raw directories, checked frozen hashes, matching parity/recovery digests, and clean source attestation.",
+    "invalid_data_used_for_conclusions": false
+  },
+  "disposition": "Promote. Every exact-main selected cell is a credible win, the same-source matrices contain no credible selected loss or neighboring regression beyond two percent, and all correctness and sanitizer gates pass."
+}
