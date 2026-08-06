@@ -478,14 +478,17 @@ void ExercisePromotedMatrix(
 {
     static const Cell cells[] = {
         { 6, 5, 64 },
+        { 7, 5, 64 },
         { 6, 6, 64 },
         { 7, 7, 64 },
         { 6, 5, 256 },
+        { 7, 5, 256 },
         { 5, 5, 256 },
         { 6, 6, 256 },
         { 7, 7, 256 },
         { 8, 8, 256 },
         { 6, 5, 1024 },
+        { 7, 5, 1024 },
         { 5, 5, 1024 },
         { 6, 6, 1024 },
         { 7, 7, 1024 },
@@ -526,7 +529,8 @@ void ExerciseNonPromotedCells(leo2_context* context)
              ++recovery_count)
         {
             if (original_count == recovery_count ||
-                (original_count == 6 && recovery_count == 5))
+                ((original_count == 6 || original_count == 7) &&
+                 recovery_count == 5))
                 continue;
             for (size_t byte_i = 0;
                  byte_i < sizeof(exact_bytes) / sizeof(exact_bytes[0]);
@@ -541,6 +545,8 @@ void ExerciseNonPromotedCells(leo2_context* context)
     /* Preserve the established B64 terminal's immediate neighbors. */
     ExerciseCell(context, Cell{ 6, 6, 63 }, false);
     ExerciseCell(context, Cell{ 6, 6, 65 }, false);
+    ExerciseCell(context, Cell{ 7, 5, 63 }, false);
+    ExerciseCell(context, Cell{ 7, 5, 65 }, false);
     ExerciseCell(context, Cell{ 7, 7, 63 }, false);
     ExerciseCell(context, Cell{ 7, 7, 65 }, false);
     ExerciseCell(context, Cell{ 7, 6, 64 }, false);
@@ -863,10 +869,13 @@ void ExerciseScalarFallbacks()
         "create scalar K=8/R=8/T=8 fallback context");
     static const Cell cells[] = {
         { 6, 5, 64 },
+        { 7, 5, 64 },
         { 6, 6, 64 }, { 7, 7, 64 },
         { 6, 5, 256 },
+        { 7, 5, 256 },
         { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 }, { 8, 8, 256 },
         { 6, 5, 1024 },
+        { 7, 5, 1024 },
         { 5, 5, 1024 }, { 6, 6, 1024 }, { 7, 7, 1024 },
         { 8, 8, 1024 }, { 8, 8, 64 }
     };
@@ -1009,10 +1018,13 @@ void ExerciseAutoBackend(bool full_parity_terminal_available)
         leo2_context_backend(context) == LEO2_BACKEND_AVX2;
     static const Cell cells[] = {
         { 6, 5, 64 },
+        { 7, 5, 64 },
         { 6, 6, 64 }, { 7, 7, 64 },
         { 6, 5, 256 },
+        { 7, 5, 256 },
         { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 }, { 8, 8, 256 },
         { 6, 5, 1024 },
+        { 7, 5, 1024 },
         { 5, 5, 1024 }, { 6, 6, 1024 }, { 7, 7, 1024 },
         { 8, 8, 1024 }, { 8, 8, 64 }
     };
@@ -1075,6 +1087,7 @@ int main()
         ExerciseNonPromotedCells(context);
         ExerciseForcedTransform(context, Cell{ 6, 6, 64 });
         ExerciseForcedTransform(context, Cell{ 6, 5, 64 });
+        ExerciseForcedTransform(context, Cell{ 7, 5, 64 });
         ExerciseForcedTransform(context, Cell{ 7, 7, 64 });
         ExerciseForcedTransform(context, Cell{ 8, 8, 64 });
         ExerciseForcedTransform(context, Cell{ 7, 7, 1024 });
@@ -1085,10 +1098,12 @@ int main()
         ExerciseForcedTransform(context, Cell{ 16, 7, 256 });
         static const Cell promoted_cells[] = {
             { 6, 5, 64 },
+            { 7, 5, 64 },
             { 6, 6, 64 }, { 7, 7, 64 },
             { 6, 5, 256 },
+            { 7, 5, 256 },
             { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 },
-            { 8, 8, 256 }, { 6, 5, 1024 },
+            { 8, 8, 256 }, { 6, 5, 1024 }, { 7, 5, 1024 },
             { 5, 5, 1024 }, { 6, 6, 1024 },
             { 7, 7, 1024 }, { 8, 8, 1024 }, { 8, 8, 64 }
         };

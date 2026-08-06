@@ -3211,6 +3211,25 @@ void ReedSolomonEncodeK6R5T8(
         FFTSkewStorage + 8, FFTSkewStorage, byte_count);
 }
 
+void ReedSolomonEncodeK7R5T8(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* work,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+    LEO_DEBUG_ASSERT(ops.ff8_high_encode_one_block != NULL);
+    LEO_DEBUG_ASSERT((ops.ff8_high_encode_one_block_sides & 8U) != 0);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestHighIFFTButterfly4OutCalls.fetch_add(2, std::memory_order_relaxed);
+    TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
+    ops.ff8_high_encode_one_block(
+        data, work, 8U | backend::kFF8HighEncodeK7R5Partial,
+        FFTSkewStorage + 8, FFTSkewStorage, byte_count);
+}
+
 void ReedSolomonEncodeK7R7T8(
     const backend::Ops& ops,
     const void* const* data,

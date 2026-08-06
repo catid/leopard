@@ -7470,7 +7470,7 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK6K7T8Vector(
     uint64_t byte_count)
 {
     static_assert(ActiveCount == 6 || ActiveCount == 7,
-        "exact T=8 partial kernel supports K=R=6 or K=R=7");
+        "exact T=8 partial kernel supports K=6 or K=7");
     static_assert(OutputCount >= 5 && OutputCount <= ActiveCount,
         "exact T=8 partial output prefix is invalid");
     static const uint16_t kInverse1 = 153;
@@ -7653,6 +7653,8 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
         (side_and_flags & kFF8HighEncodeK7R7Partial) != 0;
     const bool k6_r5_partial =
         (side_and_flags & kFF8HighEncodeK6R5Partial) != 0;
+    const bool k7_r5_partial =
+        (side_and_flags & kFF8HighEncodeK7R5Partial) != 0;
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
     const bool k9_tail =
         (side_and_flags & kFF8HighEncodeK9Tail) != 0;
@@ -7665,6 +7667,7 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
           kFF8HighEncodeK6R6Partial |
           kFF8HighEncodeK7R7Partial |
           kFF8HighEncodeK6R5Partial |
+          kFF8HighEncodeK7R5Partial |
           kFF8HighEncodeK9Tail |
           kFF8HighEncodeK9OutputCountMask);
 #else
@@ -7676,29 +7679,27 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
           kFF8HighEncodeK5R5Partial |
           kFF8HighEncodeK6R6Partial |
           kFF8HighEncodeK7R7Partial |
-          kFF8HighEncodeK6R5Partial);
+          kFF8HighEncodeK6R5Partial |
+          kFF8HighEncodeK7R5Partial);
 #endif
     LEO_DEBUG_ASSERT(side == 8);
     if (side != 8)
         return;
     const bool k9_output_count_valid =
         k9_output_count >= 5 && k9_output_count <= 8;
-    if ((shortened &&
-            (k5_r5_partial || k6_r6_partial || k7_r7_partial ||
-             k6_r5_partial || k9_tail)) ||
-        (k5_r5_partial &&
-            (k6_r6_partial || k7_r7_partial || k6_r5_partial || k9_tail)) ||
-        (k6_r6_partial && (k7_r7_partial || k6_r5_partial || k9_tail)) ||
-        (k7_r7_partial && (k6_r5_partial || k9_tail)) ||
-        (k6_r5_partial && k9_tail) ||
-        (k9_tail ? !k9_output_count_valid : k9_output_count != 0))
-        return;
-    LEO_DEBUG_ASSERT(
-        static_cast<unsigned>(shortened) +
+    const unsigned partial_count =
         static_cast<unsigned>(k5_r5_partial) +
         static_cast<unsigned>(k6_r6_partial) +
         static_cast<unsigned>(k7_r7_partial) +
         static_cast<unsigned>(k6_r5_partial) +
+        static_cast<unsigned>(k7_r5_partial);
+    if ((shortened && (partial_count != 0 || k9_tail)) ||
+        partial_count > 1 || (partial_count != 0 && k9_tail) ||
+        (k9_tail ? !k9_output_count_valid : k9_output_count != 0))
+        return;
+    LEO_DEBUG_ASSERT(
+        static_cast<unsigned>(shortened) +
+        partial_count +
         static_cast<unsigned>(k9_tail) <= 1U);
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
     if (k9_tail)
@@ -7766,6 +7767,12 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
     if (k7_r7_partial)
     {
         AVX2FF8HighEncodeK6K7T8Vector<7>(
+            data, work, inverse_skew, forward_skew, byte_count);
+        return;
+    }
+    if (k7_r5_partial)
+    {
+        AVX2FF8HighEncodeK6K7T8Vector<7, 5>(
             data, work, inverse_skew, forward_skew, byte_count);
         return;
     }
