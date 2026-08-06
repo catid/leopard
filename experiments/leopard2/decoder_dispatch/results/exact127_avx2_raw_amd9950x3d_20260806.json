@@ -1,0 +1,217 @@
+{
+  "schema": "leopard2-exact127-avx2-raw-evidence/v1",
+  "date_utc": "2026-08-06",
+  "bead": "leopard-79h.38.2.5.17.1",
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "governor": "powersave",
+    "allowed_cpus": "0-13,16-29",
+    "timing_cpu": 13,
+    "smt_sibling": 29,
+    "orchestration_affinity": "CPU 0; other Codex processes excluded from CPUs 13 and 29",
+    "runnable_sibling_observations": 0
+  },
+  "artifacts": {
+    "implementation_commit": "769310ff1c8ffb6d3651255b0cee89a557209c66",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "timed_candidate_sha256": "fb7cf6c1ee2852f1f246fea28656f6b3cc6d40b0850b467c29b7c7b68794b3e6",
+    "final_candidate_sha256": "2e8a7a54545a1e0728673111a4b68304ddac86fb1109c28bcaa491f3b14c8572",
+    "exact_main_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "disabled_control_sha256": "f59ada9ad619b0b4a479200234d57b85dbd7cb205c08fb5002f6e8bbf41f96fd",
+    "final_text_sha256": "8ba3d99c5a02c82913b69743ab18518568b76a02f3af0149d9d7c8844981e2b1",
+    "final_rodata_sha256": "9f780702d6b1eced913ad394b1f24a9be28c59b366d7c96f71d75732306ba448",
+    "final_data_sha256": "a00014338a2e3343bfc9395c0d2b57a5f7e9ae2e3551dbbeba96e61ef974c18c",
+    "timed_and_final_loadable_sections_identical": true,
+    "timed_and_final_difference": "ELF build identity, attestation text, and symbol-table offsets only; .text, .rodata, and .data match byte-for-byte.",
+    "fixed_copy_screen_root": "/tmp/leopard2-exact127-stage-screen-v1",
+    "fused_screen_root": "/tmp/leopard2-exact127-fused-screen-v2",
+    "pre_raw_full_map_root": "/tmp/leopard2-exact127-fused-all-n128-t32-v1",
+    "raw_abba_root": "/tmp/leopard2-exact127-raw-abba-v1",
+    "final_full_map_root": "/tmp/leopard2-exact127-raw-all-n128-t32-v2",
+    "weak_rerun_root": "/tmp/leopard2-exact127-raw-weak-rerun-v1",
+    "neighbor_root": "/tmp/leopard2-exact127-final-neighbor-abba-v1",
+    "hashes_stable_after_campaigns": true,
+    "stderr_files_nonempty": 0
+  },
+  "implementation": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "public_bytes": 127,
+    "kernel_bytes": 128,
+    "parent_count": 128,
+    "padded_side": 32,
+    "K": "33..96",
+    "R": "17..32",
+    "loss_policy": "R-1 or R missing originals",
+    "receive_boundary": "Load public bytes 0..126 directly, synthesize byte 127 as zero, and fuse the first two inverse LCH layers into 128-byte work rows.",
+    "one_shot_setup": "Store bounded Algorithm 5 erasure metadata in caller scratch rather than allocating a transient vector-owned decode plan.",
+    "output_boundary": "Write complete transform output to scratch and copy only bytes 0..126 to each public restored shard.",
+    "fallback": "Every other byte/count/loss/backend/profile combination retains the established reusable-plan or general one-shot route."
+  },
+  "source_boundary_safety": {
+    "tail_loads": [
+      "16 bytes at source+96, covering public bytes 96..111",
+      "16 bytes at source+111, covering public bytes 111..126; shift right by one byte to form bytes 112..126 plus zero"
+    ],
+    "maximum_source_offset_read": 126,
+    "emitted_symbol_bytes": 1819,
+    "emitted_symbol_hex_size": "0x71b",
+    "assembly_observation": "The exact-tail cases load XMM vectors only at offsets 0x60 and 0x6f. No load starts at or includes source+127.",
+    "asan_boundary": "API tests allocate exact 127-byte shard vectors; both R-1 and R one-shot cases pass Clang 18 ASan+UBSan, so a source[127] read or 128-byte public output write would hit a redzone."
+  },
+  "method": {
+    "common": {
+      "field": "gf8",
+      "backend": "avx2",
+      "profile": "legacy_high_v1",
+      "batch": 1,
+      "threads": 1,
+      "pinning": "Each benchmark process pinned to CPU 13; CPU 29 continuously monitored for runnable tasks.",
+      "order": "Counterbalanced ABBA process order with identical deterministic seeds and missing-coordinate patterns.",
+      "ratio_semantics": "Ratios above one mean the candidate in the denominator is faster."
+    },
+    "fused_screen": {
+      "cells": 4,
+      "rounds": 5,
+      "processes_per_implementation_per_cell": 10,
+      "reuse": 128,
+      "iterations_per_process": 17,
+      "warmup_per_process": 6,
+      "comparison": "fixed 127-to-128 staging copy versus fused direct source boundary"
+    },
+    "raw_abba": {
+      "cells": 10,
+      "reports": 200,
+      "rounds": 5,
+      "processes_per_implementation_per_cell": 10,
+      "reuse": 128,
+      "iterations_per_process": 17,
+      "warmup_per_process": 6,
+      "comparison": "same source and identical .text/.rodata; a single diagnostic data word disables or enables scratch-owned raw one-shot setup"
+    },
+    "full_exact_main_map": {
+      "K": "33..96",
+      "R": "17..32",
+      "losses": ["R-1", "R"],
+      "distinct_cells": 2048,
+      "reports": 8192,
+      "reuse": 32,
+      "iterations_per_process": 5,
+      "warmup_per_process": 2,
+      "main_semantics": "Exact Leopard main processes a physical 128-byte shard and fingerprints only the zero-padded 127-byte logical prefix.",
+      "purpose": "Exhaustive directional crossover map; the weak-cell rerun supplies confidence intervals."
+    },
+    "weak_rerun": {
+      "cells": 15,
+      "rounds": 8,
+      "processes_per_implementation_per_cell": 16,
+      "reuse": 128,
+      "iterations_per_process": 17,
+      "warmup_per_process": 6,
+      "interval": "Deterministic percentile bootstrap over eight round-level ABBA ratios."
+    },
+    "neighbors": {
+      "K_R_loss_shapes": ["57/29/28", "57/29/29", "92/32/31", "92/32/32"],
+      "bytes": [64, 65, 128],
+      "distinct_cells": 12,
+      "reports": 240,
+      "rounds": 5,
+      "comparison": "final enabled binary versus same-source disabled-control binary"
+    }
+  },
+  "staging_and_fusion_results": [
+    {
+      "K_R_loss": "57/29/28",
+      "prior_over_fixed_copy_execution": 1.026307,
+      "fixed_copy_over_fused_execution": 1.018808,
+      "fixed_copy_over_fused_one_shot": 1.024253
+    },
+    {
+      "K_R_loss": "57/29/29",
+      "prior_over_fixed_copy_execution": 1.027253,
+      "fixed_copy_over_fused_execution": 1.025949,
+      "fixed_copy_over_fused_one_shot": 1.026677
+    },
+    {
+      "K_R_loss": "92/31/30",
+      "prior_over_fixed_copy_execution": 1.038893,
+      "fixed_copy_over_fused_execution": 1.048925,
+      "fixed_copy_over_fused_one_shot": 1.043873
+    },
+    {
+      "K_R_loss": "92/31/31",
+      "prior_over_fixed_copy_execution": 1.037954,
+      "fixed_copy_over_fused_execution": 1.049021,
+      "fixed_copy_over_fused_one_shot": 1.043583
+    }
+  ],
+  "raw_one_shot_results": [
+    { "K_R_loss": "33/17/16", "disabled_over_enabled_one_shot": 1.181590, "disabled_over_enabled_execution": 1.006501 },
+    { "K_R_loss": "33/17/17", "disabled_over_enabled_one_shot": 1.155199, "disabled_over_enabled_execution": 1.009270 },
+    { "K_R_loss": "57/29/28", "disabled_over_enabled_one_shot": 1.149113, "disabled_over_enabled_execution": 1.001089 },
+    { "K_R_loss": "57/29/29", "disabled_over_enabled_one_shot": 1.124828, "disabled_over_enabled_execution": 1.007799 },
+    { "K_R_loss": "68/32/31", "disabled_over_enabled_one_shot": 1.144477, "disabled_over_enabled_execution": 1.008181 },
+    { "K_R_loss": "68/32/32", "disabled_over_enabled_one_shot": 1.121157, "disabled_over_enabled_execution": 1.004559 },
+    { "K_R_loss": "92/32/31", "disabled_over_enabled_one_shot": 1.139634, "disabled_over_enabled_execution": 1.008789 },
+    { "K_R_loss": "92/32/32", "disabled_over_enabled_one_shot": 1.115952, "disabled_over_enabled_execution": 1.009616 },
+    { "K_R_loss": "96/32/31", "disabled_over_enabled_one_shot": 1.130583, "disabled_over_enabled_execution": 1.005568 },
+    { "K_R_loss": "96/32/32", "disabled_over_enabled_one_shot": 1.115627, "disabled_over_enabled_execution": 1.004312 }
+  ],
+  "exact_main_results": [
+    {
+      "loss": "R-1",
+      "cells": 1024,
+      "main_over_candidate_geomean": 1.152791481,
+      "candidate_slower_cells": 0
+    },
+    {
+      "loss": "R",
+      "cells": 1024,
+      "main_over_candidate_geomean": 1.146965504,
+      "candidate_slower_cells": 0
+    },
+    {
+      "loss": "combined",
+      "cells": 2048,
+      "main_over_candidate_geomean": 1.149874803,
+      "candidate_slower_cells": 0
+    }
+  ],
+  "weak_cell_confirmation": [
+    { "K_R_loss": "80/31/31", "main_over_candidate": 1.029801, "ci95": [1.025888, 1.032961] },
+    { "K_R_loss": "92/32/32", "main_over_candidate": 1.037061, "ci95": [1.031753, 1.041557] },
+    { "K_R_loss": "93/32/31", "main_over_candidate": 1.028463, "ci95": [1.026723, 1.030184] },
+    { "K_R_loss": "96/32/31", "main_over_candidate": 1.039454, "ci95": [1.036256, 1.042941] }
+  ],
+  "neighbor_results": {
+    "disabled_over_enabled_geomean_range": [0.990598, 1.002510],
+    "worst_round_ratio": 0.986503,
+    "regression_guard": 0.98,
+    "cells_below_guard": 0,
+    "rounds_below_guard": 0,
+    "round_trip_failures": 0,
+    "digest_mismatch_groups": 0
+  },
+  "correctness": {
+    "full_map_candidate_failures": 0,
+    "full_map_main_failures": 0,
+    "full_map_cross_binary_digest_mismatches": 0,
+    "release_focused": "5/5 passed in 4.77 seconds: context_backends, api, random, decode_plan_schedule, high_pruned_legacy",
+    "clang18_asan_ubsan_api": "1/1 passed in 1.66 seconds with 16 MiB ASan quarantine; includes R-1 and R exact-127 one-shot boundaries",
+    "field_builds": "FF8-only and FF16-only production libraries compile",
+    "strict_gcc": "leopard2_api_test builds with -Wall -Wextra -Wpedantic -Werror",
+    "strict_clang_changed_translation_units": "leopard2.cpp, LeopardFF8.cpp, and Leopard2BackendAVX2.cpp compile with Clang 18 -Wall -Wextra -Wpedantic -Werror",
+    "strict_clang_full_target": "A pre-existing option-dependent unused-helper failure in Leopard2BackendAVX2T8K8B1024.cpp is tracked separately as leopard-79h.40.19.8.",
+    "release_test_peak_rss_kib": 803372,
+    "asan_test_peak_rss_kib": 1007280,
+    "oom_events_observed": 0
+  },
+  "decision": {
+    "promoted": true,
+    "reason": "The direct exact-source boundary removes the remaining staging pass, scratch-owned raw setup removes transient plan allocation, all 2048 exact-main cells win, all weak-cell confidence intervals remain above parity, neighbor regressions stay below two percent, and exact-byte sanitizer boundaries are clean.",
+    "measured_region": "GF8 AVX2 legacy-high N=128/T=32, K=33..96, R=17..32, B=127, and R-1 or R missing originals.",
+    "non_claim": "This evidence does not generalize the exact-source kernel to other byte lengths, transform sides, fields, backends, or lower loss counts."
+  }
+}
