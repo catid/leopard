@@ -1,0 +1,170 @@
+{
+  "schema": "leopard2-gf8-k6-k7-t8-b64-avx2/v1",
+  "created_utc": "2026-08-06T04:51:03Z",
+  "status": "promoted",
+  "scope": {
+    "field": "GF8",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "backend": "forced AVX2",
+    "operation": "prepared-codec encode execution",
+    "target_cells": [
+      {"K": 6, "R": 6, "shard_bytes": 64},
+      {"K": 7, "R": 7, "shard_bytes": 64}
+    ],
+    "change": "Admit the existing exact-count K6/K7 T8 arithmetic kernels through the packed public full-parity terminal at 64 bytes. K5 and K8 retain their earlier dedicated B64 terminals."
+  },
+  "source": {
+    "branch": "codex/leopard2",
+    "candidate_commit": "07dc2fc677f3269d43a36b36b359bf9d5bb89bb5",
+    "candidate_tree": "3805c4b2f01ae0a1c4fa9f3dc6a309c42e31baeb",
+    "candidate_tracked_dirty": false,
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_tree": "b7c8830d96a978f6ec14fe747095f066e351ae72"
+  },
+  "frozen_inputs": {
+    "candidate_executable": "/tmp/leopard2-t8-b64-k6k7-final-07dc2fc-v1/artifacts/bench-leopard2-07dc2fc",
+    "candidate_executable_sha256": "0d520ddaad23d97a288006217650f0b8ab9d5c1d020b612d0e3335f4057e939d",
+    "candidate_archive_sha256": "991cadf40cbfd9a7f38a45eed5bb833c87ec075717f919362d7fa0929a195010",
+    "exact_main_executable": "/tmp/leopard2-t8-b64-k6k7-final-07dc2fc-v1/artifacts/leopard-main-d39c77d",
+    "exact_main_executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "exact_main_archive_sha256": "49250fb7528df955e57e96f84b309cf0c26f203122d112f3f501336c0eb131d0",
+    "immutability": "Lane-owned executable copies were installed read-only before timing and their SHA-256 values were unchanged after every accepted campaign."
+  },
+  "discovery": {
+    "small_all_k_directory": "/tmp/leopard2-small-allk-ae29b30-light-v1",
+    "summary_sha256": "d0ff57ce9d02fcfed026556859af8fa11326794d275fa55edc5e959978494c17",
+    "cell_payload_aggregate_sha256": "64dd8e37efd039098c1c3564a6c03ff2bee6bd8facd06454b704ad2111950605",
+    "cell_count": 3783,
+    "correctness_failures": 0,
+    "maximum_rss_kib": 41016,
+    "elapsed_seconds": 292.09563764487393,
+    "reserved_sibling_nonidle_jiffies": 8,
+    "classification": "Directional discovery only. The long screen located candidates but is not promotion evidence because the reserved sibling was not perfectly idle.",
+    "prechange_exact_main_over_leopard2": {
+      "K6_R6_B64": {
+        "estimate": 0.4585772020407682,
+        "student_t_95_ci": [0.45635972062248287, 0.4608054583447812]
+      },
+      "K7_R7_B64": {
+        "estimate": 0.45551274706408623,
+        "student_t_95_ci": [0.4500697643477416, 0.4610215552661605]
+      }
+    },
+    "prechange_exact_main_abba": {
+      "raw_directory": "/tmp/leopard2-t8-b64-k6k7-baseline-ae29b30-v1",
+      "file_count": 80,
+      "aggregate_sha256": "e42b2ccc1d0a951f56fab97e84ab7b4b11bbbdef0198cdefcc6c323a660ef9c3",
+      "rounds": 5,
+      "reserved_sibling_nonidle_jiffies": 0
+    }
+  },
+  "campaign": {
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "benchmark_cpu": 28,
+    "reserved_smt_sibling": 12,
+    "accepted_sibling_nonidle_jiffies": 0,
+    "round_order": ["control", "candidate", "candidate", "control"],
+    "iterations_per_invocation": 31,
+    "warmup_per_invocation": 16,
+    "reuse": 4096,
+    "batch": 1,
+    "threads": 1,
+    "statistics": "One average log(control/candidate) contrast per independent ABBA round, with a two-sided 95% Student-t interval.",
+    "same_source_targets": {
+      "raw_directory": "/tmp/leopard2-t8-b64-k6k7-final-07dc2fc-v1/same-source-target-clean",
+      "rounds": 7,
+      "file_count": 56,
+      "aggregate_sha256": "f4461585db893fcee8c183033de41e3a2323b2d127f6ad7f64606496965a10a4"
+    },
+    "same_source_neighbors": {
+      "raw_directory": "/tmp/leopard2-t8-b64-k6k7-final-07dc2fc-v1/same-source-neighbors-clean",
+      "rounds": 5,
+      "file_count": 120,
+      "aggregate_sha256": "a49a5903caf59b567b319e1f84bcb9dededeaa4940aa2079aa1350f648c8b214"
+    },
+    "same_source_k7_b63_extension": {
+      "raw_directory": "/tmp/leopard2-t8-b64-k6k7-final-07dc2fc-v1/same-source-k7b63-extension",
+      "additional_rounds": 10,
+      "file_count": 40,
+      "aggregate_sha256": "f25b6130c63100abc07467cce47960502912a984ff7d8954d35ae3f6c7a1e768"
+    },
+    "exact_main_targets": {
+      "raw_directory": "/tmp/leopard2-t8-b64-k6k7-final-07dc2fc-v1/exact-main-target-clean",
+      "rounds": 7,
+      "file_count": 56,
+      "aggregate_sha256": "a58966220e1efb534ebcbd7e3dc23b8c9e5b8a65fe0b8ff7c5119f131944561f"
+    },
+    "exact_main_neighbors": {
+      "raw_directory": "/tmp/leopard2-t8-b64-k6k7-final-07dc2fc-v1/exact-main-neighbors-clean",
+      "rounds": 5,
+      "file_count": 40,
+      "aggregate_sha256": "36b67e0291522aeddb700311fb4dace94e9d870bb08a44a62ae0523414e88275"
+    },
+    "discarded_final_source_attempts": [
+      {"directory": "same-source", "reserved_sibling_nonidle_jiffies": 3},
+      {"directory": "same-source-clean", "reserved_sibling_nonidle_jiffies": 1}
+    ]
+  },
+  "correctness": {
+    "accepted_timed_invocations": 312,
+    "failed_invocations": 0,
+    "all_workload_digests_match": true,
+    "all_parity_digests_match": true,
+    "all_recovery_digests_match": true,
+    "all_round_trips_pass": true,
+    "candidate_source_identity_match": true,
+    "candidate_runtime_identity_match": true,
+    "wire_profile_changed": false
+  },
+  "encode_prior_path_over_packed_terminal": {
+    "K6_R6_B64": {
+      "estimate": 3.81604812728847,
+      "student_t_95_ci": [3.7295691197667344, 3.9045323580683844]
+    },
+    "K7_R7_B64": {
+      "estimate": 3.56414918552416,
+      "student_t_95_ci": [3.501443995450496, 3.6279773239777735]
+    }
+  },
+  "encode_exact_main_over_leopard2": {
+    "K6_R6_B64": {
+      "estimate": 1.787237095490601,
+      "student_t_95_ci": [1.7455198998952477, 1.829951314613698]
+    },
+    "K7_R7_B64": {
+      "estimate": 1.6552131507556969,
+      "student_t_95_ci": [1.6286792423409846, 1.6821793409097823]
+    },
+    "K5_R5_B64_control": {
+      "estimate": 2.3969756818321915,
+      "student_t_95_ci": [2.360073696516421, 2.4344546646045484]
+    },
+    "K8_R8_B64_control": {
+      "estimate": 1.6171499428090574,
+      "student_t_95_ci": [1.6026404402890322, 1.631790807085648]
+    }
+  },
+  "same_source_inert_neighbors": {
+    "K5_R5_B64": [1.0011111821683247, 0.9834437653505567, 1.0190959914268305],
+    "K6_R6_B63": [1.003980595962833, 0.9995890348726012, 1.0083914507909273],
+    "K6_R6_B65": [0.9968370310667314, 0.9906881072676583, 1.0030241195148089],
+    "K7_R7_B63_15_rounds": [0.9938566037813501, 0.9852510956968461, 1.0025372752122497],
+    "K7_R7_B65": [0.9951601102623304, 0.9816670550612092, 1.008838628078013],
+    "K8_R8_B64": [1.0023379083076216, 0.9875963607783658, 1.0172994983888632],
+    "array_semantics": "Each value is [control/candidate estimate, 95% lower bound, 95% upper bound]. All point estimates remain within one percent of unity and every interval excludes a two-percent regression."
+  },
+  "validation": {
+    "focused_release": "2/2 passed: hook/oracle and production-link packed-terminal tests",
+    "strict_gcc": "2/2 passed after a -Wall -Wextra -Wpedantic -Werror build",
+    "asan_ubsan": "2/2 passed with leak detection and halt-on-error",
+    "visual_studio_project_self_test": "1/1 passed",
+    "coverage": [
+      "independent direct-generator parity for packed public and one-item batch calls",
+      "scalar and forced-transform fallbacks",
+      "unaligned packed slabs",
+      "sparse, detached, punctured, B63 and B65 neighbors",
+      "scratch size/alignment and input/output/metadata overlap atomicity"
+    ]
+  },
+  "disposition": "Promote the exact K6/K7 T8 packed terminal at B64. The change removes only public validation and geometry overhead, reuses already qualified arithmetic, preserves every fallback, and converts both exact-main losses into large credible wins."
+}
