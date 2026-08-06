@@ -6458,8 +6458,18 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
         B=256/L=2 maps won on isolated paired reruns; the weakest B=256 rerun
         was still 1.034x.  At 512 bytes, sparse loss crossed over, while every
         weak floor-half-loss cell reran between 1.09x and 1.16x.  Therefore
-        partial loss uses regular kernels through 256 bytes unconditionally,
-        and through 512 bytes only from floor(R/2) losses onward.
+        partial loss initially used regular kernels through 256 bytes
+        unconditionally, and through 512 bytes only from floor(R/2) losses
+        onward.  A subsequent exact-main gap pass found an artificial cliff
+        at the next complete five-cache-line size: the pruned route was 1.56x
+        slower than Leopard main at 320 bytes.  The dedicated B=320 all-K/R
+        screen extended the unconditional boundary by one complete pass.  A
+        subsequent B=384 screen over the same 4064 K/R cells measured a 1.098x
+        geometric-mean kernel gain.  Five-round isolated reruns of its 23
+        weakest or representative cells found no regression beyond 0.3%, and
+        public one-shot decode improved by at least 1.72x versus the prior
+        route.  This supports extending the unconditional boundary to six
+        complete passes.
 
         Keep the byte-aware choice at execution rather than discarding the
         plan's exact schedules: the same immutable plan may later execute a
@@ -6503,7 +6513,7 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
         return codec->recovery_count <= 62;
     if (plan->missing_original_count < 2U)
         return false;
-    return buffer_bytes <= 256U ||
+    return buffer_bytes <= 384U ||
         plan->missing_original_count >= codec->recovery_count / 2U;
 }
 #endif

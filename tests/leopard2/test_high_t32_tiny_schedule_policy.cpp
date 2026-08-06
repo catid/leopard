@@ -941,8 +941,20 @@ int main()
             "eligible T64 sparse B319 transient plan retained schedules");
         require(transient_high_schedule_count(avx2_context,
                 99, 50, random_missing(99, 2, 0xc4b6da24U), 320,
-                "transient T64 sparse B320") != 0,
-            "pruned T64 sparse B320 transient plan omitted schedules");
+                "transient T64 sparse B320") == 0,
+            "eligible T64 sparse B320 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 2, 0xc4b6da27U), 321,
+                "transient T64 sparse B321") == 0,
+            "all-regular T64 sparse B321 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 2, 0xc4b6da28U), 384,
+                "transient T64 sparse B384") == 0,
+            "eligible T64 sparse B384 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 2, 0xc4b6da29U), 385,
+                "transient T64 sparse B385") == 0,
+            "all-regular T64 sparse B385 transient plan retained schedules");
         require(transient_high_schedule_count(avx2_context,
                 99, 50, random_missing(99, 25, 0xc4b6da25U), 575,
                 "transient T64 half-loss B575") == 0,
@@ -992,11 +1004,23 @@ int main()
             t64_sparse_partial.push_back(entry);
         }
         {
-            const ByteCase entry = { 320, RoutePrunedOnly };
+            const ByteCase entry = { 320, RouteRegularOnly };
             t64_sparse_partial.push_back(entry);
         }
         {
-            const ByteCase entry = { 321, RouteMixed };
+            const ByteCase entry = { 321, RouteRegularOnly };
+            t64_sparse_partial.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 383, RouteRegularOnly };
+            t64_sparse_partial.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 384, RouteRegularOnly };
+            t64_sparse_partial.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 385, RouteRegularOnly };
             t64_sparse_partial.push_back(entry);
         }
         {
