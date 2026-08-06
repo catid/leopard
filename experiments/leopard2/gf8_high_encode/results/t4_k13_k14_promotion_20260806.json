@@ -1,0 +1,115 @@
+{
+  "schema": "leopard2-gf8-t4-k13-k14-promotion/v1",
+  "date_utc": "2026-08-06",
+  "authoritative_promotion_evidence": true,
+  "bead": "leopard-79h.38.5.10.49",
+  "scope": "Legacy-high GF8 AVX2 dense three- and four-parity encoding for K=13 and K=14",
+  "source": {
+    "candidate_commit": "04b20d3ce776f3f54a38ae1d975562bfe66e3631",
+    "candidate_tree": "4465eef3ef4f702e9c7397f1c1a0f4e3ad914635",
+    "candidate_tracked_dirty": false,
+    "candidate_binary_sha256": "a28dfd53f6f8fcc5201e5740dad03c521417e316c4e4ad82395d1f43726ae6a9",
+    "candidate_prevalidated_binary_sha256": "5afc1eaa9521e2ceaab37b4e59c9c58d39fe0e026a0ff0c31e99a5a93893af0d",
+    "same_source_baseline_commit": "05cdcc253d08c58989f4d31904c3228e217fe3e9",
+    "same_source_baseline_tree": "44acbcdd4daf86480befd198641419464182c4dc",
+    "same_source_baseline_binary_sha256": "ccade0b1fdb29ea0a8d7fbdf9284e91e3e6a63c20b7a8efa9ddc8b4cb26ef50b",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_binary_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93"
+  },
+  "implementation": {
+    "algebra": "Accumulate four shifted T=4 inverse LCH transforms for source blocks 0..3, retaining all four coefficient lanes in AVX2 registers, then apply one T=4 forward transform and store only the requested R=3 or R=4 parity prefix.",
+    "fourth_block": "K=13 loads one source and three shortened zero lanes; K=14 loads two sources and two shortened zero lanes. The fixed inverse skew tables use indices 13, 15, and 14 in the legacy coordinate order.",
+    "public_fast_layout": "Dense packed source and parity slabs for exact shard sizes 64, 128, 256, 512, 1024, and 1984 bytes.",
+    "reusable_binding": "Homogeneous dense prevalidated bindings use one prepared-table batch circuit for 32-byte multiples through 16384 bytes and amortize table setup across stripes.",
+    "fallback": "K=12, K=15, K=16, ragged sizes, sparse outputs, detached slabs, aliases, and byte counts outside the qualified public set retain the mature transform path.",
+    "backend_scope": "The large four-block generated kernels are emitted only in the AVX2 member; AVX-512 and GFNI retain their previously qualified paths pending independent measurements.",
+    "neighbor_stabilization": "A compact shape classifier and a one-item K=4/R=4/B=64 register-resident route removed the initial 5.3 percent same-source K=4 regression while multi-stripe K=4 bindings retain table amortization.",
+    "code_footprint": {
+      "baseline_text_bytes": 1404544,
+      "candidate_text_bytes": 1428074,
+      "text_delta_bytes": 23530,
+      "baseline_file_bytes": 1544328,
+      "candidate_file_bytes": 1569328,
+      "file_delta_bytes": 25000
+    }
+  },
+  "methodology": {
+    "cpu": 6,
+    "reserved_smt_sibling": 22,
+    "controller_cpu": 0,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "rounds": 5,
+    "order": "alternating ABBA/BAAB",
+    "iterations_per_invocation": 15,
+    "warmups_per_invocation": 3,
+    "batch": 1,
+    "threads": 1,
+    "child_address_space_limit_bytes": 536870912,
+    "statistic": "Mean of five independent log-contrasts with a two-sided Student-t 95 percent confidence interval.",
+    "ratio_orientation": "Comparator encode time divided by candidate encode time.",
+    "isolation_result": "Frozen hashes were unchanged. The reserved SMT sibling accumulated zero non-idle jiffies in the same-source campaign and two in the exact-main campaign."
+  },
+  "exact_main": {
+    "selected_cells": 24,
+    "K": [13, 14],
+    "R": [3, 4],
+    "bytes": [64, 128, 256, 512, 1024, 1984],
+    "credible_wins": 24,
+    "credible_losses": 0,
+    "minimum_ratio": 1.2429072921710829,
+    "minimum_ci95_low": 1.2152260180305268,
+    "summary_path": "/tmp/leopard2-t4-k14-exact-main-04b20d3-v1/summary.json",
+    "summary_sha256": "4a866adcf5da4845e679d3a46c54a1fec66330b629dd2e2d5c686af3bec7190a",
+    "representative_ratios": [
+      { "K": 14, "R": 4, "bytes": 256, "ratio": 1.2429072921710829, "ci95": [1.2152260180305268, 1.271219109870348] },
+      { "K": 14, "R": 4, "bytes": 1984, "ratio": 1.251282295930928, "ci95": [1.237475529080712, 1.2652431076946606] },
+      { "K": 13, "R": 4, "bytes": 64, "ratio": 1.556565825311641, "ci95": [1.5041322360647322, 1.6108272334267277] },
+      { "K": 13, "R": 3, "bytes": 64, "ratio": 1.6339100751758187, "ci95": [1.5486552238363047, 1.7238582821215709] }
+    ]
+  },
+  "same_source": {
+    "selected_cells": 24,
+    "credible_wins": 24,
+    "credible_losses": 0,
+    "minimum_ratio": 1.1693668650376938,
+    "minimum_ci95_low": 1.1627793805880822,
+    "maximum_ratio": 2.484225785358589,
+    "byte_control_cells": 4,
+    "neighbor_k_control_cells": 18,
+    "existing_t4_control_cells": 7,
+    "redundancy_control_cells": 6,
+    "control_credible_regressions_beyond_two_percent": 0,
+    "largest_control_slowdown_ratio": 0.984812790987229,
+    "only_credible_control_loss": "K=4/R=3/B=64 at ratio 0.9911693713; magnitude is below one percent.",
+    "summary_path": "/tmp/leopard2-t4-k14-same-source-04b20d3-v1/summary.json",
+    "summary_sha256": "d062318c58e9e11e401a734bac479163666c3fac030bf932b67d5bbc5dabc5b2"
+  },
+  "reusable_binding": {
+    "cells": 52,
+    "K": [13, 14],
+    "R": [3, 4],
+    "batch_sizes": [1, 8, 64],
+    "bytes": [64, 256, 1024, 4096, 16384],
+    "credible_wins": 47,
+    "credible_losses": 0,
+    "credible_losses_beyond_two_percent": 0,
+    "minimum_ratio": 1.005769753306156,
+    "minimum_ci95_low": 0.9706283625572978,
+    "maximum_ratio": 3.046842293536132,
+    "summary_path": "/tmp/leopard2-t4-k14-binding-04b20d3-v1/summary.json",
+    "summary_sha256": "6fdfb96a2f8511f7079b0ef28b4517d6bcae9e3b7574460b6efaf0844e133adc"
+  },
+  "correctness": {
+    "independent_oracle": "The 1024-profile direct systematic generator suite passed 50,064,849 Release parity-symbol comparisons; the sanitizer build passed 50,111,649 comparisons.",
+    "t4_contract_matrix": "K=13/14, R=3/4, every promoted byte count, unaligned packed slabs, public and one-item batch execution, forced-transform fallbacks, ragged boundaries, sparse outputs, detached slabs, input aliases, overlap rejection, exact scratch, and failure atomicity passed.",
+    "binding_matrix": "The production high-direct test passed 1,489 T=4 binding checks; allocation, aliasing, changed-source, concurrency, and repeated-execution checks passed.",
+    "legacy_compatibility": "Every promoted parity output matched both the independent generator and Leopard1 byte-for-byte.",
+    "clang18_asan_ubsan_lsan": "Packed terminal, production archive, binding, allocation/aliasing, concurrency, and full direct-generator tests passed with no diagnostic.",
+    "field_builds": "Final GF8-only and GF16-only production archives built successfully."
+  },
+  "rejected_variants": {
+    "K12_K15_K16_register_fusion": "Correct but rejected. The initial screen regressed the prior Leopard2 path at multiple byte counts: representative prior/new ratios were about 0.93 for K=12/B=1024, 0.94 for K=15/B=1024, and 0.90 for K=16/B=256. Register pressure and code shape outweighed eliminated memory passes.",
+    "unisolated_first_promotion": "Rejected after the first same-source campaign found a 5.3 percent K=4/R=4/B=64 regression. Compact classification and the exact one-item route removed regressions beyond two percent before final promotion."
+  },
+  "disposition": "Promote K=13/14. All exact-main and same-source selected cells are credible wins, no same-source control regresses beyond two percent, the binding matrix has no credible loss, and all correctness, sanitizer, compatibility, and optional-field build gates pass."
+}
