@@ -1,0 +1,147 @@
+{
+  "schema": "leopard2-gf8-t16-q2-b64-b256-fused-checkpoint/v1",
+  "created_utc": "2026-08-06T15:05:00Z",
+  "status": "promoted",
+  "scope": {
+    "operation": "encode",
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "pure_avx2",
+    "K_range": [17, 32],
+    "R_range": [9, 16],
+    "T": 16,
+    "message_blocks": 2,
+    "shard_bytes": [1, 64, 256]
+  },
+  "source": {
+    "implementation_commit": "59e3ea7ff18bbe6a3f18f25ff527faa4be4a4593",
+    "implementation_tree": "9a7875560fa4d2693da081d5c0957f8a09cfade8",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "pre_b256_control_commit": "fbce8795f2a58f94c4e6bc59f5043e5a57de1f12"
+  },
+  "hypothesis": "The fused T=16 two-message-block circuit can beat exact Leopard main at 256-byte shards if shortening is compiled as one to four active second-block radix-four groups instead of storing and reloading known-zero groups.",
+  "implementation": {
+    "wire_change": false,
+    "public_abi_change": false,
+    "cmake_option": "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
+    "option_default": true,
+    "byte_dispatch": "B=1..63 stages into the proven 64-byte circuit; B=64 and B=256 execute directly; every other byte count retains the mature transform.",
+    "shortening": "B=256 selects one, two, three, or four second-block radix-four groups from K and injects compile-time zero vectors for omitted groups during the fused outer layer.",
+    "puncturing": "R=9..15 stores only transmitted parity outputs; R=16 uses the caller recovery slab as the primary work half.",
+    "scratch": "Uses the existing 32-row transform scratch bound and performs no hot-path allocation."
+  },
+  "correctness": {
+    "focused_release_test": "PASS",
+    "eligible_K_R_cells_per_byte_count": 128,
+    "eligible_byte_counts": [1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 256],
+    "eligible_shape_byte_combinations": 1792,
+    "oracles": [
+      "independent direct systematic generator matrix",
+      "mature Leopard2 transform",
+      "exact Leopard main workload digest"
+    ],
+    "interfaces": [
+      "ordinary encode",
+      "one-item batch encode",
+      "unaligned packed slabs",
+      "sparse-output fallback",
+      "detached-input fallback",
+      "scratch rejection and failure atomicity",
+      "input/output overlap rejection",
+      "scalar backend exclusion",
+      "B=65,66,255,257 and adjacent K/R exclusion"
+    ],
+    "release_peak_rss_kib": 22784,
+    "asan_ubsan": {
+      "compiler": "Clang 18.1.3",
+      "result": "PASS",
+      "options": "ASAN detect_leaks=1, halt_on_error=1; UBSAN halt_on_error=1, print_stacktrace=1",
+      "peak_rss_kib": 84480
+    },
+    "strict_builds": {
+      "gcc_13_3": "PASS with -Wall -Wextra -Wpedantic -Werror",
+      "clang_18_1": "PASS with -Wall -Wextra -Wpedantic -Werror; -Wno-unused-function only suppresses three pre-existing T8 helper diagnostics"
+    },
+    "build_matrix": {
+      "feature_off": "PASS",
+      "gf8_only": "PASS",
+      "gf16_only": "PASS"
+    }
+  },
+  "measurement": {
+    "metric": "metrics.encode_execution.median_us_per_batch_call",
+    "ratio": "reference time divided by candidate time; values above one favor the candidate",
+    "protocol": {
+      "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+      "timed_cpu": 13,
+      "reserved_smt_sibling": 29,
+      "thread_count": 1,
+      "batch": 1,
+      "reuse": 64,
+      "representative_blocks": 12,
+      "representative_order": "alternating ABCCBA and reverse",
+      "full_region_order": "ABBA",
+      "all_retained_runs_zero_sibling_runnable_observations": true
+    },
+    "b64_exact_main_full_region": {
+      "cells": 128,
+      "minimum": 1.5511,
+      "geomean": 1.6766,
+      "maximum": 1.8249,
+      "source_commit": "fbce8795f2a58f94c4e6bc59f5043e5a57de1f12"
+    },
+    "b256_representative_exact_main_over_candidate": [
+      {
+        "K": 17,
+        "R": 9,
+        "geomean": 1.2769734251598235,
+        "bootstrap_95_ci": [1.2650004951160372, 1.2889788776025135]
+      },
+      {
+        "K": 23,
+        "R": 12,
+        "geomean": 1.2317353842090966,
+        "bootstrap_95_ci": [1.2206784058855156, 1.2412538314323025]
+      },
+      {
+        "K": 32,
+        "R": 16,
+        "geomean": 1.1236807714909658,
+        "bootstrap_95_ci": [1.114984113747303, 1.1329980701642326]
+      }
+    ],
+    "b256_exact_main_full_region": {
+      "cells": 128,
+      "minimum": 1.0876583052630693,
+      "geomean": 1.1832863817602242,
+      "maximum": 1.3070805983168134,
+      "below_1_05_count": 0
+    },
+    "neighbors_pre_b256_control_over_candidate": {
+      "cells": 22,
+      "minimum": 0.9955060898967214,
+      "largest_measured_regression_percent": 0.44939101032786,
+      "B64_representative_ratios": [0.9997356877350152, 1.0016991793541237, 0.9955060898967214]
+    }
+  },
+  "binary_provenance": {
+    "candidate_sha256": "908421f2d9efdb926ae098bbab12c9493940be21468fcdf051e48d68920c6e1b",
+    "pre_b256_control_sha256": "2f9f36dc17a6a367c8ed68b6a5404145a7bb0733921231415727fb2e9b091b23",
+    "exact_main_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "representative_summary_sha256": "215c54df64bfc5a914ec9d643fabdeac926cfb20dba67e0981f9cac9e2ad0582",
+    "full_region_summary_sha256": "2439dbab551cfb66310542a2430414c8ef4508a5bb98b963eec509ca0d4172a6",
+    "neighbor_summary_sha256": "59094f82da9c80e05a9487a75c932fbf55f7f06a22ddaa7f4f5ca05fa2fe3200"
+  },
+  "footprint": {
+    "candidate_benchmark_text_bytes": 1389499,
+    "pre_b256_control_benchmark_text_bytes": 1331579,
+    "added_text_bytes": 57920,
+    "b64_entry_text_bytes_unchanged": 23911
+  },
+  "decision": {
+    "result": "promote",
+    "reason": "Every B=256 target cell beats exact Leopard main by more than the five-percent gate, representative lower confidence bounds exceed 1.11, correctness is independently established, and no measured neighbor regresses by two percent.",
+    "supersedes_negative_result": "t16_q2_b256_fused_negative_20260802.json",
+    "remaining_scope": "The selector is deliberately exact to B=256; irregular 65..255 and 257+ byte counts continue through existing measured paths."
+  }
+}
