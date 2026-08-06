@@ -78,7 +78,7 @@ forbidden_mnemonics='^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|mo
 # kernel starts using another AVX/AVX2 mnemonic, reviewers must add that
 # mnemonic after checking its architectural feature contract.  A broad `v*'
 # exemption would silently admit instructions whose CPUID bits are not probed.
-allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vbroadcastss|vextracti128|vinserti128|vmovaps|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpackuswb|vpaddq|vpaddw|vpand|vpandn|vpblendd|vpblendw|vpbroadcastb|vpbroadcastd|vpbroadcastq|vpbroadcastw|vpcmpeqb|vpcmpeqd|vpcmpgtw|vperm2i128|vpermq|vpextrq|vpextrw|vpinsrb|vpminub|vpmovsxbw|vpmovzxbw|vpmuludq|vpmullw|vpshufb|vpshufd|vpshufhw|vpshuflw|vpsrlq|vpsrlw|vpsubw|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
+allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vbroadcastss|vextracti128|vinserti128|vmovaps|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpackuswb|vpaddq|vpaddw|vpand|vpandn|vpblendd|vpblendw|vpbroadcastb|vpbroadcastd|vpbroadcastq|vpbroadcastw|vpcmpeqb|vpcmpeqd|vpcmpgtw|vperm2i128|vpermq|vpextrq|vpextrw|vpinsrb|vpminub|vpmovsxbw|vpmovzxbw|vpmuludq|vpmullw|vpshufb|vpshufd|vpshufhw|vpshuflw|vpsrldq|vpsrlq|vpsrlw|vpsubw|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
 
 # The GFNI candidate is compiled with `-mavx2 -mgfni -mno-avx512f' and is gated
 # on a runtime probe that establishes AVX2 *and* the separately enumerated GFNI
@@ -244,6 +244,7 @@ require_expected_members()
             cpu_features) expected_member=Leopard2CpuFeatures.cpp.o ;;
             ssse3) expected_member=Leopard2BackendSSSE3.cpp.o ;;
             avx2) expected_member=Leopard2BackendAVX2.cpp.o ;;
+            avx2_t16_q2) expected_member=Leopard2BackendAVX2T16Q2.cpp.o ;;
             avx2_xor) expected_member=Leopard2BackendAVX2Xor.cpp.o ;;
             avx2_t2_k4) expected_member=Leopard2BackendAVX2T2K4.cpp.o ;;
             avx2_t8_k8_b1024) expected_member=Leopard2BackendAVX2T8K8B1024.cpp.o ;;
@@ -323,6 +324,7 @@ scan_archive()
             Leopard2BackendSSSE3.cpp.o|Leopard2BackendSSSE3.cpp.obj)
                 object_class=ssse3 ;;
             Leopard2BackendAVX2.cpp.o|Leopard2BackendAVX2.cpp.obj|\
+            Leopard2BackendAVX2T16Q2.cpp.o|Leopard2BackendAVX2T16Q2.cpp.obj|\
             Leopard2BackendAVX2Xor.cpp.o|Leopard2BackendAVX2Xor.cpp.obj|\
             Leopard2BackendAVX2T2K4.cpp.o|Leopard2BackendAVX2T2K4.cpp.obj|\
             Leopard2BackendAVX2T8K8B1024.cpp.o|Leopard2BackendAVX2T8K8B1024.cpp.obj|\
@@ -446,7 +448,7 @@ scan_build_metadata()
         violating_lines="$scratch_root/metadata-violations"
         candidate_lines="$scratch_root/metadata-candidates"
         LC_ALL=C grep -Ein -- "$forbidden_metadata" "$compile_commands" |
-            grep -Ev '(^|[/[:space:]"])(Leopard2Backend(SSSE3|AVX2|AVX2Xor|AVX2T2K4|AVX2T8K8B1024|AVX2T16B64|AVX2T32B256|AVX512|GFNI)|Leopard2LowP32B64AVX2)[.]cpp([[:space:]",]|$)' > \
+            grep -Ev '(^|[/[:space:]"])(Leopard2Backend(SSSE3|AVX2|AVX2T16Q2|AVX2Xor|AVX2T2K4|AVX2T8K8B1024|AVX2T16B64|AVX2T32B256|AVX512|GFNI)|Leopard2LowP32B64AVX2)[.]cpp([[:space:]",]|$)' > \
                 "$candidate_lines" || true
         : > "$violating_lines"
         while IFS= read -r candidate_line
@@ -479,6 +481,7 @@ scan_build_metadata()
         fi
         for avx2_source in \
             Leopard2BackendAVX2.cpp \
+            Leopard2BackendAVX2T16Q2.cpp \
             Leopard2BackendAVX2Xor.cpp \
             Leopard2LowP32B64AVX2.cpp
         do

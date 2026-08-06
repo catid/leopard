@@ -1437,6 +1437,10 @@ if(LEO2_BUILD_TESTS)
             endif()
             if(LEO2_HAVE_AVX2_BACKEND)
                 list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2)
+                if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+                    list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
+                        avx2_t16_q2)
+                endif()
                 if(LEOPARD_ENABLE_GF8)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2_xor)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
