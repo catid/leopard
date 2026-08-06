@@ -423,6 +423,8 @@ class AllKIdentityTests(unittest.TestCase):
                 runner.ALL_K_BUILD_CACHE_KEYS_V6,
             runner.RUN_CONTRACT_SCHEMA_V10:
                 runner.ALL_K_BUILD_CACHE_KEYS_V7,
+            runner.RUN_CONTRACT_SCHEMA_V11:
+                runner.ALL_K_BUILD_CACHE_KEYS,
             runner.RUN_CONTRACT_SCHEMA:
                 runner.ALL_K_BUILD_CACHE_KEYS,
         }[schema]
@@ -443,6 +445,7 @@ class AllKIdentityTests(unittest.TestCase):
                         runner.RUN_CONTRACT_SCHEMA_V8,
                         runner.RUN_CONTRACT_SCHEMA_V9,
                         runner.RUN_CONTRACT_SCHEMA_V10,
+                        runner.RUN_CONTRACT_SCHEMA_V11,
                         runner.RUN_CONTRACT_SCHEMA):
             cache.update({
                 "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
@@ -463,6 +466,7 @@ class AllKIdentityTests(unittest.TestCase):
                     runner.RUN_CONTRACT_SCHEMA_V8,
                     runner.RUN_CONTRACT_SCHEMA_V9,
                     runner.RUN_CONTRACT_SCHEMA_V10,
+                    runner.RUN_CONTRACT_SCHEMA_V11,
                     runner.RUN_CONTRACT_SCHEMA):
                 cache.update({
                     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED":
@@ -470,14 +474,18 @@ class AllKIdentityTests(unittest.TestCase):
                     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK":
                         "OFF",
                     "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
-                    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+                    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED":
+                        ("ON" if schema == runner.RUN_CONTRACT_SCHEMA
+                         else "OFF"),
                     "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
                     "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
                 })
                 if schema in (runner.RUN_CONTRACT_SCHEMA_V10,
+                              runner.RUN_CONTRACT_SCHEMA_V11,
                               runner.RUN_CONTRACT_SCHEMA):
                     cache["LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = "ON"
-                if schema == runner.RUN_CONTRACT_SCHEMA:
+                if schema in (runner.RUN_CONTRACT_SCHEMA_V11,
+                              runner.RUN_CONTRACT_SCHEMA):
                     cache.update({
                         "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
                         "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
@@ -533,6 +541,7 @@ class AllKIdentityTests(unittest.TestCase):
                 runner.RUN_CONTRACT_SCHEMA_V8,
                 runner.RUN_CONTRACT_SCHEMA_V9,
                 runner.RUN_CONTRACT_SCHEMA_V10,
+                runner.RUN_CONTRACT_SCHEMA_V11,
                 runner.RUN_CONTRACT_SCHEMA):
             contract["child_environment"] = copy.deepcopy(runner.CHILD_ENV)
         return contract
@@ -1415,6 +1424,7 @@ class AllKIdentityTests(unittest.TestCase):
         validated_proof = proof_validator.start()
         self.addCleanup(proof_validator.stop)
         current = self.run_contract()
+        v11 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V11)
         v10 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V10)
         v9 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V9)
         v8 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V8)
@@ -1424,6 +1434,8 @@ class AllKIdentityTests(unittest.TestCase):
         v4 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V4)
         self.assertIs(
             runner.validate_run_contract_evidence(current), current)
+        self.assertIs(
+            runner.validate_run_contract_evidence(v11), v11)
         self.assertIs(
             runner.validate_run_contract_evidence(v10), v10)
         self.assertIs(
@@ -1441,7 +1453,7 @@ class AllKIdentityTests(unittest.TestCase):
 
         # Each body remains coherent under its own generation.  Relabeling only
         # the outer contract cannot upgrade or downgrade its nested closure.
-        bodies = (v4, v5, v6, v7, v8, v9, v10, current)
+        bodies = (v4, v5, v6, v7, v8, v9, v10, v11, current)
         schemas = tuple(body["schema"] for body in bodies)
         for body in bodies:
             for schema in schemas:
@@ -1454,7 +1466,7 @@ class AllKIdentityTests(unittest.TestCase):
                         self,
                         lambda relabeled=relabeled:
                             runner.validate_run_contract_evidence(relabeled),
-                        "schema tuple")
+                        "tuple")
 
         self.assertEqual(
             runner.child_environment_for_contract_schema(
@@ -1470,6 +1482,10 @@ class AllKIdentityTests(unittest.TestCase):
             runner.CHILD_ENV)
         self.assertEqual(
             runner.child_environment_for_contract_schema(
+                runner.RUN_CONTRACT_SCHEMA_V11),
+            runner.CHILD_ENV)
+        self.assertEqual(
+            runner.child_environment_for_contract_schema(
                 runner.RUN_CONTRACT_SCHEMA_V7),
             runner.CHILD_ENV_V7)
         self.assertEqual(
@@ -1480,6 +1496,7 @@ class AllKIdentityTests(unittest.TestCase):
         self.assertEqual(v8["child_environment"], runner.CHILD_ENV)
         self.assertEqual(v9["child_environment"], runner.CHILD_ENV)
         self.assertEqual(v10["child_environment"], runner.CHILD_ENV)
+        self.assertEqual(v11["child_environment"], runner.CHILD_ENV)
         self.assertNotIn("OMP_PLACES", current["child_environment"])
         self.assertEqual(
             current["child_environment"]["OMP_THREAD_LIMIT"], "1")
@@ -1510,6 +1527,15 @@ class AllKIdentityTests(unittest.TestCase):
         self.assertNotIn(
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
             v10["current_build_initial"]["validated_cache"])
+        self.assertEqual(
+            v11["current_build_initial"]["validated_cache"][
+                "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED"], "OFF")
+        self.assertEqual(
+            current["current_build_initial"]["validated_cache"][
+                "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED"], "ON")
+        self.assertEqual(
+            v11["current_build_initial"]["validated_cache"][
+                "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS"], "ON")
         self.assertEqual(
             current["current_build_initial"]["validated_cache"][
                 "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"], "ON")
@@ -1604,7 +1630,7 @@ class AllKIdentityTests(unittest.TestCase):
              "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING", "OFF"),
             ("T8-ragged", "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING", "OFF"),
             ("T8-disable", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR", "ON"),
-            ("T32-B256", "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED", "ON"),
+            ("T32-B256", "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED", "OFF"),
             ("T32-B256-disable",
              "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED", "ON"),
             ("T16-B64-generated",

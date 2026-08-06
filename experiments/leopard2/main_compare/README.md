@@ -110,10 +110,12 @@ Configure this default-off diagnostic explicitly and build its attested target:
     python3 experiments/leopard2/main_compare/run_allk_gap.py \
         --main /tmp/leopard-gf8-final-map-9b1d439-20260722T030328Z/main-build/leopard_main_benchmark \
         --main-commit 6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198 \
+        --main-sha256 a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910 \
         --current /tmp/leopard2-all-k/bench_leopard2_allk \
         --current-source-root "$PWD" \
         --current-commit "$(git rev-parse HEAD)" \
         --output /tmp/leopard2-all-k-gap --workers "$JOBS" \
+        --reproducible-build-jobs 1 \
         --gf8-only --with-current-legacy \
         --lock /tmp/leopard-gf8-authoritative.lock
 
@@ -129,6 +131,13 @@ disposition.  One untimed schema-v5 preflight binds the sealed Leopard2
 executable to the exact clean source commit/tree.  Timed calls then use the
 distinct schema-v3 decode-path report, so summaries record the implementation
 actually selected instead of inferring a potentially stale route from K/R.
+
+The current all-K run-contract and manifest generation is v12. It requires the
+production-default exact T32/B256 terminal selector to be `ON`. Historical v11
+remains replayable only with that selector `OFF`; relabeling either body as the
+other generation is rejected. The 2,522-cell matrix uses 4 KiB and 64 KiB
+shards, so the exact 256-byte terminal cannot affect a timed cell, but its value
+still belongs to the authenticated production selector identity.
 
 ## Counterbalanced comparison
 
