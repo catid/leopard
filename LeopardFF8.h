@@ -470,6 +470,7 @@ struct TestOnlyHighEncodeCounts
     uint64_t t2_packed_calls;
     uint64_t t4_packed_calls;
     uint64_t t8_packed_calls;
+    uint64_t t8_two_block_b64_packed_calls;
     uint64_t t8_k7_b1024_direct_calls;
     uint64_t t8_k8_b1024_direct_calls;
     uint64_t balanced_b64_packed_calls;
@@ -522,6 +523,7 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts();
 void TestOnlyRecordT2PackedCall();
 void TestOnlyRecordT4PackedCall();
 void TestOnlyRecordT8PackedCall();
+void TestOnlyRecordT8TwoBlockB64PackedCall();
 void TestOnlyRecordBalancedB64PackedCall();
 void TestOnlyRecordT16PreparedCall();
 // Attribution-only selector.  Production archives contain neither this state

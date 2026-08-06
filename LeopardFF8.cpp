@@ -107,6 +107,7 @@ static std::atomic<uint64_t> TestHighSmallTransformCalls(0);
 static std::atomic<uint64_t> TestHighT2PackedCalls(0);
 static std::atomic<uint64_t> TestHighT4PackedCalls(0);
 static std::atomic<uint64_t> TestHighT8PackedCalls(0);
+static std::atomic<uint64_t> TestHighT8TwoBlockB64PackedCalls(0);
 static std::atomic<uint64_t> TestHighT8K7B1024DirectCalls(0);
 static std::atomic<uint64_t> TestHighT8K8B1024DirectCalls(0);
 static std::atomic<uint64_t> TestHighBalancedB64PackedCalls(0);
@@ -4245,6 +4246,7 @@ void TestOnlyResetHighEncodeCounts()
     TestHighT2PackedCalls.store(0, std::memory_order_relaxed);
     TestHighT4PackedCalls.store(0, std::memory_order_relaxed);
     TestHighT8PackedCalls.store(0, std::memory_order_relaxed);
+    TestHighT8TwoBlockB64PackedCalls.store(0, std::memory_order_relaxed);
     TestHighT8K7B1024DirectCalls.store(0, std::memory_order_relaxed);
     TestHighT8K8B1024DirectCalls.store(0, std::memory_order_relaxed);
     TestHighBalancedB64PackedCalls.store(0, std::memory_order_relaxed);
@@ -4280,6 +4282,8 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighT4PackedCalls.load(std::memory_order_relaxed);
     result.t8_packed_calls =
         TestHighT8PackedCalls.load(std::memory_order_relaxed);
+    result.t8_two_block_b64_packed_calls =
+        TestHighT8TwoBlockB64PackedCalls.load(std::memory_order_relaxed);
     result.t8_k7_b1024_direct_calls =
         TestHighT8K7B1024DirectCalls.load(std::memory_order_relaxed);
     result.t8_k8_b1024_direct_calls =
@@ -4314,6 +4318,12 @@ void TestOnlyRecordT4PackedCall()
 void TestOnlyRecordT8PackedCall()
 {
     TestHighT8PackedCalls.fetch_add(1, std::memory_order_relaxed);
+}
+
+void TestOnlyRecordT8TwoBlockB64PackedCall()
+{
+    TestHighT8TwoBlockB64PackedCalls.fetch_add(
+        1, std::memory_order_relaxed);
 }
 
 void TestOnlyRecordBalancedB64PackedCall()

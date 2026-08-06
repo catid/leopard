@@ -254,6 +254,12 @@ uint64_t T8PackedCalls()
     return leopard::ff8::TestOnlyGetHighEncodeCounts().t8_packed_calls;
 }
 
+uint64_t T8TwoBlockB64PackedCalls()
+{
+    return leopard::ff8::TestOnlyGetHighEncodeCounts().
+        t8_two_block_b64_packed_calls;
+}
+
 uint64_t T8K8B1024DirectCalls()
 {
     return leopard::ff8::TestOnlyGetHighEncodeCounts().
@@ -303,7 +309,8 @@ size_t ExpectedK8R8ProductionScratch()
 void ExerciseCell(
     leo2_context* context,
     const Cell& cell,
-    bool expect_terminal)
+    bool expect_terminal,
+    bool expect_two_block_b64_terminal = false)
 {
     leo2_codec* codec = CreateCodec(context, cell);
     const size_t scratch_bytes = QueryScratch(codec, cell);
@@ -344,6 +351,9 @@ void ExerciseCell(
         LEO2_SUCCESS, cell, "execute packed public encode");
     RequireCell(T8PackedCalls() == (expect_terminal ? 1U : 0U), cell,
         "packed public terminal selection mismatch");
+    RequireCell(T8TwoBlockB64PackedCalls() ==
+            (expect_two_block_b64_terminal ? 1U : 0U), cell,
+        "packed public two-block B64 terminal selection mismatch");
     RequireCell(T8K7B1024DirectCalls() ==
             (expect_k7_direct ? 1U : 0U), cell,
         "packed public K7 direct-leaf selection mismatch");
@@ -364,6 +374,9 @@ void ExerciseCell(
         LEO2_SUCCESS, cell, "execute packed one-item batch encode");
     RequireCell(T8PackedCalls() == (expect_terminal ? 1U : 0U), cell,
         "packed one-item batch terminal selection mismatch");
+    RequireCell(T8TwoBlockB64PackedCalls() ==
+            (expect_two_block_b64_terminal ? 1U : 0U), cell,
+        "packed one-item batch two-block B64 terminal selection mismatch");
     RequireCell(T8K7B1024DirectCalls() ==
             (expect_k7_direct ? 1U : 0U), cell,
         "packed one-item batch K7 direct-leaf selection mismatch");
@@ -388,6 +401,9 @@ void ExerciseCell(
         LEO2_SUCCESS, cell, "execute unaligned packed public encode");
     RequireCell(T8PackedCalls() == (expect_terminal ? 1U : 0U), cell,
         "unaligned packed terminal selection mismatch");
+    RequireCell(T8TwoBlockB64PackedCalls() ==
+            (expect_two_block_b64_terminal ? 1U : 0U), cell,
+        "unaligned packed two-block B64 terminal selection mismatch");
     RequireCell(T8K7B1024DirectCalls() ==
             (expect_k7_direct ? 1U : 0U), cell,
         "unaligned packed K7 direct-leaf selection mismatch");
@@ -399,6 +415,23 @@ void ExerciseCell(
     RequireOutputGuards(output, kGuardBytes + 3U, cell);
 
     leo2_codec_destroy(codec);
+}
+
+void ExerciseTwoBlockB64Matrix(
+    leo2_context* context,
+    bool terminal_available)
+{
+    for (unsigned original_count = 9; original_count <= 16;
+         ++original_count)
+    {
+        for (unsigned recovery_count = 5; recovery_count <= 8;
+             ++recovery_count)
+        {
+            ExerciseCell(context,
+                Cell{ original_count, recovery_count, 64 },
+                false, terminal_available);
+        }
+    }
 }
 
 void ExercisePromotedMatrix(
@@ -474,6 +507,12 @@ void ExerciseNonPromotedCells(leo2_context* context)
     ExerciseCell(context, Cell{ 8, 8, 128 }, false);
     ExerciseCell(context, Cell{ 8, 7, 64 }, false);
     ExerciseCell(context, Cell{ 7, 8, 64 }, false);
+    ExerciseCell(context, Cell{ 9, 5, 63 }, false);
+    ExerciseCell(context, Cell{ 9, 5, 65 }, false);
+    ExerciseCell(context, Cell{ 16, 8, 63 }, false);
+    ExerciseCell(context, Cell{ 16, 8, 65 }, false);
+    ExerciseCell(context, Cell{ 9, 4, 64 }, false);
+    ExerciseCell(context, Cell{ 17, 8, 64 }, false);
 }
 
 void ExerciseForcedTransform(leo2_context* context, const Cell& cell)
@@ -500,6 +539,8 @@ void ExerciseForcedTransform(leo2_context* context, const Cell& cell)
         LEO2_SUCCESS, cell, "execute forced mature transform");
     RequireCell(T8PackedCalls() == 0, cell,
         "forced transform entered the packed K=8/R=8/T=8 terminal");
+    RequireCell(T8TwoBlockB64PackedCalls() == 0, cell,
+        "forced transform entered the packed two-block B64 terminal");
     RequireCell(T8K7B1024DirectCalls() == 0, cell,
         "forced transform entered the K=7/R=7/B=1024 direct leaf");
     RequireCell(T8K8B1024DirectCalls() == 0, cell,
@@ -539,6 +580,8 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
         LEO2_SUCCESS, cell, "execute all-null public no-op");
     RequireCell(T8PackedCalls() == 0, cell,
         "all-null public output entered the dense terminal");
+    RequireCell(T8TwoBlockB64PackedCalls() == 0, cell,
+        "all-null public output entered the two-block B64 terminal");
     RequireCell(std::memcmp(output.bytes(), &no_output_before[0],
             no_output_before.size()) == 0,
         cell, "all-null public encode modified output");
@@ -552,6 +595,8 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
         LEO2_SUCCESS, cell, "execute all-null one-item batch no-op");
     RequireCell(T8PackedCalls() == 0, cell,
         "all-null batch output entered the dense terminal");
+    RequireCell(T8TwoBlockB64PackedCalls() == 0, cell,
+        "all-null batch output entered the two-block B64 terminal");
     RequireCell(std::memcmp(output.bytes(), &no_output_before[0],
             no_output_before.size()) == 0,
         cell, "all-null batch encode modified output");
@@ -567,6 +612,8 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
         LEO2_SUCCESS, cell, "execute sparse-output fallback");
     RequireCell(T8PackedCalls() == 0, cell,
         "sparse output entered the dense packed terminal");
+    RequireCell(T8TwoBlockB64PackedCalls() == 0, cell,
+        "sparse output entered the two-block B64 terminal");
     CheckParity(cell, generator, original, recovery);
     for (size_t i = 0; i < cell.shard_bytes; ++i)
     {
@@ -591,6 +638,8 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
         LEO2_SUCCESS, cell, "execute detached-layout fallback");
     RequireCell(T8PackedCalls() == 0, cell,
         "detached layout entered the packed terminal");
+    RequireCell(T8TwoBlockB64PackedCalls() == 0, cell,
+        "detached layout entered the two-block B64 terminal");
     CheckParity(cell, generator, original, recovery);
     for (size_t i = 0; i < cell.shard_bytes; ++i)
         RequireCell(output.bytes()[
@@ -921,6 +970,9 @@ int main()
         const bool full_parity_terminal_available =
             leopard2_internal::
                 SetT8FullParityTerminalEnabledForDiagnostics(true);
+        const bool two_block_b64_terminal_available =
+            leopard2_internal::
+                SetHighT8TwoBlockB64PackedTerminalEnabledForDiagnostics(true);
         ExerciseScalarFallbacks();
         ExerciseAutoBackend(full_parity_terminal_available);
 
@@ -941,6 +993,8 @@ int main()
             "create AVX2 K=8/R=8/T=8 terminal context");
 
         ExercisePromotedMatrix(context, full_parity_terminal_available);
+        ExerciseTwoBlockB64Matrix(
+            context, two_block_b64_terminal_available);
         if (full_parity_terminal_available)
         {
             ExerciseAdjacentShardSubobjects(context);
@@ -952,6 +1006,8 @@ int main()
         ExerciseForcedTransform(context, Cell{ 8, 8, 64 });
         ExerciseForcedTransform(context, Cell{ 7, 7, 1024 });
         ExerciseForcedTransform(context, Cell{ 8, 8, 1024 });
+        ExerciseForcedTransform(context, Cell{ 9, 5, 64 });
+        ExerciseForcedTransform(context, Cell{ 16, 8, 64 });
         static const Cell promoted_cells[] = {
             { 6, 6, 64 }, { 7, 7, 64 },
             { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 },
@@ -963,6 +1019,13 @@ int main()
         {
             ExerciseFallbackLayouts(context, promoted_cells[i]);
             ExerciseValidationAtomicity(context, promoted_cells[i]);
+        }
+        if (two_block_b64_terminal_available)
+        {
+            ExerciseFallbackLayouts(context, Cell{ 9, 5, 64 });
+            ExerciseFallbackLayouts(context, Cell{ 16, 8, 64 });
+            ExerciseValidationAtomicity(context, Cell{ 9, 5, 64 });
+            ExerciseValidationAtomicity(context, Cell{ 16, 8, 64 });
         }
 
         leo2_context_destroy(context);

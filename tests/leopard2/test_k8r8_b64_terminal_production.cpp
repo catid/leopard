@@ -343,6 +343,17 @@ int main()
         for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
             ExerciseCell(context, cells[i]);
 
+        for (unsigned original_count = 9; original_count <= 16;
+             ++original_count)
+        {
+            for (unsigned recovery_count = 5; recovery_count <= 8;
+                 ++recovery_count)
+            {
+                ExerciseCell(context,
+                    Cell{ original_count, recovery_count, 64 });
+            }
+        }
+
         leo2_context_destroy(context);
         std::printf("production K=8/R=8/T=8 packed-terminal smoke checks passed\n");
         return 0;

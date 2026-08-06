@@ -250,6 +250,10 @@ bool SetK8R3R4T4TerminalEnabledForDiagnostics(bool enabled);
 */
 bool SetK16R8B256TerminalEnabledForDiagnostics(bool enabled);
 
+/* Process-local same-executable attribution for the packed K=9..16,
+   R=5..8, B64 two-block T=8 terminal. */
+bool SetHighT8TwoBlockB64PackedTerminalEnabledForDiagnostics(bool enabled);
+
 /*
     Process-local same-executable control for the dense K=R=5..8 T=8
     packed-slab terminal.  Change it only while no encode call is executing.
