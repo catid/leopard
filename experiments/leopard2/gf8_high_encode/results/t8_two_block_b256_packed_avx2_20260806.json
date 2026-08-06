@@ -1,0 +1,123 @@
+{
+  "schema": "leopard2-gf8-t8-two-block-b256-packed-avx2/v1",
+  "created_utc": "2026-08-06T06:28:09.172734Z",
+  "status": "promoted",
+  "scope": {
+    "field": "GF8",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "backend": "pure AVX2",
+    "operation": "256-byte prepared encode execution and public one-shot encode",
+    "counts": "K10/R5..8, K11/R5, and K13..16/R5..8 excluding K16/R8",
+    "target_cell_count": 20,
+    "neighbor_cell_count": 18
+  },
+  "source": {
+    "branch": "codex/leopard2",
+    "implementation_commit": "98dc03b81d0bf87cf62ade3d0d6fc61e5d9e34f9",
+    "candidate_commit": "d84ce20750cc9559198c116f16a32fc85ec811cd",
+    "candidate_tree": "d36846381e4c9d91370e25ec35a36b614d4acd3c",
+    "candidate_tracked_dirty": false,
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "implementation": {
+    "description": "One packed-slab terminal validates aggregate ranges before dispatching either an exact first-T8-block plus systematic generator-tail-column circuit for K10/R5..8 and K11/R5, or the existing fused two-block T8 executor for the qualified K13..16 cells.",
+    "wire_change": false,
+    "arithmetic_order_change": true,
+    "hot_path_allocation": false,
+    "fallbacks_retained": [
+      "K11/R6..8 and K12/R5..8",
+      "the existing K9 and K16/R8 exact owners",
+      "sparse outputs",
+      "detached shard layouts",
+      "unaligned and non-256-byte shards",
+      "forced transform diagnostics",
+      "non-AVX2 backends",
+      "out-of-region K and R"
+    ]
+  },
+  "frozen_inputs": {
+    "candidate_executable": "/tmp/leopard2-t8-b256-authoritative-d84ce20-v6/frozen/candidate",
+    "candidate_executable_sha256": "c5dc350e3193709605ede42420830337a9220f6c95482d921e50a61a273738e6",
+    "exact_main_executable": "/tmp/leopard2-t8-b256-authoritative-d84ce20-v6/frozen/main",
+    "exact_main_executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "mode": "0555",
+    "candidate_control_executable_sections_sha256": "addb35c4b43fed862091e1736cfea8c76c0adfe037716b400520afc6efb35016"
+  },
+  "campaign": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_t8_two_block_b256_terminal_abba.py",
+    "raw_directory": "/tmp/leopard2-t8-b256-authoritative-d84ce20-v6",
+    "raw_sha256": "945a4f6e4946cdb45c59d53557b063a7dc44e926df40b1797dcabf2cd29c04ca",
+    "summary_sha256": "1cc4d478b3d057b21aaaccd8024bcc5e08e54a53392dd3ace06434851f3caa07",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "benchmark_cpu": 30,
+    "reserved_smt_sibling": 14,
+    "rounds": 9,
+    "iterations_per_invocation": 15,
+    "warmup_per_invocation": 64,
+    "reuse": 8192,
+    "batch": 1,
+    "threads": 1,
+    "accepted_processes": 1728,
+    "discarded_processes": 0,
+    "discarded_round_attempts": 0,
+    "all_accepted_rounds_zero_sibling_nonidle": true,
+    "statistics": "Each round averages the two log baseline/candidate contrasts in balanced ABBA or BAAB order. Point estimates are geometric means and intervals are two-sided Student-t 95 percent intervals over nine independent rounds."
+  },
+  "correctness": {
+    "failed_accepted_invocations": 0,
+    "all_workload_digests_match": true,
+    "all_parity_digests_match": true,
+    "all_recovery_digests_match": true,
+    "all_round_trips_pass": true,
+    "target_cells_passing_both_1_05_lower_bound_gates": 20,
+    "target_cell_count": 20,
+    "credible_neighbor_regressions": [],
+    "credible_neighbor_one_shot_regressions": []
+  },
+  "prepared_encode_prior_path_over_terminal": {
+    "median_speedup": 1.3769148074616178,
+    "minimum_point_and_lower_bound": {
+      "cell": "K16_R6_B256",
+      "estimate": 1.3291693863835166,
+      "student_t_95_ci": [1.3206328532624718, 1.3377610994113358]
+    }
+  },
+  "prepared_encode_exact_main_over_leopard2": {
+    "median_speedup": 1.1209448896711656,
+    "minimum_point_and_lower_bound": {
+      "cell": "K10_R8_B256",
+      "estimate": 1.088035954860397,
+      "student_t_95_ci": [1.075083933565285, 1.1011440150008416]
+    }
+  },
+  "public_one_shot_prior_path_over_terminal": {
+    "median_speedup": 1.358075550423314,
+    "minimum_point": {
+      "cell": "K16_R6_B256",
+      "estimate": 1.319436107563007,
+      "student_t_95_ci": [1.308123501077999, 1.3308465450749625]
+    },
+    "minimum_lower_bound": {
+      "cell": "K16_R5_B256",
+      "estimate": 1.3218989036436226,
+      "student_t_95_ci": [1.3016250938708245, 1.3424884935628232]
+    }
+  },
+  "public_one_shot_exact_main_over_leopard2": {
+    "median_speedup": 1.1213769884568774,
+    "minimum_point_and_lower_bound": {
+      "cell": "K10_R8_B256",
+      "estimate": 1.0878096524342236,
+      "student_t_95_ci": [1.0759195101304626, 1.099831194422322]
+    }
+  },
+  "validation": {
+    "clean_committed_release": "2/2 focused hook and production tests passed from the d84ce20 build under a 256 MiB address-space cap",
+    "strict_gcc": "2/2 focused tests passed with high warnings promoted to errors",
+    "asan_ubsan": "2/2 focused tests passed with leak detection and halt-on-error",
+    "release_graph": "All 135 codec and other graph entries passed in the full serial Release run; the sole stale provenance-checker failure was repaired in d84ce20 and its two-test rerun passed, covering all 136 entries with passing evidence.",
+    "hook_matrix": "An independent generator oracle checked every K10..16/R5..8 B256 shape. All 20 promoted shapes selected the terminal through ordinary, one-item batch, and unaligned APIs; K9/K16 exact owners, seven excluded K11/K12 cells, B255/B257, K/R boundaries, sparse/detached layouts, forced-transform routes, overlap errors, and atomicity controls passed.",
+    "isa_scan": "The frozen candidate contains zero ZMM, opmask, or zero-mask register signatures, and every timed Leopard2 invocation resolved AVX2."
+  },
+  "disposition": "Promote the packed two-block T=8 256-byte AVX2 terminal for the 20 qualified legacy-high GF8 shapes. Every target clears the 5 percent lower-confidence gate against both the prior Leopard2 route and exact Leopard main, while all measured boundary controls remain regression-free."
+}
