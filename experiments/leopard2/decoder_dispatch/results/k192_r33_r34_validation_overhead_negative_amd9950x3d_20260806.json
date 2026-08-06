@@ -1,0 +1,81 @@
+{
+  "schema": "leopard2.k192_r33_r34_validation_overhead_negative.v1",
+  "date_utc": "2026-08-06",
+  "host": "AMD Ryzen 9 9950X3D 16-Core Processor",
+  "source_commit": "358a3591ea5a8280ace21078052277e89e242098",
+  "baseline_sha256": "9bb733451eea4c9c27a1a2ab62f1178e251a0a43cb3db8dd48091406ff123d02",
+  "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+  "exact_main_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+  "workload": {
+    "K": 192,
+    "R": [33, 34],
+    "loss": [16, 17],
+    "shard_bytes": 64,
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "rounds": 5,
+    "iterations": 17,
+    "warmups": 6,
+    "reuse": 64,
+    "seed": 515151,
+    "cpu": 30
+  },
+  "attribution": [
+    {
+      "R": 33,
+      "main_over_reusable_execution": 0.990663,
+      "ci95": [0.960948, 1.021297],
+      "public_minus_reusable_execution_median_us": 0.552828,
+      "conclusion": "Even eliminating all public-wrapper overhead would only tie exact main."
+    },
+    {
+      "R": 34,
+      "main_over_reusable_execution": 1.043105,
+      "ci95": [1.029990, 1.056387],
+      "public_minus_reusable_execution_median_us": 0.583453,
+      "conclusion": "Even eliminating all public-wrapper overhead has a 4.31 percent point estimate, below the 5 percent promotion gate."
+    }
+  ],
+  "scratch_cache_color_experiment": {
+    "design": "Shift the scratch-owned 128-row Algorithm-5 workspace into otherwise unused missing-output rows without changing scratch size.",
+    "variants": [
+      {
+        "offset_rows": 1,
+        "sha256": "c4ece1c682f218a58f01efe14735bbe17cb69b6b4d3b67e1462f669bfee93ef3",
+        "baseline_over_candidate_R33": 1.009151,
+        "R33_ci95": [1.003360, 1.014975],
+        "baseline_over_candidate_R34": 0.997883,
+        "R34_ci95": [0.994031, 1.001750]
+      },
+      {
+        "offset_rows": 8,
+        "sha256": "b507c019f49f44ae6f18df15075da3a24790ee3ae755e540849d6f73e4cf4715",
+        "baseline_over_candidate_R33": 1.010024,
+        "R33_ci95": [1.001203, 1.018923],
+        "baseline_over_candidate_R34": 1.002931,
+        "R34_ci95": [0.998707, 1.007172]
+      },
+      {
+        "offset_rows": 16,
+        "sha256": "769dac9a9557feef367c0a364f394ab6ee9b737b1360d99862d8247e2f38dc10",
+        "baseline_over_candidate_R33": 1.010169,
+        "R33_ci95": [1.001743, 1.018666],
+        "baseline_over_candidate_R34": 1.003724,
+        "R34_ci95": [0.994028, 1.013515]
+      }
+    ],
+    "result": "rejected",
+    "reason": "The best lower confidence bound was only 0.17 percent above neutral and the maximum point gain was 1.02 percent. Fixed cache coloring is allocator-layout-sensitive and cannot close the exact-main gap."
+  },
+  "decision": {
+    "result": "negative",
+    "production_change": false,
+    "reason": "The remaining public gap is the cost of Leopard2's stronger presence, pointer-range, overlap, scratch, and failure-atomicity contract. Removing those checks is unsafe, while removing their entire measured cost still fails the promotion threshold.",
+    "next_step": "Prefer reusable decode plans or prevalidated batch bindings for latency-sensitive tiny shards; revisit only with a broader kernel improvement rather than a count-specific wrapper shortcut."
+  },
+  "correctness": {
+    "all_workload_digests_match": true,
+    "production_worktree_restored": true
+  }
+}
