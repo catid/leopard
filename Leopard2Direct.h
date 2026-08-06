@@ -240,6 +240,17 @@ bool SetContextGF8AVX2WalshLocatorEnabledForDiagnostics(
     bool enabled);
 
 /*
+    Context-local setup-only attribution for reusable GF8/AVX2 small-dual
+    plans.  Enabled plans omit the selected pruned schedules and execute the
+    mature regular transform below the direct-repair byte threshold.  Set it
+    before codec/plan construction.  This changes neither public ABI nor wire
+    identity and exists so both policies can be measured in one executable.
+*/
+bool SetContextSmallDualRegularFallbackEnabledForDiagnostics(
+    leo2_context* context,
+    bool enabled);
+
+/*
     Process-local benchmark control for the exact-byte K=8/R=3..4 packed
     T=4 terminals.  Change it only while no encode call is executing and
     invoke it before constructing the codec under test.  This remains outside

@@ -975,6 +975,146 @@ void verify_irregular_presence_boundary(leo2_context* context)
     leo2_codec_destroy(codec);
 }
 
+size_t pruned_schedule_count(const leo2_decode_plan* plan)
+{
+    leopard2_internal::DecodePlanPrunedScheduleInfo info = {};
+    require(leopard2_internal::GetDecodePlanPrunedScheduleInfo(plan, &info),
+        "same-binary pruned-schedule introspection failed");
+    return info.low_input_plan_count + info.low_output_plan_count +
+        info.high_input_plan_count + info.high_output_plan_count;
+}
+
+void verify_regular_fallback_pair(
+    leo2_context* pruned_context,
+    leo2_context* regular_context,
+    unsigned k,
+    unsigned r,
+    const std::vector<unsigned>& missing,
+    bool expect_affected)
+{
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    for (size_t i = 0; i < missing.size(); ++i)
+    {
+        require(missing[i] < k, "same-binary missing index is invalid");
+        original_present[missing[i]] = 0;
+    }
+
+    leo2_codec* pruned_codec = make_codec(pruned_context, k, r, 0);
+    leo2_codec* regular_codec = make_codec(regular_context, k, r, 0);
+    leo2_decode_plan* pruned_plan = make_plan(
+        pruned_codec, original_present, recovery_present);
+    leo2_decode_plan* regular_plan = make_plan(
+        regular_codec, original_present, recovery_present);
+    const size_t pruned_count = pruned_schedule_count(pruned_plan);
+    const size_t regular_count = pruned_schedule_count(regular_plan);
+    if (expect_affected)
+    {
+        require(pruned_count != 0,
+            "same-binary control unexpectedly had no pruned schedules");
+        require(regular_count == 0,
+            "same-binary regular policy retained a pruned schedule");
+    }
+    else
+    {
+        require(regular_count == pruned_count,
+            "same-binary inert control changed schedule metadata");
+    }
+
+    const BinaryField field = leopard2_test::make_legacy_gf8();
+    const ProfileLayout layout = leopard2_test::make_profile_layout(
+        leopard2_test::kLegacyHigh, k, r);
+    const Matrix generator =
+        leopard2_test::direct_systematic_generator(field, layout);
+    const size_t byte_counts[] = { 64, 257, 1023 };
+    for (size_t byte_i = 0;
+         byte_i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++byte_i)
+    {
+        const size_t bytes = byte_counts[byte_i];
+        size_t pruned_scratch_bytes = 0;
+        size_t regular_scratch_bytes = 0;
+        require_result(leo2_decode_plan_scratch_size(
+            pruned_plan, bytes, &pruned_scratch_bytes),
+            "same-binary pruned scratch query");
+        require_result(leo2_decode_plan_scratch_size(
+            regular_plan, bytes, &regular_scratch_bytes),
+            "same-binary regular scratch query");
+        require(pruned_scratch_bytes == regular_scratch_bytes,
+            "same-binary transform policies changed scratch geometry");
+
+        const uint64_t seed = UINT64_C(0x524547554c415200) +
+            static_cast<uint64_t>(k) * 257U + r * 17U + bytes;
+        Buffers pruned(k, r, 0, bytes, pruned_scratch_bytes,
+            field, generator, seed);
+        Buffers regular(k, r, 0, bytes, regular_scratch_bytes,
+            field, generator, seed);
+        pruned.apply_presence(original_present, recovery_present);
+        regular.apply_presence(original_present, recovery_present);
+        require_result(leo2_decode_plan_execute(
+            pruned_plan, bytes, pruned.original_input.data(),
+            pruned.recovery_input.data(), pruned.restored_output.data(),
+            pruned.scratch.data, pruned.scratch.bytes),
+            "same-binary pruned execute");
+        require_result(leo2_decode_plan_execute(
+            regular_plan, bytes, regular.original_input.data(),
+            regular.recovery_input.data(), regular.restored_output.data(),
+            regular.scratch.data, regular.scratch.bytes),
+            "same-binary regular execute");
+        pruned.verify_missing(missing);
+        regular.verify_missing(missing);
+        for (size_t i = 0; i < missing.size(); ++i)
+        {
+            const unsigned original = missing[i];
+            require(std::memcmp(pruned.restored[original].data() + 1,
+                        regular.restored[original].data() + 1, bytes) == 0,
+                "same-binary transform policies recovered different bytes");
+        }
+    }
+
+    leo2_decode_plan_destroy(regular_plan);
+    leo2_decode_plan_destroy(pruned_plan);
+    leo2_codec_destroy(regular_codec);
+    leo2_codec_destroy(pruned_codec);
+}
+
+void verify_same_binary_regular_fallback_control(
+    const leo2_context_options& options)
+{
+    require(!leopard2_internal::
+            SetContextSmallDualRegularFallbackEnabledForDiagnostics(
+                NULL, true),
+        "null same-binary regular-fallback context was accepted");
+    leo2_context* pruned_context = NULL;
+    leo2_context* regular_context = NULL;
+    require_result(leo2_context_create(&options, &pruned_context),
+        "same-binary pruned context create");
+    require_result(leo2_context_create(&options, &regular_context),
+        "same-binary regular context create");
+    require(leopard2_internal::
+            SetContextSmallDualRegularFallbackEnabledForDiagnostics(
+                pruned_context, false),
+        "cannot select same-binary pruned control");
+    require(leopard2_internal::
+            SetContextSmallDualRegularFallbackEnabledForDiagnostics(
+                regular_context, true),
+        "cannot select same-binary regular candidate");
+
+    verify_regular_fallback_pair(pruned_context, regular_context,
+        5, 5, std::vector<unsigned>{ 0, 1, 2, 3, 4 }, true);
+    /* Explicit legacy-high R>K coverage. */
+    verify_regular_fallback_pair(pruned_context, regular_context,
+        5, 8, std::vector<unsigned>{ 0, 1, 2, 3, 4 }, true);
+    /* Existing dense/boundary policy: the new selector must be inert. */
+    verify_regular_fallback_pair(pruned_context, regular_context,
+        14, 7, std::vector<unsigned>{ 0, 1, 2, 3, 4, 5, 6 }, false);
+    /* Common scattered partial-loss pattern: native high remains unchanged. */
+    verify_regular_fallback_pair(pruned_context, regular_context,
+        16, 8, std::vector<unsigned>{ 1, 4, 7, 12, 15 }, false);
+
+    leo2_context_destroy(regular_context);
+    leo2_context_destroy(pruned_context);
+}
+
 } // namespace
 
 int main()
@@ -1002,6 +1142,8 @@ int main()
             std::cout << "small dual-direct test skipped: GF8 disabled\n";
             return 0;
         }
+
+        verify_same_binary_regular_fallback_control(options);
 
 #if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0 && \
     LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT && \

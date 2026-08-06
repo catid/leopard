@@ -122,6 +122,7 @@ struct Options
     int low_p128_b64_terminal_mode;
     int low_p16_partial_direct_output_mode;
     int gf8_avx2_walsh_locator_mode;
+    int small_dual_regular_fallback_mode;
     int r1_small_reduction_mode;
     int r1_fixed_avx2_mode;
     int k8r3r4_t4_terminal_mode;
@@ -184,6 +185,7 @@ struct Options
         , low_p128_b64_terminal_mode(-1)
         , low_p16_partial_direct_output_mode(-1)
         , gf8_avx2_walsh_locator_mode(-1)
+        , small_dual_regular_fallback_mode(-1)
         , r1_small_reduction_mode(-1)
         , r1_fixed_avx2_mode(-1)
         , k8r3r4_t4_terminal_mode(-1)
@@ -488,6 +490,9 @@ static void Usage(std::ostream& output, const char* program)
         << "  --gf8-avx2-walsh-locator-mode 0|1\n"
         << "                         Attribution-only: disable or enable the dense setup kernel\n"
         << "                         within one-shot setup mode 3 using schema v16\n"
+        << "  --small-dual-regular-fallback-mode 0|1\n"
+        << "                         Attribution-only: pruned or regular small-dual transform\n"
+        << "                         in identical executable text using schema v27\n"
         << "  --r1-small-reduction-mode 0|1\n"
         << "                         Attribution-only: snapshot the small R=1 AVX2 policy\n"
         << "  --r1-fixed-avx2-mode 0|1\n"
@@ -635,6 +640,19 @@ static Options ParseOptions(int argc, char** argv)
                 options.gf8_avx2_walsh_locator_mode = 1;
             else
                 Fail("--gf8-avx2-walsh-locator-mode must be exactly 0 or 1");
+        }
+        else if (argument == "--small-dual-regular-fallback-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.small_dual_regular_fallback_mode = 0;
+            else if (mode == "1")
+                options.small_dual_regular_fallback_mode = 1;
+            else
+            {
+                Fail("--small-dual-regular-fallback-mode must be exactly "
+                     "0 or 1");
+            }
         }
         else if (argument == "--r1-small-reduction-mode")
         {
@@ -869,6 +887,27 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--gf8-avx2-walsh-locator-mode requires explicit GF8/AVX2, "
              "one-shot plan setup mode 3, batch=1, one thread, "
              "--skip-legacy, --retain-samples, and --measure-one-shot-decode");
+    }
+    if (options.small_dual_regular_fallback_mode >= 0 &&
+        (options.batch != 1 || options.threads != 1 ||
+         options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+         options.field != LEO2_FIELD_GF8 ||
+         options.backend != LEO2_BACKEND_AVX2 ||
+         !options.skip_legacy || !options.retain_samples ||
+         !options.report_decode_path || !options.report_direct_executor ||
+         options.measure_one_shot_decode ||
+         options.one_shot_plan_setup_mode >= 0 ||
+         options.gf8_avx2_walsh_locator_mode >= 0 ||
+         options.r1_small_reduction_mode >= 0 ||
+         options.r1_fixed_avx2_mode >= 0 ||
+         options.low_p32_b64_terminal_mode >= 0 ||
+         options.low_p128_b64_terminal_mode >= 0 ||
+         options.low_p16_partial_direct_output_mode >= 0))
+    {
+        Fail("--small-dual-regular-fallback-mode requires explicit "
+             "high/GF8/AVX2, batch=1, one thread, --skip-legacy, "
+             "--retain-samples, --report-decode-path, and "
+             "--report-direct-executor");
     }
     if (options.low_p32_b64_terminal_mode >= 0 &&
         (options.batch != 1 || options.threads != 1 ||
@@ -1702,6 +1741,14 @@ static int Run(const Options& options)
             SetContextGF8AVX2WalshLocatorEnabledForDiagnostics(
                 context, options.gf8_avx2_walsh_locator_mode == 1))
         Fail("cannot set the GF8 AVX2 Walsh-locator attribution mode");
+    if (options.small_dual_regular_fallback_mode >= 0 &&
+        !leopard2_internal::
+            SetContextSmallDualRegularFallbackEnabledForDiagnostics(
+                context,
+                options.small_dual_regular_fallback_mode == 1))
+    {
+        Fail("cannot set the small-dual regular-fallback attribution mode");
+    }
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
     if (options.disable_high_t4_binding)
     {
@@ -1777,6 +1824,14 @@ static int Run(const Options& options)
     leo2_decode_plan* plan = NULL;
     RequireLeo2(leo2_decode_plan_create(
         codec, &original_present[0], &recovery_present[0], &plan), "decode plan create");
+    leopard2_internal::DecodePlanPrunedScheduleInfo
+        reusable_plan_schedule_info = {};
+    if (options.small_dual_regular_fallback_mode >= 0 &&
+        !leopard2_internal::GetDecodePlanPrunedScheduleInfo(
+            plan, &reusable_plan_schedule_info))
+    {
+        Fail("reusable small-dual schedule introspection failed");
+    }
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
     if ((options.force_translated_low || options.force_native_high) &&
         leo2_test_decode_plan_uses_translated_low(plan) !=
@@ -1979,6 +2034,7 @@ static int Run(const Options& options)
         options.low_p32_b64_terminal_mode >= 0 ||
         options.low_p128_b64_terminal_mode >= 0 ||
         options.low_p16_partial_direct_output_mode >= 0 ||
+        options.small_dual_regular_fallback_mode >= 0 ||
         options.r1_small_reduction_mode >= 0 ||
         options.r1_fixed_avx2_mode >= 0 ||
         options.balanced_b64_terminal_mode >= 0 ||
@@ -1991,6 +2047,7 @@ static int Run(const Options& options)
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.small_dual_regular_fallback_mode >= 0 ? 27 :
         options.high_t8_two_block_b256_terminal_mode >= 0 ? 26 :
         options.high_t8_two_block_b64_terminal_mode >= 0 ? 25 :
         options.high_t16_prepared_terminal_mode >= 0 ? 24 :
@@ -2552,6 +2609,15 @@ static int Run(const Options& options)
              << (options.gf8_avx2_walsh_locator_mode == 1
                     ? "true" : "false");
     }
+    if (options.small_dual_regular_fallback_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"small_dual_regular_fallback_diagnostic_mode\": "
+             << options.small_dual_regular_fallback_mode << ",\n"
+             << "    \"small_dual_regular_fallback_enabled\": "
+             << (options.small_dual_regular_fallback_mode == 1
+                    ? "true" : "false");
+    }
     if (options.r1_small_reduction_mode >= 0 ||
         options.r1_fixed_avx2_mode >= 0)
     {
@@ -2722,6 +2788,11 @@ static int Run(const Options& options)
         if (options.gf8_avx2_walsh_locator_mode >= 0)
             json << "    \"gf8_avx2_walsh_locator_mode\": "
                  << options.gf8_avx2_walsh_locator_mode << ",\n";
+        if (options.small_dual_regular_fallback_mode >= 0)
+        {
+            json << "    \"small_dual_regular_fallback_mode\": "
+                 << options.small_dual_regular_fallback_mode << ",\n";
+        }
         if (options.r1_fixed_avx2_mode >= 0)
             json << "    \"r1_fixed_avx2_mode\": "
                  << options.r1_fixed_avx2_mode << ",\n";
@@ -2760,6 +2831,21 @@ static int Run(const Options& options)
              << "    \"gf8_avx2_walsh_locator_enabled\": "
              << (options.gf8_avx2_walsh_locator_mode == 1
                     ? "true" : "false");
+    }
+    if (options.small_dual_regular_fallback_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"small_dual_regular_fallback_enabled\": "
+             << (options.small_dual_regular_fallback_mode == 1
+                    ? "true" : "false") << ",\n"
+             << "    \"small_dual_low_input_pruned_plans\": "
+             << reusable_plan_schedule_info.low_input_plan_count << ",\n"
+             << "    \"small_dual_low_output_pruned_plans\": "
+             << reusable_plan_schedule_info.low_output_plan_count << ",\n"
+             << "    \"small_dual_high_input_pruned_plans\": "
+             << reusable_plan_schedule_info.high_input_plan_count << ",\n"
+             << "    \"small_dual_high_output_pruned_plans\": "
+             << reusable_plan_schedule_info.high_output_plan_count;
     }
     if (options.report_decode_path)
     {

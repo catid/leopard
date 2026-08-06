@@ -539,6 +539,13 @@ struct leo2_context
     bool calibrated_k1_avx2_copy_host;
     bool high_t4_batch_binding_enabled;
     bool gf8_avx2_walsh_locator_enabled;
+    /*
+        Setup-only policy for reusable GF8 small-dual plans.  Keeping this in
+        the context lets an attribution benchmark compare the regular and
+        pruned schedules in one executable, without perturbing hot text
+        layout.  Production contexts snapshot the build-time default.
+    */
+    bool small_dual_regular_fallback_enabled;
     uint32_t thread_count;
     size_t gf16_effective_l3_bytes;
     size_t gf16_live_set_target_bytes;
@@ -2318,8 +2325,9 @@ static bool SkipMeasuredBoundaryGF8AVX2HighPrunedSchedules(
 
 static bool SkipSmallDualPrunedSchedules(const leo2_decode_plan* plan)
 {
-#if LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK
-    if (!plan || !plan->codec || !plan->direct_transform_fallback)
+    if (!plan || !plan->codec || !plan->codec->context ||
+        !plan->codec->context->small_dual_regular_fallback_enabled ||
+        !plan->direct_transform_fallback)
         return false;
     /* A translated small-dual plan uses the same tiny regular Algorithm 4
        fallback already selected by one-shot setup.  Native Algorithm 5 full
@@ -2337,10 +2345,6 @@ static bool SkipSmallDualPrunedSchedules(const leo2_decode_plan* plan)
     const uint64_t originals = plan->codec->original_count;
     return recovery + 1U < plan->codec->padded_side ||
         originals + 1U < recovery * 2U;
-#else
-    (void)plan;
-    return false;
-#endif
 }
 
 enum DecodeTransformMetadata
@@ -14186,6 +14190,8 @@ LEO2_EXPORT leo2_result leo2_context_create(
     // permanent-cache construction remain on their established scalar path.
     context->gf8_avx2_walsh_locator_enabled =
         ops->kind == LEO2_BACKEND_AVX2 && ops->ff8_walsh_locator != NULL;
+    context->small_dual_regular_fallback_enabled =
+        LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK != 0;
     context->thread_count = threads;
     /*
         The retained cache-policy campaigns used an explicitly requested AVX2
@@ -15199,6 +15205,23 @@ bool SetContextGF8AVX2WalshLocatorEnabledForDiagnostics(
         !context->ops->ff8_walsh_locator)
         return false;
     context->gf8_avx2_walsh_locator_enabled = enabled;
+    return true;
+#else
+    (void)context;
+    (void)enabled;
+    return false;
+#endif
+}
+
+bool SetContextSmallDualRegularFallbackEnabledForDiagnostics(
+    leo2_context* context,
+    bool enabled)
+{
+#if defined(LEO_HAS_FF8) && defined(LEO2_HAVE_AVX2_BACKEND)
+    if (!context || !context->ops ||
+        context->ops->kind != LEO2_BACKEND_AVX2)
+        return false;
+    context->small_dual_regular_fallback_enabled = enabled;
     return true;
 #else
     (void)context;
