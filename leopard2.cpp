@@ -4364,6 +4364,15 @@ static bool PrepareDirectRepairTermsFromLocator(
     plan->direct_terms.reserve(maximum_term_count);
     plan->direct_term_offsets.push_back(0);
 
+#if LEO2_HAVE_GF8_TINY_DENSE_DIRECT && \
+    LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0
+    const bool prepare_tiny_dense =
+        IsProductionSmallDualPattern(codec, losses) &&
+        codec->original_count <= kDirectLegacyMaxRepairOriginals;
+    if (prepare_tiny_dense)
+        plan->direct_tiny_source_count = 0;
+#endif
+
     for (uint32_t output = 0; output < losses; ++output)
     {
         const uint32_t missing_original = plan->missing_originals[output];
@@ -4416,6 +4425,29 @@ static bool PrepareDirectRepairTermsFromLocator(
         const size_t end = plan->direct_terms.size();
         if (end - begin != codec->original_count)
             return false;
+#if LEO2_HAVE_GF8_TINY_DENSE_DIRECT && \
+    LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0
+        if (prepare_tiny_dense)
+        {
+            for (size_t source = 0;
+                 source < codec->original_count; ++source)
+            {
+                const leo2_direct_repair_term& term =
+                    plan->direct_terms[begin + source];
+                if (term.multiplier_log >= DirectField8::Modulus)
+                    return false;
+                if (output == 0)
+                    plan->direct_tiny_sources[source] = term.tagged_source;
+                else if (plan->direct_tiny_sources[source] !=
+                         term.tagged_source)
+                    return false;
+                plan->direct_tiny_logs[
+                    static_cast<size_t>(output) * codec->original_count +
+                        source] =
+                    static_cast<uint8_t>(term.multiplier_log);
+            }
+        }
+#endif
         for (size_t i = begin + 1; i < end; ++i)
         {
             if (plan->direct_terms[i].multiplier_log == 0)
@@ -4426,8 +4458,18 @@ static bool PrepareDirectRepairTermsFromLocator(
         }
         plan->direct_term_offsets.push_back(end);
     }
-    return plan->direct_term_offsets.size() == losses + 1U &&
+    const bool complete =
+        plan->direct_term_offsets.size() == losses + 1U &&
         plan->direct_terms.size() == maximum_term_count;
+#if LEO2_HAVE_GF8_TINY_DENSE_DIRECT && \
+    LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0
+    if (complete && prepare_tiny_dense)
+    {
+        plan->direct_tiny_source_count =
+            static_cast<uint8_t>(codec->original_count);
+    }
+#endif
+    return complete;
 }
 
 #if LEO2_HAVE_GF8_TINY_DENSE_DIRECT
@@ -4461,45 +4503,68 @@ static void PrepareGF8TinyDenseDirectSchedule(leo2_decode_plan* plan)
         source_count > kDirectLegacyMaxRepairOriginals)
         return;
 
+    uint8_t original_slots[kDirectLegacyMaxRepairOriginals];
+    uint8_t recovery_slots[kDirectMaxRepairLosses];
+    std::fill(original_slots,
+        original_slots + kDirectLegacyMaxRepairOriginals, UINT8_MAX);
+    std::fill(recovery_slots,
+        recovery_slots + kDirectMaxRepairLosses, UINT8_MAX);
     for (size_t source = 0; source < source_count; ++source)
     {
         const leo2_direct_repair_term& term =
             plan->direct_terms[first_begin + source];
         if (term.multiplier_log >= DirectField8::Modulus)
             return;
-        for (size_t earlier = 0; earlier < source; ++earlier)
-            if (plan->direct_tiny_sources[earlier] == term.tagged_source)
-                return;
+        const bool parity =
+            (term.tagged_source & kDirectRecoveryTag) != 0;
+        const uint32_t source_index =
+            term.tagged_source & ~kDirectRecoveryTag;
+        if ((parity && source_index >= codec->recovery_count) ||
+            (!parity && source_index >= codec->original_count))
+            return;
+        uint8_t& slot = parity
+            ? recovery_slots[source_index] : original_slots[source_index];
+        if (slot != UINT8_MAX)
+            return;
+        slot = static_cast<uint8_t>(source);
         plan->direct_tiny_sources[source] = term.tagged_source;
     }
 
+    const uint32_t complete_source_mask =
+        (UINT32_C(1) << source_count) - 1U;
     for (uint32_t output = 0; output < output_count; ++output)
     {
         const size_t begin = plan->direct_term_offsets[output];
         const size_t end = plan->direct_term_offsets[output + 1];
         if (end - begin != source_count)
             return;
-        bool seen[kDirectLegacyMaxRepairOriginals] = {};
+        uint32_t seen_sources = 0;
         for (size_t term_index = begin; term_index < end; ++term_index)
         {
             const leo2_direct_repair_term& term =
                 plan->direct_terms[term_index];
             if (term.multiplier_log >= DirectField8::Modulus)
                 return;
-            size_t source = 0;
-            while (source < source_count &&
-                   plan->direct_tiny_sources[source] != term.tagged_source)
-                ++source;
-            if (source == source_count || seen[source])
+            const bool parity =
+                (term.tagged_source & kDirectRecoveryTag) != 0;
+            const uint32_t source_index =
+                term.tagged_source & ~kDirectRecoveryTag;
+            if ((parity && source_index >= codec->recovery_count) ||
+                (!parity && source_index >= codec->original_count))
                 return;
-            seen[source] = true;
+            const uint8_t source = parity
+                ? recovery_slots[source_index]
+                : original_slots[source_index];
+            if (source == UINT8_MAX || source >= source_count ||
+                (seen_sources & (UINT32_C(1) << source)) != 0)
+                return;
+            seen_sources |= UINT32_C(1) << source;
             plan->direct_tiny_logs[
                 static_cast<size_t>(output) * source_count + source] =
                 static_cast<uint8_t>(term.multiplier_log);
         }
-        for (size_t source = 0; source < source_count; ++source)
-            if (!seen[source])
-                return;
+        if (seen_sources != complete_source_mask)
+            return;
     }
 
     plan->direct_tiny_source_count =
@@ -21079,7 +21144,8 @@ static leo2_result DecodePlanCreateInternal(
             }
 #endif
 #if LEO2_HAVE_GF8_TINY_DENSE_DIRECT
-            if (plan->direct_repair)
+            if (plan->direct_repair &&
+                plan->direct_tiny_source_count == 0)
                 PrepareGF8TinyDenseDirectSchedule(plan);
 #endif
         }
@@ -21342,7 +21408,8 @@ static leo2_result DecodePlanCreateInternal(
                 }
 #endif
 #if LEO2_HAVE_GF8_TINY_DENSE_DIRECT
-                PrepareGF8TinyDenseDirectSchedule(plan);
+                if (plan->direct_tiny_source_count == 0)
+                    PrepareGF8TinyDenseDirectSchedule(plan);
 #endif
             }
 #endif

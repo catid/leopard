@@ -162,15 +162,30 @@ void verify_pattern(
         leopard2_internal::DecodePathInfo path;
         require_result(leopard2_internal::GetDecodePlanPathInfo(
             plan, k, false, &path), "exhaustive path introspection");
-        require(path.path == leopard2_internal::kDecodePathDirect &&
-                path.rule == leopard2_internal::kDecodeRuleDirect,
-            "eligible loss pattern did not select direct repair");
+        const bool production_full_loss_transform =
+            LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0 &&
+            missing.size() == k && k >= 7;
+        if (production_full_loss_transform)
+        {
+            require(path.path != leopard2_internal::kDecodePathDirect &&
+                    path.rule != leopard2_internal::kDecodeRuleDirect,
+                "production full-loss transform control selected direct repair");
+        }
+        else
+        {
+            require(path.path == leopard2_internal::kDecodePathDirect &&
+                    path.rule == leopard2_internal::kDecodeRuleDirect,
+                "eligible loss pattern did not select direct repair");
+        }
         const leopard2_internal::DirectRepairExecutor expected_executor =
-            LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2
+            LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 1
                 ? leopard2_internal::kDirectRepairExecutorSourceMajor
                 : leopard2_internal::kDirectRepairExecutorOutputMajor;
-        require(path.direct_executor == expected_executor,
-            "eligible loss pattern selected the wrong direct executor");
+        if (!production_full_loss_transform)
+        {
+            require(path.direct_executor == expected_executor,
+                "eligible loss pattern selected the wrong direct executor");
+        }
 
         size_t scratch_bytes = 0;
         require_result(leo2_decode_plan_scratch_size(
@@ -256,9 +271,9 @@ void verify_pattern(
 
 void run_shard(uint32_t shard_index, uint32_t shard_count, Counts& counts)
 {
-    require(LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 1 ||
-            LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2,
-        "exhaustive small-direct verifier requires mode 1 or 2");
+    require(LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE >= 0 &&
+            LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE <= 2,
+        "exhaustive small-direct verifier requires mode 0, 1, or 2");
     require(shard_count != 0 && shard_index < shard_count,
         "shard index must be smaller than nonzero shard count");
 
