@@ -181,7 +181,9 @@ void test_avx2_six_output_large()
     require(ops->ff8_multiply_add_outputs != NULL,
         "qualified AVX2 backend omitted multi-output GF8 multiply-add");
 
-    static const size_t byte_counts[] = { 16384, 16385 };
+    static const size_t byte_counts[] = {
+        2047, 2048, 2049, 4096, 16384, 16385
+    };
     static const uint16_t log_sets[][6] = {
         { 0, 1, 17, 29, 127, 254 },
         { 0, UINT16_MAX, 17, 29, UINT16_MAX, 254 }

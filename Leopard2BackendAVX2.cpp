@@ -5216,7 +5216,7 @@ static void AVX2FF8MultiplyAddOutputs(
     }
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(_MSC_VER)
     if (output_count == 6 &&
-        byte_count >= UINT64_C(16384) &&
+        byte_count >= UINT64_C(2048) &&
         (byte_count & UINT64_C(31)) == 0)
     {
         AVX2FF8MultiplyAddOutputGroup6(
