@@ -1,0 +1,149 @@
+{
+  "schema": "leopard2-t32-fused-ragged-decode-evidence/v1",
+  "date_utc": "2026-08-06",
+  "bead": "leopard-79h.38.2.5.14",
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "governor": "powersave",
+    "allowed_cpus": "0-13,16-29",
+    "timing_cpu": 13,
+    "smt_sibling": 29,
+    "sibling_runnable_observations": 0,
+    "note": "The restarted session no longer admitted the formerly reserved CPU 30/14 pair, so this campaign selected an allowed physical CPU and checked its sibling before every timed process."
+  },
+  "artifacts": {
+    "root": "/tmp/leopard2-ragged-fused-102c50d-authoritative-v1",
+    "candidate_commit": "102c50d7485b5ad3154634accc13da8b9ce80c88",
+    "candidate_sha256": "1505c2367d6e3ae7d66c4bd018286961066c7923110a52e4639fa3972b125fd4",
+    "parent_commit": "358a3591ea5a8280ace21078052277e89e242098",
+    "parent_sha256": "9bb733451eea4c9c27a1a2ab62f1178e251a0a43cb3db8dd48091406ff123d02",
+    "main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "main_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "hashes_stable_after_campaign": true,
+    "json_reports": 210,
+    "stderr_files_nonempty": 0
+  },
+  "method": {
+    "parameters": {
+      "K": 57,
+      "R": 29,
+      "field": "gf8",
+      "backend": "avx2",
+      "batch": 1,
+      "reuse": 128,
+      "iterations_per_process": 17,
+      "warmup_per_process": 6,
+      "rounds": 5,
+      "processes_per_implementation_per_cell": 10,
+      "seed": 515151
+    },
+    "cells": [
+      { "bytes": 65, "loss": 2 },
+      { "bytes": 65, "loss": 14 },
+      { "bytes": 65, "loss": 28 },
+      { "bytes": 511, "loss": 2 },
+      { "bytes": 511, "loss": 14 },
+      { "bytes": 511, "loss": 28 },
+      { "bytes": 513, "loss": 2 }
+    ],
+    "order": "Counterbalanced six-process rounds: parent,candidate,main,main,candidate,parent alternating with main,candidate,parent,parent,candidate,main.",
+    "main_semantics": "Leopard main receives the next 64-byte physical size and fingerprints only the exact logical prefix. All padded bytes are zero.",
+    "interval": "Geometric mean of five round-level ratios; percentile 95% bootstrap over round ratios with 100000 deterministic resamples.",
+    "ratio_semantics": "A ratio above one means the candidate is faster."
+  },
+  "results": [
+    {
+      "bytes": 65,
+      "loss": 2,
+      "parent_over_candidate_execution": { "geomean": 1.365720, "ci95_low": 1.358452, "ci95_high": 1.374784 },
+      "parent_over_candidate_one_shot": { "geomean": 1.281898, "ci95_low": 1.274938, "ci95_high": 1.289297 },
+      "main_over_candidate_one_shot": { "geomean": 1.177340, "ci95_low": 1.172111, "ci95_high": 1.182593 },
+      "candidate_plan_scratch_bytes": 19584,
+      "parent_plan_scratch_bytes": 13568,
+      "candidate_one_shot_scratch_bytes": 23296,
+      "parent_one_shot_scratch_bytes": 15552
+    },
+    {
+      "bytes": 65,
+      "loss": 14,
+      "parent_over_candidate_execution": { "geomean": 1.327586, "ci95_low": 1.322778, "ci95_high": 1.332411 },
+      "parent_over_candidate_one_shot": { "geomean": 1.266167, "ci95_low": 1.259222, "ci95_high": 1.272267 },
+      "main_over_candidate_one_shot": { "geomean": 1.024801, "ci95_low": 1.023171, "ci95_high": 1.026252 },
+      "candidate_plan_scratch_bytes": 21248,
+      "parent_plan_scratch_bytes": 14464,
+      "candidate_one_shot_scratch_bytes": 23296,
+      "parent_one_shot_scratch_bytes": 15552
+    },
+    {
+      "bytes": 65,
+      "loss": 28,
+      "parent_over_candidate_execution": { "geomean": 1.341872, "ci95_low": 1.332550, "ci95_high": 1.350340 },
+      "parent_over_candidate_one_shot": { "geomean": 1.280058, "ci95_low": 1.274117, "ci95_high": 1.287045 },
+      "main_over_candidate_one_shot": { "geomean": 0.964054, "ci95_low": 0.963136, "ci95_high": 0.965204 },
+      "candidate_plan_scratch_bytes": 23168,
+      "parent_plan_scratch_bytes": 15488,
+      "candidate_one_shot_scratch_bytes": 23296,
+      "parent_one_shot_scratch_bytes": 15552
+    },
+    {
+      "bytes": 511,
+      "loss": 2,
+      "parent_over_candidate_execution": { "geomean": 1.088070, "ci95_low": 1.085089, "ci95_high": 1.091058 },
+      "parent_over_candidate_one_shot": { "geomean": 1.083484, "ci95_low": 1.080991, "ci95_high": 1.085983 },
+      "main_over_candidate_one_shot": { "geomean": 1.540934, "ci95_low": 1.537629, "ci95_high": 1.543529 },
+      "candidate_plan_scratch_bytes": 66816,
+      "parent_plan_scratch_bytes": 38912,
+      "candidate_one_shot_scratch_bytes": 80896,
+      "parent_one_shot_scratch_bytes": 51264
+    },
+    {
+      "bytes": 511,
+      "loss": 14,
+      "parent_over_candidate_execution": { "geomean": 1.071399, "ci95_low": 1.067505, "ci95_high": 1.075308 },
+      "parent_over_candidate_one_shot": { "geomean": 1.076046, "ci95_low": 1.072724, "ci95_high": 1.078771 },
+      "main_over_candidate_one_shot": { "geomean": 1.256850, "ci95_low": 1.253596, "ci95_high": 1.260113 },
+      "candidate_plan_scratch_bytes": 73088,
+      "parent_plan_scratch_bytes": 44416,
+      "candidate_one_shot_scratch_bytes": 80896,
+      "parent_one_shot_scratch_bytes": 51264
+    },
+    {
+      "bytes": 511,
+      "loss": 28,
+      "parent_over_candidate_execution": { "geomean": 1.066543, "ci95_low": 1.066045, "ci95_high": 1.067196 },
+      "parent_over_candidate_one_shot": { "geomean": 1.068032, "ci95_low": 1.066276, "ci95_high": 1.069611 },
+      "main_over_candidate_one_shot": { "geomean": 1.131158, "ci95_low": 1.130060, "ci95_high": 1.132449 },
+      "candidate_plan_scratch_bytes": 80384,
+      "parent_plan_scratch_bytes": 50816,
+      "candidate_one_shot_scratch_bytes": 80896,
+      "parent_one_shot_scratch_bytes": 51264
+    },
+    {
+      "bytes": 513,
+      "loss": 2,
+      "parent_over_candidate_execution": { "geomean": 1.006168, "ci95_low": 1.004295, "ci95_high": 1.008270 },
+      "parent_over_candidate_one_shot": { "geomean": 1.012705, "ci95_low": 1.010869, "ci95_high": 1.014944 },
+      "main_over_candidate_one_shot": { "geomean": 1.474249, "ci95_low": 1.472318, "ci95_high": 1.476138 },
+      "candidate_plan_scratch_bytes": 41280,
+      "parent_plan_scratch_bytes": 43136,
+      "candidate_one_shot_scratch_bytes": 55360,
+      "parent_one_shot_scratch_bytes": 57216,
+      "note": "The fused whole-shard path is disabled at this boundary; compact K-only tail staging remains active."
+    }
+  ],
+  "correctness": {
+    "all_round_trips_passed": true,
+    "distinct_original_parity_recovery_digest_tuples_per_cell": 1,
+    "release_focused": "13/13 passed",
+    "release_full": "138/139 passed in 1075.89 seconds; the only failure was the independently fixed nested-CWD provenance inventory bug, whose complete 116-test target then passed in 8.12 seconds",
+    "clang18_asan_ubsan_focused": "7/7 passed in 17.14 seconds",
+    "operation_and_scratch_models": "24/24 Python unit tests passed"
+  },
+  "decision": {
+    "promoted": true,
+    "reason": "The exact ragged pass materially improves every intended 65-511 byte cell versus the pre-change Leopard2 binary, has lower CI bounds above five percent at the 511-byte boundary, and does not regress the 513-byte neighbor.",
+    "tradeoff": "The fused path reserves rounded whole-shard input and work rows, increasing scratch in its active region.",
+    "remaining_gap": "At 65 bytes and 28 of 29 missing originals, exact Leopard main remains 3.59 percent faster in one-shot latency. This high-loss setup/execution crossover remains follow-up work."
+  }
+}
