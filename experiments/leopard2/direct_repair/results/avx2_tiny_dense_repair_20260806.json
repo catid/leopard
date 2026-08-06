@@ -1,0 +1,303 @@
+{
+  "schema": "leopard2-avx2-tiny-dense-repair-promotion/v1",
+  "date_utc": "2026-08-06",
+  "disposition": "promoted",
+  "bead": "leopard-79h.38.15",
+  "parent_bead": "leopard-79h.38.5.10.38",
+  "hypothesis": "A reusable erasure plan can preformat the exact dense GF8 coefficient schedule once and use the existing one-pass AVX2 multi-output kernel to beat the transform decoder for 1..63-byte shards with five through eight missing originals.",
+  "source_identity": {
+    "benchmarked_implementation_commit": "c1caf24d21432dc9103e68b977ef541f673576c7",
+    "benchmarked_implementation_tree": "6f8f8ef02307afede3e3fbebb2b775cd1521be90",
+    "initial_implementation_commit": "72aa4e0",
+    "prior_production_control_commit": "35ffd84",
+    "compile_time_control_commit": "c1caf24d21432dc9103e68b977ef541f673576c7",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "post_benchmark_portable_audit_commit": "2a76835",
+    "post_benchmark_dead_helper_cleanup_commit": "afdd20628427c824d9bf83c8611f445373f6d4c7",
+    "note": "The two post-benchmark commits alter the portable-ISA audit and delete unreferenced always-inline helpers; they do not alter the promoted routing, schedule, or arithmetic. The current Release benchmark retains the same 1391731-byte text size as the attested candidate."
+  },
+  "target": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "shard_bytes": [1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63],
+    "production_shapes": [
+      {"K": 5, "R": 5, "losses": 5},
+      {"K": 8, "R": 8, "losses": 5},
+      {"K": 16, "R": 8, "losses": 5},
+      {"K": 16, "R": 8, "losses": 8}
+    ],
+    "deliberate_transform_control": {"K": 8, "R": 8, "losses": 8},
+    "loss4_neighbor_shapes": [
+      {"K": 5, "R": 5, "losses": 4},
+      {"K": 8, "R": 8, "losses": 4},
+      {"K": 16, "R": 8, "losses": 4}
+    ]
+  },
+  "implementation": {
+    "plan_setup": "The immutable decode plan stores at most sixteen tagged source coordinates and an 8-by-16 byte matrix of nonzero GF8 multiplier logs. Locator-built plans fill the common-order matrix before output-row copy-first canonicalization; the fallback compiler maps tagged sources in O(K*L), not O(K*K*L).",
+    "execution": "The plan gathers K source pointers once and calls AVX2FF8LinearCombinationTiny for all L outputs. The backend handles exact 16/8/4/2/1-byte tails without reading rounded padding.",
+    "dispatcher": "Reusable production plans select this route only for supported five-through-eight-loss cells at 1..63 bytes. B64..1023 remains on the measured transform route; at least 1024 bytes retains the established source-major direct route. Public one-shot tiny decode remains on the transform path because cold setup dominates.",
+    "hot_path_allocations": 0,
+    "wire_format_changed": false,
+    "public_abi_changed": false,
+    "scratch_changed": false,
+    "parity_rebuild_changed": false
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus_available": 30,
+    "physical_core_smt_pair": "6,22",
+    "timing_cpu": 6,
+    "reserved_smt_sibling": 22,
+    "controller_cpu": 0,
+    "numa_nodes": 1,
+    "os": "Linux 6.8.0-134-generic x86_64",
+    "frequency_driver": "amd-pstate-epp",
+    "governor": "powersave",
+    "gcc": "13.3.0",
+    "clang": "18.1.3"
+  },
+  "full_matched_campaign": {
+    "orientation": "control_time_over_candidate_time",
+    "raw_root": "/tmp/leopard2-tiny-dense-c1caf24-matched-v4/campaigns/full",
+    "aggregate_path": "/tmp/leopard2-tiny-dense-c1caf24-matched-v4/campaigns/full/aggregate.json",
+    "aggregate_sha256": "6b47c997fd55b6a02ee23ae49e08be813df6360e4b141615f53be1f6b4e79f05",
+    "cells": 288,
+    "rounds": 3,
+    "retained_samples_per_process": 21,
+    "warmups_per_process": 5,
+    "order": "alternating baseline-candidate-candidate-baseline and candidate-baseline-baseline-candidate",
+    "statistic": "paired round log-ratio Student-t 95 percent interval",
+    "candidate_sha256": "ed7f134bf065fd166cc7bbec1d8f5639d7f43606fa8b11c19094f9cb9d57baa2",
+    "compile_time_control_sha256": "0765613b12c2a71c9e702499d07345218b0df51a9d3009d4de0ebf562dc8013a",
+    "exact_main_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "binary_hashes_verified_before_and_after": true,
+    "all_workload_digests_matched": true,
+    "all_round_trips_passed": true,
+    "reserved_sibling_nonidle_jiffies": 0,
+    "target_execution": {
+      "cells": 144,
+      "geometric_mean_speedup": 3.3863381345433137,
+      "minimum_speedup": 1.3749086148156198,
+      "minimum_ci95_lower": 1.352173612671019,
+      "credible_5_percent_gains": 144,
+      "point_regressions": 0
+    },
+    "same_source_amortized_by_reuse": {
+      "reuse_1": {
+        "cells": 48,
+        "geometric_mean_speedup": 1.0004543324376245,
+        "minimum_speedup": 0.7385225924896242,
+        "credible_5_percent_gains": 9,
+        "point_regressions": 17
+      },
+      "reuse_8": {
+        "cells": 48,
+        "geometric_mean_speedup": 2.0013537963449624,
+        "minimum_speedup": 1.1980050250967718,
+        "minimum_ci95_lower": 1.1950781131552488,
+        "credible_5_percent_gains": 48,
+        "point_regressions": 0
+      },
+      "reuse_64": {
+        "cells": 48,
+        "geometric_mean_speedup": 3.121846629721881,
+        "minimum_speedup": 1.3478863558789453,
+        "minimum_ci95_lower": 1.3258535188054454,
+        "credible_5_percent_gains": 48,
+        "point_regressions": 0
+      }
+    },
+    "exact_main_amortized_by_reuse": {
+      "semantics": "Leopard main decode includes pattern setup on every call. Leopard2 is execution plus immutable plan setup divided by reuse. For logical sizes below 64 bytes, main processes a zero-padded 64-byte physical shard because the old API does not support exact tails.",
+      "reuse_1": {
+        "cells": 48,
+        "geometric_mean_speedup": 0.6193635143838827,
+        "point_regressions": 48,
+        "interpretation": "Cold reusable-plan construction loses to main. The public one-shot API therefore retains the transform route; callers expecting one execution should use one-shot decode."
+      },
+      "reuse_8": {
+        "cells": 48,
+        "geometric_mean_speedup": 2.765807379313668,
+        "minimum_speedup": 1.537917257001745,
+        "minimum_ci95_lower": 1.5084647915329563,
+        "credible_5_percent_gains": 48
+      },
+      "reuse_64": {
+        "cells": 48,
+        "geometric_mean_speedup": 5.219937683445297,
+        "minimum_speedup": 1.8273187595283387,
+        "minimum_ci95_lower": 1.815462647087021,
+        "credible_5_percent_gains": 48
+      }
+    }
+  },
+  "same_executable_attribution": {
+    "purpose": "Remove compiler/link layout phase from the route comparison by using the exact candidate executable for both processes and --force-specialized only for the control process.",
+    "raw_root": "/tmp/leopard2-tiny-same-executable-c1caf24-v1",
+    "runner_path": "/tmp/run_tiny_same_executable_screen.sh",
+    "runner_sha256": "a62853eb72b9867cd46f011d11243b2f9ec8380ce38271dadade676c07ce0e34",
+    "binary_sha256_both_sides": "ed7f134bf065fd166cc7bbec1d8f5639d7f43606fa8b11c19094f9cb9d57baa2",
+    "cells": 60,
+    "rounds": 5,
+    "paired_log_ratios_per_cell": 10,
+    "retained_samples_per_process": 21,
+    "warmups_per_process": 5,
+    "reuse": 8,
+    "reserved_sibling_nonidle_jiffies": 0,
+    "target_execution": {
+      "cells": 48,
+      "geometric_mean_speedup": 3.4612033590492537,
+      "minimum_speedup": 1.3972815451741474,
+      "minimum_ci95_lower": 1.3833961827984673,
+      "credible_5_percent_gains": 48,
+      "point_regressions": 0
+    },
+    "target_amortized_reuse_8": {
+      "cells": 48,
+      "geometric_mean_speedup": 1.997573392750059,
+      "minimum_speedup": 1.1999170458621404,
+      "minimum_ci95_lower": 1.188957164959028,
+      "credible_5_percent_gains": 48,
+      "point_regressions": 0
+    },
+    "unchanged_k8_full_loss_control_execution": {
+      "cells": 12,
+      "geometric_mean_speedup": 1.0003909741048889,
+      "minimum_speedup": 0.989976595848205,
+      "minimum_ci95_lower": 0.9785736728484372,
+      "credible_regressions_greater_than_2_percent": 0
+    }
+  },
+  "incremental_prior_production_screen": {
+    "purpose": "Compare the accepted candidate to the immediately preceding production commit rather than only to a compile-time selector.",
+    "raw_root": "/tmp/leopard2-tiny-final-incremental-c1caf24-v1",
+    "runner_sha256": "3547344676f0b26d79f6b321526e6ed8a51b1da99202ffda59e60d610cb9ca37",
+    "prior_production_sha256": "696c940938770cde6e83a51e3496fcba214c227f9b5c14ac9d50b344402d3ea1",
+    "candidate_sha256": "ed7f134bf065fd166cc7bbec1d8f5639d7f43606fa8b11c19094f9cb9d57baa2",
+    "cells": 96,
+    "raw_json_files": 1920,
+    "rounds": 5,
+    "reserved_sibling_nonidle_jiffies": 0,
+    "hashes_unchanged": true,
+    "target_execution": {
+      "cells": 48,
+      "geometric_mean_speedup": 3.42489174450739,
+      "minimum_speedup": 1.43515172039803,
+      "minimum_ci95_lower": 1.4287587537880857,
+      "credible_5_percent_gains": 48
+    },
+    "loss4_neighbor_execution": {
+      "cells": 36,
+      "geometric_mean_speedup": 1.0040264955411784,
+      "minimum_speedup": 0.9846983105301884,
+      "minimum_ci95_lower": 0.9729676202369923,
+      "credible_regressions_greater_than_2_percent": 0
+    },
+    "k8_full_loss_layout_observation": {
+      "cells": 12,
+      "geometric_mean_speedup": 0.9437883286213027,
+      "interpretation": "Both commits select the identical materialized transform route. The same-executable attribution above measures it at 1.0004x with no credible regression, identifying this cross-binary result as link-layout phase rather than a new runtime operation. Leopard2 still beats exact main by 2.1448x geometric mean for this excluded shape in the full campaign."
+    }
+  },
+  "code_generation": {
+    "compile_time_control_dot_text_bytes": 1241391,
+    "candidate_dot_text_bytes": 1246447,
+    "dot_text_delta_bytes": 5056,
+    "compile_time_control_size_tool_text_bytes": 1386443,
+    "candidate_size_tool_text_bytes": 1391731,
+    "size_tool_text_delta_bytes": 5288,
+    "file_delta_bytes": 4384,
+    "four_kib_budget_excess_bytes": 960,
+    "budget_exception": "The 960-byte excess is accepted because the target execution gain is 3.39x overall, every target cell clears 5 percent credibly, and the same-executable unchanged-path control is neutral.",
+    "symbols": {
+      "AVX2FF8LinearCombinationTiny_bytes": 247,
+      "PrepareGF8TinyDenseDirectSchedule_bytes": 659,
+      "ExecuteGF8TinyDenseDirectRepair_bytes": 671
+    },
+    "template_stack_vector_references": {
+      "loss_5": {"references": 56, "maximum_stack_offset": 504},
+      "loss_6": {"references": 68, "maximum_stack_offset": 568},
+      "loss_7": {"references": 79, "maximum_stack_offset": 632},
+      "loss_8": {"references": 73, "maximum_stack_offset": 664},
+      "wrapper": {"references": 0}
+    },
+    "portable_isa": {
+      "ctest": "passed",
+      "avx2_object_sha256_selector_on_and_off": "b766bda9073969cffba7dbf01601b8954619164b234addf9b3dbfe36a34f0dd3",
+      "evex_prefix_count": 0,
+      "avx512_operand_count": 0
+    }
+  },
+  "correctness": {
+    "release": {
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_random",
+        "leopard2_dense_plan_policy",
+        "leopard2_direct_repair"
+      ],
+      "passed": 4,
+      "failed": 0
+    },
+    "clang18_asan_ubsan_lsan": {
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_random",
+        "leopard2_dense_plan_policy"
+      ],
+      "passed": 3,
+      "failed": 0
+    },
+    "exhaustive_small_direct_mode_2": {
+      "shards": 30,
+      "total_patterns": 1982812,
+      "recovered_shards": 11124698,
+      "verified_basis_symbols": 162888934,
+      "result_root": "/tmp/leopard2-small-direct-tiny-refined-20260806-v1/exhaustive-mode2-rerun"
+    },
+    "exhaustive_production_mode_0": {
+      "shards": 30,
+      "total_patterns": 1982812,
+      "recovered_shards": 11124698,
+      "verified_basis_symbols": 162888934,
+      "result_root": "/tmp/leopard2-small-direct-tiny-refined-20260806-v1/exhaustive-production-rerun"
+    },
+    "strict_builds": {
+      "gcc_13_3": "passed with -Wall -Wextra -Wpedantic -Werror",
+      "clang_18_1": "passed with -Wall -Wextra -Wpedantic -Werror",
+      "cleanup": "Clang exposed five transitive dead always-inline helpers in Leopard2BackendAVX2T8K8B1024.cpp; afdd206 removes them."
+    }
+  },
+  "rejected_variants": [
+    {
+      "candidate": "Split five-through-eight output calls into Group4 plus Group1..4 to reduce stack spills",
+      "raw_root": "/tmp/leopard2-tiny-split-dirty-v1",
+      "analysis_sha256": "2db2934983d8987b42044c80458dbd0c9b1916c6bf2219130aa545ae19113698",
+      "cells": 12,
+      "rounds": 5,
+      "geometric_mean_speedup": 0.955466,
+      "slower_cells": 10,
+      "candidate_text_reduction_bytes": 28728,
+      "reason": "The split reread every source group and lost more memory/load work than it recovered from reduced register spills. Only K16/L8/B31 improved credibly. The prototype was reverted completely."
+    },
+    {
+      "candidate": "Move the tiny schedule to the tail of leo2_decode_plan and short-circuit the direct-plan predicate",
+      "raw_root": "/tmp/leopard2-tiny-layout-fix-excluded-v1",
+      "cells": 12,
+      "geometric_mean_speedup": 0.918194,
+      "reason": "The attempted layout change worsened the excluded K8 full-loss transform screen. It was reverted completely; same-executable attribution was used to distinguish real work from cross-binary layout phase."
+    }
+  ],
+  "isolation_note": "The campaign used the canonical build/timing lock, immutable read-only binaries, CPU6 child pinning, CPU22 sibling before/after gates, and CPU0 controller pinning. The temporary runner manually pinned the controller instead of using the release supervisor because unrelated same-user long-lived processes made the supervisor's process-affinity mutation inappropriate. Treat it as pinned, sibling-gated promotion evidence, not as a release-final pair-exclusion certificate.",
+  "commands": {
+    "release_tests": "OMP_NUM_THREADS=1 ctest --test-dir BUILD -R '^(leopard2_backend_ops|leopard2_random|leopard2_dense_plan_policy|leopard2_direct_repair)$' -j1 --output-on-failure",
+    "sanitizer_tests": "OMP_NUM_THREADS=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 ctest --test-dir ASAN_BUILD -R '^(leopard2_backend_ops|leopard2_random|leopard2_dense_plan_policy)$' -j1 --output-on-failure",
+    "strict_build": "cmake -S . -B STRICT -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=OFF '-DCMAKE_CXX_FLAGS=-Wall -Wextra -Wpedantic -Werror' && cmake --build STRICT --target leopard -j1",
+    "exhaustive_shard": "leopard2_small_direct_exhaustive_test --shard-index I --shard-count 30",
+    "candidate_benchmark": "taskset -c 6 bench_leopard2 --k K --r R --profile high --field gf8 --backend avx2 --bytes BYTES --loss LOSSES --batch 1 --reuse REUSE --iterations 21 --warmup 5 --threads 1 --seed SEED --skip-legacy --retain-samples --report-decode-path --report-direct-executor --json FILE",
+    "same_executable_control": "Use the identical candidate command and executable with --force-specialized.",
+    "exact_main_benchmark": "taskset -c 6 leopard_main_benchmark --k K --r R --bytes max(64,BYTES) --logical-bytes BYTES --loss LOSSES --batch 1 --reuse REUSE --iterations 21 --warmup 5 --threads 1 --seed SEED --json FILE"
+  }
+}
