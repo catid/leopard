@@ -442,6 +442,23 @@ void ExercisePromotedMatrix(leo2_context* context)
     }
     ExerciseCell(context, Cell{ 4, 3, 1024 }, true);
     ExerciseCell(context, Cell{ 4, 4, 1024 }, true);
+
+    static const size_t four_block_bytes[] = {
+        64, 128, 256, 512, 1024, 1984
+    };
+    for (unsigned k = 13; k <= 14; ++k)
+    {
+        for (unsigned r = 3; r <= 4; ++r)
+        {
+            for (size_t i = 0;
+                 i < sizeof(four_block_bytes) /
+                    sizeof(four_block_bytes[0]); ++i)
+            {
+                ExerciseCell(context,
+                    Cell{ k, r, four_block_bytes[i] }, true);
+            }
+        }
+    }
 }
 
 void ExerciseNonPromotedCells(leo2_context* context)
@@ -479,7 +496,10 @@ void ExerciseNonPromotedCells(leo2_context* context)
         { 8, 3, 2048 },
         { 8, 4, 2048 },
         { 8, 8, 64 },
-        { 9, 4, 64 }
+        { 9, 4, 64 },
+        { 12, 4, 64 },
+        { 15, 4, 64 },
+        { 16, 4, 64 }
     };
     for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
         ExerciseCell(context, cells[i], false);
@@ -500,6 +520,23 @@ void ExerciseNonPromotedCells(leo2_context* context)
     {
         for (unsigned r = 3; r <= 4; ++r)
             ExerciseCell(context, Cell{ k, r, 1024 }, false);
+    }
+    static const size_t four_block_neighbors[] = {
+        63, 65, 127, 129, 255, 257, 511, 513,
+        1023, 1025, 1983, 1985, 2048
+    };
+    for (unsigned k = 13; k <= 14; ++k)
+    {
+        for (unsigned r = 3; r <= 4; ++r)
+        {
+            for (size_t i = 0;
+                 i < sizeof(four_block_neighbors) /
+                    sizeof(four_block_neighbors[0]); ++i)
+            {
+                ExerciseCell(context,
+                    Cell{ k, r, four_block_neighbors[i] }, false);
+            }
+        }
     }
 }
 
@@ -848,7 +885,9 @@ void ExerciseScalarFallbacks()
         { 8, 3, 128 },
         { 8, 4, 256 },
         { 8, 4, 512 },
-        { 8, 4, 1024 }
+        { 8, 4, 1024 },
+        { 13, 3, 64 },
+        { 14, 4, 1984 }
     };
     for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
         ExerciseCell(context, cells[i], false);
@@ -893,6 +932,8 @@ int main()
         ExerciseForcedTransform(context, Cell{ 8, 3, 128 });
         ExerciseForcedTransform(context, Cell{ 8, 3, 512 });
         ExerciseForcedTransform(context, Cell{ 8, 3, 1024 });
+        ExerciseForcedTransform(context, Cell{ 13, 3, 64 });
+        ExerciseForcedTransform(context, Cell{ 14, 4, 1984 });
         ExerciseFallbackLayouts(context, Cell{ 3, 3, 64 });
         ExerciseFallbackLayouts(context, Cell{ 3, 3, 1024 });
         ExerciseFallbackLayouts(context, Cell{ 4, 3, 64 });
@@ -902,6 +943,8 @@ int main()
         ExerciseFallbackLayouts(context, Cell{ 8, 4, 256 });
         ExerciseFallbackLayouts(context, Cell{ 8, 4, 512 });
         ExerciseFallbackLayouts(context, Cell{ 8, 4, 1024 });
+        ExerciseFallbackLayouts(context, Cell{ 13, 3, 64 });
+        ExerciseFallbackLayouts(context, Cell{ 14, 4, 1984 });
         ExerciseValidationAtomicity(context, Cell{ 3, 3, 64 });
         ExerciseValidationAtomicity(context, Cell{ 3, 3, 1024 });
         ExerciseValidationAtomicity(context, Cell{ 4, 4, 64 });
@@ -909,6 +952,8 @@ int main()
         ExerciseValidationAtomicity(context, Cell{ 8, 4, 64 });
         ExerciseValidationAtomicity(context, Cell{ 8, 4, 512 });
         ExerciseValidationAtomicity(context, Cell{ 8, 4, 1024 });
+        ExerciseValidationAtomicity(context, Cell{ 13, 3, 64 });
+        ExerciseValidationAtomicity(context, Cell{ 14, 4, 512 });
 
         leo2_context_destroy(context);
         std::printf("T=4 packed terminal family checks passed\n");

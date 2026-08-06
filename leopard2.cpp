@@ -648,7 +648,13 @@ enum TerminalT4Shape : uint8_t
     kTerminalT4K8R4,
     /* Keep the late-added singleton out of the established K=4..8 pairs so
        their numeric identities and range checks remain stable. */
-    kTerminalT4K3R3
+    kTerminalT4K3R3,
+    /* Later measured four-block shapes retain the established numeric
+       identities above so persisted diagnostics remain comparable. */
+    kTerminalT4K13R3,
+    kTerminalT4K13R4,
+    kTerminalT4K14R3,
+    kTerminalT4K14R4
 };
 
 struct leo2_codec
@@ -6291,7 +6297,8 @@ static uint8_t ClassifyTerminalT4Shape(const leo2_codec* codec)
 {
 #ifdef LEO_HAS_FF8
     if (!codec || !codec->high_t4_batch_binding_enabled ||
-        codec->original_count < 3 || codec->original_count > 8 ||
+        codec->original_count < 3 || codec->original_count > 14 ||
+        (codec->original_count > 8 && codec->original_count < 13) ||
         (codec->recovery_count != 3 && codec->recovery_count != 4) ||
         (codec->original_count == 3 && codec->recovery_count != 3) ||
         codec->padded_side != 4 ||
@@ -6327,6 +6334,12 @@ static uint8_t ClassifyTerminalT4Shape(const leo2_codec* codec)
                 ? kTerminalT4K8R3 : kTerminalT4K8R4;
         }
         break;
+    case 13:
+        return codec->recovery_count == 3
+            ? kTerminalT4K13R3 : kTerminalT4K13R4;
+    case 14:
+        return codec->recovery_count == 3
+            ? kTerminalT4K14R3 : kTerminalT4K14R4;
     default:
         break;
     }
@@ -15173,6 +15186,9 @@ uint64_t HighT4BatchMaximumBytes(
     case 9: return punctured_r3 ? 4U * 1024U : 3U * 1024U;
     case 10: return punctured_r3 ? 8U * 1024U : 4U * 1024U;
     case 11: return punctured_r3 ? 6U * 1024U : 2U * 1024U;
+    case 13:
+    case 14:
+        return 16U * 1024U;
     default: return 0;
     }
 }
@@ -15652,7 +15668,8 @@ bool GetCodecEncodePathInfo(
         codec->padded_side == 4 &&
         codec->recovery_count >= 3 && codec->recovery_count <= 4 &&
         ((codec->original_count >= 3 && codec->original_count <= 7) ||
-         (codec->original_count >= 9 && codec->original_count <= 11)) &&
+         (codec->original_count >= 9 && codec->original_count <= 11) ||
+         (codec->original_count >= 13 && codec->original_count <= 14)) &&
         shard_bytes >= 32 &&
         shard_bytes <= HighT4BatchMaximumBytes(
             codec->original_count, codec->recovery_count) &&
@@ -16898,16 +16915,25 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalByteCount(
     {
         /* Keep this promotion local to its measured K=4..8 family.  A later
            shape may share this classifier without inheriting B=512. */
-        return terminal_shape >= kTerminalT4K4R3 &&
-            terminal_shape <= kTerminalT4K8R4;
+        return (terminal_shape >= kTerminalT4K4R3 &&
+                terminal_shape <= kTerminalT4K8R4) ||
+            (terminal_shape >= kTerminalT4K13R3 &&
+                terminal_shape <= kTerminalT4K14R4);
     }
     /* Restrict B=1024 to the disjoint K=4 and K=8 families.  Keep K=5..7 on
        the mature path until they are measured independently. */
-    return shard_bytes == 1024 &&
-        ((terminal_shape >= kTerminalT4K4R3 &&
-          terminal_shape <= kTerminalT4K4R4) ||
-         (terminal_shape >= kTerminalT4K8R3 &&
-          terminal_shape <= kTerminalT4K8R4));
+    if (shard_bytes == 1024)
+    {
+        return (terminal_shape >= kTerminalT4K4R3 &&
+                terminal_shape <= kTerminalT4K4R4) ||
+            (terminal_shape >= kTerminalT4K8R3 &&
+                terminal_shape <= kTerminalT4K8R4) ||
+            (terminal_shape >= kTerminalT4K13R3 &&
+                terminal_shape <= kTerminalT4K14R4);
+    }
+    return shard_bytes == 1984 &&
+        terminal_shape >= kTerminalT4K13R3 &&
+        terminal_shape <= kTerminalT4K14R4;
 }
 
 static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalEligible(
@@ -16932,8 +16958,9 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalEligible(
         return false;
 #endif
 
-    LEO_DEBUG_ASSERT(codec->original_count >= 3 &&
-        codec->original_count <= 8);
+    LEO_DEBUG_ASSERT(
+        (codec->original_count >= 3 && codec->original_count <= 8) ||
+        (codec->original_count >= 13 && codec->original_count <= 14));
     LEO_DEBUG_ASSERT(codec->recovery_count == 3 ||
         codec->recovery_count == 4);
     LEO_DEBUG_ASSERT(codec->original_count != 3 ||
@@ -16970,7 +16997,9 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalEligible(
 template<uint32_t OriginalCount, uint32_t RecoveryCount>
 static LEO_FORCE_INLINE uint8_t GF8T4TerminalShape()
 {
-    static_assert(OriginalCount >= 3 && OriginalCount <= 8,
+    static_assert(
+        (OriginalCount >= 3 && OriginalCount <= 8) ||
+        (OriginalCount >= 13 && OriginalCount <= 14),
         "T=4 packed terminal instantiated outside its fixed K set");
     static_assert(RecoveryCount == 3 || RecoveryCount == 4,
         "T=4 packed terminal instantiated outside its fixed R set");
@@ -16978,6 +17007,10 @@ static LEO_FORCE_INLINE uint8_t GF8T4TerminalShape()
         "K=3 T=4 packed terminal is qualified only for R=3");
     return OriginalCount == 3
         ? static_cast<uint8_t>(kTerminalT4K3R3)
+        : OriginalCount >= 13
+        ? static_cast<uint8_t>(
+            kTerminalT4K13R3 + (OriginalCount - 13U) * 2U +
+            (RecoveryCount - 3U))
         : static_cast<uint8_t>(
             kTerminalT4K4R3 + (OriginalCount - 4U) * 2U +
             (RecoveryCount - 3U));
@@ -16988,7 +17021,9 @@ static LEO_FORCE_INLINE bool GF8T4ScratchLayout(
     size_t shard_bytes,
     ScratchLayout& layout)
 {
-    static_assert(OriginalCount >= 3 && OriginalCount <= 8,
+    static_assert(
+        (OriginalCount >= 3 && OriginalCount <= 8) ||
+        (OriginalCount >= 13 && OriginalCount <= 14),
         "T=4 packed terminal instantiated outside its fixed K set");
     static_assert(RecoveryCount == 3 || RecoveryCount == 4,
         "T=4 packed terminal instantiated outside its fixed R set");
@@ -17184,6 +17219,22 @@ TryEncodeGF8T4PackedTerminal(
             result_out);
     case kTerminalT4K8R4:
         return TryEncodeGF8T4PackedShape<8, 4>(codec, protected_range,
+            shard_bytes, original, recovery, scratch, scratch_bytes,
+            result_out);
+    case kTerminalT4K13R3:
+        return TryEncodeGF8T4PackedShape<13, 3>(codec, protected_range,
+            shard_bytes, original, recovery, scratch, scratch_bytes,
+            result_out);
+    case kTerminalT4K13R4:
+        return TryEncodeGF8T4PackedShape<13, 4>(codec, protected_range,
+            shard_bytes, original, recovery, scratch, scratch_bytes,
+            result_out);
+    case kTerminalT4K14R3:
+        return TryEncodeGF8T4PackedShape<14, 3>(codec, protected_range,
+            shard_bytes, original, recovery, scratch, scratch_bytes,
+            result_out);
+    case kTerminalT4K14R4:
+        return TryEncodeGF8T4PackedShape<14, 4>(codec, protected_range,
             shard_bytes, original, recovery, scratch, scratch_bytes,
             result_out);
     default:
@@ -20805,7 +20856,8 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
         codec->padded_side == 4 &&
         codec->recovery_count >= 3 && codec->recovery_count <= 4 &&
         ((codec->original_count >= 3 && codec->original_count <= 7) ||
-         (codec->original_count >= 9 && codec->original_count <= 11)))
+         (codec->original_count >= 9 && codec->original_count <= 11) ||
+         (codec->original_count >= 13 && codec->original_count <= 14)))
     {
         const uint64_t shard_bytes = binding->items[0].shard_bytes;
         const uint64_t maximum_bytes =

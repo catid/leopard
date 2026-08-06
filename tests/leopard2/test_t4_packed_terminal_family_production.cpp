@@ -319,6 +319,23 @@ int main()
         ExerciseCell(context, Cell{ 4, 3, 1024 });
         ExerciseCell(context, Cell{ 4, 4, 1024 });
 
+        static const size_t four_block_bytes[] = {
+            64, 128, 256, 512, 1024, 1984
+        };
+        for (unsigned k = 13; k <= 14; ++k)
+        {
+            for (unsigned r = 3; r <= 4; ++r)
+            {
+                for (size_t i = 0;
+                     i < sizeof(four_block_bytes) /
+                        sizeof(four_block_bytes[0]); ++i)
+                {
+                    ExerciseCell(context,
+                        Cell{ k, r, four_block_bytes[i] });
+                }
+            }
+        }
+
         leo2_context_destroy(context);
         std::printf("production T=4 packed-terminal smoke checks passed\n");
         return 0;

@@ -428,7 +428,9 @@ uint64_t ExerciseT4BatchBindings(leo2_context* context)
         { 7, 3, 16384 }, { 7, 4, 4096 },
         { 9, 3, 4096 }, { 9, 4, 3072 },
         { 10, 3, 8192 }, { 10, 4, 4096 },
-        { 11, 3, 6144 }, { 11, 4, 2048 }
+        { 11, 3, 6144 }, { 11, 4, 2048 },
+        { 13, 3, 16384 }, { 13, 4, 16384 },
+        { 14, 3, 16384 }, { 14, 4, 16384 }
     };
     static const size_t item_count = 2;
     static const uint8_t sentinel = 0xa5;
