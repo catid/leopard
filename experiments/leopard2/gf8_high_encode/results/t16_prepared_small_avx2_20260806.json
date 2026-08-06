@@ -1,0 +1,148 @@
+{
+  "schema": "leopard2-gf8-t16-prepared-small-avx2/v1",
+  "created_utc": "2026-08-06T04:32:04Z",
+  "status": "promoted",
+  "scope": {
+    "field": "GF8",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "backend": "pure AVX2",
+    "operation": "prepared-codec encode execution",
+    "counts": "K=R=9..15 at 64 bytes and K=R=9..16 at 128,192,256,320,384,448 bytes",
+    "cell_count": 55,
+    "excluded_cell": {
+      "K": 16,
+      "R": 16,
+      "shard_bytes": 64,
+      "reason": "The separately qualified generated balanced-B64 terminal already owns this route; the prepared-T16 selector remains inert there."
+    }
+  },
+  "source": {
+    "branch": "codex/leopard2",
+    "candidate_commit": "ae29b30cdf2a1b9e5490165227c9d0bfd29d20e0",
+    "candidate_tree": "dbfda77990ce3d43ac06378f64f4a7b9f791f960",
+    "candidate_tracked_dirty": false,
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_tree": "b7c8830d96a978f6ec14fe747095f066e351ae72"
+  },
+  "frozen_inputs": {
+    "candidate_executable": "/tmp/leopard2-t16-small-final-ae29b30-v1/artifacts/bench_leopard2-ae29b30",
+    "candidate_executable_sha256": "da094e411e762da7b8c6ddc4723619d4043a087b59403ec46afbb1dddefb138b",
+    "candidate_archive_sha256": "8bb1e5fa10474e4dc72df063d2cc28f44f925155ff95bbdc8b60e378ff6c5653",
+    "exact_main_executable": "/tmp/leopard2-t16-small-final-ae29b30-v1/artifacts/leopard-main-d39c77d",
+    "exact_main_executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "exact_main_archive_sha256": "49250fb7528df955e57e96f84b309cf0c26f203122d112f3f501336c0eb131d0",
+    "candidate_build_profile": "Release AUTO resolving to AVX2, with AVX-512 probes forced false",
+    "exact_main_build_profile": "Release -march=x86-64 -mtune=generic -mavx2 -mno-avx512f",
+    "immutability": "Lane-owned executable copies were installed read-only before timing. SHA-256 values were unchanged after every accepted campaign."
+  },
+  "campaign": {
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "benchmark_cpu": 28,
+    "reserved_smt_sibling": 12,
+    "accepted_sibling_nonidle_jiffies": 0,
+    "round_order": ["control", "candidate", "candidate", "control"],
+    "iterations_per_invocation": 31,
+    "warmup_per_invocation": 8,
+    "reuse": 64,
+    "batch": 1,
+    "threads": 1,
+    "environment": {
+      "OMP_NUM_THREADS": "1",
+      "OMP_THREAD_LIMIT": "1",
+      "OMP_DYNAMIC": "FALSE",
+      "OMP_PROC_BIND": "TRUE"
+    },
+    "statistics": "For each independent ABBA round, average the two log(control/candidate) contrasts; report the geometric mean and a two-sided 95% Student-t interval over independent round contrasts.",
+    "exact_main_initial": {
+      "raw_directory": "/tmp/leopard2-t16-small-final-ae29b30-v1/exact-main",
+      "accepted_rounds": [0, 1, 2],
+      "accepted_file_count": 660,
+      "accepted_aggregate_sha256": "5d510a12ad15528248f5b064f34859a489151e87a8a8804e3e809251e8ee2c21"
+    },
+    "exact_main_clean_extension": {
+      "raw_directory": "/tmp/leopard2-t16-small-final-ae29b30-v1/exact-main-clean-extension",
+      "extended_cells": [
+        "K12_R12_B192", "K14_R14_B256", "K15_R15_B192",
+        "K15_R15_B384", "K16_R16_B192", "K16_R16_B256",
+        "K16_R16_B384", "K16_R16_B448"
+      ],
+      "additional_rounds": [3, 4, 5, 6, 7, 8],
+      "accepted_file_count": 192,
+      "accepted_aggregate_sha256": "446495bb76d3a33f46943a5e17416167c0663c426ce226ab0f6a74fd90b5cb56"
+    },
+    "same_source": {
+      "raw_directory": "/tmp/leopard2-t16-small-final-ae29b30-v1/same-source",
+      "rounds": 3,
+      "accepted_file_count": 660,
+      "accepted_aggregate_sha256": "cafcd389f8955f4f411378ee8b08f09327293c28d6840d79fe20342882a80746"
+    },
+    "discarded_extension": {
+      "raw_directory": "/tmp/leopard2-t16-small-final-ae29b30-v1/exact-main",
+      "rounds": [3, 4, 5, 6, 7, 8],
+      "file_count": 192,
+      "aggregate_sha256": "f6ad66e57d953b271c797a442bc184021af74022fecfcfb8c18b91fbb9c12ee3",
+      "reason": "The reserved SMT sibling accumulated one non-idle jiffy. These timings were excluded and replaced by the zero-jiffy clean extension."
+    }
+  },
+  "correctness": {
+    "accepted_exact_main_invocations": 852,
+    "accepted_same_source_invocations": 660,
+    "failed_invocations": 0,
+    "all_workload_digests_match": true,
+    "all_parity_digests_match": true,
+    "all_recovery_digests_match": true,
+    "all_round_trips_pass": true,
+    "candidate_source_identity_match": true,
+    "candidate_runtime_identity_match": true
+  },
+  "encode_exact_main_over_leopard2": {
+    "point_wins": 55,
+    "cell_count": 55,
+    "cells_with_95_ci_lower_bound_at_least_1_05": 55,
+    "median_geometric_speedup": 1.1868433876546445,
+    "minimum_point_speedup": {
+      "cell": "K16_R16_B448",
+      "estimate": 1.0777145637241343,
+      "student_t_95_ci": [1.069243287245689, 1.0862529554475666],
+      "rounds": 9
+    },
+    "minimum_lower_bound": {
+      "cell": "K16_R16_B192",
+      "estimate": 1.0970471255433656,
+      "student_t_95_ci": [1.0562522382947088, 1.1394176050277534],
+      "rounds": 9
+    },
+    "maximum_point_speedup": {
+      "cell": "K9_R9_B64",
+      "estimate": 1.5859354815529818,
+      "student_t_95_ci": [1.5347564655555719, 1.6388211472614356],
+      "rounds": 3
+    }
+  },
+  "encode_prior_path_over_prepared_t16": {
+    "point_wins": 55,
+    "cell_count": 55,
+    "cells_with_95_ci_lower_bound_at_least_1_05": 55,
+    "median_geometric_speedup": 1.4028527351935498,
+    "minimum_point_and_lower_bound": {
+      "cell": "K16_R16_B448",
+      "estimate": 1.139481113458397,
+      "student_t_95_ci": [1.1038558255803834, 1.1762561539644083]
+    },
+    "maximum_point_speedup": {
+      "cell": "K10_R10_B64",
+      "estimate": 2.2324130087246172,
+      "student_t_95_ci": [2.2160047390822033, 2.2489427723818727]
+    }
+  },
+  "validation": {
+    "release_focused": "3/3 passed: prepared-T16 hook, production, and Visual Studio project self-test",
+    "strict_gcc": "2/2 passed after a -Wall -Wextra -Wpedantic -Werror build",
+    "asan_ubsan": "2/2 passed with leak detection and halt-on-error",
+    "isa_scan": "Disassembly contains no ZMM, opmask, zero-mask, or other AVX-512 register signatures; every timed candidate invocation resolved the forced AVX2 backend.",
+    "qualified_sizes": [64, 128, 192, 256, 320, 384, 448, 512, 1024, 2048],
+    "fallback_sizes": [63, 65, 511, 513],
+    "additional_cases": ["K9_R9_B64 unaligned input and output", "K16_R16_B64 selector exclusion"]
+  },
+  "disposition": "Promote the prepared T16 AVX2 executor from 512 bytes down to whole 64-byte multiples, retaining the existing K16/R16/B64 owner and all ragged fallbacks. The promoted region is byte-identical and clears the 5% lower-bound gate in every tested cell against both the prior path and exact Leopard main."
+}
