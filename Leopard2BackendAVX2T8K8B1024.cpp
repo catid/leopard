@@ -87,16 +87,6 @@ static LEO_FORCE_INLINE __m256i Multiply(
     return Product(source, Broadcast(table), Broadcast(table + 16));
 }
 
-static LEO_FORCE_INLINE void IFFT2Nonzero(
-    const uint8_t* tables,
-    __m256i& x,
-    __m256i& y,
-    uint16_t log)
-{
-    y = _mm256_xor_si256(y, x);
-    MulAdd(tables, x, y, log);
-}
-
 static LEO_FORCE_INLINE void FFT2Nonzero(
     const uint8_t* tables,
     __m256i& x,
@@ -105,92 +95,6 @@ static LEO_FORCE_INLINE void FFT2Nonzero(
 {
     MulAdd(tables, x, y, log);
     y = _mm256_xor_si256(y, x);
-}
-
-static LEO_FORCE_INLINE void FFT2Prepared(
-    __m256i& x,
-    __m256i& y,
-    __m256i low_table,
-    __m256i high_table)
-{
-    MulAddPrepared(x, y, low_table, high_table);
-    y = _mm256_xor_si256(y, x);
-}
-
-static LEO_FORCE_INLINE void IFFT4Nonzero(
-    const uint8_t* tables,
-    __m256i& x0,
-    __m256i& x1,
-    __m256i& x2,
-    __m256i& x3,
-    uint16_t log01,
-    uint16_t log23,
-    uint16_t log02)
-{
-    IFFT2Nonzero(tables, x0, x1, log01);
-    IFFT2Nonzero(tables, x2, x3, log23);
-    x2 = _mm256_xor_si256(x2, x0);
-    x3 = _mm256_xor_si256(x3, x1);
-    const uint8_t* const table = Table(tables, log02);
-    const __m256i low_table = Broadcast(table);
-    const __m256i high_table = Broadcast(table + 16);
-    MulAddPrepared(x0, x2, low_table, high_table);
-    MulAddPrepared(x1, x3, low_table, high_table);
-}
-
-static LEO_FORCE_INLINE void IFFTDistance4Nonzero(
-    __m256i& x0,
-    __m256i& x1,
-    __m256i& x2,
-    __m256i& x3,
-    __m256i& x4,
-    __m256i& x5,
-    __m256i& x6,
-    __m256i& x7,
-    __m256i low_table,
-    __m256i high_table)
-{
-    x4 = _mm256_xor_si256(x4, x0);
-    x5 = _mm256_xor_si256(x5, x1);
-    x6 = _mm256_xor_si256(x6, x2);
-    x7 = _mm256_xor_si256(x7, x3);
-    MulAddPrepared(x0, x4, low_table, high_table);
-    MulAddPrepared(x1, x5, low_table, high_table);
-    MulAddPrepared(x2, x6, low_table, high_table);
-    MulAddPrepared(x3, x7, low_table, high_table);
-}
-
-static LEO_FORCE_INLINE void ForwardKnownZeros(
-    const uint8_t* tables,
-    __m256i& x0,
-    __m256i& x1,
-    __m256i& x2,
-    __m256i& x3,
-    __m256i& x4,
-    __m256i& x5,
-    __m256i& x6,
-    __m256i& x7,
-    __m256i low_85,
-    __m256i high_85)
-{
-    /* skew[4], skew[2], and skew[1] are the zero-product sentinel 255
-       for this versioned legacy parity coset. */
-    x4 = _mm256_xor_si256(x4, x0);
-    x5 = _mm256_xor_si256(x5, x1);
-    x6 = _mm256_xor_si256(x6, x2);
-    x7 = _mm256_xor_si256(x7, x3);
-    x2 = _mm256_xor_si256(x2, x0);
-    x3 = _mm256_xor_si256(x3, x1);
-
-    MulAddPrepared(x4, x6, low_85, high_85);
-    MulAddPrepared(x5, x7, low_85, high_85);
-    x6 = _mm256_xor_si256(x6, x4);
-    x7 = _mm256_xor_si256(x7, x5);
-
-    x1 = _mm256_xor_si256(x1, x0);
-    FFT2Prepared(x2, x3, low_85, high_85);
-    FFT2Nonzero(tables, x4, x5, 17);
-    FFT2Nonzero(tables, x6, x7, 34);
 }
 
 /*
