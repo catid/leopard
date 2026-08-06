@@ -1,0 +1,738 @@
+{
+  "authoritative_method": {
+    "accepted_cells": 16,
+    "accepted_rounds": 144,
+    "accepted_sibling_nonidle_jiffies": 0,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "chunk_sha256": {
+      "a": "a42a6a6ddf4671779deee499441ed355a8942f71a6ad27f27c989abf6805e88d",
+      "b": "2362ade9d36751706efa33a8507aa7672c2e47c497dda2e72b6a822c76c387fc",
+      "c": "4122f2b45f65f165d4d6b541e9ed24f2c98069710eb9e0cb8bb1ef8ef29812a6"
+    },
+    "counterbalancing": "ABBA with alternating role order",
+    "interval": "two-sided normal 95 percent interval over per-round paired log ratios",
+    "invalidated_non_run": "One earlier chunk-A inline script failed at Python parse time. It launched no benchmark process, produced no summary, and is excluded.",
+    "invocations_per_role_per_round": 2,
+    "iterations_per_invocation": 9,
+    "openmp_environment": {
+      "OMP_DYNAMIC": "FALSE",
+      "OMP_NUM_THREADS": "1",
+      "OMP_PLACES": "unset",
+      "OMP_PROC_BIND": "TRUE",
+      "OMP_THREAD_LIMIT": "1"
+    },
+    "per_process_address_space_limit_bytes": 268435456,
+    "ratio_semantics": "comparator time divided by current time; values above one favor commit 4834244",
+    "raw_root": "/tmp/leopard2-t32-partial-4834244-authoritative-v1",
+    "raw_summary": "summary.json",
+    "raw_summary_sha256": "4ee070ee46614bc23ee21ba1f83a25e440fab8cd434aab14f38f32126c45893f",
+    "rejected_benchmark_runs": 0,
+    "reports": 1152,
+    "reserved_smt_sibling": 14,
+    "reuse": 64,
+    "timed_cpu": 30,
+    "warmup_calls_per_invocation": 4
+  },
+  "binary_provenance": {
+    "current_avx512_zmm_opmask_zeroing_instruction_matches": 0,
+    "current_sha256": "54bf8ece9c9775fcc8aac68aed7cc92213440031c0d54b1d40cec0a29fcbc574",
+    "current_source_tracked_dirty": false,
+    "exact_main_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "exact_parent_sha256": "b229e5e0ec0d8cc1aa707ac0cc50cd72b447938ae038d4d5b5a7fef4222344c9",
+    "hashes_identical_before_and_after_every_chunk": true
+  },
+  "correctness": {
+    "clang18_asan_ubsan": {
+      "build": "/tmp/leopard2-t32-punctured-asan-v2",
+      "maximum_rss_kib": 470172,
+      "tests": [
+        "decode_high_acceptance",
+        "high_pruned_stage",
+        "high_t32_tiny_schedule_policy",
+        "high_low_duality"
+      ],
+      "tests_failed": 0,
+      "tests_passed": 4
+    },
+    "compile_matrix": {
+      "gf16_only_library_build": "passed",
+      "purpose": "prove the GF8-conditional helper leaves FF16-only builds valid"
+    },
+    "coverage": "Focused policy tests cover R-1, L=2/3/4, half/floor-half, 64/320/321/384/385/512/513/575/576/577 bytes, T16 and T64 neighbors, scalar isolation, unaligned guarded buffers, exact schedule introspection, and route counters. Acceptance and golden tests use direct and legacy oracles.",
+    "release": {
+      "build": "/tmp/leopard2-t32-partial-4834244-build",
+      "maximum_rss_kib": 104488,
+      "tests": [
+        "backend_ops",
+        "public_api_contract",
+        "locator",
+        "dense_plan_policy",
+        "decode_high_acceptance",
+        "high_pruned_legacy",
+        "high_pruned_stage",
+        "high_t32_tiny_schedule_policy",
+        "high_low_duality",
+        "legacy_golden"
+      ],
+      "tests_failed": 0,
+      "tests_passed": 10
+    }
+  },
+  "decision": {
+    "fallback": "One-loss direct repair, translated Algorithm 4, scalar, SSSE3, GF16, forced diagnostic codecs, aligned passes >=576 bytes, and other T/K/R regions retain their established routes. Reusable plans retain exact schedules for later wider calls.",
+    "field_arithmetic_changed": false,
+    "plan_mutability_changed": false,
+    "scope": {
+      "backend": "avx2",
+      "exact_one_shot_shard_bytes_inclusive": [
+        1,
+        575
+      ],
+      "field": "gf8",
+      "flags": 0,
+      "layout": "native_v1",
+      "loss_rule": "2 <= missing_original_count <= R",
+      "original_K_inclusive": [
+        33,
+        224
+      ],
+      "padded_side_T": 32,
+      "parent_N": [
+        128,
+        256
+      ],
+      "profile": "legacy_high_v1",
+      "reusable_aligned_pass_bytes_inclusive": [
+        64,
+        512
+      ],
+      "transmitted_recovery_R_inclusive": [
+        17,
+        32
+      ]
+    },
+    "scratch_geometry_changed": false,
+    "status": "promote",
+    "summary": "For native legacy-high GF8 AVX2 T=32 multi-loss decode, execute mature regular Algorithm-5 kernels instead of interpreting exact-mask schedules on complete 64-byte passes through 512 bytes; exact-byte one-shot plans omit schedules when every pass uses that policy.",
+    "threshold_note": "The clean authoritative target set has a 1.026 lower confidence bound against the immediate parent in its weakest execution cell and a 1.009 lower bound against exact main in its weakest public one-shot cell. The unified predicate is retained because 3072/3072 all-K/all-R B64-L2 cells and 1320/1320 four-seed former-off-policy cells won directionally, while every clean neighbor stayed within the 2 percent regression budget.",
+    "wire_format_changed": false
+  },
+  "directional_scope_search": {
+    "all_k_r_b64_l2": {
+      "artifact": "/tmp/leopard2-t32-partial-production-screen-v5/all-k-r-b64-l2-summary.json",
+      "cells": 3072,
+      "domain": "every K=33..224 and R=17..32",
+      "geometric_gain": 1.291103,
+      "minimum_gain": 1.082013,
+      "sha256": "42e18f13cdd1e6febc18c7cc25e7b42844f48ee819b98e89fb72710e3b471610",
+      "wins": 3072
+    },
+    "authority": "directional screens used exploratory or dirty binaries; clean frozen-binary results below are authoritative",
+    "former_off_policy_same_binary": {
+      "artifact": "/tmp/leopard2-t32-partial-production-screen-v2/same-binary-off-policy-multiseed-summary.json",
+      "bytes": [
+        320,
+        384,
+        448,
+        512
+      ],
+      "cells": 1320,
+      "geometric_gain": 1.104077,
+      "minimum_gain": 1.000072,
+      "seeds": 4,
+      "sha256": "2a060b92baff334dc1faaf34b523ab035b222c5734fb7795f51aae90467484f9",
+      "wins": 1320
+    },
+    "four_seed_scope": {
+      "artifact": "/tmp/leopard2-t32-partial-production-screen-v1/multiseed-summary.json",
+      "cells": 840,
+      "geometric_gain": 1.246466,
+      "minimum_gain": 1.038631,
+      "sha256": "96cb225ef06e04f5eec8818755e31505a88d838c06e6fd1cb533e33d9da0ba97",
+      "wins": 840
+    },
+    "intermediate_bytes": {
+      "artifact": "/tmp/leopard2-t32-partial-broad-screen-v1/intermediate-summary.json",
+      "bytes": [
+        320,
+        384,
+        448
+      ],
+      "cells": 450,
+      "geometric_gain": 1.121805,
+      "minimum_gain": 1.010517,
+      "sha256": "7de91df6c4adc215c5557e1741c2ed7095afef4f602697ecf997bc4b0557ed9d",
+      "wins": 450
+    },
+    "r_minus_one": {
+      "artifact": "/tmp/leopard2-t32-partial-rminus1-screen-v2/directional-summary.json",
+      "cells": 960,
+      "geometric_gain": 1.307989,
+      "minimum_gain": 1.086413,
+      "sha256": "d0397ff113f1b37a9f39e69b35fdef5c84b5b60bee82031479a3fb9db85047c6",
+      "wins": 960
+    },
+    "ragged": {
+      "artifact": "/tmp/leopard2-t32-partial-production-screen-v5/ragged-summary.json",
+      "cells": 360,
+      "main_one_shot_wins": 254,
+      "parent_execution_geometric_gain": 1.252613,
+      "parent_execution_wins": 360,
+      "parent_one_shot_geometric_gain": 2.145089,
+      "parent_one_shot_wins": 360,
+      "sha256": "deebfc0b4b56082665a367c758ca8ffd33468b1c5d70fcf3c7aeb19b419a9697"
+    },
+    "wide_one_shot": {
+      "artifact": "/tmp/leopard2-t32-partial-production-screen-v2/one-shot-wide-summary.json",
+      "cells": 240,
+      "main_geometric_gain": 1.777517,
+      "parent_geometric_gain": 1.807162,
+      "sha256": "ed12f48ee8b4fc287a6332de5b1444b7d1cb77d91e2af9c14dfce64c0243e877",
+      "wins_vs_main": 240,
+      "wins_vs_parent": 240
+    }
+  },
+  "generated_utc": "2026-08-06T08:03:56Z",
+  "host": {
+    "cmake": "3.28.3",
+    "compiler": "gcc 13.3.0",
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "logical_cpus": 32,
+    "numa_nodes": 1,
+    "physical_cores": 16,
+    "sanitizer_compiler": "clang 18.1.3",
+    "sockets": 1
+  },
+  "implementation": {
+    "commit": "4834244f4858b0c67d90e7895958b0b3bb34ead5",
+    "design": "The byte-pass selector supplies null pruned-plan views to the existing regular Algorithm-5 executor. An out-of-line helper is guarded by a fast T32/T64 eligibility predicate. Exact-byte one-shot setup computes the aligned prefix and omits schedule compilation only through 575 bytes; at 576 bytes the complete prefix returns to pruning. Forced-tiled remains the same-binary exact-schedule control.",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "focused_test": "tests/leopard2/test_high_t32_tiny_schedule_policy.cpp",
+    "predecessor_commit": "dede1950a9d5a7a648c213d34ec020cc9b6ced5a",
+    "predecessor_tree": "88a9ddc3eb45bcad9d82ab97bb0d9bab3a34a17e",
+    "production_file": "leopard2.cpp",
+    "source_tree": "82fb682a27230c7ec5a740a8385888a052fed875"
+  },
+  "known_limit_result": {
+    "K": 57,
+    "R": 29,
+    "bytes": 65,
+    "class": "ragged_limit",
+    "loss": 2,
+    "main_over_current_amortized_reuse64": [
+      1.089035,
+      1.084891,
+      1.093195
+    ],
+    "main_over_current_execution": [
+      1.113001,
+      1.108714,
+      1.117305
+    ],
+    "main_over_current_one_shot": [
+      0.910854,
+      0.908983,
+      0.912729
+    ],
+    "main_physical_bytes": 128,
+    "parent_over_current_execution": [
+      1.320336,
+      1.31379,
+      1.326914
+    ],
+    "parent_over_current_one_shot": [
+      2.296576,
+      2.290111,
+      2.303058
+    ]
+  },
+  "limitations_and_follow_up": [
+    "At 65 logical bytes, current execution is 1.113x faster than main but public one-shot is 0.911x because exact-tail staging and setup dominate while main processes a physically padded 128-byte buffer. This is a separate setup/tail optimization target; arbitrary-tail semantics remain intact.",
+    "At the deliberate 576-byte cutoff, execution remains 1.780x faster than main but public one-shot is 0.978x. The current patch does not discard the schedule once the aligned prefix exceeds 512 bytes.",
+    "The untouched T64 partial-loss neighbor K=99,R=50,B=64,L=49 is 0.887x main in reusable execution and 0.284x main one-shot. It is outside this T32 policy and remains a high-priority decode/setup gap.",
+    "No online benchmarking or CPU-dependent wire-profile selection was introduced."
+  ],
+  "neighbor_results": [
+    {
+      "K": 57,
+      "R": 29,
+      "bytes": 576,
+      "class": "cutoff_control",
+      "loss": 2,
+      "main_over_current_amortized_reuse64": [
+        1.758835,
+        1.755086,
+        1.762593
+      ],
+      "main_over_current_execution": [
+        1.779775,
+        1.77594,
+        1.783617
+      ],
+      "main_over_current_one_shot": [
+        0.977955,
+        0.975576,
+        0.980339
+      ],
+      "main_physical_bytes": 576,
+      "parent_over_current_execution": [
+        0.992415,
+        0.990233,
+        0.994601
+      ],
+      "parent_over_current_one_shot": [
+        0.995519,
+        0.992345,
+        0.998703
+      ]
+    },
+    {
+      "K": 20,
+      "R": 16,
+      "bytes": 64,
+      "class": "t16_neighbor",
+      "loss": 16,
+      "main_over_current_amortized_reuse64": [
+        1.032142,
+        1.027558,
+        1.036746
+      ],
+      "main_over_current_execution": [
+        1.061589,
+        1.056838,
+        1.066363
+      ],
+      "main_over_current_one_shot": [
+        0.991024,
+        0.98565,
+        0.996426
+      ],
+      "main_physical_bytes": 64,
+      "parent_over_current_execution": [
+        0.995011,
+        0.991876,
+        0.998156
+      ],
+      "parent_over_current_one_shot": [
+        0.991475,
+        0.98936,
+        0.993595
+      ]
+    },
+    {
+      "K": 99,
+      "R": 50,
+      "bytes": 64,
+      "class": "t64_neighbor",
+      "loss": 49,
+      "main_over_current_amortized_reuse64": [
+        0.857657,
+        0.852671,
+        0.862673
+      ],
+      "main_over_current_execution": [
+        0.886608,
+        0.881306,
+        0.891943
+      ],
+      "main_over_current_one_shot": [
+        0.283812,
+        0.282588,
+        0.285042
+      ],
+      "main_physical_bytes": 64,
+      "parent_over_current_execution": [
+        0.99777,
+        0.994874,
+        1.000674
+      ],
+      "parent_over_current_one_shot": [
+        1.000476,
+        0.998589,
+        1.002366
+      ]
+    }
+  ],
+  "resource_note": "All compiles used -j1 under a 512 MiB virtual-address cap. Benchmarks used a 256 MiB cap. A release test attempt under 256 MiB was discarded as an invalid resource configuration after thread creation and allocation failed; the serial uncapped rerun passed all 10 tests at 104488 KiB peak RSS. Sanitizer tests were intentionally not VA-capped and peaked at 470172 KiB.",
+  "schema": "leopard2-t32-partial-tiny-schedule-bypass-summary-v1",
+  "target_result_format": "Each ratio is [geometric mean, CI95 lower, CI95 upper].",
+  "target_results": [
+    {
+      "K": 33,
+      "R": 17,
+      "bytes": 64,
+      "loss": 2,
+      "main_over_current_amortized_reuse64": [
+        1.671746,
+        1.665787,
+        1.677726
+      ],
+      "main_over_current_execution": [
+        1.743398,
+        1.736997,
+        1.749822
+      ],
+      "main_over_current_one_shot": [
+        1.237184,
+        1.233397,
+        1.240983
+      ],
+      "parent_over_current_execution": [
+        1.319211,
+        1.309481,
+        1.329013
+      ],
+      "parent_over_current_one_shot": [
+        2.994801,
+        2.978688,
+        3.011003
+      ]
+    },
+    {
+      "K": 57,
+      "R": 29,
+      "bytes": 64,
+      "loss": 2,
+      "main_over_current_amortized_reuse64": [
+        1.635832,
+        1.628091,
+        1.64361
+      ],
+      "main_over_current_execution": [
+        1.706118,
+        1.697916,
+        1.71436
+      ],
+      "main_over_current_one_shot": [
+        1.191888,
+        1.188125,
+        1.195662
+      ],
+      "parent_over_current_execution": [
+        1.331084,
+        1.326125,
+        1.336062
+      ],
+      "parent_over_current_one_shot": [
+        2.944266,
+        2.934819,
+        2.953742
+      ]
+    },
+    {
+      "K": 57,
+      "R": 29,
+      "bytes": 64,
+      "loss": 28,
+      "main_over_current_amortized_reuse64": [
+        1.318166,
+        1.313398,
+        1.322952
+      ],
+      "main_over_current_execution": [
+        1.373836,
+        1.368701,
+        1.37899
+      ],
+      "main_over_current_one_shot": [
+        1.011983,
+        1.008751,
+        1.015225
+      ],
+      "parent_over_current_execution": [
+        1.494673,
+        1.490158,
+        1.499201
+      ],
+      "parent_over_current_one_shot": [
+        3.118145,
+        3.111116,
+        3.125189
+      ]
+    },
+    {
+      "K": 192,
+      "R": 32,
+      "bytes": 64,
+      "loss": 31,
+      "main_over_current_amortized_reuse64": [
+        1.400043,
+        1.397742,
+        1.402348
+      ],
+      "main_over_current_execution": [
+        1.486389,
+        1.48383,
+        1.488951
+      ],
+      "main_over_current_one_shot": [
+        1.14715,
+        1.144199,
+        1.150108
+      ],
+      "parent_over_current_execution": [
+        1.570832,
+        1.565058,
+        1.576626
+      ],
+      "parent_over_current_one_shot": [
+        4.271199,
+        4.257116,
+        4.285329
+      ]
+    },
+    {
+      "K": 57,
+      "R": 29,
+      "bytes": 256,
+      "loss": 4,
+      "main_over_current_amortized_reuse64": [
+        1.645086,
+        1.638052,
+        1.652151
+      ],
+      "main_over_current_execution": [
+        1.688178,
+        1.680868,
+        1.695519
+      ],
+      "main_over_current_one_shot": [
+        1.372729,
+        1.365681,
+        1.379814
+      ],
+      "parent_over_current_execution": [
+        1.143743,
+        1.140623,
+        1.146871
+      ],
+      "parent_over_current_one_shot": [
+        2.372995,
+        2.36729,
+        2.378715
+      ]
+    },
+    {
+      "K": 33,
+      "R": 17,
+      "bytes": 320,
+      "loss": 2,
+      "main_over_current_amortized_reuse64": [
+        1.897813,
+        1.890569,
+        1.905084
+      ],
+      "main_over_current_execution": [
+        1.938639,
+        1.930902,
+        1.946407
+      ],
+      "main_over_current_one_shot": [
+        1.606918,
+        1.604302,
+        1.609538
+      ],
+      "parent_over_current_execution": [
+        1.164009,
+        1.154665,
+        1.173429
+      ],
+      "parent_over_current_one_shot": [
+        2.18089,
+        2.169696,
+        2.192142
+      ]
+    },
+    {
+      "K": 97,
+      "R": 24,
+      "bytes": 384,
+      "loss": 2,
+      "main_over_current_amortized_reuse64": [
+        2.709257,
+        2.69425,
+        2.724348
+      ],
+      "main_over_current_execution": [
+        2.746644,
+        2.731489,
+        2.761883
+      ],
+      "main_over_current_one_shot": [
+        2.311614,
+        2.301564,
+        2.321709
+      ],
+      "parent_over_current_execution": [
+        1.109745,
+        1.104796,
+        1.114717
+      ],
+      "parent_over_current_one_shot": [
+        1.726403,
+        1.720021,
+        1.732809
+      ]
+    },
+    {
+      "K": 160,
+      "R": 29,
+      "bytes": 448,
+      "loss": 4,
+      "main_over_current_amortized_reuse64": [
+        2.039083,
+        2.033385,
+        2.044797
+      ],
+      "main_over_current_execution": [
+        2.06972,
+        2.063984,
+        2.075472
+      ],
+      "main_over_current_one_shot": [
+        1.830185,
+        1.825949,
+        1.83443
+      ],
+      "parent_over_current_execution": [
+        1.028203,
+        1.025542,
+        1.030871
+      ],
+      "parent_over_current_one_shot": [
+        1.793135,
+        1.788679,
+        1.797602
+      ]
+    },
+    {
+      "K": 224,
+      "R": 31,
+      "bytes": 512,
+      "loss": 2,
+      "main_over_current_amortized_reuse64": [
+        2.080849,
+        2.075681,
+        2.086031
+      ],
+      "main_over_current_execution": [
+        2.100115,
+        2.094862,
+        2.105382
+      ],
+      "main_over_current_one_shot": [
+        1.871445,
+        1.867415,
+        1.875483
+      ],
+      "parent_over_current_execution": [
+        1.040891,
+        1.038032,
+        1.043758
+      ],
+      "parent_over_current_one_shot": [
+        1.481313,
+        1.47932,
+        1.483309
+      ]
+    },
+    {
+      "K": 224,
+      "R": 31,
+      "bytes": 512,
+      "loss": 30,
+      "main_over_current_amortized_reuse64": [
+        1.540032,
+        1.5357,
+        1.544377
+      ],
+      "main_over_current_execution": [
+        1.568019,
+        1.563598,
+        1.572453
+      ],
+      "main_over_current_one_shot": [
+        1.456595,
+        1.453824,
+        1.459371
+      ],
+      "parent_over_current_execution": [
+        1.11725,
+        1.114854,
+        1.11965
+      ],
+      "parent_over_current_one_shot": [
+        2.10625,
+        2.101965,
+        2.110544
+      ]
+    },
+    {
+      "K": 57,
+      "R": 29,
+      "bytes": 513,
+      "class": "ragged_target",
+      "loss": 2,
+      "main_over_current_amortized_reuse64": [
+        1.635527,
+        1.625703,
+        1.645411
+      ],
+      "main_over_current_execution": [
+        1.653624,
+        1.643647,
+        1.663662
+      ],
+      "main_over_current_one_shot": [
+        1.489761,
+        1.481438,
+        1.49813
+      ],
+      "main_physical_bytes": 576,
+      "parent_over_current_execution": [
+        1.172789,
+        1.169211,
+        1.176377
+      ],
+      "parent_over_current_one_shot": [
+        1.742135,
+        1.738801,
+        1.745475
+      ]
+    },
+    {
+      "K": 57,
+      "R": 29,
+      "bytes": 575,
+      "class": "ragged_target",
+      "loss": 2,
+      "main_over_current_amortized_reuse64": [
+        1.644454,
+        1.638751,
+        1.650178
+      ],
+      "main_over_current_execution": [
+        1.663325,
+        1.657298,
+        1.669373
+      ],
+      "main_over_current_one_shot": [
+        1.492888,
+        1.488929,
+        1.496858
+      ],
+      "main_physical_bytes": 576,
+      "parent_over_current_execution": [
+        1.182933,
+        1.180057,
+        1.185816
+      ],
+      "parent_over_current_one_shot": [
+        1.766429,
+        1.760613,
+        1.772263
+      ]
+    }
+  ]
+}
