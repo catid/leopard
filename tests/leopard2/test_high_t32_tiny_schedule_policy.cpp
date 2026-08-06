@@ -560,7 +560,7 @@ void run_campaign(
             return left.bytes < right.bytes;
         })->bytes;
     const uint32_t t = ceil_pow2(r);
-    require(t == 32 || t == 64,
+    require(t == 16 || t == 32 || t == 64,
         std::string(name) + " escaped the tested transform sides");
     const uint32_t parent = ceil_pow2(k + t);
     const size_t output_blocks =
@@ -749,10 +749,33 @@ int main()
             32, 32, striped_missing(32, 31),
             one_byte_case(64, RoutePrunedOnly),
             false, true, false, 0x54a32505U);
-        run_campaign(avx2_context, "r31-neighbor",
-            192, 31, striped_missing(192, 31),
+        run_campaign(avx2_context, "t32-r29-punctured-byte-matrix",
+            57, 29, random_missing(57, 29, 0x6eb496d3U), byte_matrix,
+            true, false, true, 0x54a32606U);
+        run_campaign(avx2_context, "t32-r17-lower-k",
+            33, 17, clustered_missing(17),
+            one_byte_case(64, RouteRegularOnly),
+            true, false, true, 0x54a33313U);
+        run_campaign(avx2_context, "t32-r31-upper-k",
+            224, 31, random_missing(224, 31, 0x9f27a451U),
+            one_byte_case(512, RouteRegularOnly),
+            true, false, true, 0x54a33515U);
+        run_campaign(avx2_context, "t32-parent-boundary-lower",
+            96, 24, striped_missing(96, 24),
+            one_byte_case(512, RouteRegularOnly),
+            true, false, true, 0x54a33616U);
+        run_campaign(avx2_context, "t32-parent-boundary-upper",
+            97, 24, random_missing(97, 24, 0x41bc28d6U),
+            one_byte_case(64, RouteRegularOnly),
+            true, false, true, 0x54a33717U);
+        run_campaign(avx2_context, "t32-r16-neighbor",
+            20, 16, striped_missing(20, 16),
             one_byte_case(64, RoutePrunedOnly),
-            false, false, true, 0x54a32606U);
+            false, false, true, 0x54a33414U);
+        run_campaign(avx2_context, "t32-punctured-partial-loss-neighbor",
+            57, 29, random_missing(57, 28, 0x78a5dd93U),
+            one_byte_case(64, RoutePrunedOnly),
+            false, false, true, 0x54a33818U);
         run_campaign(avx2_context, "l31-neighbor",
             192, 32, striped_missing(192, 31),
             one_byte_case(64, RoutePrunedOnly),

@@ -6410,6 +6410,9 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
         and every complete 64-byte pass size through 512 bytes.  The regular
         schedule won by 1.49x geometric mean at 64 bytes and 1.14x at 512
         bytes; the weakest uncontaminated multi-seed cell still won by 1.03x.
+        A later punctured-side screen extended the same T=32 policy to
+        R=L=17..31; see the committed experiment summary for its exact
+        crossover and neighbor evidence.
 
         For T=64, a same-binary screen covered every K=65..191 and
         R=L=33..62 pair at 64 bytes.  The regular schedule won all 3810 cells;
@@ -6443,7 +6446,11 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
 
     if (codec->padded_side == 32)
     {
-        return codec->recovery_count == 32 &&
+        /* padded_side is ceil_pow2(recovery_count), so this branch already
+           proves recovery_count <= 32.  Keep one comparison here: besides
+           making the invariant explicit, it preserves the established hot
+           text layout for decode paths that never enter this policy. */
+        return codec->recovery_count > 16 &&
             codec->parent_count > 64 && codec->parent_count <= kGF8Order &&
             codec->original_count > 32 && codec->original_count <= 224;
     }
