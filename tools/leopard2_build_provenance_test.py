@@ -1275,24 +1275,35 @@ class StableFileSnapshotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(
                 prefix="leo2-provenance-source-copy-") as directory:
             destination = Path(directory) / "source"
-            snapshot = provenance._RetainedPrivateSourceTree(
-                SOURCE_ROOT, destination)
+            cwd_descriptor = os.open(
+                ".", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:
-                records = snapshot.manifest["files"]
-                self.assertGreater(len(records), 100)
-                relative = next(
-                    record["path"] for record in records
-                    if record["path"] == "leopard2.h")
-                target = destination / relative
-                original = target.read_bytes()
-                target.write_bytes(original + b"\n")
-                target.write_bytes(original)
-                with self.assertRaisesRegex(
-                        provenance.BuildProvenanceError,
-                        "(?:pathname changed|snapshot changed)"):
-                    snapshot.close()
+                # Git ls-files otherwise limits its result to the caller's
+                # current subdirectory even with an explicit work tree.  The
+                # retained source capture must be independent of where the
+                # benchmark/provenance driver was launched.
+                os.chdir(SOURCE_ROOT / "tools")
+                snapshot = provenance._RetainedPrivateSourceTree(
+                    SOURCE_ROOT, destination)
+                try:
+                    records = snapshot.manifest["files"]
+                    self.assertGreater(len(records), 100)
+                    relative = next(
+                        record["path"] for record in records
+                        if record["path"] == "leopard2.h")
+                    target = destination / relative
+                    original = target.read_bytes()
+                    target.write_bytes(original + b"\n")
+                    target.write_bytes(original)
+                    with self.assertRaisesRegex(
+                            provenance.BuildProvenanceError,
+                            "(?:pathname changed|snapshot changed)"):
+                        snapshot.close()
+                finally:
+                    snapshot.guard._close_without_verification()
             finally:
-                snapshot.guard._close_without_verification()
+                os.fchdir(cwd_descriptor)
+                os.close(cwd_descriptor)
 
     def test_tracked_source_rejects_git_directory_aba(self) -> None:
         with tempfile.TemporaryDirectory(

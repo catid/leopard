@@ -2575,6 +2575,7 @@ def _git_source_state(
         return _run(
             (
                 str(git_snapshot.resolved),
+                "-C", source_argument,
                 f"--git-dir=/proc/self/fd/{git_metadata.descriptor}",
                 f"--work-tree={source_argument}",
                 *arguments,
