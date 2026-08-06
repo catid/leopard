@@ -7,6 +7,7 @@
 */
 
 #include "Leopard2Direct.h"
+#include "Leopard2Dispatch.h"
 #include "direct_oracle.h"
 
 #include <algorithm>
@@ -591,6 +592,8 @@ bool run_case(const PolicyCase& test)
         bytes = 1024;
     else if (strcmp(test.name, "target-k106r53-1025") == 0)
         bytes = 1025;
+    else if (strncmp(test.name, "tiny-direct-", 12) == 0)
+        bytes = 63;
     AlignedBytes original_storage(static_cast<size_t>(test.k) * bytes);
     AlignedBytes recovery_storage(static_cast<size_t>(test.r) * bytes);
     std::vector<const void*> original(test.k);
@@ -639,6 +642,22 @@ bool run_case(const PolicyCase& test)
     leo2_decode_plan* plan = NULL;
     require_result(leo2_decode_plan_create(codec, original_present.data(),
         recovery_present.data(), &plan), "decode plan create");
+    if (strncmp(test.name, "tiny-direct-", 12) == 0)
+    {
+        leopard2_internal::DecodePathInfo path;
+        require_result(leopard2_internal::GetDecodePlanPathInfo(
+            plan, bytes, false, &path),
+            std::string(test.name) + " path introspection");
+        const bool control =
+            strcmp(test.name, "tiny-direct-k8r8l8-control") == 0;
+        require((path.path == leopard2_internal::kDecodePathDirect) ==
+                !control,
+            std::string(test.name) + " selected the wrong tiny path");
+        require(path.direct_executor == (control
+                ? leopard2_internal::kDirectRepairExecutorNone
+                : leopard2_internal::kDirectRepairExecutorSourceMajor),
+            std::string(test.name) + " selected the wrong tiny executor");
+    }
     leopard2_internal::DecodePlanPrunedScheduleInfo info;
     require(leopard2_internal::GetDecodePlanPrunedScheduleInfo(plan, &info),
         std::string(test.name) + " schedule introspection failed");
@@ -646,11 +665,19 @@ bool run_case(const PolicyCase& test)
         info.high_input_plan_count + info.high_output_plan_count;
     const size_t low_count =
         info.low_input_plan_count + info.low_output_plan_count;
+    const bool tiny_direct_case =
+        strncmp(test.name, "tiny-direct-", 12) == 0;
     if (force_generic)
     {
         require(high_count == 0 && low_count == 0,
             std::string(test.name) +
                 " forced generic plan compiled specialized schedules");
+    }
+    else if (tiny_direct_case)
+    {
+        // The assertions above fix the byte-aware execution route.  Depending
+        // on shape, its retained transform fallback is either a full schedule
+        // (reported as zero pruned entries) or a translated/pruned schedule.
     }
     else if (expect_skip)
     {
@@ -739,6 +766,14 @@ int main()
           LEO2_FIELD_GF8, LEO2_PROFILE_LEGACY_HIGH_V1, 128, 63, 63, true },
         { "negative-t4", LEO2_BACKEND_AVX2, LEO2_FIELD_GF8,
           LEO2_PROFILE_LEGACY_HIGH_V1, 8, 4, 4, false },
+        { "tiny-direct-k5r5l5", LEO2_BACKEND_AVX2, LEO2_FIELD_GF8,
+          LEO2_PROFILE_LEGACY_HIGH_V1, 5, 5, 5, false },
+        { "tiny-direct-k8r8l5", LEO2_BACKEND_AVX2, LEO2_FIELD_GF8,
+          LEO2_PROFILE_LEGACY_HIGH_V1, 8, 8, 5, false },
+        { "tiny-direct-k8r8l8-control", LEO2_BACKEND_AVX2,
+          LEO2_FIELD_GF8, LEO2_PROFILE_LEGACY_HIGH_V1, 8, 8, 8, false },
+        { "tiny-direct-k16r8l8", LEO2_BACKEND_AVX2, LEO2_FIELD_GF8,
+          LEO2_PROFILE_LEGACY_HIGH_V1, 16, 8, 8, false },
         { "negative-t32", LEO2_BACKEND_AVX2, LEO2_FIELD_GF8,
           LEO2_PROFILE_LEGACY_HIGH_V1, 64, 32, 32, false },
         { "negative-t32-r-minus-one", LEO2_BACKEND_AVX2, LEO2_FIELD_GF8,

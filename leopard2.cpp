@@ -102,6 +102,15 @@
 #error "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT must be 0 or 1"
 #endif
 
+#if defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
+    (LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2 || \
+     (LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0 && \
+      LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT))
+#define LEO2_HAVE_GF8_TINY_DENSE_DIRECT 1
+#else
+#define LEO2_HAVE_GF8_TINY_DENSE_DIRECT 0
+#endif
+
 /*
     A reusable small-dual plan already constructs the transform locator.  Its
     survivor values and erased-coordinate derivatives are also a complete
@@ -843,6 +852,24 @@ struct leo2_decode_plan
         high_pruned_output_plans;
     std::vector<size_t> direct_term_offsets;
     std::vector<leo2_direct_repair_term> direct_terms;
+#if LEO2_HAVE_GF8_TINY_DENSE_DIRECT
+    /*
+        Exact dense K-by-L view for 1..63-byte AVX2 repair.  Every output row
+        uses the same selected K received
+        coordinates, but copy-first canonicalization gives those coordinates
+        a different order in direct_terms.  Compile that permutation once in
+        the immutable plan instead of rediscovering it in every tiny call.
+
+        ElementLog() returns 0..254 for a nonzero GF8 coefficient, so the
+        byte rows retain the backend tiny-kernel representation exactly.
+        direct_tiny_source_count remains zero when a sparse/noncanonical row
+        cannot use this optional view; execution then keeps the checked
+        source-major fallback.
+    */
+    uint32_t direct_tiny_sources[16];
+    uint8_t direct_tiny_logs[8 * 16];
+    uint8_t direct_tiny_source_count;
+#endif
 #if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
     /*
         Optional source-major view of direct_terms.  The output-major rows
@@ -904,8 +931,15 @@ static bool PlanUsesDirectRepairExecution(
     const leo2_decode_plan* plan,
     uint64_t shard_bytes)
 {
+#if LEO2_HAVE_GF8_TINY_DENSE_DIRECT
+    const bool tiny_dense = plan &&
+        plan->direct_tiny_source_count != 0 &&
+        shard_bytes != 0 && shard_bytes <= 63;
+#else
+    const bool tiny_dense = false;
+#endif
     return plan && plan->direct_repair &&
-        (!plan->direct_transform_fallback ||
+        (tiny_dense || !plan->direct_transform_fallback ||
          shard_bytes >= kSmallDualDirectReusableMinimumBytes);
 }
 
@@ -4395,6 +4429,83 @@ static bool PrepareDirectRepairTermsFromLocator(
     return plan->direct_term_offsets.size() == losses + 1U &&
         plan->direct_terms.size() == maximum_term_count;
 }
+
+#if LEO2_HAVE_GF8_TINY_DENSE_DIRECT
+static void PrepareGF8TinyDenseDirectSchedule(leo2_decode_plan* plan)
+{
+    if (!plan)
+        return;
+    plan->direct_tiny_source_count = 0;
+
+    const leo2_codec* const codec = plan->codec;
+    const uint32_t output_count = plan->missing_original_count;
+    if (!codec ||
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2
+        !IsSmallDirectRepairCodec(codec) ||
+#else
+        !IsProductionSmallDualPattern(codec, output_count) ||
+#endif
+        output_count < 5 || output_count > kDirectMaxRepairLosses ||
+        codec->original_count > kDirectLegacyMaxRepairOriginals ||
+        plan->direct_term_offsets.size() !=
+            static_cast<size_t>(output_count) + 1U ||
+        plan->direct_term_offsets.front() != 0 ||
+        plan->direct_term_offsets.back() != plan->direct_terms.size())
+        return;
+
+    const size_t first_begin = plan->direct_term_offsets[0];
+    const size_t first_end = plan->direct_term_offsets[1];
+    const size_t source_count = first_end - first_begin;
+    if (source_count == 0 ||
+        source_count != codec->original_count ||
+        source_count > kDirectLegacyMaxRepairOriginals)
+        return;
+
+    for (size_t source = 0; source < source_count; ++source)
+    {
+        const leo2_direct_repair_term& term =
+            plan->direct_terms[first_begin + source];
+        if (term.multiplier_log >= DirectField8::Modulus)
+            return;
+        for (size_t earlier = 0; earlier < source; ++earlier)
+            if (plan->direct_tiny_sources[earlier] == term.tagged_source)
+                return;
+        plan->direct_tiny_sources[source] = term.tagged_source;
+    }
+
+    for (uint32_t output = 0; output < output_count; ++output)
+    {
+        const size_t begin = plan->direct_term_offsets[output];
+        const size_t end = plan->direct_term_offsets[output + 1];
+        if (end - begin != source_count)
+            return;
+        bool seen[kDirectLegacyMaxRepairOriginals] = {};
+        for (size_t term_index = begin; term_index < end; ++term_index)
+        {
+            const leo2_direct_repair_term& term =
+                plan->direct_terms[term_index];
+            if (term.multiplier_log >= DirectField8::Modulus)
+                return;
+            size_t source = 0;
+            while (source < source_count &&
+                   plan->direct_tiny_sources[source] != term.tagged_source)
+                ++source;
+            if (source == source_count || seen[source])
+                return;
+            seen[source] = true;
+            plan->direct_tiny_logs[
+                static_cast<size_t>(output) * source_count + source] =
+                static_cast<uint8_t>(term.multiplier_log);
+        }
+        for (size_t source = 0; source < source_count; ++source)
+            if (!seen[source])
+                return;
+    }
+
+    plan->direct_tiny_source_count =
+        static_cast<uint8_t>(source_count);
+}
+#endif
 
 #if defined(LEO2_ENABLE_TEST_HOOKS) && defined(LEO_HAS_FF8)
 static bool VerifyGF8LocatorDirectTermsAgainstMatrix(
@@ -11237,6 +11348,65 @@ ExecuteGF8PreparedSourceMajorDirectRepair(
     return LEO2_SUCCESS;
 }
 
+#if LEO2_HAVE_GF8_TINY_DENSE_DIRECT
+static LEO2_SOURCE_MAJOR_NOINLINE leo2_result
+ExecuteGF8TinyDenseDirectRepair(
+    const leo2_decode_plan* plan,
+    size_t shard_bytes,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original)
+{
+    if (!plan || !plan->codec || !plan->codec->context ||
+        !plan->codec->context->ops || !original || !recovery ||
+        !restored_original || shard_bytes == 0 || shard_bytes > 63 ||
+        plan->codec->context->ops->kind != LEO2_BACKEND_AVX2)
+        return LEO2_UNSUPPORTED;
+
+    const leo2_codec* const codec = plan->codec;
+    const uint32_t source_count = plan->direct_tiny_source_count;
+    const uint32_t output_count = plan->missing_original_count;
+    if (source_count == 0 ||
+        source_count != codec->original_count ||
+        source_count > kDirectLegacyMaxRepairOriginals ||
+        output_count < 5 || output_count > kDirectMaxRepairLosses ||
+        plan->missing_originals.size() != output_count)
+        return LEO2_UNSUPPORTED;
+
+    const void* sources[kDirectLegacyMaxRepairOriginals] = {};
+    for (uint32_t source = 0; source < source_count; ++source)
+    {
+        const uint32_t tagged_source = plan->direct_tiny_sources[source];
+        const bool parity = (tagged_source & kDirectRecoveryTag) != 0;
+        const uint32_t source_index =
+            tagged_source & ~kDirectRecoveryTag;
+        if ((parity && source_index >= codec->recovery_count) ||
+            (!parity && source_index >= codec->original_count))
+            return LEO2_INTERNAL_ERROR;
+        sources[source] = parity
+            ? recovery[source_index] : original[source_index];
+        if (!sources[source])
+            return LEO2_INTERNAL_ERROR;
+    }
+
+    void* outputs[kDirectMaxRepairLosses] = {};
+    for (uint32_t output = 0; output < output_count; ++output)
+    {
+        const uint32_t missing_original =
+            plan->missing_originals[output];
+        if (missing_original >= codec->original_count ||
+            !restored_original[missing_original])
+            return LEO2_INTERNAL_ERROR;
+        outputs[output] = restored_original[missing_original];
+    }
+
+    leopard::backend::AVX2FF8LinearCombinationTiny(
+        sources, source_count, outputs, plan->direct_tiny_logs,
+        output_count, shard_bytes);
+    return LEO2_SUCCESS;
+}
+#endif
+
 #if defined(LEO2_HAVE_AVX2_BACKEND)
 static leo2_result ExecuteRawNativeHighDirectAVX2(
     const leo2_codec* codec,
@@ -11725,6 +11895,15 @@ ExecuteGF8SourceMajorDirectRepair(
     const void* const* recovery,
     void* const* restored_original)
 {
+#if LEO2_HAVE_GF8_TINY_DENSE_DIRECT
+    if (shard_bytes <= 63)
+    {
+        const leo2_result tiny = ExecuteGF8TinyDenseDirectRepair(
+            plan, shard_bytes, original, recovery, restored_original);
+        if (tiny != LEO2_UNSUPPORTED)
+            return tiny;
+    }
+#endif
     const leo2_codec* codec = plan->codec;
     const leopard::backend::Ops& ops = *codec->context->ops;
     const uint32_t output_count = plan->missing_original_count;
@@ -20767,6 +20946,9 @@ static leo2_result DecodePlanCreateInternal(
         plan->direct_copy_recovery = std::numeric_limits<uint32_t>::max();
         plan->direct_xor_original = std::numeric_limits<uint32_t>::max();
         plan->missing_original_count = missing_original_count;
+#if LEO2_HAVE_GF8_TINY_DENSE_DIRECT
+        plan->direct_tiny_source_count = 0;
+#endif
         plan->prepared_transform_metadata = 0;
         plan->low_b64_terminal_kind = 0;
         plan->no_op = missing_original_count == 0;
@@ -20895,6 +21077,10 @@ static leo2_result DecodePlanCreateInternal(
                 // execution takes the established checked transpose.
                 plan->direct_source_rows.clear();
             }
+#endif
+#if LEO2_HAVE_GF8_TINY_DENSE_DIRECT
+            if (plan->direct_repair)
+                PrepareGF8TinyDenseDirectSchedule(plan);
 #endif
         }
 
@@ -21154,6 +21340,9 @@ static leo2_result DecodePlanCreateInternal(
                 {
                     plan->direct_source_rows.clear();
                 }
+#endif
+#if LEO2_HAVE_GF8_TINY_DENSE_DIRECT
+                PrepareGF8TinyDenseDirectSchedule(plan);
 #endif
             }
 #endif

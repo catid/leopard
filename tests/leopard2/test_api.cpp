@@ -995,6 +995,16 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
     const Case cases[] = {
         { 16, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           33, 4, true, false },
+        { 5, 5, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          1, 5, experimental_small_direct || production_small_dual, true },
+        { 5, 5, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          63, 5, experimental_small_direct || production_small_dual, true },
+        { 8, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          63, 5, experimental_small_direct || production_small_dual, true },
+        { 8, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          63, 8, experimental_small_direct, true },
+        { 16, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          63, 8, experimental_small_direct || production_small_dual, true },
         { 5, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 5, experimental_small_direct, true },
         { 8, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -1198,7 +1208,8 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
                 production_small_dual && test.k >= 5 && test.k <= 16 &&
                 test.r >= 5 && test.r <= 8 && test.losses >= 5 &&
                 !(test.losses == test.k && test.k >= 7) &&
-                test.bytes >= 1024;
+                ((test.bytes >= 1 && test.bytes <= 63) ||
+                 test.bytes >= 1024);
             const leopard2_internal::DirectRepairExecutor expected_executor =
                 expanded_k65_source_major ||
                 experimental_equal_rounded_source_major ||
