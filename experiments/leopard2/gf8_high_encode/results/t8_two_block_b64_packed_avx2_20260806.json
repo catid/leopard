@@ -1,0 +1,120 @@
+{
+  "schema": "leopard2-gf8-t8-two-block-b64-packed-avx2/v1",
+  "created_utc": "2026-08-06T05:09:41.396022Z",
+  "status": "promoted",
+  "scope": {
+    "field": "GF8",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "backend": "pure AVX2",
+    "operation": "64-byte prepared and public encode execution",
+    "counts": "K=9..16 and R=5..8",
+    "target_cell_count": 32,
+    "neighbor_cell_count": 10
+  },
+  "source": {
+    "branch": "codex/leopard2",
+    "candidate_commit": "6153a5f55dcad1496dd8330cadff6ecd25198d03",
+    "candidate_tree": "380c3dc8289607faf582d9bb138caf377f9aa57f",
+    "candidate_tracked_dirty": false,
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "implementation": {
+    "description": "A packed-slab public terminal validates aggregate input, output, scratch, pointer-array, and batch-descriptor ranges before calling the existing qualified two-block T=8 executor.",
+    "wire_change": false,
+    "arithmetic_change": false,
+    "hot_path_allocation": false,
+    "fallbacks_retained": [
+      "sparse outputs",
+      "detached shard layouts",
+      "unaligned and ragged byte counts",
+      "forced transform diagnostics",
+      "non-AVX2 backends",
+      "out-of-region K and R"
+    ]
+  },
+  "frozen_inputs": {
+    "candidate_executable": "/tmp/leopard2-t8-two-block-b64-final-6153a5f-v1/artifacts/bench_leopard2-6153a5f",
+    "candidate_executable_sha256": "dedc51d21dde5d125f98f5da6ad8c46ee35ea6c9048caf4b21af242bcfeacffc",
+    "exact_main_executable": "/tmp/leopard2-t16-small-final-ae29b30-v1/artifacts/leopard-main-d39c77d",
+    "exact_main_executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "mode": "0555",
+    "candidate_control_executable_sections_sha256": "824be3cf33ad4488f889af722f94aae80923e2612152e4069c003d2ff3b5c089"
+  },
+  "campaign": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_t8_two_block_b64_terminal_abba.py",
+    "raw_directory": "/tmp/leopard2-t8-two-block-b64-final-6153a5f-v1/abba-v1",
+    "raw_sha256": "974fea1d2d9f44d4c2314f5cb17ee500056d9dd613db026a7ac4b760d55d8a36",
+    "summary_sha256": "90564dad02792b3e26cebc0fbeceae0a398b3e2b9fda4358245d7928630094ad",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "benchmark_cpu": 28,
+    "reserved_smt_sibling": 12,
+    "rounds": 3,
+    "iterations_per_invocation": 31,
+    "warmup_per_invocation": 8,
+    "reuse": 8192,
+    "batch": 1,
+    "threads": 1,
+    "accepted_processes": 696,
+    "discarded_processes": 6,
+    "discarded_round_attempts": 1,
+    "all_accepted_rounds_zero_sibling_nonidle": true,
+    "statistics": "Each round averages the two log baseline/candidate contrasts in balanced ABBA order. Point estimates are geometric means and intervals are two-sided Student-t 95 percent intervals over three independent rounds."
+  },
+  "correctness": {
+    "failed_accepted_invocations": 0,
+    "all_workload_digests_match": true,
+    "all_parity_digests_match": true,
+    "all_recovery_digests_match": true,
+    "all_round_trips_pass": true,
+    "target_cells_passing_both_1_05_lower_bound_gates": 32,
+    "target_cell_count": 32,
+    "credible_neighbor_regressions": [],
+    "credible_neighbor_one_shot_regressions": []
+  },
+  "prepared_encode_prior_path_over_terminal": {
+    "median_speedup": 2.536416429870745,
+    "minimum_point_and_lower_bound": {
+      "cell": "K9_R8_B64",
+      "estimate": 1.9984044077647554,
+      "student_t_95_ci": [1.9285687151570219, 2.070768931169998]
+    }
+  },
+  "prepared_encode_exact_main_over_leopard2": {
+    "median_speedup": 1.537124211988076,
+    "minimum_point_and_lower_bound": {
+      "cell": "K9_R6_B64",
+      "estimate": 1.3920046466532863,
+      "student_t_95_ci": [1.2263818526290673, 1.5799947888583215]
+    }
+  },
+  "public_one_shot_prior_path_over_terminal": {
+    "median_speedup": 2.7051812231659755,
+    "minimum_point_and_lower_bound": {
+      "cell": "K9_R8_B64",
+      "estimate": 1.9119532168852538,
+      "student_t_95_ci": [1.8623946138978285, 1.962830581810529]
+    }
+  },
+  "public_one_shot_exact_main_over_leopard2": {
+    "median_speedup": 1.5505835273236093,
+    "minimum_point": {
+      "cell": "K9_R6_B64",
+      "estimate": 1.4119235376813049,
+      "student_t_95_ci": [1.283344505431523, 1.5533849779394742]
+    },
+    "minimum_lower_bound": {
+      "cell": "K14_R8_B64",
+      "estimate": 1.657879426745384,
+      "student_t_95_ci": [1.2619513646104652, 2.1780270386838723]
+    }
+  },
+  "validation": {
+    "clean_release": "2/2 focused hook and production tests passed",
+    "strict_gcc": "2/2 passed with -Wall -Wextra -Wpedantic -Werror",
+    "asan_ubsan": "2/2 passed with leak detection and halt-on-error",
+    "visual_studio_project": "164/164 tests passed",
+    "hook_matrix": "All 32 target shapes selected the terminal through ordinary and one-item batch APIs; B63/B65, K/R boundaries, sparse/detached layouts, forced-transform routes, overlap errors, and atomicity controls passed.",
+    "isa_scan": "The frozen candidate contains no ZMM, opmask, or zero-mask register signatures, and every timed candidate invocation resolved AVX2."
+  },
+  "disposition": "Promote the packed two-block T=8 64-byte AVX2 terminal for legacy-high GF8 K=9..16,R=5..8. Every target clears the 5 percent lower-confidence gate against both the prior Leopard2 route and exact Leopard main, while all measured boundary controls remain regression-free."
+}
