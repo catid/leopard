@@ -5610,7 +5610,8 @@ static bool SkipOneShotTinyGF8AVX2PrunedSchedules(
         1 KiB than executing the mature prefix transforms, including partial
         high-loss patterns.  Native Algorithm 5 keeps its independently
         measured byte/loss predicate below; maximum loss retains the older
-        one-shot-only extension through 1 KiB.
+        one-shot-only extension through 1 KiB, while partial T=64 loss uses
+        the separately measured transient-only extension below.
     */
     if (metadata_mask != kDecodeTransformMetadataSpecialized ||
         codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
@@ -5626,8 +5627,7 @@ static bool SkipOneShotTinyGF8AVX2PrunedSchedules(
 #ifdef LEO_HAS_FF8
     /* A small exact-byte one-shot executes an aligned prefix plus, when
        ragged, one padded 64-byte tail.  Ask the reusable pass predicate about
-       the widest pass: when it bypasses pruning, every smaller pass does too.
-       At 576 bytes the prefix itself always becomes pruned. */
+       the widest pass: when it bypasses pruning, every smaller pass does too. */
     if (hint.shard_bytes > std::numeric_limits<size_t>::max())
         return false;
     if (codec->padded_side != 32 && codec->padded_side != 64)
@@ -5635,12 +5635,34 @@ static bool SkipOneShotTinyGF8AVX2PrunedSchedules(
     const size_t exact_bytes = static_cast<size_t>(hint.shard_bytes);
     const size_t aligned_prefix = exact_bytes &
         ~static_cast<size_t>(kScratchAlignment - 1U);
-    if (aligned_prefix > 512U)
+    if (aligned_prefix > 4096U)
         return false;
     const size_t maximum_pass = aligned_prefix == 0
         ? kScratchAlignment : aligned_prefix;
-    return BypassTinyGF8AVX2HighPrunedSchedules(
-        plan, maximum_pass);
+    if (BypassTinyGF8AVX2HighPrunedSchedules(plan, maximum_pass))
+        return true;
+
+    /* Sparse T=64 execution crosses back to the exact pruned graph at a
+       complete 512-byte pass, so reusable plans retain those schedules.
+       Exact-byte one-shot plans cannot amortize their construction.  At 512
+       bytes isolated paired measurements found the regular transient path
+       1.71--2.03x faster including setup while remaining 1.36--1.71x ahead
+       of exact Leopard main.  A four-worker B=4096/L=2 screen covered all
+       4064 K/R cells: one-shot geometric mean improved 1.124x, 4061 cells
+       initially won, and isolated reruns resolved the three sub-neutral
+       cells.  Common L=4,8,R/4,R/2,R-1 shapes improved 1.05--1.13x and kept
+       matching main-branch digests.  The 8-KiB crossover sweep found upper-K
+       regressions, so the conservative global cutoff remains 4 KiB.  Omit
+       schedules only from that transient plan; execution of the same pattern
+       through a reusable plan remains pruned. */
+    return maximum_pass >= 512U && maximum_pass <= 4096U &&
+        codec->flags == 0 &&
+        codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        codec->padded_side == 64 && codec->parent_count == kGF8Order &&
+        codec->recovery_count >= 33 && codec->recovery_count <= 64 &&
+        codec->original_count >= 65 && codec->original_count <= 191 &&
+        plan->missing_original_count >= 2U &&
+        plan->missing_original_count < codec->recovery_count;
 #else
     return false;
 #endif
@@ -6466,10 +6488,13 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
         screen extended the unconditional boundary by one complete pass.  A
         subsequent B=384 screen over the same 4064 K/R cells measured a 1.098x
         geometric-mean kernel gain.  Five-round isolated reruns of its 23
-        weakest or representative cells found no regression beyond 0.3%, and
-        public one-shot decode improved by at least 1.72x versus the prior
-        route.  This supports extending the unconditional boundary to six
-        complete passes.
+        weakest or representative cells found no regression beyond 0.3%.
+        At B=448 the corresponding all-K/R map measured a 1.082x execution
+        geometric mean and 1.924x one-shot geometric mean; all 30 noisy weak
+        cells won or remained within 0.4% of neutral when rerun in isolation.
+        B=512 exposed small reusable upper-K losses, so the unconditional
+        execution boundary stops at seven complete passes.  Its one-shot
+        setup cost is handled independently above.
 
         Keep the byte-aware choice at execution rather than discarding the
         plan's exact schedules: the same immutable plan may later execute a
@@ -6513,7 +6538,7 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
         return codec->recovery_count <= 62;
     if (plan->missing_original_count < 2U)
         return false;
-    return buffer_bytes <= 384U ||
+    return buffer_bytes <= 448U ||
         plan->missing_original_count >= codec->recovery_count / 2U;
 }
 #endif

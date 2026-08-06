@@ -956,13 +956,45 @@ int main()
                 "transient T64 sparse B385") == 0,
             "all-regular T64 sparse B385 transient plan retained schedules");
         require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 2, 0xc4b6da2aU), 512,
+                "transient T64 sparse B512") == 0,
+            "one-shot-only T64 sparse B512 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 2, 0xc4b6da2bU), 575,
+                "transient T64 sparse B575") == 0,
+            "one-shot-only T64 sparse B575 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 2, 0xc4b6da2cU), 576,
+                "transient T64 sparse B576") == 0,
+            "one-shot-only T64 sparse B576 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 2, 0xc4b6da2dU), 4096,
+                "transient T64 sparse B4096") == 0,
+            "one-shot-only T64 sparse B4096 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 2, 0xc4b6da2eU), 4097,
+                "transient T64 sparse B4097") == 0,
+            "one-shot-only T64 sparse B4097 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 2, 0xc4b6da2fU), 4160,
+                "transient T64 sparse B4160") != 0,
+            "pruned T64 sparse B4160 transient plan omitted schedules");
+        require(transient_high_schedule_count(avx2_context,
                 99, 50, random_missing(99, 25, 0xc4b6da25U), 575,
                 "transient T64 half-loss B575") == 0,
             "eligible T64 half-loss B575 transient plan retained schedules");
         require(transient_high_schedule_count(avx2_context,
                 99, 50, random_missing(99, 25, 0xc4b6da26U), 576,
-                "transient T64 half-loss B576") != 0,
-            "pruned T64 half-loss B576 transient plan omitted schedules");
+                "transient T64 half-loss B576") == 0,
+            "one-shot-only T64 half-loss B576 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 25, 0xc4b6da30U), 4096,
+                "transient T64 half-loss B4096") == 0,
+            "one-shot-only T64 half-loss B4096 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 25, 0xc4b6da31U), 4160,
+                "transient T64 half-loss B4160") != 0,
+            "pruned T64 half-loss B4160 transient plan omitted schedules");
 
         std::vector<ByteCase> t64_byte_matrix;
         const size_t t64_regular_sizes[] = {
@@ -1029,6 +1061,10 @@ int main()
         }
         {
             const ByteCase entry = { 513, RouteMixed };
+            t64_sparse_partial.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 575, RouteMixed };
             t64_sparse_partial.push_back(entry);
         }
         {
