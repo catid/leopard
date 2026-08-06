@@ -406,6 +406,8 @@ void ExercisePromotedMatrix(
     bool full_parity_terminal_available)
 {
     static const Cell cells[] = {
+        { 6, 6, 64 },
+        { 7, 7, 64 },
         { 5, 5, 256 },
         { 6, 6, 256 },
         { 7, 7, 256 },
@@ -462,6 +464,12 @@ void ExerciseNonPromotedCells(leo2_context* context)
         }
 
     /* Preserve the established B64 terminal's immediate neighbors. */
+    ExerciseCell(context, Cell{ 6, 6, 63 }, false);
+    ExerciseCell(context, Cell{ 6, 6, 65 }, false);
+    ExerciseCell(context, Cell{ 7, 7, 63 }, false);
+    ExerciseCell(context, Cell{ 7, 7, 65 }, false);
+    ExerciseCell(context, Cell{ 6, 5, 64 }, false);
+    ExerciseCell(context, Cell{ 7, 6, 64 }, false);
     ExerciseCell(context, Cell{ 8, 8, 63 }, false);
     ExerciseCell(context, Cell{ 8, 8, 128 }, false);
     ExerciseCell(context, Cell{ 8, 7, 64 }, false);
@@ -744,6 +752,7 @@ void ExerciseScalarFallbacks()
     Require(leo2_context_create(&options, &context) == LEO2_SUCCESS,
         "create scalar K=8/R=8/T=8 fallback context");
     static const Cell cells[] = {
+        { 6, 6, 64 }, { 7, 7, 64 },
         { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 }, { 8, 8, 256 },
         { 5, 5, 1024 }, { 6, 6, 1024 }, { 7, 7, 1024 },
         { 8, 8, 1024 }, { 8, 8, 64 }
@@ -886,6 +895,7 @@ void ExerciseAutoBackend(bool full_parity_terminal_available)
     const bool expect_terminal =
         leo2_context_backend(context) == LEO2_BACKEND_AVX2;
     static const Cell cells[] = {
+        { 6, 6, 64 }, { 7, 7, 64 },
         { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 }, { 8, 8, 256 },
         { 5, 5, 1024 }, { 6, 6, 1024 }, { 7, 7, 1024 },
         { 8, 8, 1024 }, { 8, 8, 64 }
@@ -937,10 +947,13 @@ int main()
             ExerciseDirectLinearBasis(context);
         }
         ExerciseNonPromotedCells(context);
+        ExerciseForcedTransform(context, Cell{ 6, 6, 64 });
+        ExerciseForcedTransform(context, Cell{ 7, 7, 64 });
         ExerciseForcedTransform(context, Cell{ 8, 8, 64 });
         ExerciseForcedTransform(context, Cell{ 7, 7, 1024 });
         ExerciseForcedTransform(context, Cell{ 8, 8, 1024 });
         static const Cell promoted_cells[] = {
+            { 6, 6, 64 }, { 7, 7, 64 },
             { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 },
             { 8, 8, 256 }, { 5, 5, 1024 }, { 6, 6, 1024 },
             { 7, 7, 1024 }, { 8, 8, 1024 }, { 8, 8, 64 }

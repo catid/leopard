@@ -16354,7 +16354,15 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T8FullParityPackedTerminalEligible(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
-    if (!codec || (shard_bytes != 256 && shard_bytes != 1024) ||
+    if (!codec)
+        return false;
+    /* K=5 and K=8 have earlier dedicated B64 terminals.  Reuse this shared
+       exact-count terminal only for the two remaining balanced T=8 shapes. */
+    const bool qualified_b64 = shard_bytes == 64 &&
+        (codec->terminal_r1_t8_shape == kTerminalT8K6R6 ||
+         codec->terminal_r1_t8_shape == kTerminalT8K7R7);
+    if ((!qualified_b64 &&
+            shard_bytes != 256 && shard_bytes != 1024) ||
         (codec->terminal_r1_t8_shape != kTerminalT8K8R8 &&
          (codec->terminal_r1_t8_shape < kTerminalT8K5R5 ||
           codec->terminal_r1_t8_shape > kTerminalT8K7R7)))
