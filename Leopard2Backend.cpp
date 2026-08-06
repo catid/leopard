@@ -1403,6 +1403,35 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
                             return false;
             }
 
+            for (unsigned lane = 0; lane < side; ++lane)
+            {
+                std::memset(actual[lane], 0xc3, sizeof(actual[lane]));
+                std::memset(expected[lane], 0xc3, sizeof(expected[lane]));
+                actual_pointers[lane] = actual[lane] + 1;
+                expected_pointers[lane] = expected[lane] + 1;
+                partial_input[lane] = lane < 6
+                    ? static_cast<const void*>(input[lane] + 1)
+                    : static_cast<const void*>(zero + 1);
+            }
+            ReferenceFF8HighEncodeOneBlock(
+                ops, partial_input, expected_pointers, side,
+                partial_inverse_skew, partial_forward_skew, kBytes);
+            ops.ff8_high_encode_one_block(
+                input_pointers, actual_pointers,
+                side | kFF8HighEncodeK6R5Partial,
+                partial_inverse_skew, partial_forward_skew, kBytes);
+            if (std::memcmp(input, input_before, sizeof(input)) != 0)
+                return false;
+            for (unsigned lane = 0; lane < 5; ++lane)
+                if (std::memcmp(
+                        actual[lane], expected[lane],
+                        sizeof(actual[lane])) != 0)
+                    return false;
+            for (unsigned lane = 5; lane < side; ++lane)
+                for (size_t i = 0; i < sizeof(actual[lane]); ++i)
+                    if (actual[lane][i] != 0xc3)
+                        return false;
+
             static const uint32_t kMalformedPartialFlags[] = {
                 kFF8HighEncodeShortenedInput |
                     kFF8HighEncodeK6R6Partial,
@@ -1413,7 +1442,15 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
                 kFF8HighEncodeK5R5Partial |
                     kFF8HighEncodeK7R7Partial,
                 kFF8HighEncodeK6R6Partial |
-                    kFF8HighEncodeK7R7Partial
+                    kFF8HighEncodeK7R7Partial,
+                kFF8HighEncodeShortenedInput |
+                    kFF8HighEncodeK6R5Partial,
+                kFF8HighEncodeK5R5Partial |
+                    kFF8HighEncodeK6R5Partial,
+                kFF8HighEncodeK6R6Partial |
+                    kFF8HighEncodeK6R5Partial,
+                kFF8HighEncodeK7R7Partial |
+                    kFF8HighEncodeK6R5Partial
             };
             for (size_t flag_i = 0;
                  flag_i < sizeof(kMalformedPartialFlags) /
@@ -1503,6 +1540,7 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
                 kFF8HighEncodeK5R5Partial |
                     kFF8HighEncodeK6R6Partial |
                     kFF8HighEncodeK7R7Partial |
+                    kFF8HighEncodeK6R5Partial |
                     kFF8HighEncodeK9Tail |
                     (5U << kFF8HighEncodeK9OutputCountShift)
             };

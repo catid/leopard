@@ -328,12 +328,15 @@ int main()
             throw std::runtime_error("create production AVX2 context");
 
         static const Cell cells[] = {
+            { 6, 5, 64 },
             { 6, 6, 64 },
             { 7, 7, 64 },
+            { 6, 5, 256 },
             { 5, 5, 256 },
             { 6, 6, 256 },
             { 7, 7, 256 },
             { 8, 8, 256 },
+            { 6, 5, 1024 },
             { 5, 5, 1024 },
             { 6, 6, 1024 },
             { 7, 7, 1024 },

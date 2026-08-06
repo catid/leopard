@@ -477,12 +477,15 @@ void ExercisePromotedMatrix(
     bool full_parity_terminal_available)
 {
     static const Cell cells[] = {
+        { 6, 5, 64 },
         { 6, 6, 64 },
         { 7, 7, 64 },
+        { 6, 5, 256 },
         { 5, 5, 256 },
         { 6, 6, 256 },
         { 7, 7, 256 },
         { 8, 8, 256 },
+        { 6, 5, 1024 },
         { 5, 5, 1024 },
         { 6, 6, 1024 },
         { 7, 7, 1024 },
@@ -516,13 +519,14 @@ void ExerciseNonPromotedCells(leo2_context* context)
         }
     }
 
-    /* Every punctured T=8 neighbor stays on the mature general path. */
+    /* Every unpromoted punctured T=8 neighbor stays on the mature path. */
     static const size_t exact_bytes[] = { 256, 1024 };
     for (unsigned original_count = 5; original_count <= 8; ++original_count)
         for (unsigned recovery_count = 5; recovery_count <= 8;
              ++recovery_count)
         {
-            if (original_count == recovery_count)
+            if (original_count == recovery_count ||
+                (original_count == 6 && recovery_count == 5))
                 continue;
             for (size_t byte_i = 0;
                  byte_i < sizeof(exact_bytes) / sizeof(exact_bytes[0]);
@@ -539,7 +543,6 @@ void ExerciseNonPromotedCells(leo2_context* context)
     ExerciseCell(context, Cell{ 6, 6, 65 }, false);
     ExerciseCell(context, Cell{ 7, 7, 63 }, false);
     ExerciseCell(context, Cell{ 7, 7, 65 }, false);
-    ExerciseCell(context, Cell{ 6, 5, 64 }, false);
     ExerciseCell(context, Cell{ 7, 6, 64 }, false);
     ExerciseCell(context, Cell{ 8, 8, 63 }, false);
     ExerciseCell(context, Cell{ 8, 8, 128 }, false);
@@ -859,8 +862,11 @@ void ExerciseScalarFallbacks()
     Require(leo2_context_create(&options, &context) == LEO2_SUCCESS,
         "create scalar K=8/R=8/T=8 fallback context");
     static const Cell cells[] = {
+        { 6, 5, 64 },
         { 6, 6, 64 }, { 7, 7, 64 },
+        { 6, 5, 256 },
         { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 }, { 8, 8, 256 },
+        { 6, 5, 1024 },
         { 5, 5, 1024 }, { 6, 6, 1024 }, { 7, 7, 1024 },
         { 8, 8, 1024 }, { 8, 8, 64 }
     };
@@ -1002,8 +1008,11 @@ void ExerciseAutoBackend(bool full_parity_terminal_available)
     const bool expect_terminal =
         leo2_context_backend(context) == LEO2_BACKEND_AVX2;
     static const Cell cells[] = {
+        { 6, 5, 64 },
         { 6, 6, 64 }, { 7, 7, 64 },
+        { 6, 5, 256 },
         { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 }, { 8, 8, 256 },
+        { 6, 5, 1024 },
         { 5, 5, 1024 }, { 6, 6, 1024 }, { 7, 7, 1024 },
         { 8, 8, 1024 }, { 8, 8, 64 }
     };
@@ -1065,6 +1074,7 @@ int main()
         }
         ExerciseNonPromotedCells(context);
         ExerciseForcedTransform(context, Cell{ 6, 6, 64 });
+        ExerciseForcedTransform(context, Cell{ 6, 5, 64 });
         ExerciseForcedTransform(context, Cell{ 7, 7, 64 });
         ExerciseForcedTransform(context, Cell{ 8, 8, 64 });
         ExerciseForcedTransform(context, Cell{ 7, 7, 1024 });
@@ -1074,9 +1084,12 @@ int main()
         ExerciseForcedTransform(context, Cell{ 10, 5, 256 });
         ExerciseForcedTransform(context, Cell{ 16, 7, 256 });
         static const Cell promoted_cells[] = {
+            { 6, 5, 64 },
             { 6, 6, 64 }, { 7, 7, 64 },
+            { 6, 5, 256 },
             { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 },
-            { 8, 8, 256 }, { 5, 5, 1024 }, { 6, 6, 1024 },
+            { 8, 8, 256 }, { 6, 5, 1024 },
+            { 5, 5, 1024 }, { 6, 6, 1024 },
             { 7, 7, 1024 }, { 8, 8, 1024 }, { 8, 8, 64 }
         };
         for (size_t i = 0;

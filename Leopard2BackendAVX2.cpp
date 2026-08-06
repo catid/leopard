@@ -7455,11 +7455,13 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK5R5T8Vector(
 }
 
 /*
-    Exact shortened/punctured companions for K=R=6 and K=R=7.  The complete
-    T=8 parent transform is unchanged, but known-zero source suffixes are
-    formed in registers and punctured parity suffixes are never stored.
+    Exact shortened/punctured companions for K=6 and K=7.  The complete T=8
+    parent transform is unchanged, but known-zero source suffixes are formed
+    in registers and punctured parity suffixes are never stored.  OutputCount
+    permits the K=6/R=5 prefix; dead final-forward work is removed when this
+    template is instantiated.
 */
-template<unsigned ActiveCount>
+template<unsigned ActiveCount, unsigned OutputCount = ActiveCount>
 static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK6K7T8Vector(
     const void* const* data,
     void* const* work,
@@ -7469,6 +7471,8 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK6K7T8Vector(
 {
     static_assert(ActiveCount == 6 || ActiveCount == 7,
         "exact T=8 partial kernel supports K=R=6 or K=R=7");
+    static_assert(OutputCount >= 5 && OutputCount <= ActiveCount,
+        "exact T=8 partial output prefix is invalid");
     static const uint16_t kInverse1 = 153;
     static const uint16_t kInverse2 = 17;
     static const uint16_t kInverse3 = 102;
@@ -7505,12 +7509,17 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK6K7T8Vector(
     (void)forward_skew;
 
     const uint8_t* input[ActiveCount];
-    uint8_t* output[ActiveCount];
     for (unsigned lane = 0; lane < ActiveCount; ++lane)
-    {
         input[lane] = static_cast<const uint8_t*>(data[lane]);
-        output[lane] = static_cast<uint8_t*>(work[lane]);
-    }
+    uint8_t* output0 = static_cast<uint8_t*>(work[0]);
+    uint8_t* output1 = static_cast<uint8_t*>(work[1]);
+    uint8_t* output2 = static_cast<uint8_t*>(work[2]);
+    uint8_t* output3 = static_cast<uint8_t*>(work[3]);
+    uint8_t* output4 = static_cast<uint8_t*>(work[4]);
+    uint8_t* output5 = OutputCount >= 6
+        ? static_cast<uint8_t*>(work[5]) : NULL;
+    uint8_t* output6 = OutputCount >= 7
+        ? static_cast<uint8_t*>(work[6]) : NULL;
 
     const uint64_t vector_bytes = byte_count & ~UINT64_C(31);
     for (uint64_t offset = 0; offset < vector_bytes; offset += 32)
@@ -7553,20 +7562,21 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK6K7T8Vector(
         AVX2FF8T8VectorFFT2(value6, value7, kForward7);
 
         _mm256_storeu_si256(
-            reinterpret_cast<__m256i*>(output[0] + offset), value0);
+            reinterpret_cast<__m256i*>(output0 + offset), value0);
         _mm256_storeu_si256(
-            reinterpret_cast<__m256i*>(output[1] + offset), value1);
+            reinterpret_cast<__m256i*>(output1 + offset), value1);
         _mm256_storeu_si256(
-            reinterpret_cast<__m256i*>(output[2] + offset), value2);
+            reinterpret_cast<__m256i*>(output2 + offset), value2);
         _mm256_storeu_si256(
-            reinterpret_cast<__m256i*>(output[3] + offset), value3);
+            reinterpret_cast<__m256i*>(output3 + offset), value3);
         _mm256_storeu_si256(
-            reinterpret_cast<__m256i*>(output[4] + offset), value4);
-        _mm256_storeu_si256(
-            reinterpret_cast<__m256i*>(output[5] + offset), value5);
-        if (ActiveCount == 7)
+            reinterpret_cast<__m256i*>(output4 + offset), value4);
+        if (OutputCount >= 6)
             _mm256_storeu_si256(
-                reinterpret_cast<__m256i*>(output[6] + offset), value6);
+                reinterpret_cast<__m256i*>(output5 + offset), value5);
+        if (OutputCount >= 7)
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output6 + offset), value6);
     }
 
     for (uint64_t offset = vector_bytes; offset < byte_count; ++offset)
@@ -7620,8 +7630,8 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK6K7T8Vector(
         AVX2FF8T8VectorScalarFFT2(
             values[6], values[7], kForward7);
 
-        for (unsigned lane = 0; lane < ActiveCount; ++lane)
-            output[lane][offset] = values[lane];
+        for (unsigned lane = 0; lane < OutputCount; ++lane)
+            static_cast<uint8_t*>(work[lane])[offset] = values[lane];
     }
 }
 
@@ -7641,6 +7651,8 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
         (side_and_flags & kFF8HighEncodeK6R6Partial) != 0;
     const bool k7_r7_partial =
         (side_and_flags & kFF8HighEncodeK7R7Partial) != 0;
+    const bool k6_r5_partial =
+        (side_and_flags & kFF8HighEncodeK6R5Partial) != 0;
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
     const bool k9_tail =
         (side_and_flags & kFF8HighEncodeK9Tail) != 0;
@@ -7652,6 +7664,7 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
           kFF8HighEncodeK5R5Partial |
           kFF8HighEncodeK6R6Partial |
           kFF8HighEncodeK7R7Partial |
+          kFF8HighEncodeK6R5Partial |
           kFF8HighEncodeK9Tail |
           kFF8HighEncodeK9OutputCountMask);
 #else
@@ -7662,7 +7675,8 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
         ~(kFF8HighEncodeShortenedInput |
           kFF8HighEncodeK5R5Partial |
           kFF8HighEncodeK6R6Partial |
-          kFF8HighEncodeK7R7Partial);
+          kFF8HighEncodeK7R7Partial |
+          kFF8HighEncodeK6R5Partial);
 #endif
     LEO_DEBUG_ASSERT(side == 8);
     if (side != 8)
@@ -7670,10 +7684,13 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
     const bool k9_output_count_valid =
         k9_output_count >= 5 && k9_output_count <= 8;
     if ((shortened &&
-            (k5_r5_partial || k6_r6_partial || k7_r7_partial || k9_tail)) ||
-        (k5_r5_partial && (k6_r6_partial || k7_r7_partial || k9_tail)) ||
-        (k6_r6_partial && (k7_r7_partial || k9_tail)) ||
-        (k7_r7_partial && k9_tail) ||
+            (k5_r5_partial || k6_r6_partial || k7_r7_partial ||
+             k6_r5_partial || k9_tail)) ||
+        (k5_r5_partial &&
+            (k6_r6_partial || k7_r7_partial || k6_r5_partial || k9_tail)) ||
+        (k6_r6_partial && (k7_r7_partial || k6_r5_partial || k9_tail)) ||
+        (k7_r7_partial && (k6_r5_partial || k9_tail)) ||
+        (k6_r5_partial && k9_tail) ||
         (k9_tail ? !k9_output_count_valid : k9_output_count != 0))
         return;
     LEO_DEBUG_ASSERT(
@@ -7681,6 +7698,7 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
         static_cast<unsigned>(k5_r5_partial) +
         static_cast<unsigned>(k6_r6_partial) +
         static_cast<unsigned>(k7_r7_partial) +
+        static_cast<unsigned>(k6_r5_partial) +
         static_cast<unsigned>(k9_tail) <= 1U);
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
     if (k9_tail)
@@ -7736,6 +7754,12 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
     if (k6_r6_partial)
     {
         AVX2FF8HighEncodeK6K7T8Vector<6>(
+            data, work, inverse_skew, forward_skew, byte_count);
+        return;
+    }
+    if (k6_r5_partial)
+    {
+        AVX2FF8HighEncodeK6K7T8Vector<6, 5>(
             data, work, inverse_skew, forward_skew, byte_count);
         return;
     }
