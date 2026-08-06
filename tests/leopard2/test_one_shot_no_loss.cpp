@@ -810,7 +810,7 @@ uint64_t test_raw_native_high_matrix(leo2_context* avx2)
             {
                 RawTransientFixture fixture(
                     avx2, k, r, boundary_bytes[byte_i]);
-                for (uint32_t losses = 4; losses <= r; ++losses)
+                for (uint32_t losses = 3; losses <= r; ++losses)
                 {
                     const unsigned original_shape = static_cast<unsigned>(
                         (k + r + losses + byte_i) % 3U);
@@ -879,7 +879,7 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     run_raw_transient_case(avx2, 32, 32, 257, 9, 2, true, false);
     const uint64_t raw_native_high_cases =
         test_raw_native_high_matrix(avx2);
-    require(raw_native_high_cases == 31488,
+    require(raw_native_high_cases == 41984,
         "raw native-high matrix case count drifted");
 
     /*

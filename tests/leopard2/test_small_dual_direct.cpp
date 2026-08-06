@@ -555,7 +555,7 @@ size_t verify_raw_native_high_oracle_matrix(leo2_context* context)
             leo2_codec* codec = make_codec(context, k, r, 0);
             leo2_codec* reusable_codec = make_codec(
                 context, k, r, LEO2_CODEC_FORCE_SPECIALIZED_DECODE);
-            const unsigned loss_counts[] = { 4, 5, r };
+            const unsigned loss_counts[] = { 3, 4, 5, r };
             for (size_t loss_i = 0;
                  loss_i < sizeof(loss_counts) / sizeof(loss_counts[0]);
                  ++loss_i)
@@ -1058,7 +1058,7 @@ int main()
         verify_routes_and_execution(context, 16, 8, 8);
         const size_t raw_native_high_oracle_cases =
             verify_raw_native_high_oracle_matrix(context);
-        require(raw_native_high_oracle_cases == 19536,
+        require(raw_native_high_oracle_cases == 26640,
             "raw native-high oracle matrix case count drifted");
         verify_irregular_presence_boundary(context);
         verify_transform_only(context, 16, 9, 8,

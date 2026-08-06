@@ -10789,10 +10789,11 @@ static leo2_result TryOneShotRawNativeHighDecode(
         handled = true;
         return LEO2_NEED_MORE_DATA;
     }
-    /* The scratch-owned locator/direct executor has no loss-five algebraic
-       dependency.  Include loss four so K=9..16 tiny one-shot calls avoid
-       constructing the slower heap-owned direct plan. */
-    if (missing_original_count < 4 ||
+    /* The scratch-owned locator/direct executor has no loss-count-specific
+       algebra within its bounded coefficient arrays.  Include losses three
+       and four so K=9..16 tiny one-shot calls avoid constructing the slower
+       heap-owned direct plan. */
+    if (missing_original_count < 3 ||
         missing_original_count > codec->recovery_count)
         return LEO2_SUCCESS;
     DecodeScratchGeometry geometry;
@@ -11497,7 +11498,7 @@ static leo2_result ExecuteRawNativeHighDirectAVX2(
     const uint32_t output_count = pattern.missing_original_count;
     const uint32_t t = codec->padded_side;
     if (codec->original_count < 9 || codec->original_count > 16 ||
-        output_count < 4 || output_count > kDirectMaxRepairLosses ||
+        output_count < 3 || output_count > kDirectMaxRepairLosses ||
         !IsRawNativeHighDirectByteCount(shard_bytes))
         return LEO2_INTERNAL_ERROR;
 
