@@ -56,16 +56,22 @@ from pathlib import Path
 REPORT_SCHEMA_V8 = "leopard2-affinity-supervisor/v8"
 REPORT_SCHEMA_V9 = "leopard2-affinity-supervisor/v9"
 REPORT_SCHEMA_V10 = "leopard2-affinity-supervisor/v10"
-REPORT_SCHEMA = "leopard2-affinity-supervisor/v11"
+REPORT_SCHEMA_V11 = "leopard2-affinity-supervisor/v11"
+REPORT_SCHEMA_V12 = "leopard2-affinity-supervisor/v12"
+REPORT_SCHEMA = "leopard2-affinity-supervisor/v13"
 ACCEPTANCE_SCHEMA = "leopard2-affinity-acceptance/v1"
 BINDING_SCHEMA_V2 = "leopard2-affinity-main-binding/v2"
 BINDING_SCHEMA_V3 = "leopard2-affinity-main-binding/v3"
 BINDING_SCHEMA_V4 = "leopard2-affinity-main-binding/v4"
-BINDING_SCHEMA = "leopard2-affinity-main-binding/v5"
+BINDING_SCHEMA_V5 = "leopard2-affinity-main-binding/v5"
+BINDING_SCHEMA_V6 = "leopard2-affinity-main-binding/v6"
+BINDING_SCHEMA = "leopard2-affinity-main-binding/v7"
 BINDING_TO_REPORT_SCHEMA = {
     BINDING_SCHEMA_V2: REPORT_SCHEMA_V8,
     BINDING_SCHEMA_V3: REPORT_SCHEMA_V9,
     BINDING_SCHEMA_V4: REPORT_SCHEMA_V10,
+    BINDING_SCHEMA_V5: REPORT_SCHEMA_V11,
+    BINDING_SCHEMA_V6: REPORT_SCHEMA_V12,
     BINDING_SCHEMA: REPORT_SCHEMA,
 }
 REPORT_TO_BINDING_SCHEMA = {
@@ -81,7 +87,9 @@ MAIN_MANIFEST_SCHEMA_V10 = "leopard2-main-compare-manifest/v10"
 MAIN_MANIFEST_SCHEMA_V11 = "leopard2-main-compare-manifest/v11"
 MAIN_MANIFEST_SCHEMA_V12 = "leopard2-main-compare-manifest/v12"
 MAIN_MANIFEST_SCHEMA_V13 = "leopard2-main-compare-manifest/v13"
-MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v14"
+MAIN_MANIFEST_SCHEMA_V14 = "leopard2-main-compare-manifest/v14"
+MAIN_MANIFEST_SCHEMA_V15 = "leopard2-main-compare-manifest/v15"
+MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v16"
 MAIN_RAW_SCHEMA_V5 = "leopard2-main-compare-raw/v5"
 MAIN_RAW_SCHEMA_V6 = "leopard2-main-compare-raw/v6"
 MAIN_RAW_SCHEMA_V7 = "leopard2-main-compare-raw/v7"
@@ -91,7 +99,9 @@ MAIN_RAW_SCHEMA_V10 = "leopard2-main-compare-raw/v10"
 MAIN_RAW_SCHEMA_V11 = "leopard2-main-compare-raw/v11"
 MAIN_RAW_SCHEMA_V12 = "leopard2-main-compare-raw/v12"
 MAIN_RAW_SCHEMA_V13 = "leopard2-main-compare-raw/v13"
-MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v14"
+MAIN_RAW_SCHEMA_V14 = "leopard2-main-compare-raw/v14"
+MAIN_RAW_SCHEMA_V15 = "leopard2-main-compare-raw/v15"
+MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v16"
 MAIN_MANIFEST_TO_RAW_SCHEMA = {
     MAIN_MANIFEST_SCHEMA_V5: MAIN_RAW_SCHEMA_V5,
     MAIN_MANIFEST_SCHEMA_V6: MAIN_RAW_SCHEMA_V6,
@@ -102,6 +112,8 @@ MAIN_MANIFEST_TO_RAW_SCHEMA = {
     MAIN_MANIFEST_SCHEMA_V11: MAIN_RAW_SCHEMA_V11,
     MAIN_MANIFEST_SCHEMA_V12: MAIN_RAW_SCHEMA_V12,
     MAIN_MANIFEST_SCHEMA_V13: MAIN_RAW_SCHEMA_V13,
+    MAIN_MANIFEST_SCHEMA_V14: MAIN_RAW_SCHEMA_V14,
+    MAIN_MANIFEST_SCHEMA_V15: MAIN_RAW_SCHEMA_V15,
     MAIN_MANIFEST_SCHEMA: MAIN_RAW_SCHEMA,
 }
 REPORT_TO_MAIN_MANIFEST_SCHEMAS = {
@@ -116,6 +128,8 @@ REPORT_TO_MAIN_MANIFEST_SCHEMAS = {
     )),
     REPORT_SCHEMA_V9: frozenset((MAIN_MANIFEST_SCHEMA_V12,)),
     REPORT_SCHEMA_V10: frozenset((MAIN_MANIFEST_SCHEMA_V13,)),
+    REPORT_SCHEMA_V11: frozenset((MAIN_MANIFEST_SCHEMA_V14,)),
+    REPORT_SCHEMA_V12: frozenset((MAIN_MANIFEST_SCHEMA_V15,)),
     REPORT_SCHEMA: frozenset((MAIN_MANIFEST_SCHEMA,)),
 }
 MAIN_SUPERVISION_SCHEMA = "leopard2-main-supervision/v1"
@@ -235,6 +249,8 @@ REPORT_SCHEMA_ENVIRONMENTS = {
     REPORT_SCHEMA_V8: STRICT_BENCHMARK_ENVIRONMENT_V8,
     REPORT_SCHEMA_V9: STRICT_BENCHMARK_ENVIRONMENT,
     REPORT_SCHEMA_V10: STRICT_BENCHMARK_ENVIRONMENT,
+    REPORT_SCHEMA_V11: STRICT_BENCHMARK_ENVIRONMENT,
+    REPORT_SCHEMA_V12: STRICT_BENCHMARK_ENVIRONMENT,
     REPORT_SCHEMA: STRICT_BENCHMARK_ENVIRONMENT,
 }
 PID_NAMESPACE_KEYS = {"device", "inode"}
@@ -5483,6 +5499,12 @@ def test_binding():
               transaction.report["execution"]["environment"] ==
               STRICT_BENCHMARK_ENVIRONMENT,
               "new report did not use the current schema/environment contract")
+        pre_t32_report = json.loads(json.dumps(transaction.report))
+        pre_t32_report["schema"] = REPORT_SCHEMA_V12
+        validate_report(pre_t32_report)
+        pre_locator_report = json.loads(json.dumps(transaction.report))
+        pre_locator_report["schema"] = REPORT_SCHEMA_V11
+        validate_report(pre_locator_report)
         pre_dual_report = json.loads(json.dumps(transaction.report))
         pre_dual_report["schema"] = REPORT_SCHEMA_V10
         validate_report(pre_dual_report)
@@ -5659,6 +5681,8 @@ def test_binding():
                   BINDING_SCHEMA_V2: REPORT_SCHEMA_V8,
                   BINDING_SCHEMA_V3: REPORT_SCHEMA_V9,
                   BINDING_SCHEMA_V4: REPORT_SCHEMA_V10,
+                  BINDING_SCHEMA_V5: REPORT_SCHEMA_V11,
+                  BINDING_SCHEMA_V6: REPORT_SCHEMA_V12,
                   BINDING_SCHEMA: REPORT_SCHEMA,
               } and REPORT_TO_MAIN_MANIFEST_SCHEMAS == {
                   REPORT_SCHEMA_V8: frozenset((
@@ -5672,6 +5696,8 @@ def test_binding():
                   )),
                   REPORT_SCHEMA_V9: frozenset((MAIN_MANIFEST_SCHEMA_V12,)),
                   REPORT_SCHEMA_V10: frozenset((MAIN_MANIFEST_SCHEMA_V13,)),
+                  REPORT_SCHEMA_V11: frozenset((MAIN_MANIFEST_SCHEMA_V14,)),
+                  REPORT_SCHEMA_V12: frozenset((MAIN_MANIFEST_SCHEMA_V15,)),
                   REPORT_SCHEMA: frozenset((MAIN_MANIFEST_SCHEMA,)),
               }, "affinity report/binding generation matrix changed")
         check(MAIN_MANIFEST_TO_RAW_SCHEMA == {
@@ -5684,9 +5710,15 @@ def test_binding():
                   MAIN_MANIFEST_SCHEMA_V11: MAIN_RAW_SCHEMA_V11,
                   MAIN_MANIFEST_SCHEMA_V12: MAIN_RAW_SCHEMA_V12,
                   MAIN_MANIFEST_SCHEMA_V13: MAIN_RAW_SCHEMA_V13,
+                  MAIN_MANIFEST_SCHEMA_V14: MAIN_RAW_SCHEMA_V14,
+                  MAIN_MANIFEST_SCHEMA_V15: MAIN_RAW_SCHEMA_V15,
                   MAIN_MANIFEST_SCHEMA: MAIN_RAW_SCHEMA,
               }, "main-comparison manifest/raw replay matrix changed")
 
+        pre_t32_raw = json.loads(json.dumps(raw_payload))
+        pre_t32_raw["schema"] = MAIN_RAW_SCHEMA_V15
+        pre_locator_raw = json.loads(json.dumps(raw_payload))
+        pre_locator_raw["schema"] = MAIN_RAW_SCHEMA_V14
         pre_dual_raw = json.loads(json.dumps(raw_payload))
         pre_dual_raw["schema"] = MAIN_RAW_SCHEMA_V13
         pre_k8_raw = json.loads(json.dumps(raw_payload))
@@ -5712,6 +5744,20 @@ def test_binding():
                 transaction.report, manifest_path),
             "current binding with historical campaign environment")
 
+        install_bundle(pre_t32_raw, MAIN_MANIFEST_SCHEMA_V15)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                transaction.report, manifest_path),
+            "current report with pre-T32-generated manifest schema")
+
+        install_bundle(pre_locator_raw, MAIN_MANIFEST_SCHEMA_V14)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                transaction.report, manifest_path),
+            "current report with pre-locator manifest schema")
+
         install_bundle(pre_dual_raw, MAIN_MANIFEST_SCHEMA_V13)
         expect_exception(
             IsolationError,
@@ -5732,6 +5778,76 @@ def test_binding():
             lambda: validate_main_manifest_binding(
                 transaction.report, manifest_path),
             "current report with historical manifest schema")
+
+        install_accepted_report(pre_t32_report)
+        install_bundle(raw_payload)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                pre_t32_report, manifest_path),
+            "pre-T32-generated report with current manifest schema")
+        install_bundle(pre_locator_raw, MAIN_MANIFEST_SCHEMA_V14)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                pre_t32_report, manifest_path),
+            "pre-T32-generated report with pre-locator manifest schema")
+        install_bundle(pre_t32_raw, MAIN_MANIFEST_SCHEMA_V15)
+        pre_t32_binding_path = evidence / "affinity-binding-v6.json"
+        create_binding(report_path, manifest_path, pre_t32_binding_path)
+        pre_t32_binding = load_json(
+            pre_t32_binding_path, "pre-T32-generated test binding")
+        check(pre_t32_binding["schema"] == BINDING_SCHEMA_V6 and
+              pre_t32_binding["report"]["schema"] == REPORT_SCHEMA_V12,
+              "pre-T32-generated binding replay changed its schema pair")
+        validate_binding(
+            pre_t32_binding, pre_t32_binding_path, manifest_path,
+            sha256_bytes(manifest_path.read_bytes()))
+        upgraded_pre_t32_binding = json.loads(json.dumps(pre_t32_binding))
+        upgraded_pre_t32_binding["schema"] = BINDING_SCHEMA
+        upgraded_pre_t32_binding.pop("digest")
+        upgraded_pre_t32_binding["digest"] = sha256_value(
+            upgraded_pre_t32_binding)
+        expect_exception(
+            IsolationError,
+            lambda: validate_binding_structure_only(upgraded_pre_t32_binding),
+            "pre-T32-generated binding relabeled as current evidence")
+
+        install_accepted_report(pre_locator_report)
+        install_bundle(raw_payload)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                pre_locator_report, manifest_path),
+            "pre-locator report with current manifest schema")
+        install_bundle(pre_t32_raw, MAIN_MANIFEST_SCHEMA_V15)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                pre_locator_report, manifest_path),
+            "pre-locator report with pre-T32-generated manifest schema")
+        install_bundle(pre_locator_raw, MAIN_MANIFEST_SCHEMA_V14)
+        pre_locator_binding_path = evidence / "affinity-binding-v5.json"
+        create_binding(report_path, manifest_path, pre_locator_binding_path)
+        pre_locator_binding = load_json(
+            pre_locator_binding_path, "pre-locator test binding")
+        check(pre_locator_binding["schema"] == BINDING_SCHEMA_V5 and
+              pre_locator_binding["report"]["schema"] == REPORT_SCHEMA_V11,
+              "pre-locator binding replay changed its schema pair")
+        validate_binding(
+            pre_locator_binding, pre_locator_binding_path, manifest_path,
+            sha256_bytes(manifest_path.read_bytes()))
+        upgraded_pre_locator_binding = json.loads(json.dumps(
+            pre_locator_binding))
+        upgraded_pre_locator_binding["schema"] = BINDING_SCHEMA
+        upgraded_pre_locator_binding.pop("digest")
+        upgraded_pre_locator_binding["digest"] = sha256_value(
+            upgraded_pre_locator_binding)
+        expect_exception(
+            IsolationError,
+            lambda: validate_binding_structure_only(
+                upgraded_pre_locator_binding),
+            "pre-locator binding relabeled as current evidence")
 
         install_accepted_report(pre_dual_report)
         install_bundle(raw_payload)
