@@ -472,10 +472,36 @@ confound.  The selector is therefore disabled by default pending an isolated
 same-binary or section-stable ABBA replay with confidence intervals, including
 explicit high-profile `R > K` shapes.
 
+That measurement confound is now resolved.  A context-local diagnostic switch
+put both policies in the same executable, so mode changes no longer move hot
+text.  A pinned, five-round ABBA/BAAB campaign covered 709 cells: 424 affected
+plans and 285 inert controls, including loss-four direct repair, scattered
+patterns, and explicit `R > K`.  Across the 318 affected transform cells at
+64 bytes and above, regular transforms improved execution by 1.190x
+geometrically and amortized decode by 1.210x.  Every cell was a credible win;
+the weakest execution confidence interval still began at 1.016x.  Setup
+improved by 2.821x across all 424 affected cells.  No inert control had a
+credible regression beyond two percent, and the former K14/R7/loss7/64B
+outlier was neutral at 1.002x.
+
+The committed production default was then compared with exact Leopard1 on a
+separate frozen-binary campaign.  For 24 affected cells at 64, 256, and 1024
+bytes, public one-shot decode won 24/24 with a 2.131x geometric speedup and a
+worst confidence-interval lower bound of 1.216x.  Reused-plan execution won
+24/24 at 2.508x geometrically; amortization at reuse eight also won 24/24 at
+2.214x.  Creating a reusable plan and throwing it away after one execution is
+still the wrong API choice for eight small transform cells; the public
+one-shot wrapper wins those cells.  The regular-transform fallback is now ON
+by default, while the compile-time OFF switch and context-local benchmark
+override remain available for rollback and attribution.
+
 Machine-readable directional results are in
 `experiments/leopard2/direct_repair/results/small_dual_locator_terms_directional_20260805.json`
 and
 `experiments/leopard2/direct_repair/results/small_dual_regular_fallback_directional_20260805.json`.
+The superseding same-binary, exact-main, correctness, and sanitizer evidence is
+in
+`experiments/leopard2/direct_repair/results/small_dual_regular_fallback_promotion_20260806.json`.
 An attempted specialized-only metadata reduction was rejected because its
 amortized result was neutral to negative; that result is retained in
 `experiments/leopard2/direct_repair/results/small_dual_specialized_metadata_negative_20260805.json`.

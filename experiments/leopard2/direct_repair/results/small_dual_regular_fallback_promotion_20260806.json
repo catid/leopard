@@ -1,0 +1,185 @@
+{
+  "schema": "leopard2-small-dual-regular-fallback-promotion/v1",
+  "date_utc": "2026-08-06",
+  "status": "promoted_default_on",
+  "bead": "leopard-79h.38.14.1",
+  "hypothesis": "For selected reusable GF8/AVX2 small-dual plans, the tiny regular Algorithm 4 or Algorithm 5 transform is cheaper than constructing and executing a ragged pruned schedule.",
+  "selector_scope": {
+    "field": "gf8",
+    "backend": "avx2",
+    "profile": "legacy_high_v1",
+    "K": "5..16",
+    "R": "5..8",
+    "losses": "5..8, bounded by min(K,R)",
+    "translated_low": true,
+    "native_high_full_public_loss": true,
+    "exclusions": "Plans already covered by the established dense or one-coordinate boundary policies and full-original-loss K>=7 plans remain unchanged."
+  },
+  "source_identity": {
+    "same_binary_diagnostic_commit": "72d51655f9b303cfdc6522f120f9896ba2450b14",
+    "same_binary_diagnostic_tree": "17fa550aef271d96895f4051f8f1aa474f09f418",
+    "promotion_commit": "19b648ce255925ab8a4f876eee6da57958dc4dc8",
+    "promotion_tree": "690f69a2fa21d858f9269d5646ec17ed9af636ef",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "same_binary_campaign": {
+    "schema": "leopard2-small-dual-regular-same-binary-summary/v1",
+    "binary_sha256": "886af0932cb0ba1a2e47420547f0492063ba122d19f3ecf3fc06b99149d6bc24",
+    "manifest_sha256": "b7600c6472d68fcb72f3db50d924437e590ac8362b67c9c865495040d3630794",
+    "summary_sha256": "01c46d732bc9e03a9c92eafef1bebfe3fcff66b09965666ebedfc084632de979",
+    "method": {
+      "timing_cpu": 6,
+      "reserved_smt_sibling": 22,
+      "controller_cpu": 0,
+      "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+      "order": "alternating ABBA/BAAB",
+      "rounds": 5,
+      "iterations_per_invocation": 15,
+      "warmups_per_invocation": 3,
+      "reuse": 64,
+      "confidence_interval": "Student-t 95% over five independent round log-contrasts",
+      "child_address_space_limit_bytes": 536870912,
+      "peak_resident_kib": 23052,
+      "swaps": 0
+    },
+    "coverage": {
+      "cells": 709,
+      "affected_cells": 424,
+      "inert_cells": 285,
+      "affected_byte_counts": [1, 63, 64, 65, 255, 256, 257, 1023],
+      "inert_families": ["unselected transform shapes", "loss-four direct repair", "scattered missing-original patterns"],
+      "explicit_R_greater_than_K": true
+    },
+    "affected_all": {
+      "setup_geometric_mean_speedup": 2.8206683093117566,
+      "setup_credible_wins": 424,
+      "setup_credible_losses": 0,
+      "execution_geometric_mean_speedup": 1.1404960407982976,
+      "execution_credible_wins": 319,
+      "execution_credible_losses": 2,
+      "execution_credible_losses_beyond_two_percent": 0,
+      "amortized_geometric_mean_speedup": 1.1816820871514016,
+      "amortized_credible_wins": 423,
+      "amortized_credible_losses": 0
+    },
+    "affected_transform_bytes_64_and_larger": {
+      "cells": 318,
+      "execution_geometric_mean_speedup": 1.1903939839681896,
+      "execution_minimum_speedup": 1.0383133633627244,
+      "execution_minimum_ci95_lower": 1.0164727341029405,
+      "execution_credible_wins": 318,
+      "execution_credible_losses": 0,
+      "amortized_geometric_mean_speedup": 1.2100220038802327,
+      "amortized_minimum_speedup": 1.0512954822179903,
+      "amortized_minimum_ci95_lower": 1.027719664350099,
+      "amortized_credible_wins": 318,
+      "amortized_credible_losses": 0
+    },
+    "sub_64_byte_direct_execution": {
+      "cells": 106,
+      "execution_geometric_mean_speedup": 1.0030046762361537,
+      "execution_credible_losses": 2,
+      "execution_credible_losses_beyond_two_percent": 0,
+      "amortized_geometric_mean_speedup": 1.1005830123447973,
+      "amortized_credible_wins": 105,
+      "amortized_credible_losses": 0,
+      "interpretation": "The selector does not change the sub-64-byte direct executor. The two approximately one-percent execution losses are timing noise in logically identical execution; faster setup keeps total amortized decode positive."
+    },
+    "inert_controls": {
+      "execution_geometric_mean_speedup": 0.9990227661387585,
+      "amortized_geometric_mean_speedup": 0.9990460828788138,
+      "execution_credible_losses_beyond_two_percent": 0,
+      "amortized_credible_losses_beyond_two_percent": 0,
+      "loss_four_execution_geometric_mean_speedup": 0.9977599090058699,
+      "scattered_execution_geometric_mean_speedup": 0.9998548153472195,
+      "former_worst_K14_R7_loss7_B64_execution_speedup": 1.0022924670724709
+    }
+  },
+  "exact_main_campaign": {
+    "schema": "leopard2-small-dual-exact-main-abba/v1",
+    "matrix_sha256": "fcae883337f6c1ca019cb0161073b32fdd5f6cb8c75d22cb64dc7ab45fb1514a",
+    "summary_sha256": "e9b57d86794b373de9b7cc230cbf0a08a7bf9155dfcb14fe8d547b69306111ec",
+    "candidate_binary_sha256": "53f661da775c613808010f70ef74f7842eb7a6837b5e65fd9ffffe1f3e3d64c1",
+    "main_binary_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "method": {
+      "timing_cpu": 6,
+      "reserved_smt_sibling": 22,
+      "sibling_non_idle_jiffies": 0,
+      "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+      "order": "alternating ABBA/BAAB",
+      "rounds": 5,
+      "iterations_per_invocation": 15,
+      "warmups_per_invocation": 3,
+      "confidence_interval": "Student-t 95% over five independent round log-contrasts",
+      "peak_resident_kib": 21504,
+      "swaps": 0
+    },
+    "coverage": {
+      "affected_comparable_cells": 24,
+      "inert_comparable_cells": 4,
+      "R_greater_than_K_route_only_cells": 2,
+      "byte_counts": [64, 256, 1024]
+    },
+    "affected_main_over_leopard2": {
+      "public_one_shot_geometric_mean_speedup": 2.131194647504048,
+      "public_one_shot_credible_wins": 24,
+      "public_one_shot_credible_losses": 0,
+      "public_one_shot_minimum_ci95_lower": 1.2159832536922897,
+      "reused_plan_execution_geometric_mean_speedup": 2.5079146559966046,
+      "reused_plan_execution_credible_wins": 24,
+      "reused_plan_execution_credible_losses": 0,
+      "reused_plan_execution_minimum_ci95_lower": 1.4963756369437444,
+      "plan_reuse_8_geometric_mean_speedup": 2.214433346140521,
+      "plan_reuse_8_credible_wins": 24,
+      "plan_reuse_8_credible_losses": 0,
+      "plan_reuse_8_minimum_ci95_lower": 1.3529907429625052,
+      "plan_reuse_64_geometric_mean_speedup": 2.4668434018056957,
+      "plan_reuse_64_credible_wins": 24,
+      "plan_reuse_64_credible_losses": 0,
+      "plan_reuse_64_minimum_ci95_lower": 1.4768381949801024
+    },
+    "one_use_reusable_plan_caveat": {
+      "geometric_mean_speedup": 1.2288924187508894,
+      "credible_wins": 16,
+      "credible_losses": 8,
+      "minimum_speedup": 0.7028415023408124,
+      "interpretation": "Callers that will execute only once should use the public one-shot wrapper. Constructing the richer reusable plan and discarding it is slower than Leopard1 in eight small transform cells, although reuse eight wins every measured cell."
+    },
+    "encode_observation": {
+      "geometric_mean_speedup": 1.1889307999684033,
+      "credible_wins": 18,
+      "credible_losses": 6,
+      "worst_cell": "K6/R5/64B",
+      "worst_cell_speedup": 0.5217169760381597,
+      "interpretation": "Encoding is unaffected by this decode-plan selector. These pre-existing exact-main gaps remain separate AVX2 optimization work; K6/R5 is the highest-priority follow-up."
+    }
+  },
+  "correctness_and_safety": {
+    "release_small_dual_direct": {
+      "result": "pass",
+      "elapsed_seconds": 123.67,
+      "native_high_oracle_cases": 26640,
+      "peak_resident_kib": 32660
+    },
+    "release_related_tests": {
+      "result": "6 of 6 pass",
+      "tests": ["leopard2_translated_metadata", "leopard2_translated_metadata_hooks", "leopard2_public_api_contract", "leopard2_high_low_duality", "leopard2_direct_repair", "leopard2_benchmark_attestation_refresh"]
+    },
+    "clang18_asan_ubsan_small_dual_direct": {
+      "result": "pass",
+      "elapsed_seconds": 403.55,
+      "peak_resident_kib": 429772,
+      "swaps": 0
+    },
+    "workload_digest_mismatches": 0,
+    "round_trip_failures": 0
+  },
+  "promotion_gate": {
+    "correctness_complete": true,
+    "target_region_improvement_at_least_five_percent": true,
+    "neighbor_regression_over_two_percent": false,
+    "same_binary_control": true,
+    "committed_source_exact_main_comparison": true
+  },
+  "decision": "Enable LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK by default. Retain the context-local same-binary diagnostic override and compile-time OFF switch for attribution and rollback. Continue optimizing the independent K6/R5 and neighboring encoder gaps and the reusable-plan setup cost for callers that insist on one-use plans."
+}
