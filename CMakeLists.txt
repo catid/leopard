@@ -1417,6 +1417,8 @@ if(LEO2_BUILD_TESTS)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2_xor)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
                         avx2_t2_k4)
+                    list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
+                        avx2_t8_k8_b1024)
                 endif()
                 if(LEOPARD_ENABLE_GF8 AND
                    (LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED OR

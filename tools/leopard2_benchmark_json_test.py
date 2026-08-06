@@ -485,6 +485,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     expected_build = {
         "compiler", "compiler_version", "cplusplus",
         "k8r3r4_t4_terminal_diagnostic_disabled",
+        "t8_full_parity_terminal_diagnostic_disabled",
         "k16r8_b256_terminal_diagnostic_disabled",
         "k9r5_b256_terminal_diagnostic_disabled",
     }
@@ -551,6 +552,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             type(document["build"]["cplusplus"]) is int and
             type(document["build"][
                 "k8r3r4_t4_terminal_diagnostic_disabled"]) is bool and
+            type(document["build"][
+                "t8_full_parity_terminal_diagnostic_disabled"]) is bool and
             type(document["build"][
                 "k16r8_b256_terminal_diagnostic_disabled"]) is bool and
             type(document["build"][
@@ -1425,6 +1428,9 @@ def main() -> int:
     require(default["schema"] == "leopard2-benchmark-v1",
             "default benchmark schema changed")
     validate_common(default, False)
+    require(default["build"][
+                "t8_full_parity_terminal_diagnostic_disabled"] is False,
+            "default benchmark disabled the T=8 full-parity terminal")
     require(default["build"][
                 "k16r8_b256_terminal_diagnostic_disabled"] is False,
             "default benchmark disabled the K16/R8 terminal")

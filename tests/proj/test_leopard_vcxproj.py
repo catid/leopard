@@ -28,7 +28,7 @@ BENCHMARK_ATTESTATION_MODULE = \
 BENCHMARK_ATTESTATION_GENERATOR = \
     ROOT / "cmake" / "GenerateBenchmarkSourceAttestation.cmake"
 BENCHMARK_ATTESTATION_MODULE_SHA256 = \
-    "02884ba70aa5195042871fc8d1bc01296a7ad50dcf9b816c9e62066f07359bac"
+    "be06ff6635d29a0e75200580e9b689b8dca2a41cb63353ddec931de6e9d3b241"
 BENCHMARK_ATTESTATION_GENERATOR_SHA256 = \
     "21857083921f70d62f44f0d5327d88e375f845906ab97493dbbdecfe3e07a389"
 NS = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
@@ -548,8 +548,20 @@ class CMakeProductionGraph(object):
         r"cuda|nvcc|nvrtc|nvidia|cudart|ptxas|nvlink|fatbinary|"
         r"cuobjdump|nvc\+\+",
         re.IGNORECASE)
+    _small_dual_feature_source_property = (
+        "SOURCE", "leopard2.cpp", "tests/leopard2/test_api.cpp",
+        "tests/leopard2/test_small_dual_direct.cpp", "APPEND", "PROPERTY",
+        "COMPILE_DEFINITIONS",
+        "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT="
+        "$<BOOL:${LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT}>",
+        "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS="
+        "$<BOOL:${LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS}>",
+        "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK="
+        "$<BOOL:${LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK}>")
     _small_direct_source_property = (
-        "SOURCE", "leopard2.cpp", "APPEND", "PROPERTY",
+        "SOURCE", "leopard2.cpp",
+        "tests/leopard2/test_small_dual_direct.cpp",
+        "APPEND", "PROPERTY",
         "COMPILE_DEFINITIONS",
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE="
         "${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}")
@@ -987,6 +999,18 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
             "Enable the promoted GF8/AVX2 Algorithm 4 P32/N64/B64 terminal "
             "when available", "ON")): 1,
+        ("option", (
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+            "Retain transform and direct routes for qualified GF8/AVX2 "
+            "loss-5..8 plans", "ON")): 1,
+        ("option", (
+            "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+            "Derive reusable small-dual direct rows from the transform "
+            "locator", "ON")): 1,
+        ("option", (
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK",
+            "Experimentally omit pruned schedules from selected reusable "
+            "small-dual plans", "OFF")): 1,
         ("string", (
             "TOLOWER", "${LEO2_BACKEND_VARIANT}",
             "LEO2_BACKEND_VARIANT_NORMALIZED")): 1,
@@ -1299,6 +1323,18 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
             "Enable the promoted GF8/AVX2 Algorithm 4 P32/N64/B64 terminal "
             "when available", "ON"))),
+        ("trusted", ("option", (
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+            "Retain transform and direct routes for qualified GF8/AVX2 "
+            "loss-5..8 plans", "ON"))),
+        ("trusted", ("option", (
+            "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+            "Derive reusable small-dual direct rows from the transform "
+            "locator", "ON"))),
+        ("trusted", ("option", (
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK",
+            "Experimentally omit pruned schedules from selected reusable "
+            "small-dual plans", "OFF"))),
         ("protected", (
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "0", "CACHE", "STRING",
             "Default-off small GF8 direct-repair experiment: 0=transform, "
@@ -1357,6 +1393,8 @@ class CMakeProductionGraph(object):
             "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>",
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING="
             "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>"))),
+        ("source-mutation", (
+            "set_property", _small_dual_feature_source_property)),
         ("source-mutation", (
             "set_property", _t32_b256_source_property)),
         ("source-mutation", (
@@ -2952,7 +2990,9 @@ class CMakeProductionGraph(object):
             if default_reachable and is_source_property:
                 approved_experiment_source_property = (
                     command == "set_property" and
-                    (tuple(tokens) == self._small_direct_source_property or
+                    (tuple(tokens) ==
+                        self._small_dual_feature_source_property or
+                     tuple(tokens) == self._small_direct_source_property or
                      tuple(tokens) in
                         self._small_direct_test_source_properties or
                      tuple(tokens) ==
@@ -2971,7 +3011,9 @@ class CMakeProductionGraph(object):
                             "CPU-only graph: " + str(error))
                 upper_source_properties = {
                     token.upper() for token in source_property_tokens}
-                if any("$<" in token for token in source_property_tokens):
+                if (any("$<" in token for token in source_property_tokens) and
+                        tuple(tokens) !=
+                            self._small_dual_feature_source_property):
                     raise ContractError(
                         "unmodeled source-property generator expression is "
                         "reachable in the CPU-only graph")
@@ -3943,6 +3985,8 @@ class CMakeProductionGraph(object):
 
     def _record_source_properties(self, command, raw_tokens, guard, reasons):
         key = (command, tuple(raw_tokens))
+        small_dual_feature_key = (
+            "set_property", self._small_dual_feature_source_property)
         expected_key = (
             "set_property", self._small_direct_source_property)
         general_one_loss_key = (
@@ -3953,6 +3997,12 @@ class CMakeProductionGraph(object):
             "set_property", self._t32_b256_two_block_source_property)
         t16_b64_key = (
             "set_property", self._t16_b64_source_property)
+        if key == small_dual_feature_key:
+            if reasons or not self._formula_equivalent(guard, BOOL_TRUE):
+                raise ContractError(
+                    "small-dual feature source definition guard drift")
+            self.contract_events.append(("source-mutation", key))
+            return
         if key == t16_b64_key:
             expected_guard = self._t16_b64_object_guard()
             if reasons or not self._formula_equivalent(guard, expected_guard):
