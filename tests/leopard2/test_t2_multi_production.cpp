@@ -255,7 +255,10 @@ int main()
         if (result != LEO2_SUCCESS)
             throw std::runtime_error("create production AVX2 context");
 
-        static const size_t sizes[] = { 64, 128, 1024, 1984, 2048 };
+        static const size_t sizes[] = {
+            64, 128, 1024, 1984, 2048, 2112, 3072, 3136,
+            4096, 65536, 65600
+        };
         for (unsigned k = 5; k <= 16; ++k)
             for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i)
                 ExerciseCell(context, k, sizes[i]);

@@ -608,7 +608,8 @@ int main()
             }
         }
         static const size_t multi_sizes[] = {
-            32, 63, 64, 65, 128, 1024, 1984, 2047, 2048, 2049
+            32, 63, 64, 65, 128, 1024, 1984, 2047, 2048, 2049,
+            2112, 3072, 3136, 4096, 65536, 65600
         };
         for (unsigned k = 5; k <= 16; ++k)
         {
@@ -616,7 +617,10 @@ int main()
                  i < sizeof(multi_sizes) / sizeof(multi_sizes[0]); ++i)
             {
                 const size_t bytes = multi_sizes[i];
-                const bool selected = bytes <= 2048 && (bytes & 63U) == 0;
+                const size_t maximum_bytes = k <= 11 ? 65536U
+                    : (k <= 15 ? 3072U : 2048U);
+                const bool selected = bytes <= maximum_bytes &&
+                    (bytes & 63U) == 0;
                 ExercisePackedCell(context, k, bytes, selected);
             }
         }

@@ -1037,6 +1037,11 @@ static bool TryExecuteGF8AVX2T2Prevalidated(
     uint64_t shard_bytes,
     const void* const* original,
     void* const* recovery);
+static bool TryExecuteGF8AVX2T2MultiPrevalidated(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery);
 static bool TryExecuteGF8AVX2T2K4Prevalidated(
     const leo2_codec* codec,
     uint64_t shard_bytes,
@@ -13576,6 +13581,9 @@ static leo2_result RunEncodeBatchItem(void* context, size_t index)
     if (TryExecuteGF8AVX2T2Prevalidated(
             batch->codec, item.shard_bytes, item.original, item.recovery))
         return LEO2_SUCCESS;
+    if (TryExecuteGF8AVX2T2MultiPrevalidated(
+            batch->codec, item.shard_bytes, item.original, item.recovery))
+        return LEO2_SUCCESS;
     if (TryExecuteGF8AVX2T2K4Prevalidated(
             batch->codec, item.shard_bytes, item.original, item.recovery))
         return LEO2_SUCCESS;
@@ -16018,14 +16026,31 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T2PackedTerminalEligible(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
-    if (!codec || codec->terminal_t2_original_count == 0 ||
+    if (!codec ||
+        (codec->terminal_t2_original_count != 2 &&
+         codec->terminal_t2_original_count != 3) ||
         shard_bytes == 0 || shard_bytes > 2U * 1024U)
         return false;
-    /* K=2/3 own exact-tail circuits.  The multi-block callback uses its
-       public aligned prefix directly and is promoted only for complete
-       64-byte shards; arbitrary tails retain the established staged path. */
-    if (codec->terminal_t2_original_count >= 5 &&
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
+#else
+    return true;
+#endif
+}
+
+static LEO_FORCE_INLINE bool IsGF8AVX2T2MultiPackedTerminalEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    if (!codec || codec->terminal_t2_original_count < 5 ||
+        codec->terminal_t2_original_count > 16 || shard_bytes == 0 ||
         (shard_bytes & 63U) != 0)
+        return false;
+    const uint64_t maximum_bytes = codec->terminal_t2_original_count <= 11
+        ? 64U * 1024U
+        : (codec->terminal_t2_original_count <= 15 ? 3U * 1024U
+                                                   : 2U * 1024U);
+    if (shard_bytes > maximum_bytes)
         return false;
 #ifdef LEO2_ENABLE_TEST_HOOKS
     return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
@@ -16136,15 +16161,24 @@ static bool TryExecuteGF8AVX2T2Prevalidated(
     const size_t bytes = static_cast<size_t>(shard_bytes);
     if (codec->original_count == 2)
         ExecuteGF8AVX2T2PackedTerminal<2>(original, recovery, bytes);
-    else if (codec->original_count == 3)
-        ExecuteGF8AVX2T2PackedTerminal<3>(original, recovery, bytes);
     else
-    {
-        /* Whole-batch preflight has already proved scratch capacity and
-           every data range before this validation-free executor runs. */
-        ExecuteGF8AVX2T2MultiBlockTerminal(
-            codec, original, recovery, bytes);
-    }
+        ExecuteGF8AVX2T2PackedTerminal<3>(original, recovery, bytes);
+    return true;
+}
+
+static bool TryExecuteGF8AVX2T2MultiPrevalidated(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery)
+{
+    if (!IsGF8AVX2T2MultiPackedTerminalEligible(codec, shard_bytes) ||
+        !recovery[0] || !recovery[1])
+        return false;
+    /* Whole-batch preflight has already proved scratch capacity and every
+       data range before this validation-free executor runs. */
+    ExecuteGF8AVX2T2MultiBlockTerminal(
+        codec, original, recovery, static_cast<size_t>(shard_bytes));
     return true;
 }
 
@@ -16285,7 +16319,7 @@ TryEncodeGF8AVX2T2MultiBlockPackedTerminal(
     size_t scratch_bytes,
     leo2_result& result_out)
 {
-    LEO_DEBUG_ASSERT(IsGF8AVX2T2PackedTerminalEligible(
+    LEO_DEBUG_ASSERT(IsGF8AVX2T2MultiPackedTerminalEligible(
         codec, shard_bytes));
     LEO_DEBUG_ASSERT(codec->original_count >= 5 &&
         codec->original_count <= 16 && ProtectedCount <= 1);
@@ -16388,17 +16422,11 @@ EncodeGF8AVX2T2PublicTerminal(
     LEO_DEBUG_ASSERT(IsGF8AVX2T2PackedTerminalEligible(
         codec, shard_bytes));
     leo2_result result = LEO2_INTERNAL_ERROR;
-    bool handled = false;
-    if (codec->original_count == 2)
-        handled = TryEncodeGF8AVX2T2PackedTerminal<2, 0>(
+    const bool handled = codec->original_count == 2
+        ? TryEncodeGF8AVX2T2PackedTerminal<2, 0>(
             codec, NULL, shard_bytes, original, recovery,
-            scratch, scratch_bytes, result);
-    else if (codec->original_count == 3)
-        handled = TryEncodeGF8AVX2T2PackedTerminal<3, 0>(
-            codec, NULL, shard_bytes, original, recovery,
-            scratch, scratch_bytes, result);
-    else
-        handled = TryEncodeGF8AVX2T2MultiBlockPackedTerminal<0>(
+            scratch, scratch_bytes, result)
+        : TryEncodeGF8AVX2T2PackedTerminal<3, 0>(
             codec, NULL, shard_bytes, original, recovery,
             scratch, scratch_bytes, result);
     if (handled)
@@ -16416,23 +16444,55 @@ EncodeGF8AVX2T2BatchTerminal(
     LEO_DEBUG_ASSERT(item &&
         IsGF8AVX2T2PackedTerminalEligible(codec, item->shard_bytes));
     leo2_result result = LEO2_INTERNAL_ERROR;
-    bool handled = false;
-    if (codec->original_count == 2)
-        handled = TryEncodeGF8AVX2T2PackedTerminal<2, 1>(
+    const bool handled = codec->original_count == 2
+        ? TryEncodeGF8AVX2T2PackedTerminal<2, 1>(
             codec, &item_range, item->shard_bytes,
             item->original, item->recovery, item->scratch,
-            item->scratch_bytes, result);
-    else if (codec->original_count == 3)
-        handled = TryEncodeGF8AVX2T2PackedTerminal<3, 1>(
-            codec, &item_range, item->shard_bytes,
-            item->original, item->recovery, item->scratch,
-            item->scratch_bytes, result);
-    else
-        handled = TryEncodeGF8AVX2T2MultiBlockPackedTerminal<1>(
+            item->scratch_bytes, result)
+        : TryEncodeGF8AVX2T2PackedTerminal<3, 1>(
             codec, &item_range, item->shard_bytes,
             item->original, item->recovery, item->scratch,
             item->scratch_bytes, result);
     if (handled)
+        return result;
+    return EncodeInternal(codec, item->shard_bytes,
+        item->original, item->recovery, item->scratch,
+        item->scratch_bytes, item, sizeof(*item), false);
+}
+
+static LEO2_T2_PACKED_TERMINAL_NOINLINE leo2_result
+EncodeGF8AVX2T2MultiPublicTerminal(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes)
+{
+    LEO_DEBUG_ASSERT(IsGF8AVX2T2MultiPackedTerminalEligible(
+        codec, shard_bytes));
+    leo2_result result = LEO2_INTERNAL_ERROR;
+    if (TryEncodeGF8AVX2T2MultiBlockPackedTerminal<0>(
+            codec, NULL, shard_bytes, original, recovery,
+            scratch, scratch_bytes, result))
+        return result;
+    return EncodeInternal(codec, shard_bytes, original, recovery,
+        scratch, scratch_bytes, NULL, 0, false);
+}
+
+static LEO2_T2_PACKED_TERMINAL_NOINLINE leo2_result
+EncodeGF8AVX2T2MultiBatchTerminal(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item* item,
+    const AddressRange& item_range)
+{
+    LEO_DEBUG_ASSERT(item &&
+        IsGF8AVX2T2MultiPackedTerminalEligible(codec, item->shard_bytes));
+    leo2_result result = LEO2_INTERNAL_ERROR;
+    if (TryEncodeGF8AVX2T2MultiBlockPackedTerminal<1>(
+            codec, &item_range, item->shard_bytes,
+            item->original, item->recovery, item->scratch,
+            item->scratch_bytes, result))
         return result;
     return EncodeInternal(codec, item->shard_bytes,
         item->original, item->recovery, item->scratch,
@@ -19966,6 +20026,11 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
             return terminal_result;
     }
 #endif
+#ifdef LEO_HAS_FF8
+    if (IsGF8AVX2T2MultiPackedTerminalEligible(codec, shard_bytes))
+        return EncodeGF8AVX2T2MultiPublicTerminal(
+            codec, shard_bytes, original, recovery, scratch, scratch_bytes);
+#endif
     return EncodeInternal(codec, shard_bytes, original, recovery,
         scratch, scratch_bytes, NULL, 0, false);
 }
@@ -20257,6 +20322,12 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
                     items[0].scratch_bytes, terminal_result))
                 return terminal_result;
         }
+#endif
+#ifdef LEO_HAS_FF8
+        if (IsGF8AVX2T2MultiPackedTerminalEligible(
+                codec, items[0].shard_bytes))
+            return EncodeGF8AVX2T2MultiBatchTerminal(
+                codec, &items[0], item_range);
 #endif
     }
     return EncodeBatchCompatibilityInternal(codec, items, item_count);
