@@ -1737,6 +1737,8 @@ struct DecodeScratchGeometry
     size_t work_slot_count;
     size_t work_slot_bytes;
     size_t work_data_offset;
+    size_t input_slot_bytes;
+    bool fused_ragged_pass;
 };
 
 struct EncodeScratchGeometry
@@ -2018,7 +2020,8 @@ static bool ComputeSplitScratchLayout(
     size_t work_slot_count,
     size_t work_slot_bytes,
     ScratchLayout& layout,
-    size_t& work_data_offset)
+    size_t& work_data_offset,
+    size_t input_slot_bytes = kScratchAlignment)
 {
     if (!ComputeScratchLayout(
             range_count, pointer_count, 0, 1, layout))
@@ -2027,7 +2030,7 @@ static bool ComputeSplitScratchLayout(
     size_t input_bytes = 0;
     size_t work_bytes = 0;
     if (!CheckedMultiply(
-            input_slot_count, kScratchAlignment, input_bytes) ||
+            input_slot_count, input_slot_bytes, input_bytes) ||
         !CheckedAdd(layout.data_offset, input_bytes, work_data_offset) ||
         !CheckedMultiply(work_slot_count, work_slot_bytes, work_bytes) ||
         !CheckedAdd(work_data_offset, work_bytes, layout.total_bytes))
@@ -5856,6 +5859,39 @@ static size_t AVX2DecodeExecutionTileBytes(
     return aligned_prefix_bytes;
 }
 
+static bool UseFusedGF8AVX2RaggedDecodePass(
+    const leo2_codec* codec,
+    const leopard2_internal::DecodePathInfo& selection,
+    uint64_t shard_bytes,
+    size_t tail_bytes)
+{
+    /*
+        A sub-512-byte ragged shard would ordinarily execute its aligned
+        prefix and padded tail as two complete transform calls.  For the
+        common N=128/T=32 high profile, staging the exact shard once into its
+        rounded row and executing one transform removes the duplicate
+        coordinate walk, transform setup, and output gather.  The immutable
+        plan still selects exactly K inputs, so staging is compact even when
+        surplus recovery shards are present.
+
+        Five-round isolated boundary measurements and exhaustive directional
+        K=33..96/R=17..32 screens found repeatable AVX2 wins through 511 bytes.
+        At 513 bytes the reusable executor began to regress because copying
+        the whole prefix outweighed the removed call, so keep the cutoff
+        deterministic and byte-count based.  Forced diagnostic routes remain
+        unchanged to provide a same-build control.
+    */
+    return codec && tail_bytes != 0 &&
+        shard_bytes > kScratchAlignment &&
+        shard_bytes < 8U * kScratchAlignment && codec->flags == 0 &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->parent_count == 128 && codec->padded_side == 32 &&
+        selection.path == leopard2_internal::kDecodePathTiled &&
+        codec->context && codec->context->ops &&
+        codec->context->ops->kind == LEO2_BACKEND_AVX2;
+}
+
 static leo2_result DecodeLayout(
     const leo2_codec* codec,
     const leo2_decode_plan* plan,
@@ -5895,6 +5931,16 @@ static leo2_result DecodeLayout(
     geometry.work_slot_bytes = std::max(
         geometry.execution_tile_bytes,
         geometry.tail_bytes == 0 ? size_t(0) : kScratchAlignment);
+    geometry.input_slot_bytes = kScratchAlignment;
+    geometry.fused_ragged_pass = UseFusedGF8AVX2RaggedDecodePass(
+        codec, geometry.selection, shard_bytes, geometry.tail_bytes);
+    if (geometry.fused_ragged_pass)
+    {
+        geometry.input_slot_bytes = geometry.rounded_bytes;
+        geometry.work_slot_bytes = geometry.rounded_bytes;
+        geometry.execution_tile_count = 1;
+        geometry.execution_tile_bytes = geometry.rounded_bytes;
+    }
     geometry.work_slot_count = geometry.selection.required_work_slots;
     size_t pointer_count = 0;
     if (!CheckedAdd(
@@ -5908,17 +5954,20 @@ static leo2_result DecodeLayout(
         can point at the caller shards directly.  Specialized execution uses
         two side-sized transform tiles, plus one retained shard per requested
         high-profile output.  Generic fallback retains N work slots.  A ragged
-        final tile is executed separately: K+R public-coordinate staging slots
-        are fixed at 64 bytes each, while work slots are sized for the larger
-        of the aligned prefix and that one tail tile.
+        final tile is executed separately.  Immutable plan construction keeps
+        exactly K public survivors and marks every surplus recovery shard as a
+        virtual erasure, so tail staging needs K compact slots rather than one
+        slot for every K+R public coordinate.  Work slots are sized for the
+        larger of the aligned prefix and that one tail tile.
     */
     const size_t input_slot_count = geometry.tail_bytes != 0
-        ? static_cast<size_t>(codec->original_count) + codec->recovery_count
+        ? static_cast<size_t>(codec->original_count)
         : 0;
     if (!ComputeSplitScratchLayout(
             range_count, pointer_count, input_slot_count,
             geometry.work_slot_count, geometry.work_slot_bytes,
-            geometry.layout, geometry.work_data_offset))
+            geometry.layout, geometry.work_data_offset,
+            geometry.input_slot_bytes))
         return LEO2_INVALID_COUNTS;
     return LEO2_SUCCESS;
 }
@@ -6797,10 +6846,12 @@ static void PopulateDecodeCoordinates(
     size_t source_offset,
     size_t pass_bytes,
     uint8_t* staging_slots,
-    void** coordinate_data)
+    void** coordinate_data,
+    size_t staging_slot_bytes = kScratchAlignment)
 {
     const leo2_codec* codec = plan->codec;
     const bool stage_inputs = staging_slots != NULL;
+    size_t staging_slot = 0;
     std::fill(
         coordinate_data, coordinate_data + codec->parent_count,
         static_cast<void*>(NULL));
@@ -6816,9 +6867,9 @@ static void PopulateDecodeCoordinates(
         if (stage_inputs)
         {
             uint8_t* const slot = staging_slots +
-                static_cast<size_t>(i) * kScratchAlignment;
+                staging_slot++ * staging_slot_bytes;
             StageShardForKernel(
-                codec, slot, source, pass_bytes, kScratchAlignment);
+                codec, slot, source, pass_bytes, staging_slot_bytes);
             coordinate_data[coordinate] = slot;
         }
         else
@@ -6835,15 +6886,15 @@ static void PopulateDecodeCoordinates(
         if (stage_inputs)
         {
             uint8_t* const slot = staging_slots +
-                (static_cast<size_t>(codec->original_count) + i) *
-                    kScratchAlignment;
+                staging_slot++ * staging_slot_bytes;
             StageShardForKernel(
-                codec, slot, source, pass_bytes, kScratchAlignment);
+                codec, slot, source, pass_bytes, staging_slot_bytes);
             coordinate_data[coordinate] = slot;
         }
         else
             coordinate_data[coordinate] = const_cast<uint8_t*>(source);
     }
+    LEO_DEBUG_ASSERT(!stage_inputs || staging_slot == codec->original_count);
 }
 
 static LEO_FORCE_INLINE void GatherTransformDecodeOne(
@@ -9398,6 +9449,7 @@ static void PopulateRawTranslatedLowCoordinates(
 {
     const uint32_t p = codec->padded_side;
     const bool stage_inputs = staging_slots != NULL;
+    size_t staging_slot = 0;
     std::fill(coordinate_data,
         coordinate_data + codec->parent_count, static_cast<void*>(NULL));
     for (uint32_t i = 0; i < codec->original_count; ++i)
@@ -9409,7 +9461,7 @@ static void PopulateRawTranslatedLowCoordinates(
         if (stage_inputs)
         {
             uint8_t* const slot = staging_slots +
-                static_cast<size_t>(i) * kScratchAlignment;
+                staging_slot++ * kScratchAlignment;
             StageShardForKernel(
                 codec, slot, source, pass_bytes, kScratchAlignment);
             coordinate_data[i] = slot;
@@ -9427,8 +9479,7 @@ static void PopulateRawTranslatedLowCoordinates(
         if (stage_inputs)
         {
             uint8_t* const slot = staging_slots +
-                (static_cast<size_t>(codec->original_count) + i) *
-                    kScratchAlignment;
+                staging_slot++ * kScratchAlignment;
             StageShardForKernel(
                 codec, slot, source, pass_bytes, kScratchAlignment);
             coordinate_data[coordinate] = slot;
@@ -9436,6 +9487,7 @@ static void PopulateRawTranslatedLowCoordinates(
         else
             coordinate_data[coordinate] = const_cast<uint8_t*>(source);
     }
+    LEO_DEBUG_ASSERT(!stage_inputs || staging_slot == codec->original_count);
 }
 
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
@@ -21390,6 +21442,24 @@ static leo2_result DecodePlanExecuteInternal(
         geometry.aligned_prefix_bytes != 0;
     void** const high_requested_output =
         work + static_cast<size_t>(codec->padded_side) * 2;
+
+    if (geometry.fused_ragged_pass)
+    {
+        const size_t exact_bytes =
+            geometry.aligned_prefix_bytes + geometry.tail_bytes;
+        PopulateDecodeCoordinates(
+            plan, original, recovery, 0, exact_bytes, staging_slots,
+            coordinate_data, geometry.input_slot_bytes);
+        const void* const* const coordinate_input =
+            const_cast<const void* const*>(coordinate_data);
+        ExecuteTransformDecodePass(
+            plan, geometry.rounded_bytes, coordinate_input, work,
+            use_generic, use_tiled, true, NULL);
+        GatherTransformDecodePass(
+            plan, restored_original, 0, exact_bytes, work,
+            use_generic, use_tiled, true);
+        return LEO2_SUCCESS;
+    }
 
     if (geometry.aligned_prefix_bytes != 0)
     {

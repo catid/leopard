@@ -816,8 +816,8 @@ void run_gf8_payload_tiling_case(
     require(threshold_scratch * 2 < below_scratch,
         "payload tiling did not materially reduce transform scratch");
     require(tail_scratch == threshold_scratch +
-            static_cast<size_t>(k + r) * leo2_scratch_alignment(),
-        "payload-tiling tail did not reserve exactly one public staging tile");
+            static_cast<size_t>(k) * leo2_scratch_alignment(),
+        "payload-tiling tail did not reserve exactly K compact staging tiles");
 
     const size_t bytes = threshold_bytes + 17;
     Shards original(k, bytes, 11u + k);
@@ -897,6 +897,117 @@ void test_gf8_payload_tiling(Counts* counts)
     leo2_context_destroy(context);
 }
 
+void test_gf8_fused_ragged_boundaries(Counts* counts)
+{
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX2;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result context_result = leo2_context_create(&options, &context);
+    if (context_result == LEO2_UNSUPPORTED)
+        return;
+    require_success(context_result, "fused-ragged AVX2 context create");
+
+    static const unsigned k = 57;
+    static const unsigned r = 29;
+    static const unsigned missing[] = { 0, 17 };
+    static const size_t byte_counts[] = {
+        64, 65, 127, 128, 129, 191, 192, 193, 255, 256,
+        383, 384, 447, 448, 511, 512, 513
+    };
+    leo2_codec* codec = create_codec(context, k, r, LEO2_FIELD_GF8, 0);
+    require(leo2_codec_parent_count(codec) == 128 &&
+            leo2_codec_padded_side(codec) == 32,
+        "fused-ragged test selected the wrong parent geometry");
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    for (size_t i = 0; i < sizeof(missing) / sizeof(missing[0]); ++i)
+        original_present[missing[i]] = 0;
+    leo2_decode_plan* plan = NULL;
+    require_success(leo2_decode_plan_create(codec, original_present.data(),
+        recovery_present.data(), &plan), "fused-ragged plan create");
+
+    std::vector<size_t> scratch_sizes(
+        sizeof(byte_counts) / sizeof(byte_counts[0]), 0);
+    for (size_t byte_i = 0;
+         byte_i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++byte_i)
+    {
+        const size_t bytes = byte_counts[byte_i];
+        require_success(leo2_decode_plan_scratch_size(
+            plan, bytes, &scratch_sizes[byte_i]),
+            "fused-ragged scratch query");
+
+        Shards original(k, bytes, 7u + static_cast<unsigned>(byte_i));
+        Shards recovery(r, bytes, 19u + static_cast<unsigned>(byte_i));
+        Shards restored(k, bytes, 31u + static_cast<unsigned>(byte_i));
+        fill_originals(original,
+            UINT64_C(0x9e3779b97f4a7c15) + bytes * 257u);
+        encode(codec, original, recovery);
+        const std::vector<Bytes> original_before = snapshot_shards(original);
+        const std::vector<Bytes> recovery_before = snapshot_shards(recovery);
+        std::vector<const void*> original_input = original.const_pointers();
+        const std::vector<const void*> recovery_input = recovery.const_pointers();
+        std::vector<void*> output(k, NULL);
+        restored.fill(0x6d);
+        for (size_t i = 0; i < sizeof(missing) / sizeof(missing[0]); ++i)
+        {
+            original_input[missing[i]] = NULL;
+            output[missing[i]] = restored[missing[i]].data();
+        }
+        AlignedBuffer scratch(scratch_sizes[byte_i]);
+        require_success(leo2_decode_plan_execute(plan, bytes,
+            original_input.data(), recovery_input.data(), output.data(),
+            scratch.data(), scratch.bytes()), "fused-ragged execute");
+        for (size_t i = 0; i < sizeof(missing) / sizeof(missing[0]); ++i)
+        {
+            require(restored[missing[i]].payload_equals(original[missing[i]]),
+                "fused-ragged decode restored the wrong exact bytes");
+            ++counts->restored_shards;
+        }
+        require_snapshots(original, original_before,
+            "fused-ragged decode modified original input");
+        require_snapshots(recovery, recovery_before,
+            "fused-ragged decode modified recovery input");
+        require(original.guards_intact() && recovery.guards_intact() &&
+                restored.guards_intact(),
+            "fused-ragged decode modified a guard region");
+        counts->guard_checks += static_cast<uint64_t>(k) * 2u + r;
+        ++counts->specialized_executions;
+    }
+
+    const size_t row = leo2_scratch_alignment();
+    const auto scratch_for = [&](size_t bytes) -> size_t {
+        for (size_t i = 0;
+             i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++i)
+            if (byte_counts[i] == bytes)
+                return scratch_sizes[i];
+        throw std::runtime_error("missing fused-ragged scratch boundary");
+    };
+    require(scratch_for(65) == scratch_for(128) + k * 128 &&
+            scratch_for(127) == scratch_for(65),
+        "65..127 fused-ragged scratch geometry changed");
+    require(scratch_for(129) == scratch_for(192) + k * 192 &&
+            scratch_for(191) == scratch_for(129),
+        "129..191 fused-ragged scratch geometry changed");
+    require(scratch_for(193) == scratch_for(256) + k * 256 &&
+            scratch_for(255) == scratch_for(193),
+        "193..255 fused-ragged scratch geometry changed");
+    require(scratch_for(383) == scratch_for(384) + k * 384,
+        "383-byte fused-ragged scratch geometry changed");
+    require(scratch_for(447) == scratch_for(448) + k * 448,
+        "447-byte fused-ragged scratch geometry changed");
+    require(scratch_for(511) == scratch_for(512) + k * 512,
+        "511-byte fused-ragged scratch geometry changed");
+    require(scratch_for(513) == scratch_for(512) + k * row,
+        "513-byte cutoff did not retain compact one-tail staging");
+
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+    leo2_context_destroy(context);
+}
+
 void verify_expected_backend(const leo2_context* context)
 {
     const char* expected = std::getenv("LEO2_EXPECT_BACKEND");
@@ -965,6 +1076,7 @@ int main()
                 static_cast<unsigned>(i), &counts);
         test_concurrent_reuse(context, &counts);
         test_gf8_payload_tiling(&counts);
+        test_gf8_fused_ragged_boundaries(&counts);
         leo2_context_destroy(context);
 
         std::cout << "high decoder acceptance passed: profiles=" << counts.profiles

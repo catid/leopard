@@ -109,8 +109,7 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
         detected_l3_bytes = int(row["detected_l3_bytes"])
         cache_policy = COUNTS.derive_gf16_cache_policy(
             detected_l3_bytes
-            if (str(row["field"]) == "gf16" and backend == "avx2" and
-                not context_auto_requested) else 0
+            if backend == "avx2" and not context_auto_requested else 0
         )
         require(
             cache_policy.effective_l3_bytes ==
@@ -182,6 +181,7 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
             detected_l3_bytes=detected_l3_bytes,
             auto_requested=context_auto_requested,
             plan_selection=scratch_model, codec_selection=codec_model,
+            codec_flags=int(row["flags"]),
         )
         require(
             accounting.plan_total_bytes == int(row["plan_scratch_bytes"]),
@@ -242,6 +242,7 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
             detected_l3_bytes=detected_l3_bytes,
             auto_requested=context_auto_requested,
             plan_selection=selected_model, codec_selection=codec_model,
+            codec_flags=int(row["flags"]),
         )
         require(
             selected_accounting.plan_work_slots ==
@@ -270,8 +271,8 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
                 name + " introspected rounded bytes differ")
         if tail and not (direct or no_op):
             require(
-                accounting.tail_reserved_slots == int(row["K"]) + int(row["R"]),
-                name + " must reserve K+R ragged slots",
+                accounting.tail_reserved_slots == int(row["K"]),
+                name + " must reserve exactly K compact ragged slots",
             )
             require(
                 accounting.tail_selected_staged_slots == int(row["K"]),
@@ -339,8 +340,8 @@ def mutation_checks() -> int:
             "range-count mutation",
         ),
         (
-            "static_cast<size_t>(codec->original_count) + codec->recovery_count\n        : 0;",
             "static_cast<size_t>(codec->original_count)\n        : 0;",
+            "static_cast<size_t>(codec->original_count) + codec->recovery_count\n        : 0;",
             "ragged-reservation mutation",
         ),
         (
@@ -432,14 +433,14 @@ def mutation_checks() -> int:
             raise AssertionError(label + " escaped the source guard")
 
     # Formula-level sentinels catch plausible but wrong rewrites that can look
-    # reasonable in source review: rounded work slots, K-only tail reservation,
+    # reasonable in source review: rounded work slots, compact tail reservation,
     # and R output slots in a pattern-specific high tiled plan.
     exact = COUNTS.decode_scratch_accounting(
         240, 16, 256, 16, "high", 65, 1, "tiled", 8,
         codec_workspace="tiled",
     )
     require(exact.work_slot_bytes == 64, "ragged work-slot sentinel")
-    require(exact.tail_reserved_slots == 256, "K+R tail sentinel")
+    require(exact.tail_reserved_slots == 240, "compact K tail sentinel")
     require(exact.plan_work_slots == 33, "high plan L-slot sentinel")
     require(exact.codec_work_slots == 48, "high codec R-slot sentinel")
     direct = COUNTS.decode_scratch_accounting(

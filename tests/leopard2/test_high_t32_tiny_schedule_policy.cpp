@@ -516,9 +516,16 @@ ExecutionObservation execute_decode(
     observation.counts = leopard::ff8::TestOnlyGetHighDecodeCounts();
     observation.scratch_bytes = scratch_bytes;
     const size_t aligned_bytes = bytes & ~static_cast<size_t>(63U);
-    const size_t expected_passes =
-        (aligned_bytes != 0 ? 1U : 0U) +
-        (aligned_bytes != bytes ? 1U : 0U);
+    size_t execution_tile_count = 0;
+    size_t maximum_pass_bytes = 0;
+    require_result(leopard2_internal::GetDecodePlanExecutionTiles(
+        plan, bytes, &execution_tile_count, &maximum_pass_bytes),
+        label + " execution-tile query");
+    const size_t rounded_bytes = (bytes + 63U) & ~static_cast<size_t>(63U);
+    const bool fused_ragged_pass = aligned_bytes != bytes &&
+        execution_tile_count == 1 && maximum_pass_bytes == rounded_bytes;
+    const size_t expected_passes = execution_tile_count +
+        (aligned_bytes != bytes && !fused_ragged_pass ? 1U : 0U);
     require_route_counts(observation.counts, expected_route,
         output_blocks, expected_passes, label);
 
@@ -650,9 +657,22 @@ void run_campaign(
                 static_cast<size_t>(2U * t + missing.size()),
                 RoutePrunedOnly, output_blocks, missing,
                 originals, original_snapshot, recovery, recovery_snapshot);
-            require(automatic.scratch_bytes == forced.scratch_bytes,
-                std::string(name) +
-                    " AUTO and forced-tiled exact scratch sizes differ");
+            const bool automatic_fuses_ragged_pass =
+                automatic_tiled && parent == 128 && t == 32 &&
+                bytes.bytes > 64 && bytes.bytes < 512 &&
+                (bytes.bytes & 63U) != 0;
+            if (automatic_fuses_ragged_pass)
+            {
+                require(automatic.scratch_bytes > forced.scratch_bytes,
+                    std::string(name) +
+                        " fused AUTO scratch did not retain rounded rows");
+            }
+            else
+            {
+                require(automatic.scratch_bytes == forced.scratch_bytes,
+                    std::string(name) +
+                        " AUTO and forced-tiled exact scratch sizes differ");
+            }
         }
 
         std::cout << "CASE " << name

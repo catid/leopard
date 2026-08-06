@@ -544,8 +544,9 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
     additionally makes the intended distinctions reviewable: N coordinate
     pointers are metadata, large legacy-high AVX2 payloads may size work rows
     to the largest balanced pass (GF8 by padded_side, GF16 at padded_side 256
-    and 512), ragged K+R input slots are fixed 64-byte staging, and direct
-    execution retains range metadata without shard-data slots.
+    and 512), ragged staging is compact over exactly K selected inputs, the
+    qualified tiny AVX2 path uses rounded rows, and direct execution retains
+    range metadata without shard-data slots.
     """
     compact = re.sub(r"\s+", "", source)
     policy_begin = compact.find("staticconstsize_tkMiB=")
@@ -563,11 +564,16 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
         "staticleo2_resultComputeBatchPreflightScratchBytes(", policy_end
     )
     selector_begin = compact.find("staticboolSelectTransformDecodePath(")
+    fused_begin = compact.find("staticboolUseFusedGF8AVX2RaggedDecodePass(")
     begin = compact.find("staticleo2_resultDecodeLayout(", selector_begin)
     end = compact.find("staticleo2_resultDirectDecodeLayout(", begin)
     direct_end = compact.find("staticboolUseSingleSideEncodeLayout(", end)
     populate = compact.find("staticvoidPopulateDecodeCoordinates(")
     populate_end = compact.find("staticLEO_FORCE_INLINEvoidGatherTransformDecodeOne(", populate)
+    raw_populate = compact.find("staticvoidPopulateRawTranslatedLowCoordinates(")
+    raw_populate_end = compact.find(
+        "#ifLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL", raw_populate
+    )
     execute = compact.find("staticleo2_resultDecodePlanExecuteInternal(", direct_end)
     context_begin = compact.find(
         "LEO2_EXPORTleo2_resultleo2_context_create("
@@ -576,16 +582,19 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
         "LEO2_EXPORTvoidleo2_context_destroy(", context_begin
     )
     if min(policy_begin, derive_begin, scale_begin, policy_end, balanced_end,
-           selector_begin, begin, end, direct_end, populate, populate_end,
-           execute, context_begin, context_end) < 0:
+           selector_begin, fused_begin, begin, end, direct_end, populate, populate_end,
+           raw_populate, raw_populate_end, execute, context_begin,
+           context_end) < 0:
         raise ModelError("{} is missing a decode scratch boundary".format(label))
     policy = compact[policy_begin:scale_begin]
     scaling = compact[scale_begin:policy_end]
     balanced = compact[policy_end:balanced_end]
     selector = compact[selector_begin:begin]
+    fused = compact[fused_begin:begin]
     layout = compact[begin:end]
     direct = compact[end:direct_end]
     staging = compact[populate:populate_end]
+    raw_staging = compact[raw_populate:raw_populate_end]
     execution = compact[execute:]
     context_creation = compact[context_begin:context_end]
     required_policy = (
@@ -682,15 +691,21 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
         "geometry.execution_tile_bytes)",
         "geometry.work_slot_bytes=std::max(geometry.execution_tile_bytes,"
         "geometry.tail_bytes==0?size_t(0):kScratchAlignment);",
+        "geometry.fused_ragged_pass=UseFusedGF8AVX2RaggedDecodePass("
+        "codec,geometry.selection,shard_bytes,geometry.tail_bytes);",
+        "geometry.input_slot_bytes=geometry.rounded_bytes;",
+        "geometry.work_slot_bytes=geometry.rounded_bytes;",
+        "geometry.execution_tile_count=1;",
+        "geometry.execution_tile_bytes=geometry.rounded_bytes;",
         "constsize_trange_count=static_cast<size_t>(codec->original_count)*2+"
         "codec->recovery_count;",
         "static_cast<size_t>(codec->parent_count),"
         "geometry.work_slot_count,pointer_count",
         "constsize_tinput_slot_count=geometry.tail_bytes!=0?"
-        "static_cast<size_t>(codec->original_count)+codec->recovery_count:0;",
+        "static_cast<size_t>(codec->original_count):0;",
         "ComputeSplitScratchLayout(range_count,pointer_count,input_slot_count,"
         "geometry.work_slot_count,geometry.work_slot_bytes,geometry.layout,"
-        "geometry.work_data_offset)",
+        "geometry.work_data_offset,geometry.input_slot_bytes)",
         "SelectTransformDecodePath(codec,plan,shard_bytes,multi_item_batch,"
         "geometry,geometry.selection)",
         "geometry.work_slot_count=geometry.selection.required_work_slots;",
@@ -698,6 +713,22 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
     if any(token not in layout for token in required_layout):
         raise ModelError(
             "{} decode transform scratch formula diverged from schema v4".format(
+                label
+            )
+        )
+    required_fused = (
+        "tail_bytes!=0&&shard_bytes>kScratchAlignment&&"
+        "shard_bytes<8U*kScratchAlignment",
+        "codec->flags==0",
+        "codec->profile==LEO2_PROFILE_LEGACY_HIGH_V1",
+        "codec->field==LEO2_FIELD_GF8",
+        "codec->parent_count==128&&codec->padded_side==32",
+        "selection.path==leopard2_internal::kDecodePathTiled",
+        "codec->context->ops->kind==LEO2_BACKEND_AVX2",
+    )
+    if any(token not in fused for token in required_fused):
+        raise ModelError(
+            "{} fused ragged decode policy diverged from schema v4".format(
                 label
             )
         )
@@ -714,13 +745,26 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
         )
     required_staging = (
         "constboolstage_inputs=staging_slots!=NULL;",
-        "static_cast<size_t>(i)*kScratchAlignment",
-        "(static_cast<size_t>(codec->original_count)+i)*kScratchAlignment",
-        "StageShardForKernel(codec,slot,source,pass_bytes,kScratchAlignment);",
+        "size_tstaging_slot=0;",
+        "staging_slot++*staging_slot_bytes",
+        "StageShardForKernel(codec,slot,source,pass_bytes,staging_slot_bytes);",
+        "LEO_DEBUG_ASSERT(!stage_inputs||staging_slot==codec->original_count);",
     )
     if any(token not in staging for token in required_staging):
         raise ModelError(
             "{} ragged decode staging map diverged from schema v2".format(label)
+        )
+    required_raw_staging = (
+        "constboolstage_inputs=staging_slots!=NULL;",
+        "size_tstaging_slot=0;",
+        "staging_slot++*kScratchAlignment",
+        "LEO_DEBUG_ASSERT(!stage_inputs||staging_slot==codec->original_count);",
+    )
+    if (any(token not in raw_staging for token in required_raw_staging) or
+            raw_staging.count("staging_slot++*kScratchAlignment") != 2):
+        raise ModelError(
+            "{} raw translated-low staging map diverged from schema v2".
+            format(label)
         )
     required_execution = (
         "constbooluse_generic=geometry.selection.path=="
@@ -980,9 +1024,10 @@ class DecodeScratchAccounting:
 
     The production layout has three different kinds of storage that must not
     be conflated: AddressRange validation records, coordinate/work pointer
-    maps, and shard-data slots.  A ragged final tile additionally reserves one
-    fixed 64-byte input slot per public coordinate, although exactly K selected
-    coordinates are populated by a valid decode plan.
+    maps, and shard-data slots.  A ragged final tile reserves one compact input
+    slot for each of the exactly K coordinates selected by a valid decode
+    plan.  Ordinary tail slots are 64 bytes; the qualified fused AVX2 pass
+    stages a complete exact shard into one rounded slot per selected input.
     """
 
     workspace: str
@@ -1238,6 +1283,7 @@ def _scratch_components(
     work_slots: int,
     work_slot_bytes: int,
     pointer_bytes: int,
+    input_slot_bytes: int = SCRATCH_ALIGNMENT,
 ) -> Tuple[int, int, int, int, int, int, int]:
     maximum = size_t_max(pointer_bytes)
     address_range_bytes = checked_size_multiply(2, pointer_bytes, maximum)
@@ -1258,7 +1304,7 @@ def _scratch_components(
     )
     alignment_bytes = data_offset - range_bytes - pointer_bytes_total
     tail_bytes = checked_size_multiply(
-        tail_reserved_slots, SCRATCH_ALIGNMENT, maximum
+        tail_reserved_slots, input_slot_bytes, maximum
     )
     work_data_offset = checked_size_add(data_offset, tail_bytes, maximum)
     work_bytes = checked_size_multiply(work_slots, work_slot_bytes, maximum)
@@ -1271,6 +1317,26 @@ def _scratch_components(
         tail_bytes,
         work_bytes,
         total,
+    )
+
+
+def use_fused_gf8_avx2_ragged_decode_pass(
+    profile: str,
+    field_name: str,
+    backend: str,
+    parent: int,
+    padded: int,
+    shard_bytes: int,
+    selection_path: str,
+    codec_flags: int,
+) -> bool:
+    """Mirror UseFusedGF8AVX2RaggedDecodePass exactly."""
+    return (
+        shard_bytes & (SCRATCH_ALIGNMENT - 1) != 0 and
+        SCRATCH_ALIGNMENT < shard_bytes < 8 * SCRATCH_ALIGNMENT and
+        codec_flags == 0 and profile == "high" and field_name == "gf8" and
+        parent == 128 and padded == 32 and selection_path == "tiled" and
+        backend == "avx2"
     )
 
 
@@ -1293,6 +1359,7 @@ def decode_scratch_accounting(
     auto_requested: bool = False,
     plan_selection: Optional[DecodeSelection] = None,
     codec_selection: Optional[DecodeSelection] = None,
+    codec_flags: int = 0,
 ) -> DecodeScratchAccounting:
     """Mirror DecodeLayout/DirectDecodeLayout and both public queries.
 
@@ -1313,6 +1380,8 @@ def decode_scratch_accounting(
         raise ModelError("unsupported field")
     if backend not in BACKENDS:
         raise ModelError("unsupported backend")
+    if not isinstance(codec_flags, int) or codec_flags < 0 or codec_flags > UINT32_MAX:
+        raise ModelError("codec flags must fit uint32_t")
     if field_name == "gf16" and shard_bytes % 2:
         raise ModelError("current GF16 profile requires an even shard byte count")
     derive_gf16_cache_policy(detected_l3_bytes)
@@ -1341,7 +1410,7 @@ def decode_scratch_accounting(
     )
     tail = shard_bytes & (SCRATCH_ALIGNMENT - 1)
     prefix = shard_bytes - tail
-    tail_reserved_slots = checked_size_add(k, r, maximum) if tail else 0
+    tail_reserved_slots = k if tail else 0
     tail_selected_staged_slots = k if tail and not no_op and not direct else 0
 
     if no_op:
@@ -1382,12 +1451,20 @@ def decode_scratch_accounting(
             else "workspace_tiled" if plan_path == "tiled"
             else "workspace_materialized"
         )
+        plan_fused_ragged = use_fused_gf8_avx2_ragged_decode_pass(
+            profile, field_name, backend, parent, padded, shard_bytes,
+            plan_path, codec_flags,
+        )
         plan_tiles = decode_execution_tiles(
             k, r, profile, field_name, backend, padded, prefix, tail,
             plan_path, plan_rule, plan_work_slots,
             loss_count, detected_l3_bytes, plan_known=True,
             auto_requested=auto_requested,
         )
+        if plan_fused_ragged:
+            plan_tiles = ExecutionTiles(
+                1, round_shard_bytes(shard_bytes, pointer_bytes)
+            )
         plan_work_slot_bytes = max(
             plan_tiles.maximum_pass_bytes,
             SCRATCH_ALIGNMENT if tail else 0,
@@ -1397,7 +1474,9 @@ def decode_scratch_accounting(
         )
         plan_values = _scratch_components(
             range_count, plan_pointer_count, tail_reserved_slots,
-            plan_work_slots, plan_work_slot_bytes, pointer_bytes
+            plan_work_slots, plan_work_slot_bytes, pointer_bytes,
+            (round_shard_bytes(shard_bytes, pointer_bytes)
+             if plan_fused_ragged else SCRATCH_ALIGNMENT),
         )
         plan_range_count = range_count
         plan_tail_slots = tail_reserved_slots
@@ -1436,12 +1515,20 @@ def decode_scratch_accounting(
             else "workspace_tiled" if codec_path == "tiled"
             else "workspace_materialized"
         )
+        codec_fused_ragged = use_fused_gf8_avx2_ragged_decode_pass(
+            profile, field_name, backend, parent, padded, shard_bytes,
+            codec_path, codec_flags,
+        )
         codec_tiles = decode_execution_tiles(
             k, r, profile, field_name, backend, padded, prefix, tail,
             codec_path, codec_rule, codec_work_slots,
             loss_count, detected_l3_bytes, plan_known=False,
             auto_requested=auto_requested,
         )
+        if codec_fused_ragged:
+            codec_tiles = ExecutionTiles(
+                1, round_shard_bytes(shard_bytes, pointer_bytes)
+            )
         codec_work_slot_bytes = max(
             codec_tiles.maximum_pass_bytes,
             SCRATCH_ALIGNMENT if tail else 0,
@@ -1451,7 +1538,9 @@ def decode_scratch_accounting(
         )
         codec_values = _scratch_components(
             range_count, codec_pointer_count, tail_reserved_slots,
-            codec_work_slots, codec_work_slot_bytes, pointer_bytes
+            codec_work_slots, codec_work_slot_bytes, pointer_bytes,
+            (round_shard_bytes(shard_bytes, pointer_bytes)
+             if codec_fused_ragged else SCRATCH_ALIGNMENT),
         )
         codec_tail_slots = tail_reserved_slots
 
@@ -1466,11 +1555,24 @@ def decode_scratch_accounting(
     if codec_range_bytes != expected_range_bytes:
         raise ModelError("internal codec range accounting mismatch")
 
+    plan_fused_ragged = (
+        not no_op and not direct and
+        use_fused_gf8_avx2_ragged_decode_pass(
+            profile, field_name, backend, parent, padded, shard_bytes,
+            plan_path, codec_flags,
+        )
+    )
+    staged_payload_per_slot = shard_bytes if plan_fused_ragged else tail
+    staged_slot_bytes = (
+        round_shard_bytes(shard_bytes, pointer_bytes)
+        if plan_fused_ragged else SCRATCH_ALIGNMENT
+    )
     tail_payload_bytes = checked_size_multiply(
-        tail_selected_staged_slots, tail, maximum
+        tail_selected_staged_slots, staged_payload_per_slot, maximum
     )
     tail_zero_padding_bytes = checked_size_multiply(
-        tail_selected_staged_slots, SCRATCH_ALIGNMENT - tail, maximum
+        tail_selected_staged_slots,
+        staged_slot_bytes - staged_payload_per_slot, maximum
     )
 
     return DecodeScratchAccounting(
@@ -2779,7 +2881,8 @@ def schedule_metrics(
             ),
             "decode_plan_tail_reserved_bytes": Metric(
                 scratch.tail_reserved_bytes, "bytes", "exact_schedule",
-                "Ragged transform plans reserve K+R fixed 64-byte public-coordinate slots."
+                "Ragged transform plans reserve K compact selected-input slots; "
+                "the fused AVX2 path uses rounded slot widths."
             ),
             "decode_tail_staged_payload_bytes": Metric(
                 scratch.tail_staged_payload_bytes, "bytes", "exact_schedule",
@@ -2836,7 +2939,8 @@ def schedule_metrics(
             ),
             "decode_codec_tail_reserved_bytes": Metric(
                 scratch.codec_tail_reserved_bytes, "bytes", "exact_schedule",
-                "Pattern-independent ragged query reserves K+R fixed 64-byte slots."
+                "Pattern-independent ragged queries reserve K compact input "
+                "slots; the fused AVX2 path uses rounded slot widths."
             ),
         })
     return metrics
@@ -3353,10 +3457,10 @@ def run_self_test(verbose: bool = True) -> None:
         codec_workspace="tiled",
     )
     checks.require(
-        scratch.plan_total_bytes == 28800, "tiled plan scratch total"
+        scratch.plan_total_bytes == 27776, "tiled plan scratch total"
     )
     checks.require(
-        scratch.codec_total_bytes == 29824, "tiled codec scratch total"
+        scratch.codec_total_bytes == 28800, "tiled codec scratch total"
     )
 
     for pointer_bytes in (4, 8):

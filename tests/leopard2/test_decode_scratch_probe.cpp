@@ -55,7 +55,8 @@ size_t transform_scratch_bytes(
     const ProbeCase& test,
     uint32_t parent,
     size_t work_slots,
-    size_t work_slot_bytes)
+    size_t work_slot_bytes,
+    size_t input_slot_bytes = 64)
 {
     const size_t range_count = static_cast<size_t>(test.k) * 2 + test.r;
     const size_t ranges = range_count * sizeof(uintptr_t) * 2;
@@ -66,7 +67,7 @@ size_t transform_scratch_bytes(
     const size_t tail = static_cast<size_t>(test.shard_bytes) & 63;
     const size_t input_bytes = tail == 0
         ? 0
-        : (static_cast<size_t>(test.k) + test.r) * 64;
+        : static_cast<size_t>(test.k) * input_slot_bytes;
     return data_offset + input_bytes + work_slots * work_slot_bytes;
 }
 
@@ -85,11 +86,13 @@ size_t observe_work_slot_bytes(
     uint32_t parent,
     size_t scratch_bytes,
     size_t work_slots,
-    bool codec_query)
+    bool codec_query,
+    size_t input_slot_bytes = 64)
 {
     if (work_slots == 0)
         throw std::runtime_error("cannot observe zero transform work slots");
-    const size_t base = transform_scratch_bytes(test, parent, work_slots, 0);
+    const size_t base = transform_scratch_bytes(
+        test, parent, work_slots, 0, input_slot_bytes);
     if (scratch_bytes < base ||
         (scratch_bytes - base) % work_slots != 0)
         throw std::runtime_error(codec_query
@@ -132,7 +135,9 @@ void emit_case(
     leo2_context* context,
     const ProbeCase& test,
     uint64_t detected_l3_bytes,
-    bool multi_item_batch = false)
+    bool multi_item_batch = false,
+    bool fused_ragged = false,
+    bool context_auto_requested = true)
 {
     leo2_codec_options options;
     std::memset(&options, 0, sizeof(options));
@@ -177,6 +182,9 @@ void emit_case(
         "codec path introspection");
     const bool no_op = selected.path == leopard2_internal::kDecodePathNoOp;
     const bool direct = selected.path == leopard2_internal::kDecodePathDirect;
+    const size_t input_slot_bytes = fused_ragged
+        ? align_up(static_cast<size_t>(test.shard_bytes), 64)
+        : 64;
     if (direct != (!no_op && plan_scratch == direct_bytes))
         throw std::runtime_error("direct introspection/scratch mismatch");
     const size_t plan_work_slots = direct || no_op
@@ -184,7 +192,8 @@ void emit_case(
     const size_t plan_work_slot_bytes = direct || no_op
         ? 0
         : observe_work_slot_bytes(
-            test, parent, plan_scratch, plan_work_slots, false);
+            test, parent, plan_scratch, plan_work_slots, false,
+            input_slot_bytes);
     const bool k1_legacy_high =
         test.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         test.k == 1 && test.r == 1;
@@ -193,7 +202,8 @@ void emit_case(
     const size_t codec_work_slot_bytes = k1_legacy_high
         ? 0
         : observe_work_slot_bytes(
-            test, parent, codec_scratch, codec_work_slots, true);
+            test, parent, codec_scratch, codec_work_slots, true,
+            input_slot_bytes);
     size_t plan_execution_tile_count = 0;
     size_t plan_execution_tile_bytes = 0;
     require_result(leopard2_internal::GetDecodePlanExecutionTiles(
@@ -284,7 +294,8 @@ void emit_case(
         << ",\"aligned_prefix_bytes\":" << selected.aligned_prefix_bytes
         << ",\"tail_bytes\":" << selected.tail_bytes
         << ",\"rounded_bytes\":" << selected.rounded_shard_bytes
-        << ",\"context_auto_requested\":true"
+        << ",\"context_auto_requested\":"
+        << (context_auto_requested ? "true" : "false")
         << ",\"auto_host_backend_observed\":"
         << (test.auto_observed ? "true" : "false")
         << ",\"plan_work_slots\":" << plan_work_slots
@@ -361,14 +372,34 @@ int main()
     try
     {
         leo2_context_options options;
+        const uint64_t detected_l3_bytes =
+            leopard::backend::DetectConservativeL3Bytes();
+        std::memset(&options, 0, sizeof(options));
+        options.struct_size = sizeof(options);
+        options.backend = LEO2_BACKEND_AVX2;
+        options.thread_count = 1;
+        leo2_context* context = NULL;
+        const leo2_result avx2_result = leo2_context_create(&options, &context);
+        if (avx2_result == LEO2_SUCCESS)
+        {
+            const ProbeCase fused_case = {
+                "avx2_fused_ragged_65", 57, 29,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                0, 65, 2, false
+            };
+            emit_case(context, fused_case, detected_l3_bytes,
+                false, true, false);
+            leo2_context_destroy(context);
+        }
+        else if (avx2_result != LEO2_UNSUPPORTED)
+            require_result(avx2_result, "explicit AVX2 context create");
+
         std::memset(&options, 0, sizeof(options));
         options.struct_size = sizeof(options);
         options.backend = LEO2_BACKEND_AUTO;
         options.thread_count = 1;
-        leo2_context* context = NULL;
+        context = NULL;
         require_result(leo2_context_create(&options, &context), "context create");
-        const uint64_t detected_l3_bytes =
-            leopard::backend::DetectConservativeL3Bytes();
 
         const ProbeCase cases[] = {
             { "noop_ragged", 240, 16, LEO2_PROFILE_LEGACY_HIGH_V1,

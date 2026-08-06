@@ -1496,13 +1496,13 @@ void test_aligned_decode_input_staging_elision(
             "ragged one-shot scratch query");
 
         const size_t staged_input_bytes =
-            static_cast<size_t>(item.k + item.r) * 64;
+            static_cast<size_t>(item.k) * 64;
         require(ragged_plan > aligned_plan &&
                 ragged_plan - aligned_plan == staged_input_bytes,
-            "aligned plan retained K+R input staging slots");
+            "aligned plan retained K compact input staging slots");
         require(ragged_one_shot > aligned_one_shot &&
                 ragged_one_shot - aligned_one_shot == staged_input_bytes,
-            "aligned one-shot retained K+R input staging slots");
+            "aligned one-shot retained K compact input staging slots");
         require(aligned_one_shot >= aligned_plan &&
                 ragged_one_shot >= ragged_plan,
             "one-shot transform scratch does not cover the exact plan");

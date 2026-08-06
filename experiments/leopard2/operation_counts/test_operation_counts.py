@@ -779,15 +779,15 @@ class OperationCountTests(unittest.TestCase):
         self.assertEqual(tiled.range_count, 496)
         self.assertEqual(tiled.range_metadata_bytes, 7936)
         self.assertEqual(tiled.plan_pointer_count, 256 + 2 * 16 + 1)
-        self.assertEqual(tiled.tail_reserved_slots, 256)
+        self.assertEqual(tiled.tail_reserved_slots, 240)
         self.assertEqual(tiled.tail_selected_staged_slots, 240)
         self.assertEqual(tiled.tail_staged_payload_bytes, 240)
         self.assertEqual(tiled.tail_staged_zero_padding_bytes, 240 * 63)
         self.assertEqual(tiled.work_slot_bytes, 64)
         self.assertEqual(tiled.plan_work_slots, 33)
         self.assertEqual(tiled.codec_work_slots, 48)
-        self.assertEqual(tiled.plan_total_bytes, 28800)
-        self.assertEqual(tiled.codec_total_bytes, 29824)
+        self.assertEqual(tiled.plan_total_bytes, 27776)
+        self.assertEqual(tiled.codec_total_bytes, 28800)
 
         materialized = COUNTS.decode_scratch_accounting(
             240, 16, 256, 16, "high", 128, 1, "materialized", 8,
@@ -819,6 +819,43 @@ class OperationCountTests(unittest.TestCase):
         self.assertEqual(k1.codec_work_slots, 0)
         self.assertEqual(k1.work_slot_bytes, 0)
         self.assertEqual(k1.codec_work_slot_bytes, 0)
+
+    def test_fused_ragged_decode_scratch_boundaries(self) -> None:
+        fused = COUNTS.decode_scratch_accounting(
+            57, 29, 128, 32, "high", 65, 2, "tiled", 8,
+            codec_workspace="tiled", backend="avx2",
+        )
+        self.assertEqual(fused.tail_reserved_slots, 57)
+        self.assertEqual(fused.tail_reserved_bytes, 57 * 128)
+        self.assertEqual(fused.work_slot_bytes, 128)
+        self.assertEqual(fused.plan_execution_tile_count, 1)
+        self.assertEqual(fused.plan_execution_tile_bytes, 128)
+        self.assertEqual(fused.tail_staged_payload_bytes, 57 * 65)
+        self.assertEqual(fused.tail_staged_zero_padding_bytes, 57 * 63)
+
+        boundary = COUNTS.decode_scratch_accounting(
+            57, 29, 128, 32, "high", 511, 2, "tiled", 8,
+            codec_workspace="tiled", backend="avx2",
+        )
+        self.assertEqual(boundary.tail_reserved_bytes, 57 * 512)
+        self.assertEqual(boundary.work_slot_bytes, 512)
+        self.assertEqual(boundary.plan_execution_tile_bytes, 512)
+
+        excluded = COUNTS.decode_scratch_accounting(
+            57, 29, 128, 32, "high", 513, 2, "tiled", 8,
+            codec_workspace="tiled", backend="avx2",
+        )
+        self.assertEqual(excluded.tail_reserved_bytes, 57 * 64)
+        self.assertEqual(excluded.work_slot_bytes, 512)
+        self.assertEqual(excluded.plan_execution_tile_bytes, 512)
+
+        forced = COUNTS.decode_scratch_accounting(
+            57, 29, 128, 32, "high", 65, 2, "tiled", 8,
+            codec_workspace="tiled", backend="avx2", codec_flags=4,
+        )
+        self.assertEqual(forced.tail_reserved_bytes, 57 * 64)
+        self.assertEqual(forced.work_slot_bytes, 64)
+        self.assertEqual(forced.plan_execution_tile_bytes, 64)
 
     def test_gf16_cache_policy_and_balanced_pass_geometry(self) -> None:
         mib = COUNTS.MIB
