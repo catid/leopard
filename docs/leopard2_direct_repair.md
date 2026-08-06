@@ -554,3 +554,39 @@ inert controls remained within the two-percent point-regression gate. Details
 and the unpromoted source-major continuation are in
 `experiments/leopard2/optimization_log/29-native-high-direct-crossover.md` and
 `experiments/leopard2/direct_repair/results/raw_native_high_direct_crossover_20260805.json`.
+
+### Allocation-free source-major interval
+
+The source-major continuation is now promoted for shards from 12,288 through
+16,384 bytes. It reuses the raw locator setup, derives direct coefficients and
+the same deterministic source encounter order used by reusable plans into
+bounded stack metadata, and invokes the common pointer-level source-major
+executor. There is no transient heap plan and no second copy of the byte-heavy
+loop. Output-major raw execution remains selected through 7168 bytes; the
+intervals 7169--12,287 and 16,385 upward retain the ordinary plan fallback.
+
+An exact remainder handles tails through 15 bytes. Remainders from 16 through
+31 use one aligned, zero-padded 32-byte AVX2 tile followed by an exact-prefix
+copy. The tile is local bounded storage, so the public scratch size and aliasing
+contract do not change.
+
+All 80 valid `(K,R,L)` shapes at both aligned interval endpoints cleared the
+promotion gate: the minimum cell geomean was 1.0906x, the overall geomean was
+1.1283x, and the weakest 95-percent lower bound was 1.0699x versus the
+same-source plan fallback. Two tail outliers selected from a 320-cell residue
+screen were confirmed with 15 ABBA seeds at 1.1065x and 1.1127x; both lower
+bounds exceeded 1.086x. Six 12,287- and 16,385-byte inert neighbors had no
+point regression above 1.01 percent and every interval spanned one.
+
+Against exact Leopard main commit `6e5725e`, fourteen representative selected
+cells improved by 2.1216x--5.3870x, with a 3.4837x overall geomean and a
+2.1000x weakest lower confidence bound. The Release correctness matrix now
+contains 20,992 allocation-audited public cases and 12,432 independent-
+generator/reusable-Algorithm-5 differentials, including both transitions and
+every 32- and 64-byte tail residue. The complete dual-field Release suite
+passes 137/137; focused Clang 18 ASan+UBSan, GF8-only, GF16-only, and
+compile-disabled-tail gates also pass.
+
+See `experiments/leopard2/optimization_log/30-native-high-source-major-one-shot.md`
+and
+`experiments/leopard2/direct_repair/results/raw_native_high_source_major_20260805.json`.

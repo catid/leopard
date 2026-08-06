@@ -119,6 +119,7 @@ Scratch falls with all of it: encode 1073.8 MB -> 8.5 MB (126x) at legacy-high
 | 27 | Scratch-resident native-high one-shot Algorithm 5 | **landed** | 1.188x vs main at 64 B; exposed 65-B crossover |
 | 28 | Whole-shard native-high locator-direct repair | **landed** | 1.289-4.513x vs exact main; 65 B now 2.228x |
 | 29 | Native-high whole-direct crossover extension | **landed through 7168 B** | selected 1.124-4.972x vs prior; 1.886-5.133x vs main |
+| 30 | Native-high source-major raw one-shot | **landed at 12-16 KiB** | 1.128x overall vs plan fallback; 3.484x overall vs exact main |
 
 ## Method notes worth keeping
 

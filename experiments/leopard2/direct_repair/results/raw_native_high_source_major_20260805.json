@@ -1,0 +1,167 @@
+{
+  "schema": "leopard2-raw-native-high-source-major-promotion/v1",
+  "date_utc": "2026-08-05",
+  "bead": "leopard-79h.38.2.5.10",
+  "status": "promoted",
+  "source": {
+    "implementation_commit": "9498e93485b46c747d6440b056f893facadea66f",
+    "implementation_tree": "411f686f3a0dc55e3ad0fb46a7f66e1e7e813ca6",
+    "release_contract_commit": "255122fbb562dbe6d402c607e01f6417412d169f",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "change": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "pure_avx2",
+    "parent_count": 32,
+    "padded_side": 8,
+    "K": "9..16",
+    "R": "5..8",
+    "missing_originals": "5..R",
+    "promoted_shard_bytes": "12288..16384",
+    "lower_fallback_shard_bytes": "7169..12287",
+    "upper_fallback_minimum_shard_bytes": 16385,
+    "execution": "shared pointer-level source-major direct-repair executor",
+    "setup": "caller-scratch locator plus bounded stack coefficients and source order; no heap plan",
+    "tail": "exact remainder 0..15; padded aligned 32-byte tile and exact-prefix copy for remainder 16..31",
+    "wire_profile_changed": false,
+    "public_scratch_changed": false
+  },
+  "machine": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_cpus": "0-13,16-29",
+    "timing_cpu": 28,
+    "reserved_smt_sibling": 12,
+    "codec_threads": 1,
+    "why_single_core": "Authoritative sub-microsecond and cache-sensitive timings were pinned and isolated; parallel timing would invalidate the comparison."
+  },
+  "artifacts": {
+    "same_source_lane": "/tmp/leopard-source-major-samesource-v5",
+    "all_shape_lane": "/tmp/leopard-source-major-samesource-v2/allshape-abba",
+    "candidate_executable_sha256": "b56d542edcb304af4019a9e8c1f135ef5ad4f1f8c6e586e4ad604de4c48b7860",
+    "fallback_control_executable_sha256": "69314acbcef10be65a8ec7e0afa83caa615efa5971aed95ce7fbfb4ecff013fa",
+    "candidate_and_control_text_sha256": "7de416014e2ce35d38e3cfd1adfebae9cc77395eeceb87aaefc0910574f37992",
+    "exact_main_executable_sha256": "4ea8769b90ad9e5016e508a33d8fb1b4052b580de3339777c4383df2b4cf9b76",
+    "pre_post_hashes_unchanged": true,
+    "retention_note": "Frozen binaries and raw samples under /tmp are ephemeral; hashes, identities, test outcomes, and aggregate statistics are committed here."
+  },
+  "correctness": {
+    "release_allocation_audited_public_cases": 20992,
+    "release_independent_generator_and_reusable_algorithm5_differentials": 12432,
+    "all_valid_K_R_L_shapes_covered": true,
+    "both_route_transitions_covered": true,
+    "all_32_and_64_byte_tail_residues_covered": true,
+    "fallback_sizes_through_bytes": 1048576,
+    "varied_missing_original_and_parity_patterns": true,
+    "unaligned_and_alias_cases": true,
+    "failure_atomicity": true,
+    "zero_selected_one_shot_allocations": true,
+    "release_focused_tests": "pass",
+    "dual_field_release_suite": "137/137 pass",
+    "clang18_asan_ubsan_focused_tests": "pass",
+    "gf8_only_archive": "pass",
+    "gf16_only_suite": "9/9 pass",
+    "tail_feature_compile_disabled_build": "pass",
+    "all_benchmark_round_trips_and_digests": "pass",
+    "oom_controls": "one substantial process at a time; compiler build -j1 with 512 MiB virtual-address cap; ASan runtime uncapped for shadow mapping; correctness CTest at at most two concurrent tests"
+  },
+  "statistics": {
+    "design": "ABBA; each round ratio is the geometric mean of two fallback-control process medians divided by two candidate process medians",
+    "samples_per_process": 31,
+    "warmups": 4,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "interval": "two-sided Student-t 95 percent interval over log round ratios",
+    "evidence_class": "frozen lane-owned binaries, clean committed implementation source, unchanged pre/post SHA-256, pinned CPU, monitored reserved sibling"
+  },
+  "same_source_all_shapes": {
+    "cells": 160,
+    "shard_bytes": [
+      12288,
+      16384
+    ],
+    "rounds": 3,
+    "reuse": 200,
+    "minimum_speedup": 1.090578714,
+    "maximum_speedup": 1.214430894,
+    "overall_geometric_mean_speedup": 1.128305106,
+    "weakest_cell_ci95": [
+      1.082506,
+      1.098711
+    ],
+    "minimum_ci95_lower": 1.069876,
+    "reserved_sibling_total_jiffies": 4430,
+    "reserved_sibling_idle_jiffies": 4430,
+    "all_digests_matched": true
+  },
+  "tail_residue_screen": {
+    "cells": 320,
+    "representative_shapes": 5,
+    "overall_geometric_mean_speedup": 1.112742602,
+    "minimum_residue_aggregate_geometric_mean_speedup": 1.06372,
+    "single_round_cells_below_1_05": 22,
+    "interpretation": "Directional screen used to choose robust confirmation cells; individual one-round minima were not promotion evidence.",
+    "all_digests_matched": true
+  },
+  "robust_tail_confirmation": {
+    "rounds": 15,
+    "reuse": 128,
+    "samples_per_process": 31,
+    "warmups": 8,
+    "reserved_sibling_total_jiffies": 1654,
+    "reserved_sibling_idle_jiffies": 1649,
+    "cells": [
+      {
+        "K": 12,
+        "R": 8,
+        "missing_originals": 5,
+        "shard_bytes": 16382,
+        "speedup": 1.106458273,
+        "ci95": [
+          1.086260974,
+          1.127031109
+        ]
+      },
+      {
+        "K": 14,
+        "R": 5,
+        "missing_originals": 5,
+        "shard_bytes": 12298,
+        "speedup": 1.112738786,
+        "ci95": [
+          1.09058745,
+          1.135340046
+        ]
+      }
+    ],
+    "all_digests_matched": true
+  },
+  "inert_neighbor_confirmation": {
+    "rounds": 15,
+    "cells": 6,
+    "shard_bytes": [
+      12287,
+      16385
+    ],
+    "minimum_point_ratio": 0.989925274,
+    "maximum_point_ratio": 1.00991367,
+    "maximum_point_regression_percent": 1.0075,
+    "all_confidence_intervals_span_one": true,
+    "reserved_sibling_total_jiffies": 5812,
+    "reserved_sibling_idle_jiffies": 5812,
+    "all_digests_matched": true
+  },
+  "exact_main_abba": {
+    "ratio_orientation": "exact_leopard_main_over_leopard2_candidate",
+    "cells": 14,
+    "rounds": 3,
+    "minimum_speedup": 2.121565315,
+    "maximum_speedup": 5.387047752,
+    "overall_geometric_mean_speedup": 3.483688636,
+    "weakest_cell_ci95": [
+      2.099993605,
+      2.143358616
+    ],
+    "all_digests_matched": true
+  },
+  "conclusion": "Promote the shared raw source-major route only for 12288..16384-byte shards. It clears the five-percent confidence gate across all valid shapes and confirmed ragged tails, materially outperforms exact Leopard main, and leaves both neighboring fallback regions statistically inert."
+}
