@@ -6814,6 +6814,198 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK9T8Multiple32(
                 reinterpret_cast<__m256i*>(output[7] + offset), value7);
     }
 }
+
+/*
+    Exact K=10..11/R=5..8 companions to the K=9 tail circuit.  The first
+    eight sources are a complete T=8 message block.  Sources eight onward are
+    parent coordinates 16 onward; their generator-column logarithms follow
+    directly from
+
+      L_x(y) = Z(y) / ((y + x) Z'(x)),
+      Z(t) = product_{s=8}^{31} (t + s).
+
+    Keeping the two tail loads after the first-block transform limits live
+    vector pressure to nine values during each multiply-add sequence.
+*/
+template<unsigned TailCount, unsigned OutputCount>
+static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeT8TailB256(
+    const void* const* data,
+    void* const* work)
+{
+    static_assert(TailCount >= 2 && TailCount <= 3,
+        "T8 B256 tail count must be two or three");
+    static_assert(OutputCount >= 5 && OutputCount <= 8,
+        "K10 tail terminal output count must be between five and eight");
+    static const uint16_t kInverse1 = 153;
+    static const uint16_t kInverse2 = 17;
+    static const uint16_t kInverse3 = 102;
+    static const uint16_t kInverse4 = 85;
+    static const uint16_t kInverse5 = 51;
+    static const uint16_t kInverse6 = 34;
+    static const uint16_t kInverse7 = 187;
+    static const uint16_t kForward1 = 255;
+    static const uint16_t kForward2 = 255;
+    static const uint16_t kForward3 = 85;
+    static const uint16_t kForward4 = 255;
+    static const uint16_t kForward5 = 17;
+    static const uint16_t kForward6 = 85;
+    static const uint16_t kForward7 = 34;
+    static const uint16_t kTail0[8] = {
+        121, 151, 78, 228, 229, 94, 57, 147
+    };
+    static const uint16_t kTail1[8] = {
+        151, 121, 228, 78, 94, 229, 147, 57
+    };
+    static const uint16_t kTail2[8] = {
+        78, 228, 121, 151, 57, 147, 229, 94
+    };
+
+    /* Fixed extent keeps the compile-time-false TailCount=2 third-tail block
+       syntactically in bounds under aggressive static analysis. */
+    const uint8_t* input[11] = {};
+    uint8_t* output[OutputCount];
+    for (unsigned lane = 0; lane < 8 + TailCount; ++lane)
+        input[lane] = static_cast<const uint8_t*>(data[lane]);
+    for (unsigned lane = 0; lane < OutputCount; ++lane)
+        output[lane] = static_cast<uint8_t*>(work[lane]);
+
+    for (uint64_t offset = 0; offset < 256; offset += 32)
+    {
+        __m256i value0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[0] + offset));
+        __m256i value1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[1] + offset));
+        __m256i value2 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[2] + offset));
+        __m256i value3 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[3] + offset));
+        __m256i value4 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[4] + offset));
+        __m256i value5 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[5] + offset));
+        __m256i value6 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[6] + offset));
+        __m256i value7 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[7] + offset));
+
+        AVX2FF8T8VectorIFFTRadix4(
+            value0, value1, value2, value3,
+            kInverse1, kInverse3, kInverse2);
+        AVX2FF8T8VectorIFFTRadix4(
+            value4, value5, value6, value7,
+            kInverse5, kInverse7, kInverse6);
+        AVX2FF8T8VectorIFFTDistance4(
+            value0, value1, value2, value3,
+            value4, value5, value6, value7, kInverse4);
+
+        AVX2FF8T8VectorFFTRadix4Distance2(
+            value0, value1, value2, value3,
+            value4, value5, value6, value7,
+            kForward2, kForward6, kForward4);
+        AVX2FF8T8VectorFFT2(value0, value1, kForward1);
+        AVX2FF8T8VectorFFT2(value2, value3, kForward3);
+        AVX2FF8T8VectorFFT2(value4, value5, kForward5);
+        AVX2FF8T8VectorFFT2(value6, value7, kForward7);
+
+        const __m256i tail0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[8] + offset));
+        AVX2FF8T8VectorMulAdd(value0, tail0, kTail0[0]);
+        AVX2FF8T8VectorMulAdd(value1, tail0, kTail0[1]);
+        AVX2FF8T8VectorMulAdd(value2, tail0, kTail0[2]);
+        AVX2FF8T8VectorMulAdd(value3, tail0, kTail0[3]);
+        AVX2FF8T8VectorMulAdd(value4, tail0, kTail0[4]);
+        if (OutputCount >= 6)
+            AVX2FF8T8VectorMulAdd(value5, tail0, kTail0[5]);
+        if (OutputCount >= 7)
+            AVX2FF8T8VectorMulAdd(value6, tail0, kTail0[6]);
+        if (OutputCount >= 8)
+            AVX2FF8T8VectorMulAdd(value7, tail0, kTail0[7]);
+
+        const __m256i tail1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[9] + offset));
+        AVX2FF8T8VectorMulAdd(value0, tail1, kTail1[0]);
+        AVX2FF8T8VectorMulAdd(value1, tail1, kTail1[1]);
+        AVX2FF8T8VectorMulAdd(value2, tail1, kTail1[2]);
+        AVX2FF8T8VectorMulAdd(value3, tail1, kTail1[3]);
+        AVX2FF8T8VectorMulAdd(value4, tail1, kTail1[4]);
+        if (OutputCount >= 6)
+            AVX2FF8T8VectorMulAdd(value5, tail1, kTail1[5]);
+        if (OutputCount >= 7)
+            AVX2FF8T8VectorMulAdd(value6, tail1, kTail1[6]);
+        if (OutputCount >= 8)
+            AVX2FF8T8VectorMulAdd(value7, tail1, kTail1[7]);
+
+        if (TailCount >= 3)
+        {
+            const __m256i tail2 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(input[10] + offset));
+            AVX2FF8T8VectorMulAdd(value0, tail2, kTail2[0]);
+            AVX2FF8T8VectorMulAdd(value1, tail2, kTail2[1]);
+            AVX2FF8T8VectorMulAdd(value2, tail2, kTail2[2]);
+            AVX2FF8T8VectorMulAdd(value3, tail2, kTail2[3]);
+            AVX2FF8T8VectorMulAdd(value4, tail2, kTail2[4]);
+            if (OutputCount >= 6)
+                AVX2FF8T8VectorMulAdd(value5, tail2, kTail2[5]);
+            if (OutputCount >= 7)
+                AVX2FF8T8VectorMulAdd(value6, tail2, kTail2[6]);
+            if (OutputCount >= 8)
+                AVX2FF8T8VectorMulAdd(value7, tail2, kTail2[7]);
+        }
+
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[0] + offset), value0);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[1] + offset), value1);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[2] + offset), value2);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[3] + offset), value3);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[4] + offset), value4);
+        if (OutputCount >= 6)
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output[5] + offset), value5);
+        if (OutputCount >= 7)
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output[6] + offset), value6);
+        if (OutputCount >= 8)
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output[7] + offset), value7);
+    }
+}
+
+/*
+    R=8 comparison form: keep each pair's four nibble tables live for the
+    complete shard instead of reloading them for every 32-byte transform
+    slice.  The extra parity read/write pass is measured against the fused
+    form before this path is retained.
+*/
+static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK10R8T8B256Pairwise(
+    const void* const* data,
+    void* const* work)
+{
+    static const uint8_t kInverseSkew[8] = {
+        255, 153, 17, 102, 85, 51, 34, 187
+    };
+    static const uint8_t kForwardSkew[8] = {
+        0, 255, 255, 85, 255, 17, 85, 34
+    };
+    static const uint16_t kTail0[8] = {
+        121, 151, 78, 228, 229, 94, 57, 147
+    };
+    static const uint16_t kTail1[8] = {
+        151, 121, 228, 78, 94, 229, 147, 57
+    };
+    AVX2FF8HighEncodeT8Vector(
+        data, work, false, kInverseSkew, kForwardSkew, 256);
+    for (unsigned output = 0; output < 8; output += 2)
+    {
+        void* destinations[2] = { work[output], work[output + 1] };
+        AVX2FF8MultiplyAdd2Sources2Outputs(
+            destinations, data[8], data[9],
+            kTail0 + output, kTail1 + output, 256);
+    }
+}
 #endif // LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
 
 /*
@@ -7672,6 +7864,53 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeTwoBlocksT8Tiny(
     for (unsigned lane = 0; lane < 8; ++lane)
         std::memcpy(
             static_cast<uint8_t*>(work[lane]), staged[lane], byte_count);
+}
+
+bool TryAVX2FF8HighEncodeT8TailB256Packed(
+    const void* const* data,
+    void* const* recovery,
+    uint32_t original_count,
+    uint32_t recovery_count)
+{
+    if (!data || !recovery || original_count < 10 || original_count > 11 ||
+        recovery_count < 5 || recovery_count > 8)
+        return false;
+    if (original_count == 10 && recovery_count == 8)
+    {
+        AVX2FF8HighEncodeK10R8T8B256Pairwise(data, recovery);
+        return true;
+    }
+#define LEO2_T8_TAIL_DISPATCH(TailCount) \
+    switch (recovery_count) \
+    { \
+    case 5: \
+        AVX2FF8HighEncodeT8TailB256<TailCount, 5>(data, recovery); \
+        break; \
+    case 6: \
+        AVX2FF8HighEncodeT8TailB256<TailCount, 6>(data, recovery); \
+        break; \
+    case 7: \
+        AVX2FF8HighEncodeT8TailB256<TailCount, 7>(data, recovery); \
+        break; \
+    case 8: \
+        AVX2FF8HighEncodeT8TailB256<TailCount, 8>(data, recovery); \
+        break; \
+    default: \
+        return false; \
+    }
+    switch (original_count)
+    {
+    case 10:
+        LEO2_T8_TAIL_DISPATCH(2);
+        break;
+    case 11:
+        LEO2_T8_TAIL_DISPATCH(3);
+        break;
+    default:
+        return false;
+    }
+#undef LEO2_T8_TAIL_DISPATCH
+    return true;
 }
 #endif
 

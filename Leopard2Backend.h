@@ -759,6 +759,20 @@ void AVX2FF8HighEncodeT2K4Packed(
     const void* const* data,
     void* const* recovery,
     uint64_t byte_count);
+#if defined(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING)
+/*
+    Exact packed legacy-high K=10..11/R=5..8/B=256 tail-column circuit.  The
+    first eight sources use the regular T=8 inverse/forward transform and the
+    final two sources are accumulated through their systematic generator
+    columns.  The public caller has already proved all range and backend
+    contracts; false is returned for an unsupported count tuple.
+*/
+bool TryAVX2FF8HighEncodeT8TailB256Packed(
+    const void* const* data,
+    void* const* recovery,
+    uint32_t original_count,
+    uint32_t recovery_count);
+#endif
 #if defined(LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
 /*
     Generated exact legacy-high K=R=T=16, B=64 transform.  This concrete

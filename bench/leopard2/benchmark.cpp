@@ -128,6 +128,7 @@ struct Options
     int balanced_b64_terminal_mode;
     int high_t16_prepared_terminal_mode;
     int high_t8_two_block_b64_terminal_mode;
+    int high_t8_two_block_b256_terminal_mode;
     bool disable_t8_full_parity_terminal;
     bool disable_k16r8_b256_terminal;
     bool disable_k9r5_b256_terminal;
@@ -186,6 +187,7 @@ struct Options
         , balanced_b64_terminal_mode(-1)
         , high_t16_prepared_terminal_mode(-1)
         , high_t8_two_block_b64_terminal_mode(-1)
+        , high_t8_two_block_b256_terminal_mode(-1)
         , disable_t8_full_parity_terminal(false)
         , disable_k16r8_b256_terminal(false)
         , disable_k9r5_b256_terminal(false)
@@ -495,6 +497,9 @@ static void Usage(std::ostream& output, const char* program)
         << "  --high-t8-two-block-b64-terminal-mode 0|1\n"
         << "                         Attribution-only: mature or packed two-block T8 B64\n"
         << "                         path in identical executable text using schema v25\n"
+        << "  --high-t8-two-block-b256-terminal-mode 0|1\n"
+        << "                         Attribution-only: mature or packed two-block T8 B256\n"
+        << "                         path in identical executable text using schema v26\n"
         << "  --disable-t8-full-parity-terminal\n"
         << "                         Attribution-only: retain the prior ordinary encode path\n"
         << "  --disable-k16r8-b256-terminal\n"
@@ -681,6 +686,19 @@ static Options ParseOptions(int argc, char** argv)
             else
             {
                 Fail("--high-t8-two-block-b64-terminal-mode must be "
+                     "exactly 0 or 1");
+            }
+        }
+        else if (argument == "--high-t8-two-block-b256-terminal-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.high_t8_two_block_b256_terminal_mode = 0;
+            else if (mode == "1")
+                options.high_t8_two_block_b256_terminal_mode = 1;
+            else
+            {
+                Fail("--high-t8-two-block-b256-terminal-mode must be "
                      "exactly 0 or 1");
             }
         }
@@ -1631,6 +1649,14 @@ static int Run(const Options& options)
         Fail("cannot set the high T8 two-block B64 packed terminal "
              "attribution mode");
     }
+    if (options.high_t8_two_block_b256_terminal_mode >= 0 &&
+        !leopard2_internal::
+            SetHighT8TwoBlockB256PackedTerminalEnabledForDiagnostics(
+                options.high_t8_two_block_b256_terminal_mode == 1))
+    {
+        Fail("cannot set the high T8 two-block B256 packed terminal "
+             "attribution mode");
+    }
     if (options.disable_t8_full_parity_terminal &&
         !leopard2_internal::
             SetT8FullParityTerminalEnabledForDiagnostics(false))
@@ -1938,12 +1964,14 @@ static int Run(const Options& options)
         options.balanced_b64_terminal_mode >= 0 ||
         options.high_t16_prepared_terminal_mode >= 0 ||
         options.high_t8_two_block_b64_terminal_mode >= 0 ||
+        options.high_t8_two_block_b256_terminal_mode >= 0 ||
         options.disable_k9r6r8_b256_terminal ||
         options.k8r3r4_t4_terminal_mode == 0;
     const unsigned schema_version =
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.high_t8_two_block_b256_terminal_mode >= 0 ? 26 :
         options.high_t8_two_block_b64_terminal_mode >= 0 ? 25 :
         options.high_t16_prepared_terminal_mode >= 0 ? 24 :
         options.balanced_b64_terminal_mode >= 0 ? 22 :
@@ -2389,6 +2417,18 @@ static int Run(const Options& options)
                     ? "true" : "false") << ",\n"
              << "    \"high_t8_two_block_b64_terminal_diagnostic_disabled\": "
              << (options.high_t8_two_block_b64_terminal_mode == 0
+                    ? "true" : "false");
+    }
+    if (options.high_t8_two_block_b256_terminal_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"high_t8_two_block_b256_terminal_diagnostic_mode\": "
+             << options.high_t8_two_block_b256_terminal_mode << ",\n"
+             << "    \"high_t8_two_block_b256_terminal_enabled\": "
+             << (options.high_t8_two_block_b256_terminal_mode == 1
+                    ? "true" : "false") << ",\n"
+             << "    \"high_t8_two_block_b256_terminal_diagnostic_disabled\": "
+             << (options.high_t8_two_block_b256_terminal_mode == 0
                     ? "true" : "false");
     }
     if (options.low_p16_partial_direct_output_mode >= 0)
