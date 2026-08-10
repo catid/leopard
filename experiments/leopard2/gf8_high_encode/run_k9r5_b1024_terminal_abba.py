@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import math
 import re
+import statistics
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -51,8 +53,8 @@ def load_build_provenance() -> Any:
 
 BUILD_PROVENANCE = load_build_provenance()
 BASE.__doc__ = __doc__
-BASE.SCHEMA = "leopard2-gf8-k9r5-b1024-terminal-abba/v1"
-BASE.SUMMARY_SCHEMA = "leopard2-gf8-k9r5-b1024-terminal-summary/v1"
+BASE.SCHEMA = "leopard2-gf8-k9r5-b1024-terminal-abba/v2"
+BASE.SUMMARY_SCHEMA = "leopard2-gf8-k9r5-b1024-terminal-summary/v2"
 BASE.MODE_SYMBOL = \
     "_ZN12_GLOBAL__N_1L26g_k9r5_b1024_terminal_modeE"
 BASE.ALLOW_IDENTICAL_CANDIDATE_CONTROL = True
@@ -85,6 +87,55 @@ BASE.RUNNER_DEPENDENCIES = (
 BASE.RETAINED_MAIN_FLOOR = 1.0
 BASE.CANONICAL_MAIN_SHA256 = \
     "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93"
+CONFIRMATORY_ROUNDS = 25
+CONFIDENCE_LEVEL = 0.95
+T95_DF24 = 2.0638985616280205
+
+
+_BASE_CONFIDENCE_INTERVAL = BASE.confidence_interval
+
+
+def confidence_interval(values: Sequence[float]) -> dict[str, Any]:
+    """Use a predeclared 25-round interval for this qualification only."""
+    if len(values) != CONFIRMATORY_ROUNDS:
+        return _BASE_CONFIDENCE_INTERVAL(values)
+    BASE.require(all(isinstance(value, (int, float)) for value in values),
+                 "contrast is not numeric")
+    center = statistics.mean(values)
+    half_width = T95_DF24 * statistics.stdev(values) / math.sqrt(len(values))
+    return {
+        "speedup": math.exp(center),
+        "ci95": [
+            math.exp(center - half_width),
+            math.exp(center + half_width),
+        ],
+        "round_log_ratios": list(values),
+        "confidence_level": CONFIDENCE_LEVEL,
+        "degrees_of_freedom": CONFIRMATORY_ROUNDS - 1,
+        "t_critical": T95_DF24,
+    }
+
+
+BASE.confidence_interval = confidence_interval
+
+
+_BASE_SELECT_ROUND_ORDERS = BASE.select_round_orders
+
+
+def select_round_orders(
+    orders: Sequence[Sequence[str]], requested_rounds: int | None,
+) -> tuple[tuple[str, ...], ...]:
+    """Add one qualification-local 25-round confirmatory schedule."""
+    if requested_rounds != CONFIRMATORY_ROUNDS:
+        return _BASE_SELECT_ROUND_ORDERS(orders, requested_rounds)
+    BASE.require(len(orders) > 0, "round-order cycle is empty")
+    return tuple(
+        tuple(orders[index % len(orders)])
+        for index in range(CONFIRMATORY_ROUNDS)
+    )
+
+
+BASE.select_round_orders = select_round_orders
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -102,9 +153,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--cpu", required=True, type=int)
     parser.add_argument("--sibling", required=True, type=int)
-    parser.add_argument("--iterations", type=int, default=15)
+    parser.add_argument("--iterations", type=int, default=31)
     parser.add_argument("--warmup", type=int, default=64)
-    parser.add_argument("--rounds", type=int)
+    parser.add_argument(
+        "--rounds", type=int, choices=(CONFIRMATORY_ROUNDS,),
+        default=CONFIRMATORY_ROUNDS)
     # The imported runner still consults these generic compatibility fields.
     # This wrapper deliberately has no archive/compile-command CLI escape
     # hatch: the production validator discovers the entire graph from the

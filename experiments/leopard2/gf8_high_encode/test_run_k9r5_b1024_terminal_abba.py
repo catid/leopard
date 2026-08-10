@@ -364,9 +364,9 @@ def main() -> int:
             "runner dependency attestation changed")
     require(
         BASE.SCHEMA ==
-            "leopard2-gf8-k9r5-b1024-terminal-abba/v1" and
+            "leopard2-gf8-k9r5-b1024-terminal-abba/v2" and
         BASE.SUMMARY_SCHEMA ==
-            "leopard2-gf8-k9r5-b1024-terminal-summary/v1" and
+            "leopard2-gf8-k9r5-b1024-terminal-summary/v2" and
         BASE.MODE_SYMBOL ==
             "_ZN12_GLOBAL__N_1L26g_k9r5_b1024_terminal_modeE" and
         BASE.ALLOW_IDENTICAL_CANDIDATE_CONTROL is True and
@@ -410,6 +410,8 @@ def main() -> int:
     require(
         parsed.candidate == Path("/build/bench_leopard2") and
         parsed.control == parsed.candidate and
+        parsed.rounds == RUNNER.CONFIRMATORY_ROUNDS and
+        parsed.iterations == 31 and parsed.warmup == 64 and
         parsed.candidate_archive is None and
         parsed.control_archive is None and
         parsed.candidate_compile_commands is None and
@@ -443,6 +445,35 @@ def main() -> int:
             orders[:3] == BASE.TARGET_ORDER and
             neighbor_orders[:4] == BASE.NEIGHBOR_ORDER,
             "nine-round balanced ordering changed")
+    confirmatory_orders = BASE.select_round_orders(
+        BASE.TARGET_ORDER, RUNNER.CONFIRMATORY_ROUNDS)
+    confirmatory_neighbor_orders = BASE.select_round_orders(
+        BASE.NEIGHBOR_ORDER, RUNNER.CONFIRMATORY_ROUNDS)
+    require(
+        len(confirmatory_orders) == RUNNER.CONFIRMATORY_ROUNDS and
+        len(confirmatory_neighbor_orders) == RUNNER.CONFIRMATORY_ROUNDS and
+        confirmatory_orders[:3] == BASE.TARGET_ORDER and
+        confirmatory_orders[-1] == BASE.TARGET_ORDER[0] and
+        confirmatory_neighbor_orders[:4] == BASE.NEIGHBOR_ORDER and
+        confirmatory_neighbor_orders[-1] == BASE.NEIGHBOR_ORDER[0],
+        "25-round confirmatory ordering changed")
+    require_rejected(
+        lambda: BASE.select_round_orders(BASE.TARGET_ORDER, 16),
+        "unsupported intermediate round count was accepted")
+    log_ratios = [(index - 12) / 1000.0 for index in range(25)]
+    observed_interval = BASE.confidence_interval(log_ratios)
+    expected_half_width = RUNNER.T95_DF24 * math.sqrt(
+        1300.0 / 24.0) / 1000.0 / math.sqrt(25.0)
+    require(
+        math.isclose(observed_interval["speedup"], 1.0) and
+        math.isclose(
+            observed_interval["ci95"][0], math.exp(-expected_half_width)) and
+        math.isclose(
+            observed_interval["ci95"][1], math.exp(expected_half_width)) and
+        observed_interval["confidence_level"] == 0.95 and
+        observed_interval["degrees_of_freedom"] == 24 and
+        observed_interval["t_critical"] == RUNNER.T95_DF24,
+        "25-round df=24 confidence interval changed")
 
     target = cells[0]
     candidate_command = BASE.benchmark_command(
@@ -498,6 +529,21 @@ def main() -> int:
             control_analysis[
                 "neighbor_selector_inertness_validation"]["accepted"] is True,
             "same-binary-only control classification changed")
+    confirmatory_near_limit = [
+        synthetic_round(
+            order, control_execution=1.019, control_one_shot=1.019)
+        for order in confirmatory_neighbor_orders]
+    require(
+        BASE.analyze(byte_control, confirmatory_near_limit)[
+            "neighbor_selector_inertness_validation"]["accepted"] is True,
+        "25-round selector equivalence inside the band was rejected")
+    confirmatory_outside_limit = [
+        synthetic_round(
+            order, control_execution=1.021, control_one_shot=1.021)
+        for order in confirmatory_neighbor_orders]
+    require_rejected(
+        lambda: BASE.analyze(byte_control, confirmatory_outside_limit),
+        "25-round selector effect outside the band was accepted")
 
     leaked_speedup = [
         synthetic_round(
