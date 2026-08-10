@@ -402,6 +402,19 @@ void AVX2FF8HighEncodeK8R8T8B1024(
     const void* const* data,
     void* const* work);
 
+#if defined(LEO2_HAVE_AVX2_BACKEND) && \
+    defined(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING)
+/* Exact K=12/R=8 companion with four active rows in the second T=8 block. */
+void AVX2FF8HighEncodeK12R8T8(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* first_inverse_skew,
+    const uint8_t* second_inverse_skew,
+    const uint8_t* forward_skew,
+    uint16_t combined_tail_log,
+    uint64_t byte_count);
+#endif
+
 /*
     Complete dense encode for exactly two T=8 message blocks and a shard whose
     byte count is a 64-byte multiple through 1024.  data has 16 readable rows,

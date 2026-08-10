@@ -31,6 +31,7 @@
 #include "LeopardFF8.h"
 #include "leopard2.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -266,6 +267,12 @@ uint64_t T8TwoBlockB256PackedCalls()
         t8_two_block_b256_packed_calls;
 }
 
+uint64_t T8TwoBlockB1024PackedCalls()
+{
+    return leopard::ff8::TestOnlyGetHighEncodeCounts().
+        t8_two_block_b1024_packed_calls;
+}
+
 uint64_t T8K8B1024DirectCalls()
 {
     return leopard::ff8::TestOnlyGetHighEncodeCounts().
@@ -317,7 +324,8 @@ void ExerciseCell(
     const Cell& cell,
     bool expect_terminal,
     bool expect_two_block_b64_terminal = false,
-    bool expect_two_block_b256_terminal = false)
+    bool expect_two_block_b256_terminal = false,
+    bool expect_two_block_b1024_terminal = false)
 {
     leo2_codec* codec = CreateCodec(context, cell);
     const size_t scratch_bytes = QueryScratch(codec, cell);
@@ -364,6 +372,9 @@ void ExerciseCell(
     RequireCell(T8TwoBlockB256PackedCalls() ==
             (expect_two_block_b256_terminal ? 1U : 0U), cell,
         "packed public two-block B256 terminal selection mismatch");
+    RequireCell(T8TwoBlockB1024PackedCalls() ==
+            (expect_two_block_b1024_terminal ? 1U : 0U), cell,
+        "packed public two-block B1024 terminal selection mismatch");
     RequireCell(T8K7B1024DirectCalls() ==
             (expect_k7_direct ? 1U : 0U), cell,
         "packed public K7 direct-leaf selection mismatch");
@@ -390,6 +401,9 @@ void ExerciseCell(
     RequireCell(T8TwoBlockB256PackedCalls() ==
             (expect_two_block_b256_terminal ? 1U : 0U), cell,
         "packed one-item batch two-block B256 terminal selection mismatch");
+    RequireCell(T8TwoBlockB1024PackedCalls() ==
+            (expect_two_block_b1024_terminal ? 1U : 0U), cell,
+        "packed one-item batch two-block B1024 terminal selection mismatch");
     RequireCell(T8K7B1024DirectCalls() ==
             (expect_k7_direct ? 1U : 0U), cell,
         "packed one-item batch K7 direct-leaf selection mismatch");
@@ -420,6 +434,9 @@ void ExerciseCell(
     RequireCell(T8TwoBlockB256PackedCalls() ==
             (expect_two_block_b256_terminal ? 1U : 0U), cell,
         "unaligned packed two-block B256 terminal selection mismatch");
+    RequireCell(T8TwoBlockB1024PackedCalls() ==
+            (expect_two_block_b1024_terminal ? 1U : 0U), cell,
+        "unaligned packed two-block B1024 terminal selection mismatch");
     RequireCell(T8K7B1024DirectCalls() ==
             (expect_k7_direct ? 1U : 0U), cell,
         "unaligned packed K7 direct-leaf selection mismatch");
@@ -463,6 +480,7 @@ void ExerciseTwoBlockB256Matrix(
             const bool promoted_shape =
                 original_count == 10 ||
                 (original_count == 11 && recovery_count == 5) ||
+                (original_count == 12 && recovery_count == 8) ||
                 (original_count >= 13 &&
                  !(original_count == 16 && recovery_count == 8));
             ExerciseCell(context,
@@ -470,6 +488,14 @@ void ExerciseTwoBlockB256Matrix(
                 false, false, terminal_available && promoted_shape);
         }
     }
+}
+
+void ExerciseTwoBlockB1024K12(
+    leo2_context* context,
+    bool terminal_available)
+{
+    ExerciseCell(context, Cell{ 12, 8, 1024 },
+        false, false, false, terminal_available);
 }
 
 void ExercisePromotedMatrix(
@@ -605,6 +631,8 @@ void ExerciseForcedTransform(leo2_context* context, const Cell& cell)
         "forced transform entered the packed two-block B64 terminal");
     RequireCell(T8TwoBlockB256PackedCalls() == 0, cell,
         "forced transform entered the packed two-block B256 terminal");
+    RequireCell(T8TwoBlockB1024PackedCalls() == 0, cell,
+        "forced transform entered the packed two-block B1024 terminal");
     RequireCell(T8K7B1024DirectCalls() == 0, cell,
         "forced transform entered the K=7/R=7/B=1024 direct leaf");
     RequireCell(T8K8B1024DirectCalls() == 0, cell,
@@ -648,6 +676,8 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
         "all-null public output entered the two-block B64 terminal");
     RequireCell(T8TwoBlockB256PackedCalls() == 0, cell,
         "all-null public output entered the two-block B256 terminal");
+    RequireCell(T8TwoBlockB1024PackedCalls() == 0, cell,
+        "all-null public output entered the two-block B1024 terminal");
     RequireCell(std::memcmp(output.bytes(), &no_output_before[0],
             no_output_before.size()) == 0,
         cell, "all-null public encode modified output");
@@ -665,6 +695,8 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
         "all-null batch output entered the two-block B64 terminal");
     RequireCell(T8TwoBlockB256PackedCalls() == 0, cell,
         "all-null batch output entered the two-block B256 terminal");
+    RequireCell(T8TwoBlockB1024PackedCalls() == 0, cell,
+        "all-null batch output entered the two-block B1024 terminal");
     RequireCell(std::memcmp(output.bytes(), &no_output_before[0],
             no_output_before.size()) == 0,
         cell, "all-null batch encode modified output");
@@ -684,6 +716,8 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
         "sparse output entered the two-block B64 terminal");
     RequireCell(T8TwoBlockB256PackedCalls() == 0, cell,
         "sparse output entered the two-block B256 terminal");
+    RequireCell(T8TwoBlockB1024PackedCalls() == 0, cell,
+        "sparse output entered the two-block B1024 terminal");
     CheckParity(cell, generator, original, recovery);
     for (size_t i = 0; i < cell.shard_bytes; ++i)
     {
@@ -712,12 +746,31 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
         "detached layout entered the two-block B64 terminal");
     RequireCell(T8TwoBlockB256PackedCalls() == 0, cell,
         "detached layout entered the two-block B256 terminal");
+    RequireCell(T8TwoBlockB1024PackedCalls() == 0, cell,
+        "detached layout entered the two-block B1024 terminal");
     CheckParity(cell, generator, original, recovery);
     for (size_t i = 0; i < cell.shard_bytes; ++i)
         RequireCell(output.bytes()[
                 static_cast<size_t>(detached_output_index) *
                     cell.shard_bytes + i] == 0xa5,
             cell, "detached-output fallback wrote the abandoned packed row");
+
+    /* Binding setup validates this detached layout once; repeated execution
+       then enters the pointer-safe byte kernel without rebuilding geometry. */
+    ResetOutput(output.bytes(), cell);
+    std::fill(detached_output.begin(), detached_output.end(), 0xa5);
+    leo2_encode_batch_item detached_item = {
+        cell.shard_bytes, &original[0], &recovery[0],
+        scratch.data(), scratch.size()
+    };
+    leo2_encode_batch_binding* binding = NULL;
+    RequireResult(leo2_encode_batch_binding_create(
+        codec, &detached_item, 1, &binding),
+        LEO2_SUCCESS, cell, "create detached-layout encode binding");
+    RequireResult(leo2_encode_batch_binding_execute(binding),
+        LEO2_SUCCESS, cell, "execute detached-layout encode binding");
+    CheckParity(cell, generator, original, recovery);
+    leo2_encode_batch_binding_destroy(binding);
 
     leo2_codec_destroy(codec);
 }
@@ -1066,6 +1119,9 @@ int main()
         const bool two_block_b256_terminal_available =
             leopard2_internal::
                 SetHighT8TwoBlockB256PackedTerminalEnabledForDiagnostics(true);
+        const bool two_block_b1024_terminal_available =
+            leopard2_internal::
+                SetHighT8TwoBlockB1024PackedTerminalEnabledForDiagnostics(true);
         ExerciseScalarFallbacks();
         ExerciseAutoBackend(full_parity_terminal_available);
 
@@ -1090,6 +1146,8 @@ int main()
             context, two_block_b64_terminal_available);
         ExerciseTwoBlockB256Matrix(
             context, two_block_b256_terminal_available);
+        ExerciseTwoBlockB1024K12(
+            context, two_block_b1024_terminal_available);
         if (full_parity_terminal_available)
         {
             ExerciseAdjacentShardSubobjects(context);
@@ -1107,6 +1165,8 @@ int main()
         ExerciseForcedTransform(context, Cell{ 9, 5, 64 });
         ExerciseForcedTransform(context, Cell{ 16, 8, 64 });
         ExerciseForcedTransform(context, Cell{ 10, 5, 256 });
+        ExerciseForcedTransform(context, Cell{ 12, 8, 256 });
+        ExerciseForcedTransform(context, Cell{ 12, 8, 1024 });
         ExerciseForcedTransform(context, Cell{ 16, 7, 256 });
         static const Cell promoted_cells[] = {
             { 6, 5, 64 },
@@ -1138,9 +1198,16 @@ int main()
         if (two_block_b256_terminal_available)
         {
             ExerciseFallbackLayouts(context, Cell{ 10, 5, 256 });
+            ExerciseFallbackLayouts(context, Cell{ 12, 8, 256 });
             ExerciseFallbackLayouts(context, Cell{ 16, 7, 256 });
             ExerciseValidationAtomicity(context, Cell{ 10, 5, 256 });
+            ExerciseValidationAtomicity(context, Cell{ 12, 8, 256 });
             ExerciseValidationAtomicity(context, Cell{ 16, 7, 256 });
+        }
+        if (two_block_b1024_terminal_available)
+        {
+            ExerciseFallbackLayouts(context, Cell{ 12, 8, 1024 });
+            ExerciseValidationAtomicity(context, Cell{ 12, 8, 1024 });
         }
 
         leo2_context_destroy(context);

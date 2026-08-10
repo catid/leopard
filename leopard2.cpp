@@ -1301,6 +1301,7 @@ static volatile uint32_t g_high_t8_two_block_extended_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED;
 static volatile uint32_t g_high_t8_two_block_b64_packed_mode = 1U;
 static volatile uint32_t g_high_t8_two_block_b256_packed_mode = 1U;
+static volatile uint32_t g_high_t8_two_block_b1024_packed_mode = 1U;
 
 static bool IsHighT8TwoBlockExtendedShapeByteCount(
     uint32_t original_count,
@@ -1331,7 +1332,7 @@ static bool IsHighT8TwoBlockExtendedShapeByteCount(
         UINT32_C(0x5fff0d80), // 832
         UINT32_C(0xffff0fd0), // 896
         UINT32_C(0x5fff0d40), // 960
-        UINT32_C(0x6ff70c00)  // 1024
+        UINT32_C(0x6ff78c00)  // 1024
     };
     if (g_high_t8_two_block_extended_mode != 1U ||
         original_count < 9 || original_count > 16 ||
@@ -13738,6 +13739,15 @@ static leo2_result RunHighT8TwoBlockBatchItem(void* context, size_t index)
     const HighT8TwoBlockBatchContext* batch =
         static_cast<const HighT8TwoBlockBatchContext*>(context);
     const leo2_encode_batch_item& item = batch->items[index];
+    if (batch->codec->original_count == 12 &&
+        batch->codec->recovery_count == 8 &&
+        (item.shard_bytes == 256 || item.shard_bytes == 1024))
+    {
+        leopard::ff8::ReedSolomonEncodeK12R8T8(
+            *batch->ops, item.original, item.recovery,
+            item.shard_bytes);
+        return LEO2_SUCCESS;
+    }
     ExecuteHighT8TwoBlockBinding(
         *batch->ops, batch->codec->original_count,
         batch->codec->recovery_count, item.shard_bytes,
@@ -15289,6 +15299,17 @@ bool SetHighT8TwoBlockB256PackedTerminalEnabledForDiagnostics(bool enabled)
 #endif
 }
 
+bool SetHighT8TwoBlockB1024PackedTerminalEnabledForDiagnostics(bool enabled)
+{
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+    g_high_t8_two_block_b1024_packed_mode = enabled ? 1U : 2U;
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
 bool SetT8FullParityTerminalEnabledForDiagnostics(bool enabled)
 {
 #if LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING && \
@@ -16014,6 +16035,13 @@ static LEO2_T8_TWO_BLOCK_NOINLINE void ExecuteHighT8TwoBlockBinding(
 {
     LEO_DEBUG_ASSERT(IsHighT8TwoBlockByteCount(
         original_count, recovery_count, shard_bytes));
+    if (original_count == 12 && recovery_count == 8 &&
+        (shard_bytes == 256 || shard_bytes == 1024))
+    {
+        leopard::ff8::ReedSolomonEncodeK12R8T8(
+            transform_ops, original, recovery, shard_bytes);
+        return;
+    }
     alignas(32) static const uint8_t zero_shard[1024] = {};
     alignas(32) uint8_t discarded_recovery[3][1024];
     const void* padded_original[16];
@@ -18280,11 +18308,24 @@ IsGF8AVX2HighT8TwoBlockB256PackedTerminalEligible(
     const bool qualified_shape = codec &&
         (codec->original_count == 10 ||
          (codec->original_count == 11 && codec->recovery_count == 5) ||
+         (codec->original_count == 12 && codec->recovery_count == 8) ||
          codec->original_count >= 13);
     return shard_bytes == 256 &&
         g_high_t8_two_block_b256_packed_mode == 1U && codec &&
         qualified_shape && codec->original_count <= 16 &&
         !(codec->original_count == 16 && codec->recovery_count == 8) &&
+        IsGF8AVX2HighT8TwoBlockPackedTerminalCommonEligible(codec);
+}
+
+static LEO_FORCE_INLINE bool
+IsGF8AVX2HighT8TwoBlockB1024PackedTerminalEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    return shard_bytes == 1024 && codec &&
+        codec->original_count == 12 && codec->recovery_count == 8 &&
+        g_high_t8_two_block_b1024_packed_mode == 1U &&
+        g_high_t8_two_block_extended_mode == 1U &&
         IsGF8AVX2HighT8TwoBlockPackedTerminalCommonEligible(codec);
 }
 
@@ -18308,9 +18349,9 @@ IsGF8AVX2HighT8TwoBlockB256PackedTerminalEligible(
 /*
     The optimized two-block executor already skips shortened input rows and
     punctured parity stores.  This terminal removes only the general public
-    range sorting and transform-geometry setup for packed 64/256-byte slabs. A
-    layout mismatch is a normal fallback, and every error check completes
-    before the first parity byte is written.
+    range sorting and transform-geometry setup for packed 64/256/1024-byte
+    slabs. A layout mismatch is a normal fallback, and every error check
+    completes before the first parity byte is written.
 */
 template<size_t StaticByteCount, size_t ProtectedCount>
 static LEO2_HIGH_T8_TWO_BLOCK_PACKED_TERMINAL_NOINLINE bool
@@ -18323,11 +18364,16 @@ TryEncodeGF8HighT8TwoBlockPackedTerminal(
     size_t scratch_bytes,
     leo2_result& result_out)
 {
-    static_assert(StaticByteCount == 64 || StaticByteCount == 256,
+    static_assert(
+        StaticByteCount == 64 || StaticByteCount == 256 ||
+        StaticByteCount == 1024,
         "two-block T8 terminal byte count is not qualified");
     LEO_DEBUG_ASSERT(StaticByteCount == 64
         ? IsGF8AVX2HighT8TwoBlockB64PackedTerminalEligible(codec, 64)
-        : IsGF8AVX2HighT8TwoBlockB256PackedTerminalEligible(codec, 256));
+        : StaticByteCount == 256
+            ? IsGF8AVX2HighT8TwoBlockB256PackedTerminalEligible(codec, 256)
+            : IsGF8AVX2HighT8TwoBlockB1024PackedTerminalEligible(
+                codec, 1024));
     static_assert(ProtectedCount <= 1,
         "two-block T8 terminal protects at most one descriptor");
     const uint32_t original_count = codec->original_count;
@@ -18418,8 +18464,10 @@ TryEncodeGF8HighT8TwoBlockPackedTerminal(
 #ifdef LEO2_ENABLE_TEST_HOOKS
     if (StaticByteCount == 64)
         leopard::ff8::TestOnlyRecordT8TwoBlockB64PackedCall();
-    else
+    else if (StaticByteCount == 256)
         leopard::ff8::TestOnlyRecordT8TwoBlockB256PackedCall();
+    else
+        leopard::ff8::TestOnlyRecordT8TwoBlockB1024PackedCall();
 #endif
     const bool use_tail_column = StaticByteCount == 256 &&
         (original_count == 10 ||
@@ -20133,6 +20181,15 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
                 terminal_result))
             return terminal_result;
     }
+    if (IsGF8AVX2HighT8TwoBlockB1024PackedTerminalEligible(
+            codec, shard_bytes))
+    {
+        leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+        if (TryEncodeGF8HighT8TwoBlockPackedTerminal<1024, 0>(
+                codec, NULL, original, recovery, scratch, scratch_bytes,
+                terminal_result))
+            return terminal_result;
+    }
     if (IsGF8AVX2K9T8B256TerminalEligible(codec, shard_bytes))
     {
         leo2_result terminal_result = LEO2_INTERNAL_ERROR;
@@ -20421,6 +20478,16 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
         {
             leo2_result terminal_result = LEO2_INTERNAL_ERROR;
             if (TryEncodeGF8HighT8TwoBlockPackedTerminal<256, 1>(
+                    codec, &item_range, items[0].original,
+                    items[0].recovery, items[0].scratch,
+                    items[0].scratch_bytes, terminal_result))
+                return terminal_result;
+        }
+        if (IsGF8AVX2HighT8TwoBlockB1024PackedTerminalEligible(
+                codec, items[0].shard_bytes))
+        {
+            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+            if (TryEncodeGF8HighT8TwoBlockPackedTerminal<1024, 1>(
                     codec, &item_range, items[0].original,
                     items[0].recovery, items[0].scratch,
                     items[0].scratch_bytes, terminal_result))
@@ -21276,6 +21343,21 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_execute(
 #endif
     if (!binding->codec || binding->items.empty())
         return LEO2_INVALID_ARGUMENT;
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+    if (binding->high_t8_two_block_ops && binding->items.size() == 1 &&
+        binding->codec->original_count == 12 &&
+        binding->codec->recovery_count == 8)
+    {
+        const leo2_encode_batch_item& item = binding->items[0];
+        if (item.shard_bytes == 256 || item.shard_bytes == 1024)
+        {
+            leopard::ff8::ReedSolomonEncodeK12R8T8(
+                *binding->high_t8_two_block_ops,
+                item.original, item.recovery, item.shard_bytes);
+            return LEO2_SUCCESS;
+        }
+    }
+#endif
     return ExecuteEncodeBatchBindingGeneral(binding);
 }
 
