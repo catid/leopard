@@ -1,0 +1,177 @@
+{
+  "schema": "leopard2-gf8-t8-k12r8-exact-avx2/v1",
+  "created_utc": "2026-08-10T19:28:37Z",
+  "status": "promoted",
+  "scope": {
+    "field": "GF8",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "backend": "pure AVX2",
+    "operation": "loss-free systematic parity encoding",
+    "counts": "K=12,R=8",
+    "shard_bytes": [256, 1024],
+    "batch": 1,
+    "threads": 1
+  },
+  "wire_profile": {
+    "T": 8,
+    "N": 32,
+    "D": 24,
+    "S": 12,
+    "parity_coordinates": "0..7",
+    "message_coordinates": "8..19",
+    "shortened_zero_coordinates": "20..31",
+    "wire_change": false,
+    "legacy_parity_identity": true
+  },
+  "source": {
+    "branch": "codex/leopard2",
+    "implementation_commit": "64a5dd933e1901fe50d4d18ef1ed5c35d0d3e1ee",
+    "implementation_tree": "dd4c896e20d20b3e2e204acabe8143e3d1aa6ba3",
+    "candidate_tracked_dirty": false,
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "implementation": {
+    "description": "An exact arbitrary-pointer circuit inverse-transforms the first eight-message block, inverse-transforms only the four active rows of the second block, folds the shortened upper radix-four group with the legacy log-68 shift, and executes the exact T=8 forward schedule with three zero multipliers removed. A validated packed terminal bypasses general public range sorting and geometry reconstruction at 256 and 1024 bytes.",
+    "hot_path_allocation": false,
+    "arbitrary_pointer_kernel": true,
+    "unaligned_load_store_support": true,
+    "selected_byte_counts": [256, 1024],
+    "fallbacks_retained": [
+      "all other K/R pairs",
+      "all other shard byte counts",
+      "sparse parity output sets",
+      "nonpacked one-shot layouts after full validation",
+      "non-AVX2 backends",
+      "forced mature-transform diagnostics"
+    ],
+    "assembly": {
+      "pointer_kernel_bytes": 1505,
+      "vpshufb": 50,
+      "vbroadcasti128": 28,
+      "vmovdqu": 18,
+      "vmovdqa": 2,
+      "compiler_stack_data_references": 4
+    }
+  },
+  "frozen_inputs": {
+    "candidate_executable": "/tmp/leopard2-k12r8-authoritative-clean-64a5dd9-v1/frozen/candidate",
+    "candidate_executable_sha256": "da9118650725bcd4dd3a39bae90b3b659fa3ab66d4c9cfdf77f54ef9ef01176b",
+    "exact_main_executable": "/tmp/leopard2-k12r8-authoritative-clean-64a5dd9-v1/frozen/main",
+    "exact_main_executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "mode": "0555",
+    "raw_directory": "/tmp/leopard2-k12r8-authoritative-clean-64a5dd9-v1",
+    "raw_manifest_sha256": "e78e261b6629d01d7eae068ca018092a4156de1eab072b79c388e8e83347d5a1"
+  },
+  "host": {
+    "architecture": "x86_64",
+    "processor": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "physical_cores": 16,
+    "sockets": 1,
+    "numa_nodes": 1,
+    "l3_cache": "128 MiB in two instances",
+    "benchmark_cpu": 30,
+    "reserved_smt_sibling": 14,
+    "coordinator_affinity_excluded_pair": true,
+    "cpufreq_driver": "amd-pstate-epp",
+    "governor": "powersave",
+    "energy_performance_preference": "performance"
+  },
+  "campaign": {
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "rounds_per_cell": 9,
+    "order": "alternating ABBA and BAAB",
+    "invocations_per_round": 4,
+    "iterations_per_invocation": 31,
+    "warmup_per_invocation": 16,
+    "reuse": 8192,
+    "accepted_rounds": 162,
+    "accepted_processes": 648,
+    "discarded_round_attempts": 0,
+    "accepted_rounds_with_sibling_nonidle_jiffies": 0,
+    "all_workload_digests_match": true,
+    "statistics": "Each independent round averages the two log baseline/candidate contrasts. Estimates are geometric means; intervals are two-sided Student-t 95 percent intervals over nine round contrasts with eight degrees of freedom."
+  },
+  "exact_main_over_leopard2": {
+    "target_b256": {
+      "main_geomean_us": 0.137200714,
+      "leopard2_geomean_us": 0.110328145,
+      "speedup": 1.2435694807088291,
+      "student_t_95_ci": [1.220742047664526, 1.2668237784625023],
+      "round_ratios": [1.2214396437722586, 1.245556774809538, 1.2191437586139033, 1.2751481584630369, 1.2196251059137366, 1.2274241278461062, 1.226726837698311, 1.3075220063627415, 1.2524531910522119]
+    },
+    "target_b1024": {
+      "main_geomean_us": 0.453859818,
+      "leopard2_geomean_us": 0.406664541,
+      "speedup": 1.116054567835259,
+      "student_t_95_ci": [1.111373155110739, 1.1207556999717483],
+      "round_ratios": [1.1090213993375173, 1.116119864639018, 1.1236150372849225, 1.1084488916883442, 1.1108283634245735, 1.1136711280339797, 1.1166842455330015, 1.122614302349932, 1.1236214015292134]
+    }
+  },
+  "same_source_control_over_selected": {
+    "target_b256": {
+      "control_geomean_us": 0.208031515,
+      "selected_geomean_us": 0.110875734,
+      "speedup": 1.8762582942318125,
+      "student_t_95_ci": [1.8528369931746616, 1.899975658755545]
+    },
+    "target_b1024": {
+      "control_geomean_us": 0.491140967,
+      "selected_geomean_us": 0.407218648,
+      "speedup": 1.2060866307315325,
+      "student_t_95_ci": [1.2005480442180663, 1.2116507688592928]
+    }
+  },
+  "exact_main_neighbor_map": {
+    "K11_R8_B256": {"speedup": 0.6575473336986265, "student_t_95_ci": [0.6499857445928202, 0.6651968903179987]},
+    "K11_R8_B1024": {"speedup": 0.9020837961646753, "student_t_95_ci": [0.8990878634675304, 0.9050897118824908]},
+    "K12_R7_B256": {"speedup": 0.6753581576866656, "student_t_95_ci": [0.6651102279088306, 0.6857639862011683]},
+    "K12_R7_B1024": {"speedup": 0.9208931613927541, "student_t_95_ci": [0.915226978828469, 0.9265944233696817]},
+    "K13_R8_B256": {"speedup": 1.1210558493370844, "student_t_95_ci": [1.0999737621620513, 1.1425419956042016]},
+    "K13_R8_B1024": {"speedup": 0.9446427091570939, "student_t_95_ci": [0.9391917817176467, 0.9501252729572169]}
+  },
+  "same_source_inert_neighbor_map": {
+    "K11_R8_B1024": {"mode0_over_mode1": 0.9984144032818819, "student_t_95_ci": [0.9950286857559263, 1.0018116411623055]},
+    "K12_R7_B1024": {"mode0_over_mode1": 1.0005574070917354, "student_t_95_ci": [0.9973632576607985, 1.0037617860859822]},
+    "K13_R8_B1024": {"mode0_over_mode1": 0.9976858124391041, "student_t_95_ci": [0.9927019343719171, 1.0026947121565253]},
+    "K12_R8_B255": {"mode0_over_mode1": 1.0023598125346236, "student_t_95_ci": [0.9943107121277203, 1.0104740716656262]},
+    "K12_R8_B257": {"mode0_over_mode1": 1.0042020125934612, "student_t_95_ci": [0.9977998169219457, 1.0106452867545905]},
+    "K12_R8_B512": {"mode0_over_mode1": 1.004006344775779, "student_t_95_ci": [0.9960333057660605, 1.012043206300952]},
+    "K12_R8_B1023": {"mode0_over_mode1": 0.9915223987402331, "student_t_95_ci": [0.9768687872736771, 1.0063958230739931]},
+    "K12_R8_B1025": {"mode0_over_mode1": 1.0143832603932679, "student_t_95_ci": [0.9923774660382328, 1.0368770293363692]}
+  },
+  "memory": {
+    "scratch_alignment": 64,
+    "encode_scratch_bytes_b256": 4672,
+    "encode_scratch_bytes_b1024": 16960,
+    "scratch_reduction": false,
+    "note": "The exact kernel does not consume shard-data scratch, but the stable public query retains the mature fallback geometry."
+  },
+  "validation": {
+    "release": "focused independent-generator, packed, unaligned, sparse, detached, reusable-binding, overlap, and failure-atomicity test passed; peak RSS 22272 KiB",
+    "strict_gcc_13": "-Wall -Wextra -Wpedantic -Werror build and focused test passed; build peak RSS 388892 KiB",
+    "strict_clang_18": "-Wall -Wextra -Wpedantic -Werror build and focused test passed; build peak RSS 167952 KiB",
+    "clang_18_asan_ubsan_lsan": "focused test passed with leak detection and halt-on-error; peak test RSS 53504 KiB",
+    "independent_oracle": "The direct systematic generator-matrix oracle matched every tested packed, unaligned, sparse-output, detached-pointer, and reusable-binding result at both selected byte counts.",
+    "git_diff_check": "passed before implementation commit"
+  },
+  "rejected_variants": [
+    {
+      "name": "packed-only fixed-address circuit",
+      "result": "Killed because its 1024-byte screen was about 0.503 us versus about 0.471 us for exact main; it also did not support arbitrary caller pointers."
+    },
+    {
+      "name": "two-pass controlled-spill circuit",
+      "result": "Killed after the selected one-pass controlled-spill circuit was 2.55 percent faster by four-round preliminary geometric mean."
+    },
+    {
+      "name": "high-level stagewise helper",
+      "result": "Removed after it failed to improve the complete public codec path."
+    }
+  ],
+  "follow_up": {
+    "bead": "leopard-79h.38.5.10.56",
+    "reason": "The exact-main neighbor map confirms remaining T8 gaps at K11/R8, K12/R7, and K13/R8 rather than widening this shape-specific selector."
+  },
+  "disposition": "Promote the exact K12/R8 AVX2 circuit and packed public terminals at 256 and 1024 bytes. Both target lower confidence bounds exceed the five-percent exact-main gate, every same-source target clears the gate, all inert selector intervals span parity, and legacy parity remains byte-identical."
+}

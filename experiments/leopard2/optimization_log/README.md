@@ -120,6 +120,7 @@ Scratch falls with all of it: encode 1073.8 MB -> 8.5 MB (126x) at legacy-high
 | 28 | Whole-shard native-high locator-direct repair | **landed** | 1.289-4.513x vs exact main; 65 B now 2.228x |
 | 29 | Native-high whole-direct crossover extension | **landed through 7168 B** | selected 1.124-4.972x vs prior; 1.886-5.133x vs main |
 | 30 | Native-high source-major raw one-shot | **landed at 12-16 KiB** | 1.128x overall vs plan fallback; 3.484x overall vs exact main |
+| 31 | GF8 K12/R8 exact high encoder and packed terminal | **landed at 256/1024 B** | 1.244x/1.116x vs exact main |
 
 ## Method notes worth keeping
 

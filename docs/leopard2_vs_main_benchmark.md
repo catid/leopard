@@ -1,5 +1,33 @@
 # Leopard2 versus exact Leopard main
 
+## GF8 K=12/R=8 exact high-encode update: 2026-08-10
+
+The exact legacy-high GF8/AVX2 circuit at `K=12,R=8` now skips the fully
+shortened third message block, inverse-transforms only four active rows in the
+second block, folds the fixed shift, and removes the zero multipliers from the
+T=8 forward schedule. A packed public terminal also avoids the general range
+sort and transform-geometry setup at the two measured byte counts.
+
+| bytes/shard | exact main | Leopard2 | exact main / Leopard2, 95% CI |
+| ---: | ---: | ---: | ---: |
+| 256 | 0.13720 us | 0.11033 us | **1.2436x** `[1.2207,1.2668]` |
+| 1024 | 0.45386 us | 0.40666 us | **1.1161x** `[1.1114,1.1208]` |
+
+The clean candidate is commit `64a5dd9`; exact Leopard main is commit
+`6e5725e`. Nine balanced ABBA/BAAB rounds per cell used 31 retained samples,
+reuse 8192, one thread, CPU 30, and reserved sibling 14. All accepted rounds
+recorded zero sibling work and all parity digests matched. A same-executable
+selector comparison measured 1.8763x at 256 bytes and 1.2061x at 1024 bytes
+over the ordinary-validation control. Eight K/R/byte selector neighbors had
+confidence intervals spanning parity.
+
+This is deliberately not generalized to every nearby T=8 shape. Exact-main
+measurements still show 1024-byte gaps at K11/R8, K12/R7, and K13/R8, plus
+larger 256-byte gaps in the first two. Those are tracked separately. Complete
+binary identities, neighbor results, validation, and the raw-bundle hash are
+in `experiments/leopard2/gf8_high_encode/results/`
+`t8_k12r8_exact_checkpoint_20260810.json`.
+
 ## GF8 R=1 small-shard update: 2026-08-02
 
 The latest isolated campaign compares a frozen pure-AVX2 Leopard2 candidate
