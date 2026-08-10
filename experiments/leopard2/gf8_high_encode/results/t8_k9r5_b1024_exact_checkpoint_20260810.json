@@ -1,0 +1,274 @@
+{
+  "binary_provenance": {
+    "candidate_control_executable_sections_sha256": "1b678b0aa06874d6902af02a10889f5b92ccc8c4167c86ba03e75ebe0e40e433",
+    "candidate_control_same_executable": true,
+    "candidate_sha256": "d2604bfc93baa39340062831cfb1222f43a4017abd2e7b2fbb580d638f3bc0ce",
+    "control_sha256": "d2604bfc93baa39340062831cfb1222f43a4017abd2e7b2fbb580d638f3bc0ce",
+    "exact_leopard_main_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "production_build_closure_schema": "leopard2-production-build-closure/v2",
+    "reproducible_build_proof_schema": "leopard2-reproducible-build-proof/v3",
+    "selector_symbol": "_ZN12_GLOBAL__N_1L26g_k9r5_b1024_terminal_modeE",
+    "selector_word": 1
+  },
+  "campaign": {
+    "all_rounds_zero_sibling_nonidle": true,
+    "all_workload_and_output_digests_matched": true,
+    "cell_count": 7,
+    "confidence": {
+      "degrees_of_freedom": 24,
+      "level": 0.95,
+      "method": "Student-t interval over independent paired mean-log contrasts",
+      "t_critical": 2.0638985616280205
+    },
+    "cpu": 29,
+    "created_utc": "2026-08-10T23:42:38.983244Z",
+    "discarded_process_count": 4,
+    "discarded_round_attempts": 1,
+    "equivalence_band": [
+      0.9803921568627451,
+      1.02
+    ],
+    "finished_utc": "2026-08-10T23:47:10.707835Z",
+    "host": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "iterations_per_process": 31,
+    "neighbor_cells": [
+      {
+        "control_over_candidate": 1.0032327487316524,
+        "encode_ci95": [
+          0.9973884566766326,
+          1.0091112859690738
+        ],
+        "id": "byte-control-k9-r5-b1023-q1",
+        "one_shot_ci95": [
+          0.9947534200845374,
+          1.0098517396921949
+        ],
+        "one_shot_control_over_candidate": 1.0022741500393646
+      },
+      {
+        "control_over_candidate": 1.0037092676232742,
+        "encode_ci95": [
+          0.9979674595911023,
+          1.009484111160924
+        ],
+        "id": "byte-control-k9-r5-b1025-q1",
+        "one_shot_ci95": [
+          0.9967148316726265,
+          1.008626853339874
+        ],
+        "one_shot_control_over_candidate": 1.002653152564307
+      },
+      {
+        "control_over_candidate": 1.0035112434017697,
+        "encode_ci95": [
+          0.9962679288525066,
+          1.0108072200955622
+        ],
+        "id": "shape-control-k9-r6-b1024-q1",
+        "one_shot_ci95": [
+          0.9939879870605439,
+          1.008833579819197
+        ],
+        "one_shot_control_over_candidate": 1.0013832729197978
+      },
+      {
+        "control_over_candidate": 1.0004255101671073,
+        "encode_ci95": [
+          0.9965369396077156,
+          1.0043292542543376
+        ],
+        "id": "shape-control-k8-r5-b1024-q1",
+        "one_shot_ci95": [
+          0.9978346284367864,
+          1.0054353823774347
+        ],
+        "one_shot_control_over_candidate": 1.001627795736413
+      },
+      {
+        "control_over_candidate": 1.000024619046054,
+        "encode_ci95": [
+          0.9963944674283173,
+          1.0036679963502018
+        ],
+        "id": "shape-control-k10-r5-b1024-q1",
+        "one_shot_ci95": [
+          0.9980307370893071,
+          1.0035558028466707
+        ],
+        "one_shot_control_over_candidate": 1.0007894571913287
+      }
+    ],
+    "process_count": 800,
+    "raw_path": "/tmp/leopard2-k9r5-b1024-final-evidence-95bae06-v6/raw.json",
+    "raw_sha256": "d771de77e579e58ae8973d54e1dbd82eef0a6e9e2b336557c1d51c09b97823df",
+    "reserved_smt_sibling": 13,
+    "rounds_per_cell": 25,
+    "summary_path": "/tmp/leopard2-k9r5-b1024-final-evidence-95bae06-v6/summary.json",
+    "summary_sha256": "72680df2d759d94d1df87570e210ada675a029294b70681773facc04142b0630",
+    "warmup_per_process": 64
+  },
+  "date_utc": "2026-08-10",
+  "final_disposition": {
+    "promoted": true,
+    "reason": "The exact K9/R5/B1024 terminal clears both five-percent target floors for one-item batch and one-shot encoding, is 1.45x faster than exact Leopard main, and every inactive neighbor proves selector equivalence inside the predeclared two-percent band."
+  },
+  "implementation": {
+    "api_paths": [
+      "leo2_encode",
+      "one-item leo2_encode_batch",
+      "immutable reusable encode binding"
+    ],
+    "fallback_policy": "Different counts, byte sizes, sparse parity requests, detached layouts, tails, non-AVX2 backends, and forced diagnostics retain the mature path.",
+    "binding_performance_status": "correctness-covered but not timed by this campaign",
+    "kernel": "Existing exact K9/T8 AVX2 circuit with source coordinate 16 multiply-added into the five transmitted parity rows",
+    "no_hot_path_allocation": true,
+    "selector_snapshot_for_reusable_bindings": true,
+    "timed_execution_api": "leo2_encode_batch with item_count=1"
+  },
+  "invalid_attempts": [
+    {
+      "disposition": "no timing evidence",
+      "reason": "automatic/Ninja build did not satisfy the pure-AVX2 production build contract"
+    },
+    {
+      "disposition": "no timing evidence",
+      "reason": "preflight found and then fixed an incorrect benchmark flag-profile type expectation"
+    },
+    {
+      "disposition": "no timing evidence",
+      "reason": "CPU pair 30/14 was not quiet during the five-second presample"
+    },
+    {
+      "disposition": "sample-size pilots only; not pooled into qualification",
+      "reason": "two nine-round campaigns were individually inconclusive at the strict full-CI neighbor-equivalence gate"
+    }
+  ],
+  "memory": {
+    "decode_scratch_bytes_per_stripe": 384,
+    "encode_scratch_bytes_per_stripe": 16832,
+    "scratch_alignment": 64
+  },
+  "promotion_policy": {
+    "neighbor_full_ci_must_fit_equivalence_band": true,
+    "online_benchmarking": false,
+    "target_exact_main_lower_ci_floor": 1.05,
+    "target_same_binary_disabled_lower_ci_floor": 1.05,
+    "wire_change": false
+  },
+  "retained_b256": {
+    "candidate_execution_us": 0.08358805140138009,
+    "candidate_one_shot_us": 0.08189709718338699,
+    "exact_main_execution_us": 0.12904784268452113,
+    "main_over_candidate": 1.543855138635167,
+    "main_over_candidate_ci95": [
+      1.5335294857447617,
+      1.5542503168321309
+    ],
+    "one_shot_main_over_candidate": 1.5757315841799922,
+    "one_shot_main_over_candidate_ci95": [
+      1.5646690867362065,
+      1.586872295509852
+    ],
+    "selector_encode_ci95": [
+      0.9915474697117425,
+      0.9976606036115089
+    ],
+    "selector_one_shot_ci95": [
+      0.9982235559498398,
+      1.002965428051943
+    ]
+  },
+  "schema": "leopard2-gf8-k9r5-b1024-exact-checkpoint/v1",
+  "scope": {
+    "K": 9,
+    "R": 5,
+    "backend": "AVX2",
+    "batch": 1,
+    "field": "GF8",
+    "operation": "encode",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "reuse": 8192,
+    "shard_bytes": 1024,
+    "thread_count": 1
+  },
+  "source": {
+    "branch": "codex/leopard2",
+    "evidence_contract_fix_commit": "d14dbeb0f93033def39cf632eaf689ab8e70e50c",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "implementation_commit": "8d496d5233a4508dd8767d3ed910bfc9c008888f",
+    "qualification_commit": "95bae0613a14ec9c0b15c220cfc77d0a30e566a4",
+    "qualification_tree": "5416af36f0a2c093fbbec65229e455526375797e",
+    "runner": "experiments/leopard2/gf8_high_encode/run_k9r5_b1024_terminal_abba.py"
+  },
+  "status": "promoted",
+  "target": {
+    "candidate_execution_us": 0.30017459836234095,
+    "candidate_one_shot_us": 0.299965946656064,
+    "control_execution_us": 0.4423608198441384,
+    "control_one_shot_us": 0.4451961983432245,
+    "control_over_candidate": 1.4736783933667974,
+    "control_over_candidate_ci95": [
+      1.4644780921583749,
+      1.4829364936934035
+    ],
+    "exact_main_execution_us": 0.4352711854501065,
+    "main_over_candidate": 1.4500600244817863,
+    "main_over_candidate_ci95": [
+      1.4422308557313976,
+      1.4579316939754354
+    ],
+    "one_shot_control_over_candidate": 1.4841557960366718,
+    "one_shot_control_over_candidate_ci95": [
+      1.4742867056007425,
+      1.4940909516047511
+    ],
+    "one_shot_main_over_candidate": 1.4510686639679846,
+    "one_shot_main_over_candidate_ci95": [
+      1.4439799553711368,
+      1.4581921720711444
+    ]
+  },
+  "validation": {
+    "clang18_asan_ubsan_lsan": {
+      "initial_va_limited_launch": "invalid harness; ASan shadow reservation failed before test code executed, so no test result was retained",
+      "peak_rss_kib": 347648,
+      "result": "3/3 passed",
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_k9r5_b256_terminal",
+        "leopard2_batch_aliasing"
+      ]
+    },
+    "independent_review": "clean",
+    "pure_avx2_focused_ctest": "3/3 passed",
+    "release_full_ctest": "143/143 passed in 1212.36 seconds",
+    "runner_self_tests": "normal and Python -O passed",
+    "strict_compilers": {
+      "clang18": "-Wall -Wextra -Wpedantic -Werror library build passed",
+      "gcc13": "-Wall -Wextra -Wpedantic -Werror library build passed"
+    },
+    "wire_oracles": [
+      "independent direct systematic generator",
+      "legacy parity byte identity",
+      "changed-source reusable binding",
+      "multi-item batch binding"
+    ]
+  },
+  "wire_profile": {
+    "D": 24,
+    "N": 32,
+    "S": 15,
+    "T": 8,
+    "actual_message_coordinates": "8..16",
+    "parity_coordinates": "0..4",
+    "punctured_parity_coordinates": "5..7",
+    "shortened_message_coordinates": "17..31",
+    "source_coordinate_16_generator_logs": [
+      121,
+      151,
+      78,
+      228,
+      229
+    ]
+  }
+}

@@ -122,6 +122,7 @@ Scratch falls with all of it: encode 1073.8 MB -> 8.5 MB (126x) at legacy-high
 | 30 | Native-high source-major raw one-shot | **landed at 12-16 KiB** | 1.128x overall vs plan fallback; 3.484x overall vs exact main |
 | 31 | GF8 K12/R8 exact high encoder and packed terminal | **landed at 256/1024 B** | 1.244x/1.116x vs exact main |
 | 32 | GF8 T8 exact-neighbor encoders | **landed at five K/R/byte cells** | 1.111-1.282x public vs exact main |
+| 33 | GF8 K9/R5 1 KiB exact encoder | **landed** | 1.450x one-item batch, 1.451x one-shot vs exact main |
 
 ## Method notes worth keeping
 
