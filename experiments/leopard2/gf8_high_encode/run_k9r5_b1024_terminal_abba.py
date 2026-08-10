@@ -257,7 +257,8 @@ def _validate_production_build_contract(
                      bool(record["compile_entry"]["arguments"]) and
                      all(isinstance(argument, str) and argument for argument
                          in record["compile_entry"]["arguments"]) and
-                     isinstance(record.get("flag_profile"), Mapping),
+                     isinstance(record.get("flag_profile"), str) and
+                     bool(record["flag_profile"]),
                      "production compile closure record is malformed")
         source = Path(str(record["source"].get("path", ""))).resolve(
             strict=True)

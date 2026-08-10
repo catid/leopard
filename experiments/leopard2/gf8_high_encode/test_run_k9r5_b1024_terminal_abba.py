@@ -140,7 +140,7 @@ def fake_production_provenance(
                 "source": identity(RUNNER.SOURCE_ROOT / "leopard2.cpp"),
                 "object": archive_object_identity,
                 "compile_entry": {"arguments": ["c++"]},
-                "flag_profile": {"avx2": True},
+                "flag_profile": "portable-core",
             },
             {
                 "role": "benchmark",
@@ -148,7 +148,7 @@ def fake_production_provenance(
                     RUNNER.SOURCE_ROOT / "bench/leopard2/benchmark.cpp"),
                 "object": benchmark_object_identity,
                 "compile_entry": {"arguments": ["c++"]},
-                "flag_profile": {"avx2": True},
+                "flag_profile": "portable-core",
             },
         ],
         "archive_members": [archive_object.name],
@@ -287,6 +287,9 @@ def exercise_mocked_provenance_contract() -> None:
                 (lambda value: value.update(
                     {"source_object_compile_closure": []}),
                  "empty compile/object closure was accepted"),
+                (lambda value: value["source_object_compile_closure"][0].
+                    update({"flag_profile": {"avx2": True}}),
+                 "malformed compile flag profile was accepted"),
                 (lambda value: value.update({"archive_members": ["other.o"]}),
                  "inconsistent archive graph was accepted"),
                 (lambda value: value["tracked_source_manifest"]["files"].pop(),
