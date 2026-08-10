@@ -3340,7 +3340,8 @@ void ReedSolomonEncodeK9T8(
     LEO_DEBUG_ASSERT(ops.ff8_high_encode_one_block != NULL);
     LEO_DEBUG_ASSERT((ops.ff8_high_encode_one_block_sides & 8U) != 0);
     LEO_DEBUG_ASSERT(recovery_count >= 5 && recovery_count <= 8);
-    LEO_DEBUG_ASSERT(byte_count == 256);
+    LEO_DEBUG_ASSERT(byte_count == 256 ||
+        (byte_count == 1024 && recovery_count == 5));
 #if defined(LEO2_ENABLE_TEST_HOOKS)
     TestHighIFFTButterfly4OutCalls.fetch_add(2, std::memory_order_relaxed);
     TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);

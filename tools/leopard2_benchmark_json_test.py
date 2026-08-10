@@ -355,6 +355,7 @@ def run(
     measure_one_shot_decode: bool = False,
     disable_k16r8_b256_terminal: bool = False,
     disable_k9r5_b256_terminal: bool = False,
+    disable_k9r5_b1024_terminal: bool = False,
     disable_k9r6r8_b256_terminal: bool = False,
     r1_small_reduction_mode: int | None = None,
     r1_fixed_avx2_mode: int | None = None,
@@ -418,6 +419,8 @@ def run(
             command.append("--disable-k16r8-b256-terminal")
         if disable_k9r5_b256_terminal:
             command.append("--disable-k9r5-b256-terminal")
+        if disable_k9r5_b1024_terminal:
+            command.append("--disable-k9r5-b1024-terminal")
         if disable_k9r6r8_b256_terminal:
             command.append("--disable-k9r6r8-b256-terminal")
         if r1_small_reduction_mode is not None:
@@ -488,7 +491,10 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "t8_full_parity_terminal_diagnostic_disabled",
         "k16r8_b256_terminal_diagnostic_disabled",
         "k9r5_b256_terminal_diagnostic_disabled",
+        "k9r5_b1024_terminal_diagnostic_disabled",
     }
+    if "high_t16_q2_b64_fused_diagnostic_disabled" in document["build"]:
+        expected_build.add("high_t16_q2_b64_fused_diagnostic_disabled")
     if document["schema"] == "leopard2-benchmark-v10":
         expected_build.add("k9r6r8_b256_terminal_diagnostic_disabled")
     if document["schema"] == "leopard2-benchmark-v12":
@@ -558,8 +564,14 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 "k16r8_b256_terminal_diagnostic_disabled"]) is bool and
             type(document["build"][
                 "k9r5_b256_terminal_diagnostic_disabled"]) is bool and
+            type(document["build"][
+                "k9r5_b1024_terminal_diagnostic_disabled"]) is bool and
             document["build"]["cplusplus"] > 0,
             "benchmark build value types changed")
+    if "high_t16_q2_b64_fused_diagnostic_disabled" in document["build"]:
+        require(type(document["build"][
+                    "high_t16_q2_b64_fused_diagnostic_disabled"]) is bool,
+                "high-T16 fused terminal selector is not Boolean")
     if document["schema"] == "leopard2-benchmark-v12":
         build = document["build"]
         mode = build["r1_small_reduction_diagnostic_mode"]
@@ -1437,6 +1449,9 @@ def main() -> int:
     require(default["build"][
                 "k9r5_b256_terminal_diagnostic_disabled"] is False,
             "default benchmark disabled the K9/R5 terminal")
+    require(default["build"][
+                "k9r5_b1024_terminal_diagnostic_disabled"] is False,
+            "default benchmark disabled the K9/R5/1024 terminal")
     require(set(default["parameters"]) == {
         "K", "R", "requested_profile", "requested_field",
         "requested_backend", "force_generic_decode",
@@ -1474,6 +1489,9 @@ def main() -> int:
     require(external["build"][
                 "k9r5_b256_terminal_diagnostic_disabled"] is False,
             "external-evidence benchmark disabled the K9/R5 terminal")
+    require(external["build"][
+                "k9r5_b1024_terminal_diagnostic_disabled"] is False,
+            "external-evidence benchmark disabled the K9/R5/1024 terminal")
     unavailable_reason = (
         "disabled by --skip-legacy" if
         external["schema"] == "leopard2-benchmark-v2" else
@@ -1511,6 +1529,17 @@ def main() -> int:
     require(disabled_k9_terminal["workload_digests"] ==
                 external["workload_digests"],
             "inert K9/R5 attribution option changed the workload")
+
+    disabled_k9_b1024_terminal = run(
+        executable, True, disable_k9r5_b1024_terminal=True)
+    validate_common(disabled_k9_b1024_terminal, True)
+    validate_workload_digests(disabled_k9_b1024_terminal)
+    require(disabled_k9_b1024_terminal["build"][
+                "k9r5_b1024_terminal_diagnostic_disabled"] is True,
+            "K9/R5/1024 attribution option was not recorded")
+    require(disabled_k9_b1024_terminal["workload_digests"] ==
+                external["workload_digests"],
+            "inert K9/R5/1024 attribution option changed the workload")
 
     disabled_k9r6r8_terminal = run(
         executable, True, disable_k9r6r8_b256_terminal=True)

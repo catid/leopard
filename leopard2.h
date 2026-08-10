@@ -221,8 +221,12 @@ typedef struct leo2_decode_batch_item {
 LEO2_EXPORT const char* leo2_result_string(int result);
 
 /*
-    Successful setup returns immutable objects.  A context must outlive all of
-    its codecs, and a codec must outlive all of its decode plans.  A non-null
+    Successful setup returns immutable codec and plan objects.  Contexts,
+    codecs, and decode plans may be shared by concurrent executions.  Across
+    those calls, every writable output or scratch span must be disjoint from
+    every readable, writable, scratch, and metadata span used by another call;
+    destruction must wait for all calls to finish.  A context must outlive all
+    of its codecs, and a codec must outlive all of its decode plans.  A non-null
     output handle is set to null before ordinary input validation and remains
     null on failure.  Setup options/presence arrays are immutable and their
     declared spans must not overlap the output handle.  Such overlap returns

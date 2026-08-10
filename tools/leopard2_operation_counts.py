@@ -61,9 +61,278 @@ _LOW_COEFFICIENT_COPY_PATTERNS = (
 
 
 _PREPROCESSOR_DIRECTIVE = re.compile(
-    r"^[ \t]*#[ \t]*(if|ifdef|ifndef|elif|else|endif)\b([^\r\n]*)",
+    r"^[ \t\v\f]*#[ \t\v\f]*"
+    r"(if|ifdef|ifndef|elif|else|endif)\b([^\r\n]*)",
     re.MULTILINE,
 )
+
+
+_RAW_CPP_LITERAL = re.compile(
+    r'(?:u8|u|U|L)?R"(?P<delimiter>[^ ()\\\t\r\n]{0,16})\('
+)
+
+
+def _cpp_translation_phase_text(source: str) -> str:
+    """Apply token-forming translations needed by the structural lexer."""
+    # Trigraph replacement precedes physical-line splicing.  Modern builds do
+    # not normally enable trigraphs, but recognizing them keeps this audit
+    # fail-closed for older compiler modes as well.
+    trigraphs = {
+        "??=": "#", "??/": "\\", "??'": "^", "??(": "[",
+        "??)": "]", "??!": "|", "??<": "{", "??>": "}",
+        "??-": "~",
+    }
+    translated = source
+    for spelling, replacement in trigraphs.items():
+        translated = translated.replace(spelling, replacement)
+    translated = re.sub(r"\\\r?\n", "", translated)
+    # %: is the standard preprocessing-token digraph for #.
+    return translated.replace("%:", "#")
+
+
+def _blank_cpp_comments_and_literals(source: str) -> str:
+    """Blank C++ comments and literals after token-forming translations.
+
+    Structural source guards must not accept a required expression merely
+    because its spelling survives in a comment, ordinary string/character
+    literal, or raw string literal.  Prefix characters on ordinary literals
+    may remain because their contents are blanked; raw-literal prefixes are
+    blanked with the complete literal.
+    """
+    output = list(source)
+
+    def blank(begin: int, end: int) -> None:
+        for index in range(begin, min(end, len(output))):
+            if output[index] not in "\r\n":
+                output[index] = " "
+
+    offset = 0
+    while offset < len(source):
+        if source.startswith("//", offset):
+            end = offset + 2
+            while True:
+                newline = source.find("\n", end)
+                if newline < 0:
+                    end = len(source)
+                    break
+                preceding = newline - 1
+                if preceding >= offset and source[preceding] == "\r":
+                    preceding -= 1
+                if preceding >= offset and source[preceding] == "\\":
+                    # Translation-phase line splicing extends a // comment
+                    # across the next physical line (for LF and CRLF).
+                    end = newline + 1
+                    continue
+                end = newline
+                break
+            blank(offset, end)
+            offset = end
+            continue
+        if source.startswith("/*", offset):
+            end = source.find("*/", offset + 2)
+            end = len(source) if end < 0 else end + 2
+            blank(offset, end)
+            offset = end
+            continue
+
+        raw = _RAW_CPP_LITERAL.match(source, offset)
+        if raw is not None and (
+                offset == 0 or
+                not (source[offset - 1].isalnum() or
+                     source[offset - 1] == "_")):
+            terminator = ")" + raw.group("delimiter") + '"'
+            end = source.find(terminator, raw.end())
+            end = len(source) if end < 0 else end + len(terminator)
+            blank(offset, end)
+            offset = end
+            continue
+
+        if source[offset] in "\"'":
+            quote = source[offset]
+            end = offset + 1
+            while end < len(source):
+                if source[end] == "\\":
+                    end = min(len(source), end + 2)
+                    continue
+                if source[end] == quote:
+                    end += 1
+                    break
+                end += 1
+            blank(offset, end)
+            offset = end
+            continue
+        offset += 1
+    return "".join(output)
+
+
+def _literal_preprocessor_condition(expression: str) -> Optional[bool]:
+    """Return a safely known literal preprocessor condition, if any."""
+    compact = re.sub(r"[ \t\v\f]", "", expression)
+    while len(compact) >= 2 and compact[0] == "(" and compact[-1] == ")":
+        compact = compact[1:-1]
+    if compact == "false":
+        return False
+    if compact == "true":
+        return True
+
+    literal_pattern = (
+        r"(?:0[xX][0-9a-fA-F']+|0[bB][01']+|0[0-7']*|"
+        r"[1-9][0-9']*)[uUlLzZ]*"
+    )
+
+    def integer_literal(token: str) -> Optional[int]:
+        match = re.fullmatch(
+            r"(?P<digits>0[xX][0-9a-fA-F']+|0[bB][01']+|"
+            r"0[0-7']*|[1-9][0-9']*)(?:[uUlLzZ]*)",
+            token,
+        )
+        if match is None:
+            return None
+        digits = match.group("digits").replace("'", "")
+        if digits.lower().startswith("0x"):
+            return int(digits[2:], 16)
+        if digits.lower().startswith("0b"):
+            return int(digits[2:], 2)
+        if len(digits) > 1 and digits.startswith("0"):
+            return int(digits, 8)
+        return int(digits, 10)
+
+    if re.fullmatch(
+            literal_pattern + r"(?:[+-]" + literal_pattern + r")*",
+            compact):
+        pieces = re.split(r"([+-])", compact)
+        value = integer_literal(pieces[0])
+        if value is None:
+            return None
+        for index in range(1, len(pieces), 2):
+            operand = integer_literal(pieces[index + 1])
+            if operand is None:
+                return None
+            value = value + operand if pieces[index] == "+" else \
+                value - operand
+        return value != 0
+    return None
+
+
+def _production_preprocessor_condition(
+    operation: str, expression: str,
+) -> Optional[bool]:
+    """Resolve literals and the production-disabled test-hook selector."""
+    production_undefined = {
+        "LEO2_ENABLE_TEST_HOOKS",
+        "LEO2_WEIGHTED_LOCATOR_BOUNDARY_ABBA",
+    }
+    if operation == "if":
+        literal = _literal_preprocessor_condition(expression)
+        if literal is not None:
+            return literal
+        compact = re.sub(r"[ \t\v\f]", "", expression)
+        for macro in production_undefined:
+            if compact in (
+                macro,
+                "defined({})".format(macro),
+                "defined{}".format(macro),
+            ):
+                return False
+            if compact in (
+                "!{}".format(macro),
+                "!defined({})".format(macro),
+                "!defined{}".format(macro),
+            ):
+                return True
+        return None
+    macro = expression.strip()
+    if operation == "ifdef" and macro in production_undefined:
+        return False
+    if operation == "ifndef" and macro in production_undefined:
+        return True
+    return None
+
+
+def _blank_definitely_disabled_cpp_regions(source: str) -> str:
+    """Blank literal ``#if 0`` branches and all preprocessor directives.
+
+    Unknown macro conditions deliberately preserve every branch: this helper
+    is not a C preprocessor.  Literal conditions and the production-disabled
+    ``LEO2_ENABLE_TEST_HOOKS`` selector reject dead-code decoys without making
+    host configuration affect the audit.  Directive continuations are blanked
+    so a macro body cannot impersonate a runtime statement.
+    """
+    result: List[str] = []
+    # parent-active, a prior branch may have won, a prior branch must have won
+    stack: List[Tuple[bool, bool, bool]] = []
+    active = True
+
+    def blank_line(line: str) -> str:
+        return "".join(character if character in "\r\n" else " "
+                       for character in line)
+
+    lines = source.splitlines(keepends=True)
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        directive = re.match(
+            r"^[ \t\v\f]*#[ \t\v\f]*"
+            r"([A-Za-z_][A-Za-z0-9_]*)(.*)",
+            line.rstrip("\r\n"),
+        )
+        if directive is None:
+            result.append(line if active else blank_line(line))
+            index += 1
+            continue
+
+        physical_lines = [line]
+        while physical_lines[-1].rstrip("\r\n").endswith("\\") and \
+                index + 1 < len(lines):
+            index += 1
+            physical_lines.append(lines[index])
+        logical = re.sub(r"\\\r?\n", "", "".join(physical_lines))
+        match = re.match(
+            r"^[ \t\v\f]*#[ \t\v\f]*"
+            r"([A-Za-z_][A-Za-z0-9_]*)(.*)", logical
+        )
+        operation = match.group(1) if match is not None else ""
+        expression = match.group(2).strip() if match is not None else ""
+        if operation in ("if", "ifdef", "ifndef"):
+            parent_active = active
+            literal = _production_preprocessor_condition(
+                operation, expression)
+            may_take = literal is not False
+            must_take = literal is True
+            active = parent_active and may_take
+            stack.append((parent_active, may_take, must_take))
+        elif operation == "elif" and stack:
+            parent_active, prior_may_take, prior_must_take = stack[-1]
+            literal = _literal_preprocessor_condition(expression)
+            current_may_take = literal is not False
+            current_must_take = literal is True
+            active = (parent_active and not prior_must_take and
+                      current_may_take)
+            stack[-1] = (
+                parent_active,
+                prior_may_take or current_may_take,
+                prior_must_take or current_must_take,
+            )
+        elif operation == "else" and stack:
+            parent_active, _prior_may_take, prior_must_take = stack[-1]
+            active = parent_active and not prior_must_take
+            stack[-1] = (parent_active, True, True)
+        elif operation == "endif" and stack:
+            parent_active, _prior_may_take, _prior_must_take = stack.pop()
+            active = parent_active
+        # All directive spellings and their continuations are metadata, never
+        # executable statements.  This also removes #define/#pragma decoys.
+        result.extend(blank_line(item) for item in physical_lines)
+        index += 1
+    return "".join(result)
+
+
+def _compact_active_cpp_source(source: str) -> str:
+    """Return active-looking C++ tokens without lexical decoys."""
+    lexical = _cpp_translation_phase_text(source)
+    lexical = _blank_cpp_comments_and_literals(lexical)
+    lexical = _blank_definitely_disabled_cpp_regions(lexical)
+    return re.sub(r"\s+", "", lexical)
 
 
 def _compact_source_with_offsets(source: str) -> Tuple[str, List[int]]:
@@ -76,6 +345,69 @@ def _compact_source_with_offsets(source: str) -> Tuple[str, List[int]]:
         characters.append(character)
         offsets.append(offset)
     return "".join(characters), offsets
+
+
+def _require_locally_unconditional_cpp_token(
+    source: str, function_begin: str, function_end: str, token: str,
+    label: str,
+    token_branch_suffix: Sequence[Tuple[str, str, str]] = (),
+) -> None:
+    """Require one token outside local preprocessor branches in a function."""
+    lexical = _blank_cpp_comments_and_literals(
+        _cpp_translation_phase_text(source))
+    compact, offsets = _compact_source_with_offsets(lexical)
+    begin = compact.find(function_begin)
+    end = compact.find(function_end, begin + len(function_begin))
+    if begin < 0 or end < 0:
+        raise ModelError("{} has an unbounded function".format(label))
+    positions = []
+    position = compact.find(token, begin, end)
+    while position >= 0:
+        positions.append(position)
+        position = compact.find(token, position + 1, end)
+    if len(positions) != 1:
+        raise ModelError(
+            "{} must contain exactly one required production token".format(
+                label)
+        )
+    function_offset = offsets[begin]
+    token_offset = offsets[positions[0]]
+
+    def branch_stack(offset: int) -> List[Tuple[str, str, str]]:
+        stack: List[Tuple[str, str, str]] = []
+        for directive in _PREPROCESSOR_DIRECTIVE.finditer(lexical, 0, offset):
+            operation = directive.group(1)
+            expression = directive.group(2).strip()
+            if operation in ("if", "ifdef", "ifndef"):
+                stack.append((operation, expression, "initial"))
+            elif operation in ("elif", "else"):
+                if not stack:
+                    raise ModelError(
+                        "{} has an unbalanced preprocessor branch".format(
+                            label)
+                    )
+                original, original_expression, _branch = stack[-1]
+                stack[-1] = (
+                    original, original_expression,
+                    operation + (":" + expression if expression else ""),
+                )
+            elif operation == "endif":
+                if not stack:
+                    raise ModelError(
+                        "{} has an unbalanced preprocessor branch".format(
+                            label)
+                    )
+                stack.pop()
+        return stack
+
+    allowed_field_guard = [("ifdef", "LEO_HAS_FF8", "initial")]
+    if branch_stack(function_offset) != allowed_field_guard or \
+            branch_stack(token_offset) != \
+            allowed_field_guard + list(token_branch_suffix):
+        raise ModelError(
+            "{} function or required token is conditionally compiled outside "
+            "the GF8 translation-unit guard".format(label)
+        )
 
 
 def _canonical_test_hook_guard_start(source: str, offset: int) -> Optional[int]:
@@ -246,9 +578,9 @@ def verify_high_decode_no_copy_source(source: str, label: str) -> None:
 
 def verify_high_decode_receive_fusion_source(source: str, label: str) -> None:
     """Require mature Algorithm 5 input blocks to use source staging."""
-    compact = re.sub(r"\s+", "", source)
+    compact = _compact_active_cpp_source(source)
     begin = compact.find("staticvoidIFFT_DIT_DecoderFromSources(")
-    end = compact.find("/*DecimationintimeFFT:", begin)
+    end = compact.find("staticvoidFFT_DIT2(", begin)
     if begin < 0 or end < 0:
         raise ModelError(
             "{} no longer defines the Algorithm 5 source-boundary inverse "
@@ -274,18 +606,81 @@ def verify_high_decode_receive_fusion_source(source: str, label: str) -> None:
             "{} no longer confines GF8 receive fusion to qualified SIMD "
             "backends".format(label)
         )
+    for token, description in (
+        (qualified_backends, "qualified backend selector"),
+        (
+            "StageHighDecodeSources(bytes,sources,work,m);",
+            "copy-first fallback stage",
+        ),
+        (
+            "IFFT_DIT_DecoderImpl(ops,bytes,m_truncated,work,m,skewLUT,"
+            "xor_result,1);",
+            "copy-first fallback transform",
+        ),
+        ("ops.ff8_ifft_butterfly4_out(", "out-of-place butterfly call"),
+    ):
+        _require_locally_unconditional_cpp_token(
+            source,
+            "staticvoidIFFT_DIT_DecoderFromSources(",
+            "staticvoidFFT_DIT2(",
+            token,
+            "{} receive-fusion {}".format(label, description),
+        )
+    receive_callsites = (
+        (
+            "prepared",
+            "voidReedSolomonDecodeHighPrepared(constbackend::Ops&",
+            "voidReedSolomonDecodeHighPrepared(uint64_t",
+            False,
+        ),
+        (
+            "materialized",
+            "voidReedSolomonDecodeHighPrunedPlanned(constbackend::Ops&",
+            "voidReedSolomonDecodeHighPlanned(constbackend::Ops&",
+            True,
+        ),
+        (
+            "tiled",
+            "voidReedSolomonDecodeHighTiledPrunedPlannedExactSources("
+            "constbackend::Ops&",
+            "voidReedSolomonDecodeHighTiledPrunedPlanned("
+            "constbackend::Ops&",
+            True,
+        ),
+    )
+    for name, function_begin, function_end, exact_pruned in receive_callsites:
+        _require_locally_unconditional_cpp_token(
+            source, function_begin, function_end,
+            "IFFT_DIT_DecoderFromSources(",
+            "{} {} receive-fusion dispatcher".format(label, name),
+        )
+        if exact_pruned:
+            for token, description in (
+                (
+                    "ExecutePrunedInverseTransformPlanAccumulate(",
+                    "exact-pruned sink",
+                ),
+                ("StageHighDecodeSources(", "copy-first fallback"),
+            ):
+                _require_locally_unconditional_cpp_token(
+                    source, function_begin, function_end, token,
+                    "{} {} {}".format(label, name, description),
+                )
     materialized = compact.find(
         "voidReedSolomonDecodeHighPrunedPlanned(constbackend::Ops&"
     )
     tiled = compact.find(
-        "voidReedSolomonDecodeHighTiledPrunedPlanned(constbackend::Ops&"
+        "voidReedSolomonDecodeHighTiledPrunedPlannedExactSources("
+        "constbackend::Ops&"
     )
     if materialized < 0 or tiled < 0:
         raise ModelError("{} is missing a planned Algorithm 5 path".format(label))
     materialized_end = compact.find(
         "voidReedSolomonDecodeHighPlanned(", materialized
     )
-    tiled_end = compact.find("voidReedSolomonDecodeHighTiledPlanned(", tiled)
+    tiled_end = compact.find(
+        "voidReedSolomonDecodeHighTiledPrunedPlanned(", tiled
+    )
     if materialized_end < 0 or tiled_end < 0:
         raise ModelError("{} has an unbounded Algorithm 5 source check".format(label))
     for name, segment in (
@@ -309,7 +704,7 @@ def verify_high_decode_receive_fusion_source(source: str, label: str) -> None:
 
 def verify_high_decode_weighted_locator_source(source: str, label: str) -> None:
     """Bind the Algorithm 5 locator delta to its measured dispatch region."""
-    compact = re.sub(r"\s+", "", source)
+    compact = _compact_active_cpp_source(source)
     begin = compact.find("staticvoidIFFT_DIT_DecoderWeightedLocator(")
     end = compact.find("staticvoidStageHighDecodeSources(", begin)
     if begin < 0 or end < 0:
@@ -338,10 +733,66 @@ def verify_high_decode_weighted_locator_source(source: str, label: str) -> None:
                 "{} widened or obscured the qualified weighted locator "
                 "boundary ({})".format(label, token)
             )
+    weighted_production_branch = (
+        ("if", "defined(LEO2_WEIGHTED_LOCATOR_BOUNDARY_ABBA)", "else"),
+    )
+    production_selector = (
+        "constboolstatically_qualified="
+        "(ops.kind==LEO2_BACKEND_AVX2||"
+        "ops.kind==LEO2_BACKEND_AVX512||"
+        "ops.kind==LEO2_BACKEND_GFNI)&&"
+        "ops.ff8_weighted_ifft_butterfly4!=NULL&&"
+        "m>=64&&bytes>=16U*1024U&&bytes<=256U*1024U;"
+    )
+    production_live_selector = (
+        "constboolselect_weighted=statically_qualified&&"
+        "live_count>=(m+1U)/2U;"
+    )
+    for token, description in (
+        (production_selector, "production selector"),
+        (production_live_selector, "live-row selector"),
+    ):
+        _require_locally_unconditional_cpp_token(
+            source,
+            "staticvoidIFFT_DIT_DecoderWeightedLocator(",
+            "staticvoidStageHighDecodeSources(",
+            token,
+            "{} weighted-locator {}".format(label, description),
+            weighted_production_branch,
+        )
+    _require_locally_unconditional_cpp_token(
+        source,
+        "staticvoidIFFT_DIT_DecoderWeightedLocator(",
+        "staticvoidStageHighDecodeSources(",
+        "ops.ff8_weighted_ifft_butterfly4(",
+        "{} weighted-locator butterfly call".format(label),
+    )
+    for token, description in (
+        (
+            "mul_mem_inplace(ops,work[i],locator_logs[i],bytes);",
+            "scale fallback",
+        ),
+        (
+            "IFFT_DIT_Decoder(ops,bytes,m,work,m,skewLUT);",
+            "fallback transform",
+        ),
+        (
+            "IFFT_DIT_DecoderImpl(ops,bytes,m,work,m,skewLUT,NULL,4);",
+            "weighted transform tail",
+        ),
+    ):
+        _require_locally_unconditional_cpp_token(
+            source,
+            "staticvoidIFFT_DIT_DecoderWeightedLocator(",
+            "staticvoidStageHighDecodeSources(",
+            token,
+            "{} weighted-locator {}".format(label, description),
+        )
     for callsite in (
         "voidReedSolomonDecodeHighPrepared(constbackend::Ops&",
         "voidReedSolomonDecodeHighPrunedPlanned(constbackend::Ops&",
-        "voidReedSolomonDecodeHighTiledPrunedPlanned(constbackend::Ops&",
+        "voidReedSolomonDecodeHighTiledPrunedPlannedExactSources("
+        "constbackend::Ops&",
     ):
         start = compact.find(callsite)
         if start < 0:
@@ -367,6 +818,31 @@ def verify_high_decode_weighted_locator_source(source: str, label: str) -> None:
                     callsite
                 )
             )
+    weighted_callsites = (
+        (
+            "prepared",
+            "voidReedSolomonDecodeHighPrepared(constbackend::Ops&",
+            "voidReedSolomonDecodeHighPrepared(uint64_t",
+        ),
+        (
+            "materialized",
+            "voidReedSolomonDecodeHighPrunedPlanned(constbackend::Ops&",
+            "voidReedSolomonDecodeHighPlanned(constbackend::Ops&",
+        ),
+        (
+            "tiled",
+            "voidReedSolomonDecodeHighTiledPrunedPlannedExactSources("
+            "constbackend::Ops&",
+            "voidReedSolomonDecodeHighTiledPrunedPlanned("
+            "constbackend::Ops&",
+        ),
+    )
+    for name, function_begin, function_end in weighted_callsites:
+        _require_locally_unconditional_cpp_token(
+            source, function_begin, function_end,
+            "IFFT_DIT_DecoderWeightedLocator(",
+            "{} {} weighted-locator dispatcher".format(label, name),
+        )
 
 
 def verify_high_decode_gf16_copy_first_source(source: str, label: str) -> None:
@@ -434,25 +910,87 @@ def verify_high_decode_zero_shift_cancellation_source(
     source: str, label: str
 ) -> None:
     """Require the Algorithm 5 block-zero affine cancellation in every layout."""
-    compact = re.sub(r"\s+", "", source)
+    compact = _compact_active_cpp_source(source)
+    lexical_compact = re.sub(
+        r"\s+", "",
+        _blank_cpp_comments_and_literals(_cpp_translation_phase_text(source)),
+    )
     helper = compact.find("staticvoidFinishHighDecodeSyndrome(")
     prepared = compact.find("voidReedSolomonDecodeHighPrepared(", helper)
     if helper < 0 or prepared < 0:
         raise ModelError("{} is missing the block-zero cancellation helper".format(label))
     segment = compact[helper:prepared]
-    required = (
+    common_required = (
+        "FFT_DIT(ops,buffer_bytes,work,t,t,FFTSkewStorage);",
+    )
+    instrumentation_required = (
         "if(block_zero_input_count!=0)"
         "TestHighSyndromeBlockZeroIFFTElisions.fetch_add(",
-        "if(!have_later_contribution){StageHighDecodeSources("
-        "buffer_bytes,block_zero_sources,work,t);",
         "TestHighSyndromeForwardTransformElisions.fetch_add(",
-        "FFT_DIT(ops,buffer_bytes,work,t,t,FFTSkewStorage);",
-        "xor_mem(ops,work[i],block_zero_sources[i],buffer_bytes);",
     )
-    if any(token not in segment for token in required):
+    exact_tiled_call = None
+    if label == "LeopardFF8.cpp":
+        field_required = (
+            "void**work,uint64_texact_source_bytes=0){",
+            "if(!have_later_contribution){StageHighDecodeSources("
+            "buffer_bytes,block_zero_sources,work,t,exact_source_bytes);",
+            "xor_mem(ops,work[i],block_zero_sources[i],"
+            "exact_source_bytes!=0?exact_source_bytes:buffer_bytes);",
+        )
+        exact_tiled_call = (
+            "FinishHighDecodeSyndrome(ops,buffer_bytes,coordinate_data,"
+            "block_input_counts[0],have_later_contribution,t,accumulator,"
+            "exact_source_bytes);"
+        )
+    elif label == "LeopardFF16.cpp":
+        field_required = (
+            "unsignedt,void**work){",
+            "if(!have_later_contribution){StageHighDecodeSources("
+            "buffer_bytes,block_zero_sources,work,t);",
+            "xor_mem(ops,work[i],block_zero_sources[i],buffer_bytes);",
+        )
+        if "exact_source_bytes" in segment:
+            raise ModelError(
+                "{} unexpectedly acquired the GF8 exact-byte helper contract".format(
+                    label
+                )
+            )
+    else:
+        raise ModelError(
+            "{} has no declared block-zero cancellation contract".format(label)
+        )
+    if any(token not in segment for token in common_required + field_required):
         raise ModelError(
             "{} block-zero cancellation identity or counters drifted".format(label)
         )
+    if any(token not in lexical_compact for token in instrumentation_required):
+        raise ModelError(
+            "{} block-zero cancellation instrumentation drifted".format(label)
+        )
+    if label == "LeopardFF8.cpp":
+        for token, description in (
+            (
+                "StageHighDecodeSources(buffer_bytes,block_zero_sources,"
+                "work,t,exact_source_bytes);",
+                "exact-source stage",
+            ),
+            (
+                "FFT_DIT(ops,buffer_bytes,work,t,t,FFTSkewStorage);",
+                "syndrome forward transform",
+            ),
+            (
+                "xor_mem(ops,work[i],block_zero_sources[i],"
+                "exact_source_bytes!=0?exact_source_bytes:buffer_bytes);",
+                "exact-source XOR",
+            ),
+        ):
+            _require_locally_unconditional_cpp_token(
+                source,
+                "staticvoidFinishHighDecodeSyndrome(",
+                "voidReedSolomonDecodeHighPrepared(",
+                token,
+                "{} block-zero {}".format(label, description),
+            )
     if compact.count("FinishHighDecodeSyndrome(") != 4:
         raise ModelError(
             "{} does not route prepared/materialized/tiled Algorithm 5 through "
@@ -464,15 +1002,40 @@ def verify_high_decode_zero_shift_cancellation_source(
     materialized_end = compact.find(
         "voidReedSolomonDecodeHighPlanned(", materialized
     )
-    tiled = compact.find(
-        "voidReedSolomonDecodeHighTiledPrunedPlanned(constbackend::Ops&"
-    )
-    tiled_end = compact.find("voidReedSolomonDecodeHighTiledPlanned(", tiled)
+    if label == "LeopardFF8.cpp":
+        tiled = compact.find(
+            "voidReedSolomonDecodeHighTiledPrunedPlannedExactSources("
+            "constbackend::Ops&"
+        )
+        tiled_end = compact.find(
+            "voidReedSolomonDecodeHighTiledPrunedPlanned(", tiled
+        )
+    else:
+        tiled = compact.find(
+            "voidReedSolomonDecodeHighTiledPrunedPlanned(constbackend::Ops&"
+        )
+        tiled_end = compact.find("voidReedSolomonDecodeHighTiledPlanned(", tiled)
     if min(materialized, materialized_end, tiled, tiled_end) < 0:
         raise ModelError("{} is missing a planned Algorithm 5 layout".format(label))
+    materialized_segment = compact[materialized:materialized_end]
+    tiled_segment = compact[tiled:tiled_end]
+    if exact_tiled_call is not None and exact_tiled_call not in tiled_segment:
+        raise ModelError(
+            "{} no longer propagates exact source bytes through the exact "
+            "tiled Algorithm 5 implementation".format(label)
+        )
+    if exact_tiled_call is not None:
+        _require_locally_unconditional_cpp_token(
+            source,
+            "voidReedSolomonDecodeHighTiledPrunedPlannedExactSources("
+            "constbackend::Ops&",
+            "voidReedSolomonDecodeHighTiledPrunedPlanned(",
+            exact_tiled_call,
+            "{} exact tiled Algorithm 5".format(label),
+        )
     for name, body in (
-        ("materialized", compact[materialized:materialized_end]),
-        ("tiled", compact[tiled:tiled_end]),
+        ("materialized", materialized_segment),
+        ("tiled", tiled_segment),
     ):
         if "for(unsignedblock=1;block<block_count;++block)" not in body or \
                 "input_plans[input_plan_index].block==0" not in body or \
@@ -3641,6 +4204,26 @@ def run_self_test(verbose: bool = True) -> None:
         )
     ff8_source = (root / "LeopardFF8.cpp").read_text(encoding="utf-8")
     ff16_source = (root / "LeopardFF16.cpp").read_text(encoding="utf-8")
+
+    def conditionally_dead_function_token(
+        source: str, function_begin: str, function_end: str, token: str,
+    ) -> str:
+        begin = source.find(function_begin)
+        end = source.find(function_end, begin + len(function_begin))
+        checks.require(
+            begin >= 0 and end > begin,
+            "conditional callsite function mutation fixture",
+        )
+        offset = source.find(token, begin, end)
+        checks.require(
+            offset >= 0 and source.find(token, offset + 1, end) < 0,
+            "conditional callsite token mutation fixture",
+        )
+        return (
+            source[:offset] + "#if !1\n" + token + "\n#endif" +
+            source[offset + len(token):]
+        )
+
     checks.accepts(
         lambda: verify_decode_fusion_sources(
             core_source, ff8_source, ff16_source
@@ -3855,12 +4438,347 @@ def run_self_test(verbose: bool = True) -> None:
         checks.rejects_model_error(
             lambda source=source, filename=filename:
                 verify_high_decode_no_copy_source(
-                source + "\nfor (unsigned i = 0; i < t; ++i) "
+                    source + "\nfor (unsigned i = 0; i < t; ++i) "
                 "memcpy(tile[i], accumulator[i], buffer_bytes);\n",
                 filename + " high mutation",
             ),
             "{} whole-T copy mutation detection".format(filename),
         )
+
+    ff8_without_exact_stage = ff8_source.replace(
+        "buffer_bytes, block_zero_sources, work, t, exact_source_bytes);",
+        "buffer_bytes, block_zero_sources, work, t);",
+        1,
+    )
+    checks.rejects_model_error(
+        lambda: verify_high_decode_zero_shift_cancellation_source(
+            ff8_without_exact_stage, "LeopardFF8.cpp"
+        ),
+        "GF8 exact-byte stage mutation detection",
+    )
+    ff8_without_exact_xor = ff8_source.replace(
+        "exact_source_bytes != 0 ? exact_source_bytes : buffer_bytes);",
+        "buffer_bytes);",
+        1,
+    )
+    checks.rejects_model_error(
+        lambda: verify_high_decode_zero_shift_cancellation_source(
+            ff8_without_exact_xor, "LeopardFF8.cpp"
+        ),
+        "GF8 exact-byte XOR mutation detection",
+    )
+    exact_tiled_call_source = (
+        "    FinishHighDecodeSyndrome(\n"
+        "        ops, buffer_bytes, coordinate_data, block_input_counts[0],\n"
+        "        have_later_contribution, t, accumulator, exact_source_bytes);"
+    )
+    checks.require(
+        ff8_source.count(exact_tiled_call_source) == 1,
+        "GF8 exact tiled call mutation fixture",
+    )
+    ff8_without_exact_tiled_call = ff8_source.replace(
+        "have_later_contribution, t, accumulator, exact_source_bytes);",
+        "have_later_contribution, t, accumulator);",
+        1,
+    )
+    checks.rejects_model_error(
+        lambda: verify_high_decode_zero_shift_cancellation_source(
+            ff8_without_exact_tiled_call, "LeopardFF8.cpp"
+        ),
+        "GF8 tiled exact-byte propagation mutation detection",
+    )
+    ff8_with_decoy_exact_tiled_call = ff8_without_exact_tiled_call + (
+        "\n// FinishHighDecodeSyndrome(ops, buffer_bytes, coordinate_data, "
+        "block_input_counts[0], have_later_contribution, t, accumulator, "
+        "exact_source_bytes);\n"
+    )
+    checks.rejects_model_error(
+        lambda: verify_high_decode_zero_shift_cancellation_source(
+            ff8_with_decoy_exact_tiled_call, "LeopardFF8.cpp"
+        ),
+        "GF8 out-of-function exact-byte decoy rejection",
+    )
+    exact_tiled_call_compact = (
+        "FinishHighDecodeSyndrome(ops, buffer_bytes, coordinate_data, "
+        "block_input_counts[0], have_later_contribution, t, accumulator, "
+        "exact_source_bytes);"
+    )
+    lexical_decoys = (
+        ("comment", "    // " + exact_tiled_call_compact),
+        ("block-comment", "    /* " + exact_tiled_call_compact + " */"),
+        ("spliced-comment-lf",
+         "    // dead \\\n    " + exact_tiled_call_compact),
+        ("spliced-comment-crlf",
+         "    // dead \\\r\n    " + exact_tiled_call_compact),
+        ("synthesized-comment-lf",
+         "    /\\\n/ " + exact_tiled_call_compact),
+        ("synthesized-comment-crlf",
+         "    /\\\r\n/ " + exact_tiled_call_compact),
+        ("synthesized-block-comment-lf",
+         "    /\\\n* " + exact_tiled_call_compact + " */"),
+        ("synthesized-block-comment-crlf",
+         "    /\\\r\n* " + exact_tiled_call_compact + " */"),
+        ("string", '    (void) "' + exact_tiled_call_compact + '";'),
+        ("character", "    (void) '" + exact_tiled_call_compact + "';"),
+        ("raw-string",
+         '    (void) R"leo(' + exact_tiled_call_compact + ')leo";'),
+        ("disabled", "#if 0\n    " + exact_tiled_call_compact +
+         "\n#endif"),
+        ("disabled-octal-zero", "#if 00\n    " +
+         exact_tiled_call_compact + "\n#endif"),
+        ("disabled-hex-zero", "#if 0x0\n    " +
+         exact_tiled_call_compact + "\n#endif"),
+        ("disabled-binary-zero", "#if 0b0\n    " +
+         exact_tiled_call_compact + "\n#endif"),
+        ("disabled-zero-sum", "#if 0U + 0U\n    " +
+         exact_tiled_call_compact + "\n#endif"),
+        ("disabled-logical-not", "#if !1\n    " +
+         exact_tiled_call_compact + "\n#endif"),
+        ("disabled-product", "#if 0 * 1\n    " +
+         exact_tiled_call_compact + "\n#endif"),
+        ("disabled-comparison", "#if (1 == 0)\n    " +
+         exact_tiled_call_compact + "\n#endif"),
+        ("disabled-short-circuit", "#if 0 && ANYTHING\n    " +
+         exact_tiled_call_compact + "\n#endif"),
+        ("disabled-form-feed", "\f#if 0\n    " +
+         exact_tiled_call_compact + "\n#endif"),
+        ("taken-before-unknown-elif",
+         "#if 1\n    (void) 0;\n#elif ANYTHING\n    " +
+         exact_tiled_call_compact + "\n#endif"),
+        ("unknown-before-false-elif",
+         "#if ANYTHING\n    (void) 0;\n#elif false\n    " +
+         exact_tiled_call_compact + "\n#endif"),
+        ("define", "#define LEO2_DECOY " + exact_tiled_call_compact),
+        ("continued-define",
+         "#define LEO2_DECOY \\\n    " + exact_tiled_call_compact),
+        ("pragma", "#pragma LEO2_DECOY " + exact_tiled_call_compact),
+        ("digraph-define",
+         "%:define LEO2_DECOY " + exact_tiled_call_compact),
+        ("digraph-disabled",
+         "%:if 0\n    " + exact_tiled_call_compact + "\n%:endif"),
+        ("trigraph-define",
+         "??=define LEO2_DECOY " + exact_tiled_call_compact),
+        ("production-disabled-test-hook-if",
+         "#if defined(LEO2_ENABLE_TEST_HOOKS)\n    " +
+         exact_tiled_call_compact + "\n#endif"),
+        ("production-disabled-test-hook-ifdef",
+         "#ifdef LEO2_ENABLE_TEST_HOOKS\n    " +
+         exact_tiled_call_compact + "\n#endif"),
+    )
+    for kind, decoy in lexical_decoys:
+        mutated = ff8_source.replace(exact_tiled_call_source, decoy, 1)
+        checks.rejects_model_error(
+            lambda mutated=mutated:
+                verify_high_decode_zero_shift_cancellation_source(
+                    mutated, "LeopardFF8.cpp"
+                ),
+            "GF8 in-function {} exact-byte decoy rejection".format(kind),
+        )
+
+    receive_token = (
+        "            ops.ff8_ifft_butterfly4_out(\n"
+        "                sources[r], sources[r + 1], sources[r + 2], "
+        "sources[r + 3],"
+    )
+    receive_hook_decoy = ff8_source.replace(
+        receive_token,
+        "#if defined(LEO2_ENABLE_TEST_HOOKS)\n" + receive_token +
+        "\n#endif",
+        1,
+    )
+    checks.require(
+        receive_hook_decoy != ff8_source,
+        "GF8 receive-fusion test-hook mutation applied",
+    )
+    checks.rejects_model_error(
+        lambda: verify_high_decode_receive_fusion_source(
+            receive_hook_decoy, "LeopardFF8.cpp"
+        ),
+        "GF8 production-disabled receive-fusion decoy rejection",
+    )
+    receive_dead_decoy = ff8_source.replace(
+        receive_token,
+        "#if !1\n" + receive_token + "\n#endif",
+        1,
+    )
+    checks.rejects_model_error(
+        lambda: verify_high_decode_receive_fusion_source(
+            receive_dead_decoy, "LeopardFF8.cpp"
+        ),
+        "GF8 conditionally dead receive-fusion decoy rejection",
+    )
+    receive_fallback_tokens = (
+        "        StageHighDecodeSources(bytes, sources, work, m);",
+        "        IFFT_DIT_DecoderImpl(\n"
+        "            ops, bytes, m_truncated, work, m, skewLUT, "
+        "xor_result, 1);",
+    )
+    for index, token in enumerate(receive_fallback_tokens):
+        checks.require(
+            ff8_source.count(token) == 1,
+            "GF8 receive-fallback mutation fixture {}".format(index),
+        )
+        dead_fallback = ff8_source.replace(
+            token, "#if !1\n" + token + "\n#endif", 1)
+        checks.rejects_model_error(
+            lambda dead_fallback=dead_fallback:
+                verify_high_decode_receive_fusion_source(
+                    dead_fallback, "LeopardFF8.cpp"
+                ),
+            "GF8 conditionally dead receive-fallback {} rejection".format(
+                index
+            ),
+        )
+    weighted_token = (
+        "        ops.ff8_weighted_ifft_butterfly4(\n"
+        "            work[r], work[r + 1], work[r + 2], work[r + 3],"
+    )
+    weighted_hook_decoy = ff8_source.replace(
+        weighted_token,
+        "#ifdef LEO2_ENABLE_TEST_HOOKS\n" + weighted_token + "\n#endif",
+        1,
+    )
+    checks.require(
+        weighted_hook_decoy != ff8_source,
+        "GF8 weighted-locator test-hook mutation applied",
+    )
+    checks.rejects_model_error(
+        lambda: verify_high_decode_weighted_locator_source(
+            weighted_hook_decoy, "LeopardFF8.cpp"
+        ),
+        "GF8 production-disabled weighted-locator decoy rejection",
+    )
+    weighted_dead_decoy = ff8_source.replace(
+        weighted_token,
+        "#if !1\n" + weighted_token + "\n#endif",
+        1,
+    )
+    checks.rejects_model_error(
+        lambda: verify_high_decode_weighted_locator_source(
+            weighted_dead_decoy, "LeopardFF8.cpp"
+        ),
+        "GF8 conditionally dead weighted-locator decoy rejection",
+    )
+    weighted_fallback_tokens = (
+        "                mul_mem_inplace(ops, work[i], locator_logs[i], "
+        "bytes);",
+        "        IFFT_DIT_Decoder(ops, bytes, m, work, m, skewLUT);",
+    )
+    for index, token in enumerate(weighted_fallback_tokens):
+        checks.require(
+            ff8_source.count(token) == 1,
+            "GF8 weighted-fallback mutation fixture {}".format(index),
+        )
+        dead_fallback = ff8_source.replace(
+            token, "#if !1\n" + token + "\n#endif", 1)
+        checks.rejects_model_error(
+            lambda dead_fallback=dead_fallback:
+                verify_high_decode_weighted_locator_source(
+                    dead_fallback, "LeopardFF8.cpp"
+                ),
+            "GF8 conditionally dead weighted-fallback {} rejection".format(
+                index
+            ),
+        )
+    callsite_fixtures = (
+        (
+            "prepared",
+            "void ReedSolomonDecodeHighPrepared(\n"
+            "    const backend::Ops&",
+            "void ReedSolomonDecodeHighPrepared(\n"
+            "    uint64_t",
+        ),
+        (
+            "materialized",
+            "void ReedSolomonDecodeHighPrunedPlanned(\n"
+            "    const backend::Ops&",
+            "void ReedSolomonDecodeHighPlanned(\n"
+            "    const backend::Ops&",
+        ),
+        (
+            "tiled",
+            "void ReedSolomonDecodeHighTiledPrunedPlannedExactSources(\n"
+            "    const backend::Ops&",
+            "void ReedSolomonDecodeHighTiledPrunedPlanned(\n"
+            "    const backend::Ops&",
+        ),
+    )
+    for name, function_begin, function_end in callsite_fixtures:
+        dead_receive_callsite = conditionally_dead_function_token(
+            ff8_source, function_begin, function_end,
+            "IFFT_DIT_DecoderFromSources(",
+        )
+        checks.rejects_model_error(
+            lambda dead_receive_callsite=dead_receive_callsite:
+                verify_high_decode_receive_fusion_source(
+                    dead_receive_callsite, "LeopardFF8.cpp"
+                ),
+            "GF8 conditionally dead {} receive dispatcher rejection".format(
+                name
+            ),
+        )
+        dead_weighted_callsite = conditionally_dead_function_token(
+            ff8_source, function_begin, function_end,
+            "IFFT_DIT_DecoderWeightedLocator(",
+        )
+        checks.rejects_model_error(
+            lambda dead_weighted_callsite=dead_weighted_callsite:
+                verify_high_decode_weighted_locator_source(
+                    dead_weighted_callsite, "LeopardFF8.cpp"
+                ),
+            "GF8 conditionally dead {} weighted dispatcher rejection".format(
+                name
+            ),
+        )
+    exact_stage_source = (
+        "        StageHighDecodeSources(\n"
+        "            buffer_bytes, block_zero_sources, work, t, "
+        "exact_source_bytes);"
+    )
+    checks.require(
+        ff8_source.count(exact_stage_source) == 1,
+        "GF8 exact-source stage mutation fixture",
+    )
+    dead_exact_stage = ff8_source.replace(
+        exact_stage_source,
+        "#if !1\n" + exact_stage_source + "\n#endif",
+        1,
+    )
+    checks.rejects_model_error(
+        lambda: verify_high_decode_zero_shift_cancellation_source(
+            dead_exact_stage, "LeopardFF8.cpp"
+        ),
+        "GF8 conditionally dead exact-source stage rejection",
+    )
+    exact_function_begin = \
+        "void ReedSolomonDecodeHighTiledPrunedPlannedExactSources("
+    exact_function_end = \
+        "void ReedSolomonDecodeHighTiledPrunedPlanned("
+    exact_function_offset = ff8_source.find(exact_function_begin)
+    exact_function_end_offset = ff8_source.find(
+        exact_function_end, exact_function_offset)
+    checks.require(
+        exact_function_offset >= 0 and
+        exact_function_end_offset > exact_function_offset,
+        "GF8 exact-sources function mutation fixture",
+    )
+    dead_exact_function = (
+        ff8_source[:exact_function_offset] + "#if 0 * 1\n" +
+        ff8_source[exact_function_offset:exact_function_end_offset] +
+        "#endif\n" + ff8_source[exact_function_end_offset:]
+    )
+    checks.rejects_model_error(
+        lambda: verify_high_decode_zero_shift_cancellation_source(
+            dead_exact_function, "LeopardFF8.cpp"
+        ),
+        "GF8 conditionally dead exact-sources function rejection",
+    )
+    checks.rejects_model_error(
+        lambda: verify_high_decode_zero_shift_cancellation_source(
+            ff8_source, "unknown field source"
+        ),
+        "undeclared high-decode field contract rejection",
+    )
 
     direct = model_direct_repair(16, 8, 16, 16, "low", set(range(4)))
     checks.require(

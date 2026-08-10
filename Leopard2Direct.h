@@ -310,6 +310,12 @@ bool SetHighT16PreparedTerminalEnabledForDiagnostics(bool enabled);
 */
 bool SetK9R5B256TerminalEnabledForDiagnostics(bool enabled);
 
+/* Process-local benchmark control for the exact K=9/R=5/1024-byte packed
+   terminal.  It is independent of the promoted 256-byte selector.  Change it
+   only while no encode call, path introspection, or binding construction is
+   executing. */
+bool SetK9R5B1024TerminalEnabledForDiagnostics(bool enabled);
+
 /*
     Process-local benchmark control for the exact K=9/R=6..8/256-byte packed
     terminals.  Change it only while no encode call is executing.  This

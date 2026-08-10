@@ -28,7 +28,14 @@
 #define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
 #endif
 
+#ifndef LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK
+#define LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK 0
+#endif
+
 namespace {
+
+const bool kExpectSmallDualRegularFallback =
+    LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK != 0;
 
 class AlignedBytes
 {
@@ -778,12 +785,14 @@ int main()
           LEO2_PROFILE_LEGACY_HIGH_V1, 64, 32, 32, false },
         { "negative-t32-r-minus-one", LEO2_BACKEND_AVX2, LEO2_FIELD_GF8,
           LEO2_PROFILE_LEGACY_HIGH_V1, 64, 31, 31, false },
-        { "negative-k-below-boundary", LEO2_BACKEND_AVX2,
-          LEO2_FIELD_GF8, LEO2_PROFILE_LEGACY_HIGH_V1, 14, 8, 8, false },
+        { "small-dual-k-below-boundary", LEO2_BACKEND_AVX2,
+          LEO2_FIELD_GF8, LEO2_PROFILE_LEGACY_HIGH_V1, 14, 8, 8,
+          kExpectSmallDualRegularFallback },
         { "mixed-original-parity-loss", LEO2_BACKEND_AVX2, LEO2_FIELD_GF8,
           LEO2_PROFILE_LEGACY_HIGH_V1, 16, 8, 7, false },
-        { "negative-r-two-below-t", LEO2_BACKEND_AVX2, LEO2_FIELD_GF8,
-          LEO2_PROFILE_LEGACY_HIGH_V1, 16, 6, 6, false },
+        { "small-dual-r-two-below-t", LEO2_BACKEND_AVX2, LEO2_FIELD_GF8,
+          LEO2_PROFILE_LEGACY_HIGH_V1, 16, 6, 6,
+          kExpectSmallDualRegularFallback },
         { "positive-auto-avx2", LEO2_BACKEND_AUTO, LEO2_FIELD_GF8,
           LEO2_PROFILE_LEGACY_HIGH_V1, 16, 8, 8, true },
         // GFNI executes the same AVX2-tier dense schedule and the setup

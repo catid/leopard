@@ -2375,6 +2375,33 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             self.assertIn(
                 "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK:BOOL=ON",
                 configure)
+            v10_on_cache = dict(cache)
+            v10_on_cache[
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V10
+            v10_on_configure = provenance._reproducible_configure_argv(
+                SOURCE_ROOT, Path(directory) / "v10-on-build",
+                v10_on_cache)
+            self.assertIn(
+                "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED:BOOL=ON",
+                v10_on_configure)
+            self.assertIn(
+                "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK:BOOL=ON",
+                v10_on_configure)
+            v10_cache = dict(cache)
+            v10_cache[
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V10
+            v10_cache[
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"] = "OFF"
+            v10_configure = provenance._reproducible_configure_argv(
+                SOURCE_ROOT, Path(directory) / "v10-build", v10_cache)
+            self.assertIn(
+                "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED:BOOL=ON",
+                v10_configure)
+            self.assertIn(
+                "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK:BOOL=OFF",
+                v10_configure)
             v8_cache = dict(cache)
             for selector in (
                     "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
@@ -3636,6 +3663,42 @@ class ExactCommandValidationTests(unittest.TestCase):
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9)
         self.assertEqual(
             v9_validated["LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"], "ON")
+        v10_cache = dict(cache)
+        v10_cache["LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"] = "OFF"
+        v10_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V10
+        v10_validated = provenance._validate_candidate_required_cache(
+            v10_cache,
+            expected_configuration_schema=
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V10)
+        self.assertEqual(
+            v10_validated["LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"], "ON")
+        self.assertEqual(
+            v10_validated[
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"], "OFF")
+        v10_on_cache = dict(v10_cache)
+        v10_on_cache[
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"] = "ON"
+        v10_on_validated = provenance._validate_candidate_required_cache(
+            v10_on_cache,
+            expected_configuration_schema=
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V10)
+        self.assertEqual(
+            v10_on_validated[
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"], "ON")
+        for selector, value in (
+                ("LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK", "INVALID"),
+                ("LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED", "OFF")):
+            with self.subTest(v10_drift=selector):
+                changed_v10 = dict(v10_cache)
+                changed_v10[selector] = value
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        selector.removeprefix("LEO2_")):
+                    provenance._validate_candidate_required_cache(
+                        changed_v10,
+                        expected_configuration_schema=(
+                            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V10))
         selectors = {
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
@@ -3758,7 +3821,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                 }
                 with self.assertRaisesRegex(
                         provenance.BuildProvenanceError,
-                        "supports only v5 through v9 and current"):
+                        "supports only v5 through v10 and current"):
                     provenance.verify_reproducible_candidate_build(
                         candidate, jobs=1)
 
@@ -3870,6 +3933,23 @@ class ExactCommandValidationTests(unittest.TestCase):
         v8["validated_cache"][
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8
+        v9 = copy.deepcopy(current)
+        v9["validated_cache"].pop(
+            "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED")
+        v9["validated_cache"][
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"] = "OFF"
+        v9["validated_cache"][
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9
+        v10 = copy.deepcopy(current)
+        v10["validated_cache"][
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"] = "OFF"
+        v10["validated_cache"][
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V10
+        v10_on = copy.deepcopy(v10)
+        v10_on["validated_cache"][
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"] = "ON"
         v4 = {
             "schema": provenance.PRODUCTION_BUILD_CLOSURE_SCHEMA,
             "validated_cache": {
@@ -3922,6 +4002,24 @@ class ExactCommandValidationTests(unittest.TestCase):
                 provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
                     "configuration_schema"],
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8)
+        self.assertEqual(
+            provenance._require_reproducible_replay_artifact_contract(
+                v9, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
+                    "configuration_schema"],
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9)
+        self.assertEqual(
+            provenance._require_reproducible_replay_artifact_contract(
+                v10, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
+                    "configuration_schema"],
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V10)
+        self.assertEqual(
+            provenance._require_reproducible_replay_artifact_contract(
+                v10_on, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
+                    "configuration_schema"],
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V10)
         self.assertEqual(
             provenance._require_reproducible_replay_artifact_contract(
                 v5, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
@@ -4002,7 +4100,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = "ON"
         with self.assertRaisesRegex(
                 provenance.BuildProvenanceError,
-                "v6/v7/v8/v9/current reproducible-build closure"):
+                "v6/v7/v8/v9/v10/current reproducible-build closure"):
             provenance._reproducible_replay_contract(
                 v7_with_current_selector)
 
@@ -4014,9 +4112,20 @@ class ExactCommandValidationTests(unittest.TestCase):
                 v8_with_current_selector["validated_cache"][selector] = value
                 with self.assertRaisesRegex(
                         provenance.BuildProvenanceError,
-                        "v6/v7/v8/v9/current reproducible-build closure"):
+                        "v6/v7/v8/v9/v10/current reproducible-build closure"):
                     provenance._reproducible_replay_contract(
                         v8_with_current_selector)
+
+        for selector, value in (
+                ("LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK", "INVALID"),
+                ("LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED", "OFF")):
+            with self.subTest(v10_drift=selector):
+                changed_v10 = copy.deepcopy(v10)
+                changed_v10["validated_cache"][selector] = value
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "v6/v7/v8/v9/v10/current reproducible-build closure"):
+                    provenance._reproducible_replay_contract(changed_v10)
 
         for selector in (
                 "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",

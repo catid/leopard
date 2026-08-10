@@ -134,6 +134,7 @@ struct Options
     bool disable_t8_full_parity_terminal;
     bool disable_k16r8_b256_terminal;
     bool disable_k9r5_b256_terminal;
+    bool disable_k9r5_b1024_terminal;
     bool disable_k9r6r8_b256_terminal;
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
     bool disable_high_t16_q2_b64_fused;
@@ -198,6 +199,7 @@ struct Options
         , disable_t8_full_parity_terminal(false)
         , disable_k16r8_b256_terminal(false)
         , disable_k9r5_b256_terminal(false)
+        , disable_k9r5_b1024_terminal(false)
         , disable_k9r6r8_b256_terminal(false)
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
         , disable_high_t16_q2_b64_fused(false)
@@ -522,6 +524,8 @@ static void Usage(std::ostream& output, const char* program)
         << "                         Attribution-only: retain the prior ordinary encode path\n"
         << "  --disable-k9r5-b256-terminal\n"
         << "                         Attribution-only: retain the prior ordinary encode path\n"
+        << "  --disable-k9r5-b1024-terminal\n"
+        << "                         Attribution-only: retain the prior 1-KiB encode path\n"
         << "  --disable-k9r6r8-b256-terminal\n"
         << "                         Attribution-only: retain the prior path using schema v10\n"
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
@@ -754,6 +758,8 @@ static Options ParseOptions(int argc, char** argv)
             options.disable_k16r8_b256_terminal = true;
         else if (argument == "--disable-k9r5-b256-terminal")
             options.disable_k9r5_b256_terminal = true;
+        else if (argument == "--disable-k9r5-b1024-terminal")
+            options.disable_k9r5_b1024_terminal = true;
         else if (argument == "--disable-k9r6r8-b256-terminal")
             options.disable_k9r6r8_b256_terminal = true;
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
@@ -836,6 +842,7 @@ static Options ParseOptions(int argc, char** argv)
          options.k8r3r4_t4_terminal_mode >= 0 ||
          options.disable_k16r8_b256_terminal ||
          options.disable_k9r5_b256_terminal ||
+         options.disable_k9r5_b1024_terminal ||
          options.disable_k9r6r8_b256_terminal))
     {
         Fail("--r1-small-reduction-mode requires explicit high/GF8/AVX2, "
@@ -860,6 +867,7 @@ static Options ParseOptions(int argc, char** argv)
          options.balanced_b64_terminal_mode >= 0 ||
          options.disable_k16r8_b256_terminal ||
          options.disable_k9r5_b256_terminal ||
+         options.disable_k9r5_b1024_terminal ||
          options.disable_k9r6r8_b256_terminal))
     {
         Fail("--r1-fixed-avx2-mode requires explicit high/GF8/AVX2, "
@@ -880,6 +888,7 @@ static Options ParseOptions(int argc, char** argv)
          options.k8r3r4_t4_terminal_mode >= 0 ||
          options.disable_k16r8_b256_terminal ||
          options.disable_k9r5_b256_terminal ||
+         options.disable_k9r5_b1024_terminal ||
          options.disable_k9r6r8_b256_terminal))
     {
         Fail("--one-shot-plan-setup-mode requires explicit high/GF8/AVX2, "
@@ -900,6 +909,7 @@ static Options ParseOptions(int argc, char** argv)
          options.k8r3r4_t4_terminal_mode >= 0 ||
          options.disable_k16r8_b256_terminal ||
          options.disable_k9r5_b256_terminal ||
+         options.disable_k9r5_b1024_terminal ||
          options.disable_k9r6r8_b256_terminal))
     {
         Fail("--gf8-avx2-walsh-locator-mode requires explicit GF8/AVX2, "
@@ -942,6 +952,7 @@ static Options ParseOptions(int argc, char** argv)
          options.k8r3r4_t4_terminal_mode >= 0 ||
          options.disable_k16r8_b256_terminal ||
          options.disable_k9r5_b256_terminal ||
+         options.disable_k9r5_b1024_terminal ||
          options.disable_k9r6r8_b256_terminal))
     {
         Fail("--low-p32-b64-terminal-mode requires explicit high/GF8/AVX2, "
@@ -963,6 +974,7 @@ static Options ParseOptions(int argc, char** argv)
          options.k8r3r4_t4_terminal_mode >= 0 ||
          options.disable_k16r8_b256_terminal ||
          options.disable_k9r5_b256_terminal ||
+         options.disable_k9r5_b1024_terminal ||
          options.disable_k9r6r8_b256_terminal))
     {
         Fail("--low-p128-b64-terminal-mode requires explicit high/GF8/AVX2, "
@@ -985,6 +997,7 @@ static Options ParseOptions(int argc, char** argv)
          options.k8r3r4_t4_terminal_mode >= 0 ||
          options.disable_k16r8_b256_terminal ||
          options.disable_k9r5_b256_terminal ||
+         options.disable_k9r5_b1024_terminal ||
          options.disable_k9r6r8_b256_terminal))
     {
         Fail("--low-p16-partial-direct-output-mode requires explicit "
@@ -1746,6 +1759,9 @@ static int Run(const Options& options)
     if (options.disable_k9r5_b256_terminal &&
         !leopard2_internal::SetK9R5B256TerminalEnabledForDiagnostics(false))
         Fail("cannot disable the K9/R5/256-byte terminal for attribution");
+    if (options.disable_k9r5_b1024_terminal &&
+        !leopard2_internal::SetK9R5B1024TerminalEnabledForDiagnostics(false))
+        Fail("cannot disable the K9/R5/1024-byte terminal for attribution");
     if (options.disable_k9r6r8_b256_terminal &&
         !leopard2_internal::SetK9R6R8B256TerminalEnabledForDiagnostics(false))
         Fail("cannot disable the K9/R=6..8/256-byte terminal for attribution");
@@ -2493,7 +2509,10 @@ static int Run(const Options& options)
          << (options.disable_k16r8_b256_terminal ? "true" : "false")
          << ",\n"
          << "    \"k9r5_b256_terminal_diagnostic_disabled\": "
-         << (options.disable_k9r5_b256_terminal ? "true" : "false");
+         << (options.disable_k9r5_b256_terminal ? "true" : "false")
+         << ",\n"
+         << "    \"k9r5_b1024_terminal_diagnostic_disabled\": "
+         << (options.disable_k9r5_b1024_terminal ? "true" : "false");
     if (options.balanced_b64_terminal_mode >= 0)
     {
         json << ",\n"

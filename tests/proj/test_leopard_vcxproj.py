@@ -28,7 +28,7 @@ BENCHMARK_ATTESTATION_MODULE = \
 BENCHMARK_ATTESTATION_GENERATOR = \
     ROOT / "cmake" / "GenerateBenchmarkSourceAttestation.cmake"
 BENCHMARK_ATTESTATION_MODULE_SHA256 = \
-    "be06ff6635d29a0e75200580e9b689b8dca2a41cb63353ddec931de6e9d3b241"
+    "55fbc86d8ff32430be0d254f8911a1aff69117f9ed2c52ff728f9ebef15151b2"
 BENCHMARK_ATTESTATION_GENERATOR_SHA256 = \
     "21857083921f70d62f44f0d5327d88e375f845906ab97493dbbdecfe3e07a389"
 NS = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
@@ -48,6 +48,7 @@ AVX2_SOURCE_FILES = {
     "Leopard2BackendAVX2T2K4.cpp",
     "Leopard2BackendAVX2T8K8B1024.cpp",
     "Leopard2BackendAVX2T16B64.cpp",
+    "Leopard2BackendAVX2T16Q2.cpp",
     "Leopard2BackendAVX2T32B256.cpp",
     "Leopard2BackendAVX2Xor.cpp",
     "Leopard2LowP32B64AVX2.cpp",
@@ -68,9 +69,11 @@ BACKEND_DEFINITIONS = {
     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1",
     "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
     "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=1",
     "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1",
     "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
     "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
+    "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
     "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1",
     "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1",
     "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
@@ -586,6 +589,7 @@ class CMakeProductionGraph(object):
         re.IGNORECASE)
     _small_dual_feature_source_property = (
         "SOURCE", "leopard2.cpp", "tests/leopard2/test_api.cpp",
+        "tests/leopard2/test_dense_plan_policy.cpp",
         "tests/leopard2/test_small_dual_direct.cpp", "APPEND", "PROPERTY",
         "COMPILE_DEFINITIONS",
         "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT="
@@ -695,7 +699,7 @@ class CMakeProductionGraph(object):
         r"EXPERIMENT_(?:CAUCHY_LOG_REUSE|DIRECT_SOURCE_PLAN|"
         r"GENERAL_ONE_LOSS_DIRECT|HIGH_DIRECT_ENCODE(?:_AUTO)?|"
         r"HIGH_T8_(?:PARTIAL_BINDING|TWO_BLOCK_BINDING|RAGGED_BINDING)|"
-        r"HIGH_T16_B64_GENERATED|"
+        r"HIGH_T16_(?:B64_GENERATED|Q2_B64_FUSED)|"
         r"HIGH_T32_B256_(?:GENERATED|TWO_BLOCK)|"
         r"ONE_SHOT_EQUAL_ROUNDED_DIRECT|"
         r"LOW_P32_B64_TERMINAL|"
@@ -739,6 +743,8 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING="
             "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>")),
         ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1")),
+        ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1")),
         ("leopard", "target_include_directories", (
             "PUBLIC", "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>",
@@ -758,6 +764,8 @@ class CMakeProductionGraph(object):
         ("leopard2_backend_avx2", "target_compile_definitions", (
             "PRIVATE", "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING="
             "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>")),
+        ("leopard2_backend_avx2", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1")),
         ("leopard2_backend_avx2", "target_compile_definitions", (
             "PRIVATE", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1")),
         ("leopard2_backend_avx2", "target_compile_definitions", (
@@ -1028,6 +1036,10 @@ class CMakeProductionGraph(object):
             "Enable the qualified 65..1024-byte AVX2 T=8 ragged binding "
             "selector", "ON")): 1,
         ("option", (
+            "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
+            "Enable the GF8/AVX2 K=17..32,R=9..16,B=1..64/256 fused "
+            "encoder", "ON")): 1,
+        ("option", (
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
             "Enable promoted generalized GF8/AVX2 one-loss direct repair",
             "ON")): 1,
@@ -1045,8 +1057,8 @@ class CMakeProductionGraph(object):
             "locator", "ON")): 1,
         ("option", (
             "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK",
-            "Experimentally omit pruned schedules from selected reusable "
-            "small-dual plans", "OFF")): 1,
+            "Omit slower pruned schedules from selected reusable small-dual "
+            "plans", "ON")): 1,
         ("string", (
             "TOLOWER", "${LEO2_BACKEND_VARIANT}",
             "LEO2_BACKEND_VARIANT_NORMALIZED")): 1,
@@ -1114,6 +1126,8 @@ class CMakeProductionGraph(object):
         "leopard2_allk_gap_identity_optimized_self_test": 1,
         "leopard2_t8_ragged_runner_self_test": 1,
         "leopard2_t8_ragged_runner_optimized_self_test": 1,
+        "leopard2_k9r5_b1024_runner_self_test": 1,
+        "leopard2_k9r5_b1024_runner_optimized_self_test": 1,
         "leopard2_affinity_supervisor_self_test": 1,
         "leopard2_affinity_supervisor_optimized_self_test": 1,
         "leopard2_lab_self_test": 1,
@@ -1154,6 +1168,8 @@ class CMakeProductionGraph(object):
         "leopard2_allk_gap_identity_optimized_self_test",
         "leopard2_t8_ragged_runner_self_test",
         "leopard2_t8_ragged_runner_optimized_self_test",
+        "leopard2_k9r5_b1024_runner_self_test",
+        "leopard2_k9r5_b1024_runner_optimized_self_test",
         "leopard2_affinity_supervisor_self_test",
         "leopard2_affinity_supervisor_optimized_self_test",
         "leopard2_lab_self_test",
@@ -1173,12 +1189,12 @@ class CMakeProductionGraph(object):
         "leopard2_pruned_transform_benchmark_smoke",
         "leopard2_sparse_encode_benchmark_smoke",
     })
-    # Canonical SHA-256 of the sorted complete token tuples for the 45
+    # Canonical SHA-256 of the sorted complete token tuples for the 47
     # registrations above.  Names and guards alone are insufficient: a
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "55f0bd644b08b75dfe8b705599cc052f1551eb915e83688100841516e8386da8"
+        "c87a392c339039d1590baf41fd9ab08bc93679c22f2b9cb689a15675de6f4094"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1352,6 +1368,10 @@ class CMakeProductionGraph(object):
             "Enable the qualified 65..1024-byte AVX2 T=8 ragged binding "
             "selector", "ON"))),
         ("trusted", ("option", (
+            "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
+            "Enable the GF8/AVX2 K=17..32,R=9..16,B=1..64/256 fused "
+            "encoder", "ON"))),
+        ("trusted", ("option", (
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
             "Enable promoted generalized GF8/AVX2 one-loss direct repair",
             "ON"))),
@@ -1369,8 +1389,8 @@ class CMakeProductionGraph(object):
             "locator", "ON"))),
         ("trusted", ("option", (
             "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK",
-            "Experimentally omit pruned schedules from selected reusable "
-            "small-dual plans", "OFF"))),
+            "Omit slower pruned schedules from selected reusable small-dual "
+            "plans", "ON"))),
         ("protected", (
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "0", "CACHE", "STRING",
             "Default-off small GF8 direct-repair experiment: 0=transform, "
@@ -1551,6 +1571,11 @@ class CMakeProductionGraph(object):
             "target_compile_definitions", (
                 "PRIVATE", "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING="
                 "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>"))),
+        ("mutation", ("leopard2_backend_avx2",
+            "target_compile_definitions", (
+                "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1"))),
+        ("mutation", ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1"))),
         ("mutation", ("leopard2_backend_avx2",
             "target_compile_definitions", (
                 "PRIVATE", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1"))),
@@ -2425,13 +2450,20 @@ class CMakeProductionGraph(object):
                 "PRIVATE", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1")):
                 "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
             ("leopard2_backend_avx2", (
+                "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1")):
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
+            ("leopard", (
+                "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1")):
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
+            ("leopard2_backend_avx2", (
                 "PRIVATE", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1")):
                 "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
         }
         option = option_scoped_definitions.get((target, specification))
         if option:
             guard = bool_atom("option:" + option)
-            if target == "leopard2_backend_avx2":
+            if (target == "leopard2_backend_avx2" or
+                    option == "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"):
                 guard = bool_and(guard, avx2_probe)
             return guard
         forced_variants = {

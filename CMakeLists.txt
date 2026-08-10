@@ -369,6 +369,7 @@ target_compile_definitions(leopard PRIVATE
 set_property(SOURCE
     leopard2.cpp
     tests/leopard2/test_api.cpp
+    tests/leopard2/test_dense_plan_policy.cpp
     tests/leopard2/test_small_dual_direct.cpp
     APPEND PROPERTY COMPILE_DEFINITIONS
     LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=$<BOOL:${LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT}>
@@ -2766,6 +2767,14 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_t8_ragged_runner_optimized_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_t8_two_block_abba.py)
+            add_test(
+                NAME leopard2_k9r5_b1024_runner_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_k9r5_b1024_terminal_abba.py)
+            add_test(
+                NAME leopard2_k9r5_b1024_runner_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_k9r5_b1024_terminal_abba.py)
             add_test(
                 NAME leopard2_affinity_supervisor_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}

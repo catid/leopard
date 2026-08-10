@@ -115,6 +115,13 @@
     LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION > 1
 #error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION must be 0 or 1"
 #endif
+#ifndef LEO2_DIAGNOSTIC_DISABLE_K9R5_B1024_TERMINAL
+#define LEO2_DIAGNOSTIC_DISABLE_K9R5_B1024_TERMINAL 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_K9R5_B1024_TERMINAL < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_K9R5_B1024_TERMINAL > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_K9R5_B1024_TERMINAL must be 0 or 1"
+#endif
 #ifndef LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING
 #define LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING 1
 #endif
@@ -220,6 +227,9 @@ bool IsExpectedT8TwoBlockExtendedShapeByteCount(
     unsigned r,
     size_t bytes)
 {
+    if (LEO2_DIAGNOSTIC_DISABLE_K9R5_B1024_TERMINAL == 0 &&
+        k == 9 && r == 5 && bytes == 1024)
+        return true;
     static const uint32_t shape_masks[] = {
         UINT32_C(0xfffffff6), UINT32_C(0xffff5ff4),
         UINT32_C(0xffffeff0), UINT32_C(0xffff3ff0),
@@ -410,6 +420,84 @@ void EncodeAllAndCheck(
             field, generator, original, recovery_index),
             "tiny full-output AUTO parity differs from the independent oracle");
     }
+}
+
+uint64_t ExerciseK9R5B1024ProductionTerminal(leo2_context* context)
+{
+    static const unsigned k = 9;
+    static const unsigned r = 5;
+    static const size_t bytes = 1024;
+    static const uint8_t sentinel = 0xa5;
+
+    leo2_codec* codec = NULL;
+    RequireResult(leo2_codec_create(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+        "K9/R5/1024 production codec");
+    const leopard2_test::BinaryField field =
+        leopard2_test::make_legacy_gf8();
+    const leopard2_test::ProfileLayout layout =
+        leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh, k, r);
+    const leopard2_test::Matrix generator =
+        leopard2_test::direct_systematic_generator(field, layout);
+    const Shards original = MakeOriginal(k, bytes);
+    Bytes packed_original(k * bytes, 0);
+    Bytes packed_recovery(r * bytes, sentinel);
+    const void* input[k];
+    void* output[r];
+    for (unsigned source = 0; source < k; ++source)
+    {
+        std::copy(original[source].begin(), original[source].end(),
+            packed_original.begin() + source * bytes);
+        input[source] = &packed_original[source * bytes];
+    }
+    for (unsigned parity = 0; parity < r; ++parity)
+        output[parity] = &packed_recovery[parity * bytes];
+
+    size_t scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(
+        codec, bytes, &scratch_bytes),
+        "K9/R5/1024 production scratch query");
+    Require(scratch_bytes != 0,
+        "K9/R5/1024 production scratch query returned zero");
+    AlignedBuffer scratch(scratch_bytes);
+    RequireResult(leo2_encode(codec, bytes, input, output,
+        scratch.data(), scratch.size()),
+        "K9/R5/1024 production one-shot encode");
+    for (unsigned parity = 0; parity < r; ++parity)
+    {
+        const Bytes expected = OracleParity(
+            field, generator, original, parity);
+        Require(std::equal(expected.begin(), expected.end(),
+                packed_recovery.begin() + parity * bytes),
+            "K9/R5/1024 production parity differs from oracle");
+    }
+
+    std::fill(packed_recovery.begin(), packed_recovery.end(), sentinel);
+    const Bytes before = packed_recovery;
+    Require(leo2_encode(codec, bytes, input, output,
+            scratch.data(), scratch.size() - 1) ==
+            LEO2_SCRATCH_TOO_SMALL,
+        "K9/R5/1024 production terminal accepted short scratch");
+    Require(packed_recovery == before,
+        "K9/R5/1024 short-scratch rejection modified parity");
+
+    leo2_encode_batch_item item = {
+        bytes, input, output, scratch.data(), scratch.size()
+    };
+    RequireResult(leo2_encode_batch(codec, &item, 1),
+        "K9/R5/1024 production one-item batch encode");
+    for (unsigned parity = 0; parity < r; ++parity)
+    {
+        const Bytes expected = OracleParity(
+            field, generator, original, parity);
+        Require(std::equal(expected.begin(), expected.end(),
+                packed_recovery.begin() + parity * bytes),
+            "K9/R5/1024 production batch parity differs from oracle");
+    }
+
+    leo2_codec_destroy(codec);
+    return 2U * r + 2U;
 }
 
 uint64_t ExerciseT4BatchBindings(leo2_context* context)
@@ -1101,12 +1189,12 @@ uint64_t ExerciseT8PartialThreadPool(size_t bytes)
     return checks;
 }
 
-uint64_t ExerciseT8TwoBlockThreadPool(size_t bytes)
+uint64_t ExerciseT8TwoBlockThreadPool(
+    size_t bytes,
+    unsigned k = 13,
+    unsigned r = 5,
+    size_t batch_count = 8)
 {
-    static const unsigned k = 13;
-    static const unsigned r = 5;
-    static const size_t batch_count = 8;
-
     leo2_context_options options = {};
     options.struct_size = sizeof(options);
     options.backend = LEO2_BACKEND_AVX2;
@@ -1619,6 +1707,8 @@ int main()
             ExerciseT8TwoBlockUnaligned(context, 960) +
             ExerciseT8TwoBlockUnaligned(context, 1023) +
             ExerciseT8TwoBlockUnaligned(context, 1024);
+        const uint64_t k9r5_b1024_production_checks =
+            ExerciseK9R5B1024ProductionTerminal(context);
         leo2_context_destroy(context);
         const uint64_t t8_partial_thread_pool_checks =
             ExerciseT8PartialThreadPool(1) +
@@ -1672,7 +1762,8 @@ int main()
             ExerciseT8TwoBlockThreadPool(896) +
             ExerciseT8TwoBlockThreadPool(960) +
             ExerciseT8TwoBlockThreadPool(1023) +
-            ExerciseT8TwoBlockThreadPool(1024);
+            ExerciseT8TwoBlockThreadPool(1024) +
+            ExerciseT8TwoBlockThreadPool(1024, 9, 5, 2);
 #if LEO2_EXPECT_HIGH_DIRECT_PRODUCTION
         const char* const table_state = "ON";
 #else
@@ -1711,7 +1802,8 @@ int main()
             "t8_partial_unaligned_checks=%llu "
             "t8_two_block_unaligned_checks=%llu "
             "t8_partial_thread_pool_checks=%llu "
-            "t8_two_block_thread_pool_checks=%llu\n",
+            "t8_two_block_thread_pool_checks=%llu "
+            "k9r5_b1024_production_checks=%llu\n",
             table_state, auto_state, t8_state, t8_partial_state,
             t8_two_block_state,
             static_cast<unsigned long long>(tiny_codec_checks),
@@ -1731,7 +1823,9 @@ int main()
             static_cast<unsigned long long>(
                 t8_partial_thread_pool_checks),
             static_cast<unsigned long long>(
-                t8_two_block_thread_pool_checks));
+                t8_two_block_thread_pool_checks),
+            static_cast<unsigned long long>(
+                k9r5_b1024_production_checks));
         return 0;
     }
     catch (const std::exception& error)
