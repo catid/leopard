@@ -328,6 +328,17 @@ void ExerciseCell(
     bool expect_two_block_b1024_terminal = false)
 {
     leo2_codec* codec = CreateCodec(context, cell);
+    if (expect_two_block_b64_terminal ||
+        expect_two_block_b256_terminal ||
+        expect_two_block_b1024_terminal)
+    {
+        leopard2_internal::CodecEncodePathInfo path = {};
+        RequireCell(leopard2_internal::GetCodecEncodePathInfo(
+                codec, cell.shard_bytes, cell.recovery_count, &path),
+            cell, "query two-block encode path");
+        RequireCell(path.high_t8_two_block_binding_selected,
+            cell, "packed terminal was not reusable-binding eligible");
+    }
     const size_t scratch_bytes = QueryScratch(codec, cell);
     if (cell.original_count == 8 && cell.recovery_count == 8 &&
         cell.shard_bytes == 64)
@@ -479,8 +490,9 @@ void ExerciseTwoBlockB256Matrix(
         {
             const bool promoted_shape =
                 original_count == 10 ||
-                (original_count == 11 && recovery_count == 5) ||
-                (original_count == 12 && recovery_count == 8) ||
+                (original_count == 11 &&
+                 (recovery_count == 5 || recovery_count == 8)) ||
+                (original_count == 12 && recovery_count >= 7) ||
                 (original_count >= 13 &&
                  !(original_count == 16 && recovery_count == 8));
             ExerciseCell(context,
@@ -490,12 +502,20 @@ void ExerciseTwoBlockB256Matrix(
     }
 }
 
-void ExerciseTwoBlockB1024K12(
+void ExerciseTwoBlockB1024ExactNeighbors(
     leo2_context* context,
     bool terminal_available)
 {
-    ExerciseCell(context, Cell{ 12, 8, 1024 },
-        false, false, false, terminal_available);
+    static const Cell cells[] = {
+        { 11, 8, 1024 },
+        { 12, 7, 1024 },
+        { 12, 8, 1024 }
+    };
+    for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
+    {
+        ExerciseCell(context, cells[i],
+            false, false, false, terminal_available);
+    }
 }
 
 void ExercisePromotedMatrix(
@@ -1066,6 +1086,49 @@ void ExerciseDirectLinearBasis(leo2_context* context)
     }
 }
 
+void ExerciseK13TailLinearBasis(leo2_context* context)
+{
+    /* The K=13 specialization differs from the proven K=12 circuit only by
+       source twelve's direct generator column.  Exercise every input bit of
+       that column against the independent systematic-generator oracle. */
+    const Cell cell = { 13, 8, 256 };
+    leo2_codec* codec = CreateCodec(context, cell);
+    AlignedBuffer scratch(QueryScratch(codec, cell));
+    AlignedBuffer input(
+        cell.original_count * cell.shard_bytes + 2U * kGuardBytes + 8U);
+    AlignedBuffer output(
+        cell.recovery_count * cell.shard_bytes + 2U * kGuardBytes + 8U);
+    std::vector<const void*> original(cell.original_count);
+    std::vector<void*> recovery(cell.recovery_count);
+    const leopard2_test::Matrix generator = MakeGenerator(cell);
+    uint8_t* input_base = input.bytes() + kGuardBytes + 1U;
+    uint8_t* output_base = output.bytes() + kGuardBytes + 3U;
+    SetPackedPointers(input_base, output_base, cell, original, recovery);
+
+    for (unsigned bit = 0; bit < 8; ++bit)
+    {
+        FillGuards(input);
+        FillGuards(output);
+        std::memset(input_base, 0,
+            cell.original_count * cell.shard_bytes);
+        const size_t offset = (bit * 31U + 17U) % cell.shard_bytes;
+        input_base[12U * cell.shard_bytes + offset] =
+            static_cast<uint8_t>(1U << bit);
+        const std::vector<uint8_t> input_before = Snapshot(input);
+
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode(codec, cell.shard_bytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size()),
+            LEO2_SUCCESS, cell, "encode K13 tail linear basis");
+        RequireCell(T8TwoBlockB256PackedCalls() == 1, cell,
+            "K13 tail linear basis missed the exact terminal");
+        CheckParity(cell, generator, original, recovery);
+        RequireSourceUnchanged(input, input_before, cell);
+        RequireOutputGuards(output, kGuardBytes + 3U, cell);
+    }
+    leo2_codec_destroy(codec);
+}
+
 void ExerciseAutoBackend(bool full_parity_terminal_available)
 {
     leo2_context_options options = {};
@@ -1146,7 +1209,7 @@ int main()
             context, two_block_b64_terminal_available);
         ExerciseTwoBlockB256Matrix(
             context, two_block_b256_terminal_available);
-        ExerciseTwoBlockB1024K12(
+        ExerciseTwoBlockB1024ExactNeighbors(
             context, two_block_b1024_terminal_available);
         if (full_parity_terminal_available)
         {
@@ -1165,8 +1228,13 @@ int main()
         ExerciseForcedTransform(context, Cell{ 9, 5, 64 });
         ExerciseForcedTransform(context, Cell{ 16, 8, 64 });
         ExerciseForcedTransform(context, Cell{ 10, 5, 256 });
+        ExerciseForcedTransform(context, Cell{ 11, 8, 256 });
+        ExerciseForcedTransform(context, Cell{ 11, 8, 1024 });
+        ExerciseForcedTransform(context, Cell{ 12, 7, 256 });
+        ExerciseForcedTransform(context, Cell{ 12, 7, 1024 });
         ExerciseForcedTransform(context, Cell{ 12, 8, 256 });
         ExerciseForcedTransform(context, Cell{ 12, 8, 1024 });
+        ExerciseForcedTransform(context, Cell{ 13, 8, 256 });
         ExerciseForcedTransform(context, Cell{ 16, 7, 256 });
         static const Cell promoted_cells[] = {
             { 6, 5, 64 },
@@ -1197,16 +1265,27 @@ int main()
         }
         if (two_block_b256_terminal_available)
         {
+            ExerciseK13TailLinearBasis(context);
             ExerciseFallbackLayouts(context, Cell{ 10, 5, 256 });
+            ExerciseFallbackLayouts(context, Cell{ 11, 8, 256 });
+            ExerciseFallbackLayouts(context, Cell{ 12, 7, 256 });
             ExerciseFallbackLayouts(context, Cell{ 12, 8, 256 });
+            ExerciseFallbackLayouts(context, Cell{ 13, 8, 256 });
             ExerciseFallbackLayouts(context, Cell{ 16, 7, 256 });
             ExerciseValidationAtomicity(context, Cell{ 10, 5, 256 });
+            ExerciseValidationAtomicity(context, Cell{ 11, 8, 256 });
+            ExerciseValidationAtomicity(context, Cell{ 12, 7, 256 });
             ExerciseValidationAtomicity(context, Cell{ 12, 8, 256 });
+            ExerciseValidationAtomicity(context, Cell{ 13, 8, 256 });
             ExerciseValidationAtomicity(context, Cell{ 16, 7, 256 });
         }
         if (two_block_b1024_terminal_available)
         {
+            ExerciseFallbackLayouts(context, Cell{ 11, 8, 1024 });
+            ExerciseFallbackLayouts(context, Cell{ 12, 7, 1024 });
             ExerciseFallbackLayouts(context, Cell{ 12, 8, 1024 });
+            ExerciseValidationAtomicity(context, Cell{ 11, 8, 1024 });
+            ExerciseValidationAtomicity(context, Cell{ 12, 7, 1024 });
             ExerciseValidationAtomicity(context, Cell{ 12, 8, 1024 });
         }
 

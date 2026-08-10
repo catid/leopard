@@ -514,7 +514,7 @@ static void Usage(std::ostream& output, const char* program)
         << "                         Attribution-only: mature or packed two-block T8 B256\n"
         << "                         path in identical executable text using schema v26\n"
         << "  --high-t8-two-block-b1024-terminal-mode 0|1\n"
-        << "                         Attribution-only: ordinary or packed K12/R8 T8 B1024\n"
+        << "                         Attribution-only: ordinary or packed exact-neighbor T8 B1024\n"
         << "                         path in identical executable text using schema v28\n"
         << "  --disable-t8-full-parity-terminal\n"
         << "                         Attribution-only: retain the prior ordinary encode path\n"
@@ -1733,7 +1733,7 @@ static int Run(const Options& options)
             SetHighT8TwoBlockB1024PackedTerminalEnabledForDiagnostics(
                 options.high_t8_two_block_b1024_terminal_mode == 1))
     {
-        Fail("cannot set the high T8 K12/R8 B1024 packed terminal "
+        Fail("cannot set the high T8 exact-neighbor B1024 packed terminal "
              "attribution mode");
     }
     if (options.disable_t8_full_parity_terminal &&

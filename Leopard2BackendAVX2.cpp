@@ -8094,6 +8094,7 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeTwoBlocksT8(
     }
 }
 
+template<bool IncludeFifthTail>
 static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK12R8T8Pointers(
     const void* const* data,
     void* const* work,
@@ -8219,6 +8220,23 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK12R8T8Pointers(
         AVX2FF8T8VectorMulAddPrepared(
             value3, tail3, tail_fold_low, tail_fold_high);
 
+        /* K=13 adds parent systematic coordinate 20.  Its exact Lagrange
+           generator column at parity coordinates 0..7 has logarithms
+
+             229, 94, 57, 147, 121, 151, 78, 228.
+
+           Keep the source live through the final transform and fold each
+           product immediately before its destination is scattered.  The
+           compile-time-false K=12 specialization retains its previous
+           arithmetic and register allocation. */
+        __m256i fifth_tail;
+        if (IncludeFifthTail)
+        {
+            fifth_tail = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(
+                    static_cast<const uint8_t*>(data[12]) + offset));
+        }
+
         LEO_DEBUG_ASSERT(
             forward_skew[0] == 0 &&
             forward_skew[1] == 255 &&
@@ -8239,6 +8257,11 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK12R8T8Pointers(
         AVX2FF8T8VectorXor(value2, value0);
         AVX2FF8T8VectorXor(value3, value1);
         AVX2FF8T8VectorXor(value1, value0);
+        if (IncludeFifthTail)
+        {
+            AVX2FF8T8VectorMulAdd(value0, fifth_tail, 229);
+            AVX2FF8T8VectorMulAdd(value1, fifth_tail, 94);
+        }
         _mm256_storeu_si256(
             reinterpret_cast<__m256i*>(
                 static_cast<uint8_t*>(work[0]) + offset), value0);
@@ -8252,6 +8275,11 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK12R8T8Pointers(
         AVX2FF8T8VectorMulAddPrepared(
             value2, value3, log85_low, log85_high);
         AVX2FF8T8VectorXor(value3, value2);
+        if (IncludeFifthTail)
+        {
+            AVX2FF8T8VectorMulAdd(value2, fifth_tail, 57);
+            AVX2FF8T8VectorMulAdd(value3, fifth_tail, 147);
+        }
         _mm256_storeu_si256(
             reinterpret_cast<__m256i*>(
                 static_cast<uint8_t*>(work[2]) + offset), value2);
@@ -8267,6 +8295,11 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK12R8T8Pointers(
         AVX2FF8T8VectorXor(value7, value5);
         AVX2FF8T8VectorMulAdd(value4, value5, 17);
         AVX2FF8T8VectorXor(value5, value4);
+        if (IncludeFifthTail)
+        {
+            AVX2FF8T8VectorMulAdd(value4, fifth_tail, 121);
+            AVX2FF8T8VectorMulAdd(value5, fifth_tail, 151);
+        }
         _mm256_storeu_si256(
             reinterpret_cast<__m256i*>(
                 static_cast<uint8_t*>(work[4]) + offset), value4);
@@ -8275,6 +8308,11 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK12R8T8Pointers(
                 static_cast<uint8_t*>(work[5]) + offset), value5);
         AVX2FF8T8VectorMulAdd(value6, value7, 34);
         AVX2FF8T8VectorXor(value7, value6);
+        if (IncludeFifthTail)
+        {
+            AVX2FF8T8VectorMulAdd(value6, fifth_tail, 78);
+            AVX2FF8T8VectorMulAdd(value7, fifth_tail, 228);
+        }
         _mm256_storeu_si256(
             reinterpret_cast<__m256i*>(
                 static_cast<uint8_t*>(work[6]) + offset), value6);
@@ -8295,7 +8333,23 @@ LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK12R8T8(
 {
     LEO_DEBUG_ASSERT(byte_count == 256 || byte_count == 1024);
     if (byte_count == 256 || byte_count == 1024)
-        AVX2FF8HighEncodeK12R8T8Pointers(
+        AVX2FF8HighEncodeK12R8T8Pointers<false>(
+            data, work, first_inverse_skew, second_inverse_skew,
+            forward_skew, combined_tail_log, byte_count);
+}
+
+LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK13R8T8(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* first_inverse_skew,
+    const uint8_t* second_inverse_skew,
+    const uint8_t* forward_skew,
+    uint16_t combined_tail_log,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(byte_count == 256);
+    if (byte_count == 256)
+        AVX2FF8HighEncodeK12R8T8Pointers<true>(
             data, work, first_inverse_skew, second_inverse_skew,
             forward_skew, combined_tail_log, byte_count);
 }

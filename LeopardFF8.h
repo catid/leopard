@@ -282,6 +282,13 @@ void ReedSolomonEncodeK12R8T8(
     void* const* work,
     uint64_t byte_count);
 
+/* Exact K=12 transform plus the fifth tail's B=256 generator column. */
+void ReedSolomonEncodeK13R8T8(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* work,
+    uint64_t byte_count);
+
 void ReedSolomonEncodeTwoBlocksT8(
     const backend::Ops& ops,
     const void* const* data,

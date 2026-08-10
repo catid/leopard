@@ -1332,7 +1332,9 @@ static bool IsHighT8TwoBlockExtendedShapeByteCount(
         UINT32_C(0x5fff0d80), // 832
         UINT32_C(0xffff0fd0), // 896
         UINT32_C(0x5fff0d40), // 960
-        UINT32_C(0x6ff78c00)  // 1024
+        /* Adds exact K=12/R=7 reuse alongside the established K=12/R=8
+           four-tail circuit. */
+        UINT32_C(0x6ff7cc00)  // 1024
     };
     if (g_high_t8_two_block_extended_mode != 1U ||
         original_count < 9 || original_count > 16 ||
@@ -16035,9 +16037,40 @@ static LEO2_T8_TWO_BLOCK_NOINLINE void ExecuteHighT8TwoBlockBinding(
 {
     LEO_DEBUG_ASSERT(IsHighT8TwoBlockByteCount(
         original_count, recovery_count, shard_bytes));
-    if (original_count == 12 && recovery_count == 8 &&
+    if (original_count == 13 && recovery_count == 8 &&
+        shard_bytes == 256)
+    {
+        leopard::ff8::ReedSolomonEncodeK13R8T8(
+            transform_ops, original, recovery, shard_bytes);
+        return;
+    }
+    if (original_count == 11 && recovery_count == 8 &&
         (shard_bytes == 256 || shard_bytes == 1024))
     {
+        alignas(32) static const uint8_t zero_shard[1024] = {};
+        const void* padded_original[12];
+        for (uint32_t i = 0; i < 11; ++i)
+            padded_original[i] = original[i];
+        padded_original[11] = zero_shard;
+        leopard::ff8::ReedSolomonEncodeK12R8T8(
+            transform_ops, padded_original, recovery, shard_bytes);
+        return;
+    }
+    if (original_count == 12 && recovery_count >= 7 &&
+        recovery_count <= 8 &&
+        (shard_bytes == 256 || shard_bytes == 1024))
+    {
+        if (recovery_count == 7)
+        {
+            alignas(32) uint8_t discarded_recovery[1024];
+            void* padded_recovery[8];
+            for (uint32_t i = 0; i < 7; ++i)
+                padded_recovery[i] = recovery[i];
+            padded_recovery[7] = discarded_recovery;
+            leopard::ff8::ReedSolomonEncodeK12R8T8(
+                transform_ops, original, padded_recovery, shard_bytes);
+            return;
+        }
         leopard::ff8::ReedSolomonEncodeK12R8T8(
             transform_ops, original, recovery, shard_bytes);
         return;
@@ -18307,8 +18340,9 @@ IsGF8AVX2HighT8TwoBlockB256PackedTerminalEligible(
 {
     const bool qualified_shape = codec &&
         (codec->original_count == 10 ||
-         (codec->original_count == 11 && codec->recovery_count == 5) ||
-         (codec->original_count == 12 && codec->recovery_count == 8) ||
+         (codec->original_count == 11 &&
+          (codec->recovery_count == 5 || codec->recovery_count == 8)) ||
+         (codec->original_count == 12 && codec->recovery_count >= 7) ||
          codec->original_count >= 13);
     return shard_bytes == 256 &&
         g_high_t8_two_block_b256_packed_mode == 1U && codec &&
@@ -18322,8 +18356,10 @@ IsGF8AVX2HighT8TwoBlockB1024PackedTerminalEligible(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
-    return shard_bytes == 1024 && codec &&
-        codec->original_count == 12 && codec->recovery_count == 8 &&
+    const bool qualified_shape = codec &&
+        ((codec->original_count == 11 && codec->recovery_count == 8) ||
+         (codec->original_count == 12 && codec->recovery_count >= 7));
+    return shard_bytes == 1024 && codec && qualified_shape &&
         g_high_t8_two_block_b1024_packed_mode == 1U &&
         g_high_t8_two_block_extended_mode == 1U &&
         IsGF8AVX2HighT8TwoBlockPackedTerminalCommonEligible(codec);

@@ -3403,6 +3403,30 @@ void ReedSolomonEncodeK12R8T8(
 #endif
 }
 
+void ReedSolomonEncodeK13R8T8(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* work,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+    (void)ops;
+#if defined(LEO2_HAVE_AVX2_BACKEND) && !defined(LEO2_GFNI_VARIANT)
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestHighIFFTButterfly4OutCalls.fetch_add(4, std::memory_order_relaxed);
+    TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighTwoBlockCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighTailColumnCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
+    backend::AVX2FF8HighEncodeK13R8T8(
+        data, work, FFTSkewStorage + 8, FFTSkewStorage + 16,
+        FFTSkewStorage, 68, byte_count);
+#else
+    ReedSolomonEncodeTwoBlocksT8(ops, data, work, byte_count);
+#endif
+}
+
 void ReedSolomonEncodeTwoBlocksT8(
     const backend::Ops& ops,
     const void* const* data,

@@ -413,6 +413,16 @@ void AVX2FF8HighEncodeK12R8T8(
     const uint8_t* forward_skew,
     uint16_t combined_tail_log,
     uint64_t byte_count);
+
+/* K=13/R=8/B=256 extension with the fifth generator column fused. */
+void AVX2FF8HighEncodeK13R8T8(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* first_inverse_skew,
+    const uint8_t* second_inverse_skew,
+    const uint8_t* forward_skew,
+    uint16_t combined_tail_log,
+    uint64_t byte_count);
 #endif
 
 /*
