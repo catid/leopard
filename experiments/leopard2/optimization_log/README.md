@@ -124,6 +124,7 @@ Scratch falls with all of it: encode 1073.8 MB -> 8.5 MB (126x) at legacy-high
 | 32 | GF8 T8 exact-neighbor encoders | **landed at five K/R/byte cells** | 1.111-1.282x public vs exact main |
 | 33 | GF8 K9/R5 1 KiB exact encoder | **landed** | 1.450x one-item batch, 1.451x one-shot vs exact main |
 | 34 | GF8 K13/R8 1 KiB sparse/exact AVX2 variants | rejected | five correct variants converge at only 1.4-2.4% |
+| 35 | R10 one-shot schedule elision | **landed** | specialized decoder now wins every paper K; 1.22x weakest T32 target |
 
 ## Method notes worth keeping
 

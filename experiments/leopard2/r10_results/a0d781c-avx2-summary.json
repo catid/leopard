@@ -1,0 +1,112 @@
+{
+  "schema": "leopard2-r10-rs256-avx2-summary/v1",
+  "date_utc": "2026-08-11",
+  "purpose": "Reproduce the R10 RS(256,K) decoding regime and close one-shot setup gaps without changing the code mathematics or wire format.",
+  "paper": {
+    "reference": "R10",
+    "title": "Two Fast Erasure Decoding Algorithms for Reed-Solomon Codes Based on LCH-FFT",
+    "url": "https://i4ai.org/hanyunghsiang/IT2026.pdf",
+    "xdrs_repository": "https://github.com/fastecc/xdrs",
+    "xdrs_commit": "ae05a779e7f44be13c3d34e14d15b08b4bc02404"
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "compiler": "gcc 13.3.0",
+    "cmake": "3.28.3",
+    "process_allowed_cpus": "0-13,16-29",
+    "timing_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "sibling_idle_counter_gate": false
+  },
+  "candidate": {
+    "source_commit": "a0d781c1ad6f68c49d35d7fe165433aa8b7fc981",
+    "source_tree": "f224ca7ca21cf107f856d48206aab454a23a058b",
+    "source_tracked_dirty": false,
+    "profile_backend": "pure AVX2 production build; GFNI and AVX-512 code generation, tests, fuzzers, and CUDA disabled",
+    "r10_harness_sha256": "369944dc1d84c8e933a251b61e074fea5ece5fa38c2e39683018cc09233038ee",
+    "benchmark_sha256": "0257d529c29d4195e3662a551f9e7931a7d067e270dbf7a0aa2185fc1dcb1636",
+    "evex_audit": {
+      "zmm_operands": 0,
+      "opmask_operands": 0,
+      "vpternlog_instructions": 0,
+      "gfni_instructions": 0
+    }
+  },
+  "controls": {
+    "pre_change_leopard2_commit": "145ae4adf1850ca2cba5b0ababbbc4f06501dcb8",
+    "pre_change_benchmark_sha256": "ab1742e4b6aae439a4687cc59c1ee84f8d36f5a18b50b17823ac031afe06f30d",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_leopard_main_tree": "b7c8830d96a978f6ec14fe747095f066e351ae72",
+    "exact_main_r10_harness_sha256": "9e18eba9d3f165e99afef9a4ad9edcf76a6371f15076f5e310595655316c53bf"
+  },
+  "paper_matrix_protocol": {
+    "parent_count": 256,
+    "shard_bytes": 1024,
+    "interpretation": "1024 independent codewords sharing one erasure pattern",
+    "erasure_count": "R=256-K exact erasures after a deterministic shuffle",
+    "pattern_seeds": [2, 3, 5, 7, 11],
+    "data_seed": 17,
+    "iterations": 25,
+    "calls_per_sample": 512,
+    "warmup_calls": 16,
+    "thread_count": 1,
+    "timing": "setup-inclusive public one-shot decode; reusable plan setup and execution also recorded separately",
+    "algorithm_selection": "LOW_V1 Algorithm 4 for K<=128; LEGACY_HIGH_V1 Algorithm 5 for K>128",
+    "raw_json_file_count": 115
+  },
+  "paper_matrix": [
+    {"K": 8, "R": 248, "profile": "low_v1", "algorithm": "algorithm4", "path": "tiled", "seed2_plan_setup_us": 2.440000, "seed2_execution_us": 2.277430, "seed2_one_shot_us": 3.324531, "seed2_generic_one_shot_us": 26.771850, "generic_over_specialized_geomean": 7.999995, "generic_over_specialized_min": 7.239908, "generic_over_specialized_max": 8.330679},
+    {"K": 16, "R": 240, "profile": "low_v1", "algorithm": "algorithm4", "path": "tiled", "seed2_plan_setup_us": 6.390000, "seed2_execution_us": 7.040822, "seed2_one_shot_us": 9.304988, "seed2_generic_one_shot_us": 27.624711, "generic_over_specialized_geomean": 3.254478, "generic_over_specialized_min": 2.932733, "generic_over_specialized_max": 3.766778},
+    {"K": 32, "R": 224, "profile": "low_v1", "algorithm": "algorithm4", "path": "tiled", "seed2_plan_setup_us": 8.900000, "seed2_execution_us": 13.773068, "seed2_one_shot_us": 16.359953, "seed2_generic_one_shot_us": 29.943449, "generic_over_specialized_geomean": 1.875960, "generic_over_specialized_min": 1.830289, "generic_over_specialized_max": 1.925303},
+    {"K": 64, "R": 192, "profile": "low_v1", "algorithm": "algorithm4", "path": "tiled", "seed2_plan_setup_us": 11.870000, "seed2_execution_us": 19.683996, "seed2_one_shot_us": 20.585510, "seed2_generic_one_shot_us": 32.803637, "generic_over_specialized_geomean": 1.596845, "generic_over_specialized_min": 1.589169, "generic_over_specialized_max": 1.608932},
+    {"K": 128, "R": 128, "profile": "low_v1", "algorithm": "algorithm4", "path": "materialized", "seed2_plan_setup_us": 14.781000, "seed2_execution_us": 28.448178, "seed2_one_shot_us": 28.766541, "seed2_generic_one_shot_us": 38.412783, "generic_over_specialized_geomean": 1.337054, "generic_over_specialized_min": 1.330029, "generic_over_specialized_max": 1.343981, "main_over_specialized_geomean": 1.129538, "main_over_specialized_min": 1.122724, "main_over_specialized_max": 1.137477, "wire_identical_to_main": false},
+    {"K": 192, "R": 64, "profile": "legacy_high_v1", "algorithm": "algorithm5", "path": "tiled", "seed2_plan_setup_us": 14.270000, "seed2_execution_us": 32.199002, "seed2_one_shot_us": 30.428043, "seed2_generic_one_shot_us": 41.189672, "generic_over_specialized_geomean": 1.358980, "generic_over_specialized_min": 1.346555, "generic_over_specialized_max": 1.369888, "main_over_specialized_geomean": 1.149108, "main_over_specialized_min": 1.137869, "main_over_specialized_max": 1.158542, "wire_identical_to_main": true},
+    {"K": 224, "R": 32, "profile": "legacy_high_v1", "algorithm": "algorithm5", "path": "tiled", "seed2_plan_setup_us": 13.920000, "seed2_execution_us": 26.121570, "seed2_one_shot_us": 24.782121, "seed2_generic_one_shot_us": 40.212629, "generic_over_specialized_geomean": 1.584256, "generic_over_specialized_min": 1.537249, "generic_over_specialized_max": 1.622647, "main_over_specialized_geomean": 1.397914, "main_over_specialized_min": 1.355169, "main_over_specialized_max": 1.421256, "wire_identical_to_main": true},
+    {"K": 240, "R": 16, "profile": "legacy_high_v1", "algorithm": "algorithm5", "path": "tiled", "seed2_plan_setup_us": 0.980000, "seed2_execution_us": 15.294043, "seed2_one_shot_us": 16.160459, "seed2_generic_one_shot_us": 36.661553, "generic_over_specialized_geomean": 1.604040, "generic_over_specialized_min": 1.232835, "generic_over_specialized_max": 2.268596, "main_over_specialized_geomean": 1.468698, "main_over_specialized_min": 1.128643, "main_over_specialized_max": 2.078871, "wire_identical_to_main": true},
+    {"K": 248, "R": 8, "profile": "legacy_high_v1", "algorithm": "algorithm5", "path": "tiled", "seed2_plan_setup_us": 0.970000, "seed2_execution_us": 11.036297, "seed2_one_shot_us": 11.933926, "seed2_generic_one_shot_us": 35.834844, "generic_over_specialized_geomean": 2.790880, "generic_over_specialized_min": 2.228417, "generic_over_specialized_max": 3.002771, "main_over_specialized_geomean": 2.489023, "main_over_specialized_min": 1.983549, "main_over_specialized_max": 2.687501, "wire_identical_to_main": true}
+  ],
+  "t32_region_screen": {
+    "parameters": "K={97,160,224}; R={17,24,32}; missing originals={2,floor(R/2),R-1}; bytes={576,1024,1025}",
+    "logical_cells": 81,
+    "candidate_control_pairs": 81,
+    "matching_digest_pairs": 81,
+    "iterations": 9,
+    "calls_per_sample": 128,
+    "one_shot_speedup_by_bytes": {
+      "576": {"geomean": 1.734271, "minimum": 1.337695, "maximum": 1.989058},
+      "1024": {"geomean": 1.462066, "minimum": 1.229094, "maximum": 1.612520},
+      "1025_control": {"geomean": 0.999991, "minimum": 0.993408, "maximum": 1.008638}
+    },
+    "reusable_execution_speedup_by_bytes": {
+      "576": {"geomean": 1.003284, "minimum": 0.993057, "maximum": 1.012569},
+      "1024": {"geomean": 1.001177, "minimum": 0.994669, "maximum": 1.009074},
+      "1025_control": {"geomean": 1.000612, "minimum": 0.991725, "maximum": 1.008692}
+    }
+  },
+  "k224_r32_in_tree_legacy_leopard1": [
+    {"missing_originals": 2, "leopard2_one_shot_us": 16.458762, "leopard1_one_shot_us": 29.612877, "leopard1_over_leopard2": 1.799217},
+    {"missing_originals": 16, "leopard2_one_shot_us": 23.534486, "leopard1_one_shot_us": 33.793355, "leopard1_over_leopard2": 1.435908},
+    {"missing_originals": 31, "leopard2_one_shot_us": 25.220541, "leopard1_one_shot_us": 34.928250, "leopard1_over_leopard2": 1.384913},
+    {"missing_originals": 32, "leopard2_one_shot_us": 25.229389, "leopard1_one_shot_us": 35.003055, "leopard1_over_leopard2": 1.387392}
+  ],
+  "correctness": {
+    "paper_matrix_candidate_generic_digest_pairs": "45/45",
+    "paper_matrix_round_trips": "115/115",
+    "legacy_high_main_digest_pairs": "20/20",
+    "t32_region_digest_pairs": "81/81",
+    "k224_r32_legacy_comparisons": "4/4 matched"
+  },
+  "validation": {
+    "release_ctest": "6/6 passed: direct_oracle, batch_aliasing, high_t32_tiny_schedule_policy, high_low_duality, legacy_golden, transform_differential",
+    "asan_ubsan_ctest": "2/2 passed: high_t32_tiny_schedule_policy, high_low_duality",
+    "strict_harness_compile": "GCC -Wall -Wextra -Wpedantic -Werror passed",
+    "invalid_attempt": "A 512-MiB-capped sanitizer rebuild was killed inside its cgroup before tests; rerun with a 768-MiB build cap completed, followed by a 512-MiB-capped 2/2 sanitizer test pass."
+  },
+  "raw_bundle": {
+    "path": "a0d781c-avx2-raw.tar.gz",
+    "sha256": "8548a5f7df1908dbddbdc2cf78d3e6ecbfb3ef883dd448ab8e4d75c24b5aeb3e",
+    "uncompressed_contents": "115 paper-matrix JSON files, 162 T32 region JSON files, 4 K224/R32 Leopard1 comparison JSON files, and one clean-source attestation JSON file"
+  },
+  "scope": "Pinned isolated promotion screen with deterministic workload and immutable binary checks. It does not claim cross-machine reproduction or an ABBA sibling-idleness confidence interval. Ratios are medians summarized across five independently shuffled erasure patterns; every individual paper-matrix ratio favors the specialized decoder."
+}

@@ -1,5 +1,52 @@
 # Leopard2 versus exact Leopard main
 
+## R10 RS(256,K) decoder reproduction: 2026-08-11
+
+The clean pure-AVX2 build at commit `a0d781c` reproduces the central performance
+result of Chen et al. R10: the specialized low-rate Algorithm 4 and high-rate
+Algorithm 5 decoder is faster at every paper K value. This screen uses
+1024-byte shards, corresponding to the paper's 1024 codewords sharing one
+erasure pattern, and charges plan construction on every public one-shot decode.
+Each row is the geometric mean over five independently shuffled patterns with
+exactly `R=256-K` erasures. Ratios above one favor Leopard2.
+
+| K,R | Profile / algorithm | Retained generic / Leopard2 | Exact Leopard main / Leopard2 |
+| --- | --- | ---: | ---: |
+| 8,248 | low / Algorithm 4 | **8.000x** | unavailable (`R>K`) |
+| 16,240 | low / Algorithm 4 | **3.254x** | unavailable (`R>K`) |
+| 32,224 | low / Algorithm 4 | **1.876x** | unavailable (`R>K`) |
+| 64,192 | low / Algorithm 4 | **1.597x** | unavailable (`R>K`) |
+| 128,128 | low / Algorithm 4 | **1.337x** | **1.130x** (different wire profile) |
+| 192,64 | legacy high / Algorithm 5 | **1.359x** | **1.149x** |
+| 224,32 | legacy high / Algorithm 5 | **1.584x** | **1.398x** |
+| 240,16 | legacy high / Algorithm 5 | **1.604x** | **1.469x** |
+| 248,8 | legacy high / Algorithm 5 | **2.791x** | **2.489x** |
+
+The initial K=64/128 and K=224 deficits were not extra Algorithm 4/5 byte
+work. Reusable specialized execution already won. The public one-shot path was
+compiling exact pruned schedules whose construction cost could not be amortized
+at one use. Exact-byte one-shot plans now execute the mature regular transforms
+through 1 KiB for native low rate and for the measured GF8 T=32 region;
+caller-created reusable plans still retain and use exact schedules.
+
+The T=32 promotion screen covered 81 `(K,R,loss,bytes)` cells. At 1 KiB its
+one-shot geometric-mean improvement over the preceding Leopard2 build is
+1.462x, with a 1.229x weakest cell; the 1025-byte controls are neutral at
+1.000x geometric mean and remain on the exact-schedule path. At K=224/R=32,
+Leopard2 one-shot decode is 1.799x, 1.436x, 1.385x, and 1.387x faster than the
+in-tree legacy Leopard1 path for 2, 16, 31, and 32 missing originals
+respectively. All workload,
+parity, and recovered-output comparisons match.
+
+The source tree was clean, candidate and exact-main executables were frozen and
+rehashed after timing, and disassembly found no ZMM, opmask, `vpternlog`, or
+GFNI instructions. Release correctness tests passed 6/6 and focused Clang
+ASan+UBSan tests passed 2/2. This is a pinned promotion screen, not a claim that
+this host reproduces the paper's absolute throughput or a substitute for a
+cross-machine ABBA campaign. Full numbers and raw JSON are in
+`experiments/leopard2/r10_results/a0d781c-avx2-summary.json` and its attested
+raw bundle.
+
 ## GF8 K=12/R=8 exact high-encode update: 2026-08-10
 
 The exact legacy-high GF8/AVX2 circuit at `K=12,R=8` now skips the fully
