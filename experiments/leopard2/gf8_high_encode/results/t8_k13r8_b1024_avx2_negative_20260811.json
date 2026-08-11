@@ -1,0 +1,226 @@
+{
+  "schema": "leopard2-gf8-k13r8-b1024-avx2-negative/v1",
+  "created_utc": "2026-08-11",
+  "status": "rejected_below_promotion_threshold",
+  "scope": {
+    "K": 13,
+    "R": 8,
+    "T": 8,
+    "N": 32,
+    "D": 24,
+    "S": 11,
+    "field": "GF8",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "backend": "pure AVX2",
+    "shard_bytes": 1024,
+    "batch": 1,
+    "reuse": 8192,
+    "thread_count": 1,
+    "operation": "loss-free systematic parity encoding"
+  },
+  "wire_profile": {
+    "parity_coordinates": "0..7",
+    "message_coordinates": "8..20",
+    "shortened_zero_coordinates": "21..31",
+    "source_coordinate_20_generator_logs_at_parity_0_through_7": [
+      229,
+      94,
+      57,
+      147,
+      121,
+      151,
+      78,
+      228
+    ],
+    "wire_change": false,
+    "legacy_parity_identity": true
+  },
+  "baseline": {
+    "current_production_commit": "95bae0613a14ec9c0b15c220cfc77d0a30e566a4",
+    "current_production_executable_sha256": "d2604bfc93baa39340062831cfb1222f43a4017abd2e7b2fbb580d638f3bc0ce",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_leopard_main_executable_sha256": "78575e2fe1b9796d10dcb4d14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "prior_exact_main_public_ratio_main_over_leopard2": 0.985687634,
+    "prior_exact_main_public_ratio_ci95": [
+      0.978732593,
+      0.992692099
+    ],
+    "prior_exact_main_reusable_execution_ratio_main_over_leopard2": 0.999499401,
+    "prior_exact_main_reusable_execution_ratio_ci95": [
+      0.995000206,
+      1.00401894
+    ],
+    "prior_evidence": "experiments/leopard2/gf8_high_encode/results/t8_exact_neighbors_checkpoint_20260810.json"
+  },
+  "promotion_policy": {
+    "minimum_credible_target_gain": 1.05,
+    "maximum_neighbor_regression": 0.02,
+    "candidate_reaching_target_gate": false,
+    "authoritative_promotion_campaign_required": false,
+    "reason": "Every independently implemented candidate had a center gain below five percent, so the bounded diagnostic screen killed each candidate before a broader promotion campaign."
+  },
+  "diagnostic_campaign": {
+    "artifact_root": "/tmp/leopard2-k13r8-b1024-sparse-v1",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "host": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "benchmark_cpu": 6,
+    "reserved_smt_sibling": 22,
+    "external_isolation": false,
+    "rounds_per_candidate": 9,
+    "order": "alternating ABBA and BAAB",
+    "invocations_per_round": 4,
+    "iterations_per_invocation": 15,
+    "warmup_per_invocation": 8,
+    "confidence": {
+      "level": 0.95,
+      "degrees_of_freedom": 8,
+      "t_critical": 2.3060041350333704,
+      "method": "Student-t interval over nine independent paired mean-log contrasts"
+    },
+    "memory_limit_bytes_per_process": 268435456,
+    "status": "diagnostic candidate screen only; not promotion evidence",
+    "all_process_round_trips_passed": true,
+    "all_candidate_control_workload_digests_matched": true,
+    "workload_digest_groups_per_candidate": 9
+  },
+  "candidates": [
+    {
+      "name": "direct_generator_column",
+      "description": "Reuse the exact K12/T8 circuit and multiply-add source coordinate 20 directly into every output.",
+      "executable_sha256": "6f8ee43d6a24de67ec78777a7d3b51549f3032d9b0f10c3611802583a1c12595",
+      "raw_directory": "/tmp/leopard2-k13r8-b1024-sparse-v1/direct-column-abba-v2",
+      "raw_relative_manifest_sha256": "672195df495ce238290ae781390cb26a6fcb7b10ab530845cf440a77ab3f13f4",
+      "control_over_candidate_execution": 1.0212087623529895,
+      "execution_ci95": [
+        1.0173838469540668,
+        1.0250480577500345
+      ],
+      "control_over_candidate_one_shot": 1.0198698871393468,
+      "one_shot_ci95": [
+        1.0088720837814147,
+        1.0309875785194018
+      ],
+      "disposition": "rejected_below_five_percent"
+    },
+    {
+      "name": "pairwise_tail_reload",
+      "description": "Reload source coordinate 20 once per output pair to shorten its live range.",
+      "executable_sha256": "8f6dd7ac264d25ad2df0aa656e796988eb82b8360fa5a439c2fb932c892bd208",
+      "raw_directory": "/tmp/leopard2-k13r8-b1024-sparse-v1/pair-reload-abba-v1",
+      "raw_relative_manifest_sha256": "4b208791f49b97560d02cdaf3f5fcc4ea0f99a10d723238865e2e054d284368a",
+      "control_over_candidate_execution": 1.0196751153163757,
+      "execution_ci95": [
+        1.0145805974192166,
+        1.024795214338061
+      ],
+      "control_over_candidate_one_shot": 1.0220806935307718,
+      "one_shot_ci95": [
+        1.0165094168038735,
+        1.0276825052668443
+      ],
+      "disposition": "rejected_below_five_percent"
+    },
+    {
+      "name": "separate_tail_pass",
+      "description": "Run the exact K12/T8 circuit, then apply source coordinate 20 in a separate register-light output pass.",
+      "executable_sha256": "4f48e2902fb4f5ccb2696f457dccbf0ff2f071413622120b87833b6dbbd7e4ad",
+      "raw_directory": "/tmp/leopard2-k13r8-b1024-sparse-v1/tail-pass-abba-v1",
+      "raw_relative_manifest_sha256": "daf4180c5f9803d30b66be0504f919e2ef5dec550d0d133f0a10815885cb42f8",
+      "control_over_candidate_execution": 1.0239290923018944,
+      "execution_ci95": [
+        1.0169496845145083,
+        1.030956400328402
+      ],
+      "control_over_candidate_one_shot": 1.0175000769771625,
+      "one_shot_ci95": [
+        1.0100364993411852,
+        1.0250188060766408
+      ],
+      "disposition": "rejected_below_five_percent"
+    },
+    {
+      "name": "integrated_sparse_ifft",
+      "description": "Inject the five-input shortened second block into the first block's live-register accumulator during a sparse T8 inverse transform.",
+      "executable_sha256": "2d3fe3e69eb70221c5e3b26be594632c9c5046e309920299025de795aaf1db73",
+      "raw_directory": "/tmp/leopard2-k13r8-b1024-sparse-v1/sparse-ifft-abba-v1",
+      "raw_relative_manifest_sha256": "28295494684abc01913cee6d7dcf7d2ead2a3204447d89bc414ab3bdd3a76769",
+      "control_over_candidate_execution": 1.0212759462325731,
+      "execution_ci95": [
+        1.013858627008706,
+        1.0287475300481723
+      ],
+      "control_over_candidate_one_shot": 1.014349675279551,
+      "one_shot_ci95": [
+        1.009167707755155,
+        1.0195582516492538
+      ],
+      "assembly": "The combined live set caused multiple vector spills.",
+      "disposition": "rejected_below_five_percent_and_register_pressure"
+    },
+    {
+      "name": "materialized_sparse_second_block",
+      "description": "Compute the shortened five-input second T8 inverse transform separately, with no zero-shard loads, then add its eight results to the first-block coefficients.",
+      "executable_sha256": "9e219769b9acb37f23f16fd7f890d13ce9d9dcbd1ce00349e9a7119510bf28cf",
+      "raw_directory": "/tmp/leopard2-k13r8-b1024-sparse-v1/sparse-block-abba-v1",
+      "raw_relative_manifest_sha256": "e049f1c08755f5441d12b4337f05398f311aff037920b9cf7e4b457a006cf057",
+      "control_over_candidate_execution": 1.0210184110728315,
+      "execution_ci95": [
+        1.0147311043961238,
+        1.0273446741046524
+      ],
+      "control_over_candidate_one_shot": 1.0175065126006273,
+      "one_shot_ci95": [
+        1.0096361904465558,
+        1.0254381855376788
+      ],
+      "assembly": {
+        "function_bytes": 2237,
+        "evex_prefixed_instructions": 0,
+        "ymm_stack_spill_slots": 1
+      },
+      "disposition": "rejected_below_five_percent"
+    }
+  ],
+  "correctness": {
+    "timed_loss_count": 1,
+    "timed_seed_groups": 9,
+    "all_timed_round_trips_passed": true,
+    "max_loss_smoke": {
+      "loss_count": 8,
+      "seed": 99991,
+      "original_data_fnv1a64": "cbba74dca053af8c",
+      "transmitted_parity_fnv1a64": "cd850a4e81074898",
+      "recovered_originals_fnv1a64": "ec7775d85639644e",
+      "control_sparse_ifft_sparse_block_match": true
+    },
+    "independent_oracles": [
+      "direct systematic generator",
+      "legacy parity byte identity",
+      "Leopard2 maximum-loss recovery"
+    ]
+  },
+  "production_restore_proof": {
+    "result": "pass",
+    "rebuilt_current_executable_sha256": "20105038073f911265e86da7afb5bb5279a0d6f90c937027e68504ca321dc560",
+    "whole_executable_diff_reason": "The benchmark embeds the current Git commit/tree identity; the control embeds 95bae06/5416af36 while the restored rebuild embeds 8cf3186/c8c06670.",
+    "text_section_byte_differences": 1,
+    "text_difference_location": "bench_leopard2 Run() source-identity string address",
+    "production_sources_match_control_commit": [
+      "Leopard2BackendAVX2.cpp",
+      "leopard2.cpp"
+    ],
+    "identical_executable_sections": {
+      ".leo2_t2_packed_terminal": "97a799bed67af7612849b511acd20215468ba784f20e3022f132878a81a19937",
+      ".leo2_t2_k4_packed_terminal": "ace721c21c80c574c346b4d2e4964174bb9fa57256b10c50b29d7f033d5e7177",
+      ".leo2_t4_packed_terminal": "bc91a83a833a5c1ef8c4dae0ce3e0a93c8ca47edc14f186b729f300fb63fadb4"
+    },
+    "note": "The sole .text byte difference is the displacement of a benchmark reporting string; no codec or terminal instruction differs."
+  },
+  "conclusion": {
+    "production_code_retained": false,
+    "best_execution_center_gain": 1.0239290923018944,
+    "best_one_shot_center_gain": 1.0220806935307718,
+    "root_cause": "At this tiny T8 shape, the fifth source's required fixed-field multiply-add work dominates the remaining public gap. Eliminating zero loads, shortening live ranges, separating the tail, and evaluating the shortened block faithfully all converge below the promotion threshold.",
+    "kill_decision": "All bounded AVX2 formulations were exhausted without a credible five-percent gain. Keep the mature production fallback and retain the sub-two-percent exact-main public residual plus statistically tied reusable execution as the measured floor."
+  }
+}
