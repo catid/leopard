@@ -5848,14 +5848,15 @@ static bool SkipOneShotTinyGF8AVX2PrunedSchedules(
         one-shot-only extension through 1 KiB, while partial T=64 loss uses
         the separately measured transient-only extension below.
     */
+    const bool native_low = codec->profile == LEO2_PROFILE_LOW_V1;
     if (metadata_mask != kDecodeTransformMetadataSpecialized ||
-        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        (!native_low && codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1) ||
         codec->field != LEO2_FIELD_GF8 || !codec->context ||
         !codec->context->ops ||
         codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
         codec->recovery_count <= 1)
         return false;
-    if (translated_low)
+    if (native_low || translated_low)
         return hint.setup_mode >= 3U && hint.shard_bytes <= 1024;
     if (plan->missing_original_count == codec->recovery_count)
         return hint.shard_bytes <= 1024;
@@ -5875,6 +5876,22 @@ static bool SkipOneShotTinyGF8AVX2PrunedSchedules(
     const size_t maximum_pass = aligned_prefix == 0
         ? kScratchAlignment : aligned_prefix;
     if (BypassTinyGF8AVX2HighPrunedSchedules(plan, maximum_pass))
+        return true;
+
+    /* At the paper's 1-KiB RS(256,224) point, compiling a transient T=32
+       exact graph costs more than executing the regular high-rate kernels.
+       Reusable plans keep their exact graph: this applies only to production
+       exact-byte one-shot setup and therefore cannot discard caller-owned
+       reusable metadata.  The neighboring 1025-byte case has two execution
+       passes (1024 plus a padded tail) and retains the exact graph. */
+    if (hint.setup_mode >= 3U && hint.shard_bytes <= 1024U &&
+        maximum_pass >= 576U && maximum_pass <= 1024U && codec->flags == 0 &&
+        codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        codec->padded_side == 32 && codec->parent_count == kGF8Order &&
+        codec->recovery_count >= 17 && codec->recovery_count <= 32 &&
+        codec->original_count >= 97 && codec->original_count <= 224 &&
+        plan->missing_original_count >= 2U &&
+        plan->missing_original_count < codec->recovery_count)
         return true;
 
     /* Sparse T=64 execution crosses back to the exact pruned graph at a

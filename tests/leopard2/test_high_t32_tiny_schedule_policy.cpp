@@ -726,6 +726,34 @@ size_t transient_high_schedule_count(
     return info.high_input_plan_count + info.high_output_plan_count;
 }
 
+size_t reusable_high_schedule_count(
+    leo2_context* context,
+    uint32_t k,
+    uint32_t r,
+    const std::vector<uint32_t>& missing,
+    const std::string& label)
+{
+    CodecOwner codec;
+    create_codec(context, k, r, 0, false, codec, label);
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    for (size_t i = 0; i < missing.size(); ++i)
+        original_present[missing[i]] = 0;
+
+    PlanOwner plan;
+    require_result(leo2_decode_plan_create(codec.get(),
+            original_present.data(), recovery_present.data(), plan.output()),
+        label + " reusable plan create");
+    leopard2_internal::DecodePlanPrunedScheduleInfo info;
+    require(leopard2_internal::GetDecodePlanPrunedScheduleInfo(
+            plan.get(), &info),
+        label + " reusable schedule introspection failed");
+    require(info.low_input_plan_count == 0 &&
+            info.low_output_plan_count == 0,
+        label + " reusable native-high plan compiled low schedules");
+    return info.high_input_plan_count + info.high_output_plan_count;
+}
+
 } // namespace
 
 int main()
@@ -915,6 +943,28 @@ int main()
 
         require(leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(3),
             "select production one-shot setup policy");
+        const std::vector<uint32_t> paper_t32_missing =
+            random_missing(224, 30, 0xc4b62240U);
+        require(transient_high_schedule_count(avx2_context,
+                224, 32, paper_t32_missing, 1024,
+                "transient R10 T32 B1024") == 0,
+            "R10 T32 B1024 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                224, 32, paper_t32_missing, 1025,
+                "transient R10 T32 B1025") != 0,
+            "R10 T32 B1025 transient plan omitted schedules");
+        require(reusable_high_schedule_count(avx2_context,
+                224, 32, paper_t32_missing,
+                "reusable R10 T32") != 0,
+            "R10 T32 reusable plan lost exact schedules");
+        require(leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(2),
+            "select attribution one-shot setup policy");
+        require(transient_high_schedule_count(avx2_context,
+                224, 32, paper_t32_missing, 1024,
+                "attribution R10 T32 B1024") != 0,
+            "attribution R10 T32 B1024 plan omitted schedules");
+        require(leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(3),
+            "restore production one-shot setup policy");
         require(transient_high_schedule_count(avx2_context,
                 57, 29, random_missing(57, 2, 0xc4b6da19U), 64,
                 "transient sparse B64") == 0,

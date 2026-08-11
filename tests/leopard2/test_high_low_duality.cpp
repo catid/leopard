@@ -1007,6 +1007,50 @@ void test_partial_loss_transient_schedule_policy(leo2_context* context)
         "native-high partial-loss plan unexpectedly omitted schedules");
     require(schedule_count(3, true, r) == 0,
         "native-high maximum-loss plan lost its regular-transform policy");
+
+    std::fill(original_present.begin(), original_present.end(), 1);
+    for (unsigned i = 0; i < r / 2; ++i)
+        original_present[i] = 0;
+    leo2_codec* low_codec = create_codec(context, k, r,
+        LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 0);
+    const auto low_schedule_count = [&](unsigned setup_mode) {
+        require(leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(
+                setup_mode),
+            "select low-profile transient schedule policy mode");
+        leo2_decode_plan* plan = NULL;
+        require_success(
+            leopard2_internal::CreateOneShotTransformPlanForDiagnostics(
+                low_codec, 1024, original_present.data(),
+                recovery_present.data(), &plan),
+            "low-profile partial-loss transient plan create");
+        leopard2_internal::DecodePlanPrunedScheduleInfo info;
+        require(leopard2_internal::GetDecodePlanPrunedScheduleInfo(
+                plan, &info),
+            "low-profile transient schedule introspection");
+        const size_t count = info.low_input_plan_count +
+            info.low_output_plan_count + info.high_input_plan_count +
+            info.high_output_plan_count;
+        leo2_decode_plan_destroy(plan);
+        return count;
+    };
+    require(low_schedule_count(2) != 0,
+        "low-profile partial-loss attribution control had no schedules");
+    require(low_schedule_count(3) == 0,
+        "production low-profile partial-loss plan retained schedules");
+    leo2_decode_plan* reusable_low_plan = NULL;
+    require_success(leo2_decode_plan_create(low_codec,
+        original_present.data(), recovery_present.data(),
+        &reusable_low_plan),
+        "low-profile reusable partial-loss plan create");
+    leopard2_internal::DecodePlanPrunedScheduleInfo reusable_low_info;
+    require(leopard2_internal::GetDecodePlanPrunedScheduleInfo(
+            reusable_low_plan, &reusable_low_info),
+        "low-profile reusable schedule introspection");
+    require(reusable_low_info.low_input_plan_count +
+            reusable_low_info.low_output_plan_count != 0,
+        "low-profile reusable plan lost its exact schedules");
+    leo2_decode_plan_destroy(reusable_low_plan);
+    leo2_codec_destroy(low_codec);
     require(leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(3),
         "restore production transient schedule policy");
     require_success(leo2_test_codec_set_decode_mode(
