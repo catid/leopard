@@ -2356,6 +2356,12 @@ def parse_args(arguments: Sequence[str]) -> argparse.Namespace:
     return args
 
 
+def should_generate_plots(mode: str, allow_partial: bool,
+                          summary_complete: bool) -> bool:
+    """Keep bounded ``all`` smoke runs useful without partial graph claims."""
+    return mode == "plot" or summary_complete or not allow_partial
+
+
 def main(arguments: Sequence[str]) -> int:
     try:
         args = parse_args(arguments)
@@ -2381,6 +2387,11 @@ def main(arguments: Sequence[str]) -> int:
             summary = read_json(summary_path)
             validate_summary(summary, manifest,
                              require_complete=not args.allow_partial)
+            if not should_generate_plots(
+                    args.mode, args.allow_partial, summary["complete"]):
+                print("partial atlas summary written; plots and performance "
+                      "README require the complete matrix")
+                return 0
             plots = args.plots or args.output / "plots"
             generated = generate_plots(summary, plots)
             print(f"generated {len(generated)} SVG plots in {plots}")

@@ -503,6 +503,9 @@ class AtlasTests(unittest.TestCase):
         main = ATLAS.command_for("leopard1", Path("/main"), {
             **cell, "K": 32})
         self.assertNotIn("--skip-legacy", main)
+        self.assertFalse(ATLAS.should_generate_plots("all", True, False))
+        self.assertTrue(ATLAS.should_generate_plots("all", True, True))
+        self.assertTrue(ATLAS.should_generate_plots("plot", True, False))
 
 
 if __name__ == "__main__":
