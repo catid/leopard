@@ -689,6 +689,9 @@ struct leo2_codec
        public codec options reject it. */
     uint32_t flags;
     bool high_t4_batch_binding_enabled;
+    /* Count/profile/backend eligibility for the N=128 atlas-selected raw
+       Algorithm 5 route.  Byte and loss-count policy remains per call. */
+    bool n128_raw_high_transform_eligible;
     /* Immutable mutually-exclusive R=1, T=8, or K4/R2 terminal shape stored
        in existing alignment padding beside the other setup-resolved state. */
     uint8_t terminal_r1_t8_shape;
@@ -1783,9 +1786,10 @@ struct AddressRange
 };
 
 /*
-    Prefix metadata validated by the one-shot wrapper before it discovers the
-    first missing original.  Passing this into plan construction avoids
-    repeating the same address checks and prefix scan on the loss fallback.
+    Original-presence metadata validated by the one-shot wrapper.  The common
+    case stops after the first missing original; selected dispatch bands may
+    finish the scan once so both their experimental route and the canonical
+    fallback can consume the same proof.
 */
 struct DecodePresencePrefix
 {
@@ -1795,6 +1799,8 @@ struct DecodePresencePrefix
     uint32_t present_count;
     uint32_t missing_original_count;
     uint32_t single_missing_original;
+    bool raw_native_high_transform_classified;
+    bool raw_native_high_transform_selected;
 };
 
 struct DecodePlanSetupHint
@@ -10331,13 +10337,14 @@ static bool PrepareRawNativeHighPattern(
     Keep a scratch-owned view for the measured regular-schedule winners:
 
       * dense partial T=64 loss at one native AVX2 cache line; and
-      * near-maximum T=32 loss at the exact 127-byte source boundary.
+      * N=128/T=32/R=32 near-maximum loss at 64 or 127 bytes; and
+      * N=128/T=32/R=32 partial loss at one aligned KiB.
 
-    The first route writes complete public rows directly.  The second route
+    Aligned routes write complete public rows directly.  The exact-127 route
     synthesizes byte 127 while loading and stages complete 128-byte results
-    before copying the exact public prefix.  Neither route owns a pruned
-    schedule, and both retain the general one-shot path outside their narrow
-    measured regions.
+    before copying the exact public prefix.  None owns a pruned schedule, and
+    all retain the general one-shot path outside their narrow measured
+    regions.
 
     Preserve the older T64-named diagnostic macro as a source-compatible
     alias for experiment scripts and frozen benchmark controls.
@@ -10515,12 +10522,16 @@ static leo2_result ExecuteRawNativeHighTransform(
         geometry.fused_ragged_pass && geometry.rounded_bytes == 128 &&
         geometry.aligned_prefix_bytes == kScratchAlignment &&
         geometry.tail_bytes == 63;
-    const bool exact_cache_line = shard_bytes == kScratchAlignment &&
-        geometry.aligned_prefix_bytes == kScratchAlignment &&
+    const bool exact_aligned = shard_bytes != 0 &&
+        shard_bytes <= std::numeric_limits<size_t>::max() &&
+        geometry.rounded_bytes == static_cast<size_t>(shard_bytes) &&
+        geometry.aligned_prefix_bytes == static_cast<size_t>(shard_bytes) &&
         geometry.tail_bytes == 0;
-    if ((!exact127 && !exact_cache_line) ||
+    const size_t execution_bytes = exact127
+        ? 128U : static_cast<size_t>(shard_bytes);
+    if ((!exact127 && !exact_aligned) ||
         geometry.execution_tile_count != 1 ||
-        geometry.work_slot_bytes < (exact127 ? 128U : kScratchAlignment) ||
+        geometry.work_slot_bytes < execution_bytes ||
         geometry.work_slot_count <
             work_rows + pattern.base.missing_original_count ||
         codec->fixed_factors8.size() != codec->parent_count)
@@ -10565,7 +10576,7 @@ static leo2_result ExecuteRawNativeHighTransform(
     else
     {
         leopard::ff8::ReedSolomonDecodeHighTiledPrunedPlanned(
-            *codec->context->ops, kScratchAlignment,
+            *codec->context->ops, execution_bytes,
             codec->parent_count, codec->padded_side,
             const_cast<const void* const*>(coordinate_data),
             pattern.block_input_counts, pattern.requested_coordinates,
@@ -10576,7 +10587,24 @@ static leo2_result ExecuteRawNativeHighTransform(
     return LEO2_SUCCESS;
 }
 
-static leo2_result TryOneShotRawNativeHighTransform(
+#if defined(_MSC_VER)
+#define LEO2_RAW_NATIVE_HIGH_TRANSFORM_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_RAW_NATIVE_HIGH_TRANSFORM_NOINLINE \
+    __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_RAW_NATIVE_HIGH_TRANSFORM_NOINLINE
+#endif
+
+/*
+    This selected one-shot route owns locator construction, scratch binding,
+    validation, and Algorithm 5 execution.  Keeping it out of
+    DecodeOneShotGeneral is performance-significant for neighboring loss
+    counts that fall through to the mature dispatcher: GCC otherwise inlines
+    several KiB of cold setup beside that hot path.
+*/
+static LEO2_RAW_NATIVE_HIGH_TRANSFORM_NOINLINE leo2_result
+TryOneShotRawNativeHighTransform(
     const leo2_codec* codec,
     uint64_t shard_bytes,
     const uint8_t* original_present,
@@ -10586,7 +10614,7 @@ static leo2_result TryOneShotRawNativeHighTransform(
     void* const* restored,
     void* scratch,
     size_t scratch_bytes,
-    const DecodePresencePrefix* validated_prefix,
+    DecodePresencePrefix* validated_prefix,
     bool& handled)
 {
     handled = false;
@@ -10594,6 +10622,9 @@ static leo2_result TryOneShotRawNativeHighTransform(
         codec->original_count >= 33 && codec->original_count <= 96 &&
         codec->recovery_count >= 17 && codec->recovery_count <= 32 &&
         codec->parent_count == 128 && codec->padded_side == 32;
+    const bool t32_atlas_shape = codec &&
+        (shard_bytes == kScratchAlignment || shard_bytes == 1024) &&
+        codec->n128_raw_high_transform_eligible;
     const bool t64_cache_line_shape = codec &&
         shard_bytes == kScratchAlignment &&
         codec->original_count >= 65 && codec->original_count <= 192 &&
@@ -10601,7 +10632,8 @@ static leo2_result TryOneShotRawNativeHighTransform(
         codec->parent_count == kGF8Order && codec->padded_side == 64;
     if (g_raw_native_high_transform_mode != 1U ||
         g_one_shot_plan_setup_mode.load(std::memory_order_acquire) != 3U ||
-        !codec || (!exact127_shape && !t64_cache_line_shape) ||
+        !codec ||
+        (!exact127_shape && !t32_atlas_shape && !t64_cache_line_shape) ||
         codec->flags != 0 ||
         codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
         codec->field != LEO2_FIELD_GF8 ||
@@ -10642,8 +10674,13 @@ static leo2_result TryOneShotRawNativeHighTransform(
         missing_original_count = validated_prefix->missing_original_count;
         if (original_scan_start > codec->original_count ||
             present_count + missing_original_count != original_scan_start ||
-            missing_original_count != 1 ||
-            validated_prefix->single_missing_original >= original_scan_start)
+            missing_original_count == 0 ||
+            ((missing_original_count == 1) !=
+                (validated_prefix->single_missing_original <
+                    original_scan_start)) ||
+            (missing_original_count != 1 &&
+             validated_prefix->single_missing_original !=
+                std::numeric_limits<uint32_t>::max()))
         {
             handled = true;
             return LEO2_INTERNAL_ERROR;
@@ -10662,6 +10699,52 @@ static leo2_result TryOneShotRawNativeHighTransform(
         else
             ++missing_original_count;
     }
+    bool selected_loss_count = false;
+    if (exact127_shape ||
+        (t32_atlas_shape && shard_bytes == kScratchAlignment))
+    {
+        selected_loss_count =
+            missing_original_count <= codec->recovery_count &&
+            missing_original_count + 1U >= codec->recovery_count;
+    }
+    else if (t32_atlas_shape)
+    {
+        /*
+            The complete all-K atlas localized the remaining 1 KiB
+            one-shot regressions to transient Algorithm 5 plan ownership in
+            the N=128/R=32 parent.  The scratch-owned view below executes the
+            same pruned block list without heap-owned schedules.  Keep the
+            already-fast one-loss and complete-loss dispatchers unchanged and
+            admit every partial multi-loss count so neighboring patterns
+            cannot cross an artificial setup cliff.
+        */
+        selected_loss_count = missing_original_count >= 2 &&
+            missing_original_count < codec->recovery_count;
+    }
+    else
+    {
+        selected_loss_count =
+            missing_original_count < codec->recovery_count &&
+            missing_original_count >= codec->recovery_count / 2U;
+    }
+    if (!selected_loss_count)
+    {
+        /* This function completed the original-presence scan before finding
+           that another dispatcher owns the pattern.  Preserve that proof for
+           the common one-loss plan fallback so it does not rescan K originals.
+           Other loss counts retain the canonical prefix contract. */
+        if (validated_prefix && missing_original_count == 1)
+        {
+            validated_prefix->original_scan_start = codec->original_count;
+            validated_prefix->present_count = codec->original_count - 1U;
+            validated_prefix->missing_original_count = 1;
+        }
+        return LEO2_SUCCESS;
+    }
+
+    /* Recovery availability matters only after this route owns the loss
+       count.  A fallback dispatcher performs its own canonical validation;
+       avoiding this duplicate scan removes the measured boundary penalty. */
     for (uint32_t i = 0; i < codec->recovery_count; ++i)
     {
         if (recovery_present[i] > 1)
@@ -10676,17 +10759,6 @@ static leo2_result TryOneShotRawNativeHighTransform(
     {
         handled = true;
         return LEO2_NEED_MORE_DATA;
-    }
-    if (exact127_shape)
-    {
-        if (missing_original_count > codec->recovery_count ||
-            missing_original_count + 1U < codec->recovery_count)
-            return LEO2_SUCCESS;
-    }
-    else if (missing_original_count >= codec->recovery_count ||
-             missing_original_count < codec->recovery_count / 2U)
-    {
-        return LEO2_SUCCESS;
     }
 
     DecodeScratchGeometry geometry;
@@ -10725,6 +10797,8 @@ static leo2_result TryOneShotRawNativeHighTransform(
         original, recovery, restored, shard_bytes,
         static_cast<uint8_t*>(scratch));
 }
+
+#undef LEO2_RAW_NATIVE_HIGH_TRANSFORM_NOINLINE
 
 #if defined(LEO2_HAVE_AVX2_BACKEND)
 static leo2_result ExecuteRawNativeHighDirectAVX2(
@@ -14585,6 +14659,16 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     codec->flags = options ? options->flags : 0;
     codec->high_t4_batch_binding_enabled =
         context->high_t4_batch_binding_enabled;
+    codec->n128_raw_high_transform_eligible =
+        original_count >= 33 && original_count <= 96 &&
+        recovery_count == 32 && parent == 128 && padded == 32 &&
+        codec->flags == 0 &&
+        profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        field == LEO2_FIELD_GF8 &&
+        shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        context->ops && context->ops->kind == LEO2_BACKEND_AVX2 &&
+        context->ops->ff8_multiply &&
+        !CanUseTranslatedLowDecode(codec);
     const bool r1_small_reduction_mode_enabled =
         g_r1_small_reduction_mode.load(std::memory_order_acquire) == 1U &&
         profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
@@ -18031,6 +18115,30 @@ static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
 #endif
 }
 
+static LEO_FORCE_INLINE bool IsGF8AVX2K33R32B64PackedTerminalEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    if (!codec || shard_bytes != 64 || codec->original_count != 33 ||
+        codec->recovery_count != 32 || codec->padded_side != 32)
+        return false;
+    if (g_balanced_b64_terminal_mode != 1U ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 ||
+        codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
+        !codec->context || codec->context->backend != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops->ff8_ifft_butterfly2_range ||
+        !codec->context->ops->ff8_multiply_add_outputs)
+        return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
+#else
+    return true;
+#endif
+}
+
 #if defined(_MSC_VER)
 #define LEO2_BALANCED_B64_TERMINAL_NOINLINE __declspec(noinline)
 #elif defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
@@ -18185,6 +18293,132 @@ TryEncodeGF8BalancedB64PackedTerminal(
     result_out = LEO2_SUCCESS;
     return true;
 }
+
+#if defined(_MSC_VER)
+#define LEO2_K33R32_B64_TERMINAL_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
+#define LEO2_K33R32_B64_TERMINAL_NOINLINE \
+    __attribute__((noinline, noipa, section(".leo2_k33r32_b64_terminal"), \
+        aligned(64)))
+#elif defined(__clang__) && defined(__ELF__)
+#define LEO2_K33R32_B64_TERMINAL_NOINLINE \
+    __attribute__((noinline, section(".leo2_k33r32_b64_terminal"), \
+        aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_K33R32_B64_TERMINAL_NOINLINE \
+    __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_K33R32_B64_TERMINAL_NOINLINE
+#endif
+
+/*
+    K=33/R=32 is one complete T=32 message block plus one source column.
+    Keep its aggregate validation and grouped tail arithmetic isolated from
+    the already-qualified balanced terminal so K=32 and other tiny neighbors
+    retain their prior instruction layout.
+*/
+template<size_t ProtectedCount>
+static LEO2_K33R32_B64_TERMINAL_NOINLINE bool
+TryEncodeGF8K33R32B64PackedTerminal(
+    const leo2_codec* codec,
+    const AddressRange* protected_range,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    leo2_result& result_out)
+{
+    LEO_DEBUG_ASSERT(
+        IsGF8AVX2K33R32B64PackedTerminalEligible(codec, 64));
+    static_assert(ProtectedCount <= 1,
+        "K33/R32 terminal protects at most one batch descriptor");
+    LEO_DEBUG_ASSERT(
+        (ProtectedCount == 0 && !protected_range) ||
+        (ProtectedCount == 1 && protected_range));
+
+    ScratchLayout layout = { 0, 0, 0,
+        (((33U + 32U) * sizeof(AddressRange) +
+            (33U + 2U * 32U) * sizeof(void*) +
+            kScratchAlignment - 1U) & ~(kScratchAlignment - 1U)) +
+            2U * 32U * 64U };
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    EncodeScratchGeometry geometry;
+    result_out = EncodeLayout(codec, 64, geometry);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    layout = geometry.layout;
+#endif
+
+    AddressRange scratch_range;
+    result_out = CheckScratch(
+        scratch, scratch_bytes, layout, scratch_range);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    if (!original || !recovery)
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+
+    AddressRange metadata_ranges[2 + ProtectedCount];
+    if (!MakeArrayRange(original, 33, sizeof(*original),
+            metadata_ranges[0]) ||
+        !MakeArrayRange(recovery, 32, sizeof(*recovery),
+            metadata_ranges[1]))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    if (ProtectedCount != 0)
+        metadata_ranges[2] = *protected_range;
+    if (RangeOverlapsAny(
+            scratch_range, metadata_ranges, 2 + ProtectedCount))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    if (!original[0] || !recovery[0])
+        return false;
+    AddressRange input_range;
+    AddressRange output_range;
+    if (!MakeRange(original[0], 33U * 64U, input_range) ||
+        !MakeRange(recovery[0], 32U * 64U, output_range))
+        return false;
+
+    uintptr_t pointer_mismatch = 0;
+    for (size_t i = 0; i < 33; ++i)
+    {
+        pointer_mismatch |= reinterpret_cast<uintptr_t>(original[i]) ^
+            (input_range.begin + i * 64U);
+    }
+    for (size_t i = 0; i < 32; ++i)
+    {
+        pointer_mismatch |= reinterpret_cast<uintptr_t>(recovery[i]) ^
+            (output_range.begin + i * 64U);
+    }
+    if (pointer_mismatch != 0)
+        return false;
+
+    if (RangesOverlap(input_range, scratch_range) ||
+        RangesOverlap(output_range, scratch_range) ||
+        RangesOverlap(input_range, output_range) ||
+        RangeOverlapsAny(output_range, metadata_ranges, 2 + ProtectedCount))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    leopard::ff8::ReedSolomonEncodeK33R32B64Packed(
+        *codec->context->ops, original, const_cast<void**>(recovery));
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    leopard::ff8::TestOnlyRecordBalancedB64PackedCall();
+#endif
+    result_out = LEO2_SUCCESS;
+    return true;
+}
+
+#undef LEO2_K33R32_B64_TERMINAL_NOINLINE
 
 #undef LEO2_BALANCED_B64_TERMINAL_NOINLINE
 
@@ -19880,13 +20114,16 @@ static leo2_result EncodeInternal(
 
 #if LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
 /*
-    Return a no-loss verdict only after validating every presence byte.  Stop
-    at the first missing original and let the canonical plan constructor
-    validate the remainder.  Legacy-high R=1 is handled separately below so
-    its no-op and direct-XOR terminal paths share one complete scan.
+    Return a no-loss verdict only after validating every presence byte.  The
+    common path stops at the first missing original and lets the canonical
+    plan constructor validate the remainder.  The N=128 atlas dispatch band
+    completes this scan once so selected and fallback routes share its exact
+    loss-count proof.  Legacy-high R=1 is handled separately below so its
+    no-op and direct-XOR terminal paths share one complete scan.
 */
 static leo2_result TryOneShotNoLoss(
     const leo2_codec* codec,
+    uint64_t shard_bytes,
     const uint8_t* original_present,
     const uint8_t* recovery_present,
     bool& no_loss_out,
@@ -19895,6 +20132,8 @@ static leo2_result TryOneShotNoLoss(
 {
     no_loss_out = false;
     prefix_valid_out = false;
+    prefix_out.raw_native_high_transform_classified = false;
+    prefix_out.raw_native_high_transform_selected = false;
     if (!codec || !original_present || !recovery_present)
         return LEO2_SUCCESS;
 
@@ -19909,18 +20148,100 @@ static leo2_result TryOneShotNoLoss(
     const size_t repeated_one = ~static_cast<size_t>(0) /
         static_cast<size_t>(0xff);
     uint32_t i = 0;
-    while (codec->original_count - i >= sizeof(size_t))
+    const bool classify_n128_atlas_loss_count =
+        (shard_bytes == kScratchAlignment || shard_bytes == 1024) &&
+        codec->n128_raw_high_transform_eligible;
+    if (classify_n128_atlas_loss_count)
     {
-        size_t packed_presence = 0;
-        memcpy(&packed_presence, original_present + i,
-            sizeof(packed_presence));
-        if (packed_presence == repeated_one)
+        uint32_t missing_count = 0;
+        uint32_t single_missing_original =
+            std::numeric_limits<uint32_t>::max();
+        while (codec->original_count - i >= sizeof(size_t))
         {
-            i += static_cast<uint32_t>(sizeof(size_t));
-            continue;
+            size_t packed_presence = 0;
+            memcpy(&packed_presence, original_present + i,
+                sizeof(packed_presence));
+            if (packed_presence == repeated_one)
+            {
+                i += static_cast<uint32_t>(sizeof(size_t));
+                continue;
+            }
+            if ((packed_presence & ~repeated_one) != 0)
+                return LEO2_INVALID_ARGUMENT;
+            const uint32_t end =
+                i + static_cast<uint32_t>(sizeof(size_t));
+            for (; i < end; ++i)
+            {
+                if (!original_present[i])
+                {
+                    ++missing_count;
+                    single_missing_original = i;
+                }
+            }
         }
-        const uint32_t end = i + static_cast<uint32_t>(sizeof(size_t));
-        for (; i < end; ++i)
+        for (; i < codec->original_count; ++i)
+        {
+            if (original_present[i] > 1)
+                return LEO2_INVALID_ARGUMENT;
+            if (!original_present[i])
+            {
+                ++missing_count;
+                single_missing_original = i;
+            }
+        }
+        if (missing_count != 0)
+        {
+            prefix_out.original_range = original_range;
+            prefix_out.recovery_range = recovery_range;
+            prefix_out.original_scan_start = codec->original_count;
+            prefix_out.present_count =
+                codec->original_count - missing_count;
+            prefix_out.missing_original_count = missing_count;
+            prefix_out.single_missing_original = missing_count == 1
+                ? single_missing_original
+                : std::numeric_limits<uint32_t>::max();
+            prefix_out.raw_native_high_transform_classified = true;
+            prefix_out.raw_native_high_transform_selected =
+                shard_bytes == kScratchAlignment
+                    ? missing_count <= codec->recovery_count &&
+                        missing_count + 1U >= codec->recovery_count
+                    : missing_count >= 2 &&
+                        missing_count < codec->recovery_count;
+            prefix_valid_out = true;
+            return LEO2_SUCCESS;
+        }
+    }
+    else
+    {
+        while (codec->original_count - i >= sizeof(size_t))
+        {
+            size_t packed_presence = 0;
+            memcpy(&packed_presence, original_present + i,
+                sizeof(packed_presence));
+            if (packed_presence == repeated_one)
+            {
+                i += static_cast<uint32_t>(sizeof(size_t));
+                continue;
+            }
+            const uint32_t end = i + static_cast<uint32_t>(sizeof(size_t));
+            for (; i < end; ++i)
+            {
+                if (original_present[i] > 1)
+                    return LEO2_INVALID_ARGUMENT;
+                if (!original_present[i])
+                {
+                    prefix_out.original_range = original_range;
+                    prefix_out.recovery_range = recovery_range;
+                    prefix_out.original_scan_start = i + 1;
+                    prefix_out.present_count = i;
+                    prefix_out.missing_original_count = 1;
+                    prefix_out.single_missing_original = i;
+                    prefix_valid_out = true;
+                    return LEO2_SUCCESS;
+                }
+            }
+        }
+        for (; i < codec->original_count; ++i)
         {
             if (original_present[i] > 1)
                 return LEO2_INVALID_ARGUMENT;
@@ -19935,22 +20256,6 @@ static leo2_result TryOneShotNoLoss(
                 prefix_valid_out = true;
                 return LEO2_SUCCESS;
             }
-        }
-    }
-    for (; i < codec->original_count; ++i)
-    {
-        if (original_present[i] > 1)
-            return LEO2_INVALID_ARGUMENT;
-        if (!original_present[i])
-        {
-            prefix_out.original_range = original_range;
-            prefix_out.recovery_range = recovery_range;
-            prefix_out.original_scan_start = i + 1;
-            prefix_out.present_count = i;
-            prefix_out.missing_original_count = 1;
-            prefix_out.single_missing_original = i;
-            prefix_valid_out = true;
-            return LEO2_SUCCESS;
         }
     }
 
@@ -20273,6 +20578,15 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
             if (handled)
                 return terminal_result;
         }
+        if (IsGF8AVX2K33R32B64PackedTerminalEligible(
+                codec, shard_bytes))
+        {
+            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+            if (TryEncodeGF8K33R32B64PackedTerminal<0>(
+                    codec, NULL, original, recovery, scratch, scratch_bytes,
+                    terminal_result))
+                return terminal_result;
+        }
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
         if (IsGF8AVX2HighT16Q2B64FusedEligible(codec, shard_bytes))
         {
@@ -20570,6 +20884,16 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
                         items[0].scratch_bytes, terminal_result);
 #endif
                 if (handled)
+                    return terminal_result;
+            }
+            if (IsGF8AVX2K33R32B64PackedTerminalEligible(
+                    codec, items[0].shard_bytes))
+            {
+                leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+                if (TryEncodeGF8K33R32B64PackedTerminal<1>(
+                        codec, &item_range, items[0].original,
+                        items[0].recovery, items[0].scratch,
+                        items[0].scratch_bytes, terminal_result))
                     return terminal_result;
             }
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
@@ -21557,13 +21881,12 @@ static leo2_result DecodePlanCreateInternal(
             prefix_present > prefix_scanned ||
             prefix_missing > prefix_scanned - prefix_present ||
             prefix_present + prefix_missing != prefix_scanned ||
-            prefix_missing > 1 ||
-            (prefix_missing == 0) !=
-                (validated_prefix->single_missing_original ==
-                    std::numeric_limits<uint32_t>::max()) ||
-            (prefix_missing != 0 &&
-             validated_prefix->single_missing_original >=
-                prefix_scanned))
+            ((prefix_missing == 1) !=
+                (validated_prefix->single_missing_original <
+                    prefix_scanned)) ||
+            (prefix_missing != 1 &&
+             validated_prefix->single_missing_original !=
+                std::numeric_limits<uint32_t>::max()))
             return LEO2_INTERNAL_ERROR;
         original_range = validated_prefix->original_range;
         recovery_range = validated_prefix->recovery_range;
@@ -22106,8 +22429,8 @@ leo2_result CreateOneShotTransformPlanForDiagnostics(
     bool no_loss = false;
     bool prefix_valid = false;
     const leo2_result prefix_result = TryOneShotNoLoss(
-        codec, original_present, recovery_present, no_loss, prefix_valid,
-        presence_prefix);
+        codec, shard_bytes, original_present, recovery_present, no_loss,
+        prefix_valid, presence_prefix);
     if (prefix_result != LEO2_SUCCESS)
         return prefix_result;
     (void)no_loss;
@@ -23673,15 +23996,15 @@ static LEO2_ONE_SHOT_GENERAL_NOINLINE leo2_result DecodeOneShotGeneral(
 #if LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
     DecodePresencePrefix presence_prefix;
 #endif
-    const DecodePresencePrefix* validated_prefix = NULL;
+    DecodePresencePrefix* validated_prefix = NULL;
 #if LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
     if (!r1_metadata_checked)
     {
         bool one_shot_no_loss = false;
         bool prefix_valid = false;
         const leo2_result no_loss_result = TryOneShotNoLoss(
-            codec, original_present, recovery_present, one_shot_no_loss,
-            prefix_valid, presence_prefix);
+            codec, shard_bytes, original_present, recovery_present,
+            one_shot_no_loss, prefix_valid, presence_prefix);
         if (no_loss_result != LEO2_SUCCESS)
             return no_loss_result;
         if (one_shot_no_loss)
@@ -23718,11 +24041,16 @@ static LEO2_ONE_SHOT_GENERAL_NOINLINE leo2_result DecodeOneShotGeneral(
         return raw_translated_low_result;
 
     bool raw_native_high_transform_handled = false;
-    const leo2_result raw_native_high_transform_result =
-        TryOneShotRawNativeHighTransform(
+    leo2_result raw_native_high_transform_result = LEO2_SUCCESS;
+    if (!validated_prefix ||
+        !validated_prefix->raw_native_high_transform_classified ||
+        validated_prefix->raw_native_high_transform_selected)
+    {
+        raw_native_high_transform_result = TryOneShotRawNativeHighTransform(
             codec, shard_bytes, original_present, recovery_present,
             original, recovery, restored_original, scratch, scratch_bytes,
             validated_prefix, raw_native_high_transform_handled);
+    }
     if (raw_native_high_transform_result != LEO2_SUCCESS ||
         raw_native_high_transform_handled)
         return raw_native_high_transform_result;

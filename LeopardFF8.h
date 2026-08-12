@@ -181,6 +181,14 @@ void ReedSolomonEncode(
     const void* const * const data,
     void** work); // m * 2 elements
 
+// Exact packed K=33/R=32/B=64 terminal selected by Leopard2 after public
+// validation. work provides the ordinary 2*T transform workspace; its first
+// 32 rows contain the transmitted parity on return.
+void ReedSolomonEncodeK33R32B64Packed(
+    const backend::Ops& ops,
+    const void* const* data,
+    void** work);
+
 /*
     Execute the already-qualified register-light AVX2 T=8 one-block callback
     after reusable public validation has established a dense eight-output

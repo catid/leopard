@@ -3109,6 +3109,43 @@ skip_body:
 }
 
 
+void ReedSolomonEncodeK33R32B64Packed(
+    const backend::Ops& ops,
+    const void* const* data,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+    LEO_DEBUG_ASSERT(ops.ff8_multiply_add_outputs != NULL);
+
+    /*
+        Keep this atlas-selected one-tail optimization outside the mature
+        general encoder so unrelated tiny K/R shapes retain their exact code
+        layout and branch structure.  Encode the complete first T=32 block,
+        then add the systematic generator column for message coordinate 64
+        through eight-output source-major groups.  The AVX2 primitive
+        composes each group from two spill-free four-output passes, reducing
+        the final source shard from 32 passes to eight.
+    */
+    ReedSolomonEncode(
+        ops, 64, 32, 32, 32, 32, data, work, NULL, true);
+    for (unsigned output = 0; output < 32; output += 8)
+    {
+        void* destinations[8];
+        uint16_t logs[8];
+        for (unsigned lane = 0; lane < 8; ++lane)
+        {
+            destinations[lane] = work[output + lane];
+            logs[lane] = HighTailGeneratorLogs[0][32 + output + lane];
+        }
+        ops.ff8_multiply_add_outputs(
+            destinations, data[32], logs, 8, 64);
+    }
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestHighTailColumnCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
+}
+
+
 void ReedSolomonEncode(
     const backend::Ops& ops,
     uint64_t buffer_bytes,

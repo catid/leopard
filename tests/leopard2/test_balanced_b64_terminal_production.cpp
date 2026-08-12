@@ -143,22 +143,24 @@ void SetPackedPointers(
         recovery[i] = output + static_cast<size_t>(i) * kShardBytes;
 }
 
-void CheckParity(
+void CheckPackedParity(
     const leopard2_test::BinaryField& field,
     const leopard2_test::Matrix& generator,
+    unsigned original_count,
+    unsigned recovery_count,
     const void* const* original,
     void* const* recovery)
 {
-    for (unsigned parity = 0; parity < kRecoveryCount; ++parity)
+    for (unsigned parity = 0; parity < recovery_count; ++parity)
     {
         const std::vector<leopard2_test::Element>& row =
-            generator[kOriginalCount + parity];
+            generator[original_count + parity];
         const uint8_t* const output =
             static_cast<const uint8_t*>(recovery[parity]);
         for (size_t offset = 0; offset < kShardBytes; ++offset)
         {
             leopard2_test::Element expected = 0;
-            for (unsigned source = 0; source < kOriginalCount; ++source)
+            for (unsigned source = 0; source < original_count; ++source)
             {
                 const uint8_t value =
                     static_cast<const uint8_t*>(original[source])[offset];
@@ -171,14 +173,33 @@ void CheckParity(
     }
 }
 
-size_t ExpectedProductionScratch(unsigned side)
+void CheckParity(
+    const leopard2_test::BinaryField& field,
+    const leopard2_test::Matrix& generator,
+    const void* const* original,
+    void* const* recovery)
+{
+    CheckPackedParity(field, generator, kOriginalCount, kRecoveryCount,
+        original, recovery);
+}
+
+size_t ExpectedProductionScratch(
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned side)
 {
     const size_t alignment = leo2_scratch_alignment();
     const size_t metadata_bytes =
-        4U * side * sizeof(uintptr_t) + 3U * side * sizeof(void*);
+        2U * (original_count + recovery_count) * sizeof(uintptr_t) +
+        (original_count + 2U * side) * sizeof(void*);
     const size_t data_offset =
         (metadata_bytes + alignment - 1U) & ~(alignment - 1U);
     return data_offset + 2U * side * kShardBytes;
+}
+
+size_t ExpectedProductionScratch(unsigned side)
+{
+    return ExpectedProductionScratch(side, side, side);
 }
 
 void CheckGuards(
@@ -312,31 +333,38 @@ void ExerciseProduction(leo2_context* context)
     leo2_codec_destroy(codec);
 }
 
-void ExerciseProductionBalancedSide(leo2_context* context, unsigned side)
+void ExerciseProductionPackedSide(
+    leo2_context* context,
+    unsigned original_count,
+    unsigned side)
 {
     leo2_codec* codec = NULL;
-    RequireResult(leo2_codec_create(context, side, side,
+    RequireResult(leo2_codec_create(context, original_count, side,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
-        LEO2_SUCCESS, "create production balanced codec");
+        LEO2_SUCCESS, "create production packed codec");
     size_t scratch_bytes = 0;
     RequireResult(leo2_encode_scratch_size(codec, kShardBytes,
         &scratch_bytes), LEO2_SUCCESS,
         "query production balanced scratch");
-    Require(scratch_bytes == ExpectedProductionScratch(side),
-        "balanced production scratch differs from fixed geometry");
+    Require(scratch_bytes ==
+            ExpectedProductionScratch(original_count, side, side),
+        "packed production scratch differs from fixed geometry");
     AlignedBuffer scratch(scratch_bytes);
 
-    const size_t payload_bytes = static_cast<size_t>(side) * kShardBytes;
-    AlignedBuffer input(payload_bytes + 2U * kGuardBytes + 8U);
-    AlignedBuffer output(payload_bytes + 2U * kGuardBytes + 8U);
+    const size_t input_bytes =
+        static_cast<size_t>(original_count) * kShardBytes;
+    const size_t output_bytes = static_cast<size_t>(side) * kShardBytes;
+    AlignedBuffer input(input_bytes + 2U * kGuardBytes + 8U);
+    AlignedBuffer output(output_bytes + 2U * kGuardBytes + 8U);
     std::memset(input.bytes(), kGuardValue, input.size());
     std::memset(output.bytes(), kGuardValue, output.size());
     const size_t input_offset = kGuardBytes + 1U;
     const size_t output_offset = kGuardBytes + 3U;
     uint8_t* const input_base = input.bytes() + input_offset;
     uint8_t* const output_base = output.bytes() + output_offset;
-    uint64_t state = UINT64_C(0x50524f4442414c36) ^ side;
-    for (size_t i = 0; i < payload_bytes; ++i)
+    uint64_t state = UINT64_C(0x50524f4442414c36) ^
+        original_count ^ (static_cast<uint64_t>(side) << 32);
+    for (size_t i = 0; i < input_bytes; ++i)
     {
         state ^= state << 13;
         state ^= state >> 7;
@@ -345,11 +373,14 @@ void ExerciseProductionBalancedSide(leo2_context* context, unsigned side)
     }
     const std::vector<uint8_t> input_before(
         input.bytes(), input.bytes() + input.size());
-    std::vector<const void*> original(side);
+    std::vector<const void*> original(original_count);
     std::vector<void*> recovery(side);
-    for (unsigned i = 0; i < side; ++i)
+    for (unsigned i = 0; i < original_count; ++i)
     {
         original[i] = input_base + static_cast<size_t>(i) * kShardBytes;
+    }
+    for (unsigned i = 0; i < side; ++i)
+    {
         recovery[i] = output_base + static_cast<size_t>(i) * kShardBytes;
     }
 
@@ -357,45 +388,31 @@ void ExerciseProductionBalancedSide(leo2_context* context, unsigned side)
         leopard2_test::make_legacy_gf8();
     const leopard2_test::ProfileLayout layout =
         leopard2_test::make_profile_layout(
-            leopard2_test::kLegacyHigh, side, side);
+            leopard2_test::kLegacyHigh, original_count, side);
     const leopard2_test::Matrix generator =
         leopard2_test::direct_systematic_generator(field, layout);
 
     RequireResult(leo2_encode(codec, kShardBytes, &original[0], &recovery[0],
         scratch.data(), scratch.size()), LEO2_SUCCESS,
-        "execute production balanced terminal");
+        "execute production packed terminal");
     Require(std::memcmp(input.bytes(), &input_before[0], input.size()) == 0,
-        "balanced production encode modified source or guards");
-    CheckGuards(output, output_offset, payload_bytes,
-        "balanced production encode modified output guard");
+        "packed production encode modified source or guards");
+    CheckGuards(output, output_offset, output_bytes,
+        "packed production encode modified output guard");
 
-    for (unsigned parity = 0; parity < side; ++parity)
-    {
-        const std::vector<leopard2_test::Element>& row =
-            generator[side + parity];
-        const uint8_t* const encoded =
-            static_cast<const uint8_t*>(recovery[parity]);
-        for (size_t offset = 0; offset < kShardBytes; ++offset)
-        {
-            leopard2_test::Element expected = 0;
-            for (unsigned source = 0; source < side; ++source)
-            {
-                expected = field.add(expected, field.multiply(row[source],
-                    static_cast<const uint8_t*>(original[source])[offset]));
-            }
-            Require(encoded[offset] == expected,
-                "balanced production parity differs from direct oracle");
-        }
-    }
+    CheckPackedParity(field, generator, original_count, side,
+        &original[0], &recovery[0]);
 
     std::memset(output.bytes(), kGuardValue, output.size());
     leo2_encode_batch_item item = {
         kShardBytes, &original[0], &recovery[0], scratch.data(), scratch.size()
     };
     RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
-        "execute production balanced one-item batch");
-    CheckGuards(output, output_offset, payload_bytes,
-        "balanced production batch modified output guard");
+        "execute production packed one-item batch");
+    CheckGuards(output, output_offset, output_bytes,
+        "packed production batch modified output guard");
+    CheckPackedParity(field, generator, original_count, side,
+        &original[0], &recovery[0]);
     leo2_codec_destroy(codec);
 }
 
@@ -797,9 +814,10 @@ int main()
         RequireResult(result, LEO2_SUCCESS,
             "create production AVX2 context");
         ExerciseProduction(context);
-        ExerciseProductionBalancedSide(context, 16);
-        ExerciseProductionBalancedSide(context, 64);
-        ExerciseProductionBalancedSide(context, 128);
+        ExerciseProductionPackedSide(context, 16, 16);
+        ExerciseProductionPackedSide(context, 33, 32);
+        ExerciseProductionPackedSide(context, 64, 64);
+        ExerciseProductionPackedSide(context, 128, 128);
 #if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
         ExerciseProductionT32TwoBlockFamily(context, 64);
         ExerciseProductionT32TwoBlockFamily(context, 96);

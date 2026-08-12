@@ -241,31 +241,35 @@ void CheckVariableParity(
     }
 }
 
-void ExerciseSelectedBalancedSide(leo2_context* context, unsigned side)
+void ExerciseSelectedPackedShape(
+    leo2_context* context,
+    unsigned original_count,
+    unsigned side)
 {
     leo2_codec* codec = NULL;
-    RequireResult(leo2_codec_create(context, side, side,
+    RequireResult(leo2_codec_create(context, original_count, side,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
-        LEO2_SUCCESS, "create selected balanced codec");
+        LEO2_SUCCESS, "create selected packed codec");
     size_t scratch_bytes = 0;
     RequireResult(leo2_encode_scratch_size(
         codec, kShardBytes, &scratch_bytes), LEO2_SUCCESS,
         "query selected balanced scratch");
     AlignedBuffer scratch(scratch_bytes);
-    AlignedBuffer input(static_cast<size_t>(side) * kShardBytes);
+    AlignedBuffer input(
+        static_cast<size_t>(original_count) * kShardBytes);
     AlignedBuffer output(static_cast<size_t>(side) * kShardBytes);
-    FillVariableInput(input.bytes(), side, kShardBytes,
+    FillVariableInput(input.bytes(), original_count, kShardBytes,
         UINT64_C(0x42414c414e434536));
     std::vector<const void*> original;
     std::vector<void*> recovery;
-    SetVariablePackedPointers(input.bytes(), output.bytes(), side, side,
-        kShardBytes, original, recovery);
+    SetVariablePackedPointers(input.bytes(), output.bytes(), original_count,
+        side, kShardBytes, original, recovery);
 
     const leopard2_test::BinaryField field =
         leopard2_test::make_legacy_gf8();
     const leopard2_test::ProfileLayout layout =
         leopard2_test::make_profile_layout(
-            leopard2_test::kLegacyHigh, side, side);
+            leopard2_test::kLegacyHigh, original_count, side);
     const leopard2_test::Matrix generator =
         leopard2_test::direct_systematic_generator(field, layout);
 
@@ -274,9 +278,10 @@ void ExerciseSelectedBalancedSide(leo2_context* context, unsigned side)
         scratch.data(), scratch.size()), LEO2_SUCCESS,
         "execute selected balanced terminal");
     RequireTerminalCalls(1,
-        "selected balanced shape missed the packed terminal");
-    CheckVariableParity(field, generator, side, side, original, recovery,
-        kShardBytes, "selected balanced parity differs from direct oracle");
+        "selected shape missed the packed terminal");
+    CheckVariableParity(field, generator, original_count, side,
+        original, recovery, kShardBytes,
+        "selected packed parity differs from direct oracle");
 
     std::memset(output.bytes(), 0xa5,
         static_cast<size_t>(side) * kShardBytes);
@@ -287,11 +292,86 @@ void ExerciseSelectedBalancedSide(leo2_context* context, unsigned side)
     RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
         "execute selected balanced one-item batch terminal");
     RequireTerminalCalls(1,
-        "selected balanced batch missed the packed terminal");
-    CheckVariableParity(field, generator, side, side, original, recovery,
-        kShardBytes, "selected balanced batch parity differs from oracle");
+        "selected batch missed the packed terminal");
+    CheckVariableParity(field, generator, original_count, side,
+        original, recovery, kShardBytes,
+        "selected packed batch parity differs from oracle");
 
-    if (side == 16)
+    if (original_count == 33 && side == 32)
+    {
+        /* A detached final source must retain the mature path: the terminal
+           is a packed-layout optimization, not a new API restriction. */
+        std::vector<uint8_t> detached(kShardBytes);
+        std::memcpy(&detached[0], original[32], kShardBytes);
+        original[32] = &detached[0];
+        std::memset(output.bytes(), 0xa5,
+            static_cast<size_t>(side) * kShardBytes);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode(codec, kShardBytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size()),
+            LEO2_SUCCESS, "execute detached K33/R32 fallback");
+        RequireTerminalCalls(0,
+            "detached K33/R32 source entered the packed terminal");
+        CheckVariableParity(field, generator, original_count, side,
+            original, recovery, kShardBytes,
+            "detached K33/R32 parity differs from oracle");
+
+        original[32] = input.bytes() + 32U * kShardBytes;
+        Require(leopard2_internal::
+                SetBalancedB64TerminalEnabledForDiagnostics(false),
+            "disable the K33/R32 terminal");
+        std::memset(output.bytes(), 0xa5,
+            static_cast<size_t>(side) * kShardBytes);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode(codec, kShardBytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size()),
+            LEO2_SUCCESS, "execute same-binary K33/R32 control route");
+        RequireTerminalCalls(0,
+            "same-binary K33/R32 control entered the packed terminal");
+        CheckVariableParity(field, generator, original_count, side,
+            original, recovery, kShardBytes,
+            "same-binary K33/R32 control differs from oracle");
+        Require(leopard2_internal::
+                SetBalancedB64TerminalEnabledForDiagnostics(true),
+            "restore the K33/R32 terminal");
+
+        const size_t byte_neighbors[] = { 63U, 65U };
+        for (size_t neighbor_index = 0;
+             neighbor_index < sizeof(byte_neighbors) /
+                 sizeof(byte_neighbors[0]); ++neighbor_index)
+        {
+            const size_t neighbor_bytes = byte_neighbors[neighbor_index];
+            size_t neighbor_scratch_bytes = 0;
+            RequireResult(leo2_encode_scratch_size(codec, neighbor_bytes,
+                &neighbor_scratch_bytes), LEO2_SUCCESS,
+                "query K33/R32 neighboring-byte scratch");
+            AlignedBuffer neighbor_scratch(neighbor_scratch_bytes);
+            AlignedBuffer neighbor_input(
+                static_cast<size_t>(original_count) * neighbor_bytes);
+            AlignedBuffer neighbor_output(
+                static_cast<size_t>(side) * neighbor_bytes);
+            FillVariableInput(neighbor_input.bytes(), original_count,
+                neighbor_bytes, UINT64_C(0x4b33334e45494748));
+            std::vector<const void*> neighbor_original;
+            std::vector<void*> neighbor_recovery;
+            SetVariablePackedPointers(neighbor_input.bytes(),
+                neighbor_output.bytes(), original_count, side,
+                neighbor_bytes, neighbor_original, neighbor_recovery);
+            leopard::ff8::TestOnlyResetHighEncodeCounts();
+            RequireResult(leo2_encode(codec, neighbor_bytes,
+                &neighbor_original[0], &neighbor_recovery[0],
+                neighbor_scratch.data(), neighbor_scratch.size()),
+                LEO2_SUCCESS,
+                "execute K33/R32 neighboring-byte mature path");
+            RequireTerminalCalls(0,
+                "neighboring byte count entered the K33/R32 terminal");
+            CheckVariableParity(field, generator, original_count, side,
+                neighbor_original, neighbor_recovery, neighbor_bytes,
+                "K33/R32 neighboring-byte parity differs from oracle");
+        }
+    }
+
+    if (original_count == 16 && side == 16)
     {
         /* The codec is GF(2)-linear.  Exercising every systematic basis row
            at both 32-byte slices proves the generated transform matrix rather
@@ -299,7 +379,7 @@ void ExerciseSelectedBalancedSide(leo2_context* context, unsigned side)
         for (unsigned source = 0; source < side; ++source)
         {
             std::memset(input.bytes(), 0,
-                static_cast<size_t>(side) * kShardBytes);
+                static_cast<size_t>(original_count) * kShardBytes);
             std::memset(output.bytes(), 0xa5,
                 static_cast<size_t>(side) * kShardBytes);
             input.bytes()[static_cast<size_t>(source) * kShardBytes] = 1;
@@ -699,12 +779,13 @@ int main()
             "create AVX2 K32/R32 terminal context");
         ExerciseAVX2Terminal(context);
 #if defined(LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
-        ExerciseSelectedBalancedSide(context, 16);
+        ExerciseSelectedPackedShape(context, 16, 16);
 #else
         ExerciseExcludedShape(context, 16, 16);
 #endif
-        ExerciseSelectedBalancedSide(context, 64);
-        ExerciseSelectedBalancedSide(context, 128);
+        ExerciseSelectedPackedShape(context, 33, 32);
+        ExerciseSelectedPackedShape(context, 64, 64);
+        ExerciseSelectedPackedShape(context, 128, 128);
 
         // The selector is deliberately exact.  Exercise both immediate count
         // neighbors at each promoted side and unrelated earlier tiny
@@ -713,6 +794,8 @@ int main()
         ExerciseExcludedShape(context, 16, 15);
         ExerciseExcludedShape(context, 31, 32);
         ExerciseExcludedShape(context, 32, 31);
+        ExerciseExcludedShape(context, 33, 31);
+        ExerciseExcludedShape(context, 34, 32);
         ExerciseExcludedShape(context, 63, 64);
         ExerciseExcludedShape(context, 64, 63);
         ExerciseExcludedShape(context, 127, 128);
