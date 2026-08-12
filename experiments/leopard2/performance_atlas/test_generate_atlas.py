@@ -175,7 +175,8 @@ def payload(codec: str, cell: dict) -> dict:
     raise AssertionError(codec)
 
 
-def external_build_fixture(root: Path) -> tuple[dict, Path, Path, Path]:
+def external_build_fixture(root: Path, *, nested_archive: bool = False
+                           ) -> tuple[dict, Path, Path, Path]:
     compiler = shutil.which("c++")
     archiver = shutil.which("ar")
     ranlib = shutil.which("ranlib")
@@ -183,9 +184,10 @@ def external_build_fixture(root: Path) -> tuple[dict, Path, Path, Path]:
         raise unittest.SkipTest("C++/ar/ranlib tools are required")
     source_root = root / "source"
     build = root / "build"
-    archive_object = build / "CMakeFiles/archive.dir/codec.cpp.o"
+    archive_root = build / "codec-subdir" if nested_archive else build
+    archive_object = archive_root / "CMakeFiles/archive.dir/codec.cpp.o"
     executable_object = build / "CMakeFiles/bench.dir/adapter.cpp.o"
-    archive_link = build / "CMakeFiles/archive.dir/link.txt"
+    archive_link = archive_root / "CMakeFiles/archive.dir/link.txt"
     executable_link = build / "CMakeFiles/bench.dir/link.txt"
     for directory in (source_root, archive_object.parent,
                       executable_object.parent):
@@ -196,7 +198,7 @@ def external_build_fixture(root: Path) -> tuple[dict, Path, Path, Path]:
     adapter_source.write_text("int main() { return 0; }\n", encoding="utf-8")
     archive_object.write_bytes(b"compiled codec object\n")
     executable_object.write_bytes(b"compiled adapter object\n")
-    archive = build / "libcodec.a"
+    archive = archive_root / "libcodec.a"
     subprocess.run([archiver, "qc", str(archive), str(archive_object)],
                    check=True, stdout=subprocess.DEVNULL,
                    stderr=subprocess.DEVNULL)
@@ -211,10 +213,14 @@ def external_build_fixture(root: Path) -> tuple[dict, Path, Path, Path]:
     for source, output in ((codec_source, archive_object),
                            (adapter_source, executable_object)):
         relative_output = output.relative_to(build).as_posix()
-        command = [compiler, *flags, "-o", relative_output,
+        command_directory = (archive_root if source == codec_source else
+                             build)
+        command_output = output.relative_to(command_directory).as_posix()
+        command = [compiler, *flags, "-o", command_output,
                    "-c", str(source)]
         rows.append({
-            "directory": str(build), "command": " ".join(command),
+            "directory": str(command_directory),
+            "command": " ".join(command),
             "file": str(source), "output": relative_output,
         })
     (build / "compile_commands.json").write_text(
@@ -227,21 +233,24 @@ def external_build_fixture(root: Path) -> tuple[dict, Path, Path, Path]:
         f"CMAKE_RANLIB:FILEPATH={ranlib}\n", encoding="utf-8")
     archive_link.write_text(
         f"{archiver} qc libcodec.a "
-        f"{archive_object.relative_to(build).as_posix()}\n"
+        f"{archive_object.relative_to(archive_root).as_posix()}\n"
         f"{ranlib} libcodec.a\n", encoding="utf-8")
     executable_link.write_text(
         f"{compiler} {executable_object.relative_to(build).as_posix()} "
-        "-o bench libcodec.a\n", encoding="utf-8")
+        f"-o bench {archive.relative_to(build).as_posix()}\n",
+        encoding="utf-8")
     arguments = {
         "build_root": build,
         "executable": executable,
-        "archive_relative": Path("libcodec.a"),
-        "archive_link_relative": Path("CMakeFiles/archive.dir/link.txt"),
+        "archive_relative": archive.relative_to(build),
+        "archive_link_relative": archive_link.relative_to(build),
         "archive_sources": {"codec.cpp": codec_source},
         "executable_sources": {"adapter.cpp": adapter_source},
         "cache_contract": {"PURE_MODE": "ON",
                            "CMAKE_BUILD_TYPE": "Release"},
-        "archive_target_fragment": "CMakeFiles/archive.dir/",
+        "archive_target_fragment": (
+            "codec-subdir/CMakeFiles/archive.dir/" if nested_archive else
+            "CMakeFiles/archive.dir/"),
         "executable_target_fragment": "CMakeFiles/bench.dir/",
         "label": "synthetic external",
     }
@@ -396,6 +405,14 @@ class AtlasTests(unittest.TestCase):
             self.assertEqual(
                 closure["archive_members"][0]["sha256"],
                 graph["archive"]["codec.cpp"]["object"]["sha256"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            arguments, _, _, _ = external_build_fixture(
+                Path(directory), nested_archive=True)
+            closure = ATLAS.capture_external_avx2_compile_build(**arguments)
+            self.assertIn("codec-subdir/CMakeFiles/archive.dir/codec.cpp.o",
+                          closure["source_object_graph"]["archive"]
+                          ["codec.cpp"]["object"]["path"])
 
         with tempfile.TemporaryDirectory() as directory:
             arguments, _, _, source = external_build_fixture(Path(directory))

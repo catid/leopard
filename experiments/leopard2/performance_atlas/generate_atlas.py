@@ -265,7 +265,8 @@ def resolve_command_path(value: str, directory: Path,
     return Path(found).resolve(strict=True)
 
 
-def compile_row_paths(row: Mapping[str, Any], label: str) -> tuple[Path, Path]:
+def compile_row_paths(row: Mapping[str, Any], output_root: Path,
+                      label: str) -> tuple[Path, Path]:
     directory_value = row.get("directory")
     require(isinstance(directory_value, str),
             f"{label} compile-command row lacks a directory")
@@ -279,11 +280,28 @@ def compile_row_paths(row: Mapping[str, Any], label: str) -> tuple[Path, Path]:
     if not source.is_absolute():
         source = directory / source
     if not output.is_absolute():
-        output = directory / output
-    return source.resolve(strict=True), output.resolve(strict=True)
+        # CMake's compile database reports ``output`` relative to the
+        # top-level build tree even when ``directory`` is a nested binary
+        # directory.  The command's -o operand remains relative to
+        # ``directory``.  Bind both representations to the same object so a
+        # plausible but stale output field cannot attest a different file.
+        output = output_root / output
+    resolved_output = output.resolve(strict=True)
+    tokens = compile_tokens(row)
+    output_operands = [tokens[index + 1]
+                       for index, token in enumerate(tokens[:-1])
+                       if token == "-o"]
+    require(len(output_operands) == 1,
+            f"{label} compile command must contain exactly one -o operand")
+    command_output = Path(output_operands[0])
+    if not command_output.is_absolute():
+        command_output = directory / command_output
+    require(command_output.resolve(strict=True) == resolved_output,
+            f"{label} compile-command output field differs from -o operand")
+    return source.resolve(strict=True), resolved_output
 
 
-def recipe_object_paths(recipe: str, build: Path,
+def recipe_object_paths(recipe: str, working_directory: Path,
                         label: str) -> list[Path]:
     objects: list[Path] = []
     for token in shlex.split(recipe):
@@ -291,7 +309,7 @@ def recipe_object_paths(recipe: str, build: Path,
             continue
         path = Path(token)
         if not path.is_absolute():
-            path = build / path
+            path = working_directory / path
         try:
             objects.append(path.resolve(strict=True))
         except OSError as error:
@@ -365,7 +383,7 @@ def capture_external_avx2_compile_build(
             role = "executable"
         else:
             continue
-        source_path, object_path = compile_row_paths(row, label)
+        source_path, object_path = compile_row_paths(row, build, label)
         source_name = source_path.name
         expected_source = expected_by_role[role].get(source_name)
         require(expected_source is not None,
@@ -433,7 +451,7 @@ def capture_external_avx2_compile_build(
             Path(str(ranlib_value)).name in archive_link_text,
             f"{label} archive recipe omits cached archive tools")
     archive_recipe_objects = recipe_object_paths(
-        archive_link_text, build, f"{label} archive")
+        archive_link_text, archive_path.parent, f"{label} archive")
     expected_archive_objects = [
         Path(record["object"]["path"])
         for record in observed["archive"].values()]
@@ -445,7 +463,8 @@ def capture_external_avx2_compile_build(
     require(Path(str(compiler_value)).name in executable_link_text,
             f"{label} executable recipe omits cached compiler driver")
     executable_recipe_objects = recipe_object_paths(
-        executable_link_text, build, f"{label} executable")
+        executable_link_text, expected_executable.parent,
+        f"{label} executable")
     expected_executable_objects = [
         Path(record["object"]["path"])
         for record in observed["executable"].values()]
