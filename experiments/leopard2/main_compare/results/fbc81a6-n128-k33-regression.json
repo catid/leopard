@@ -1,0 +1,149 @@
+{
+  "schema": "leopard2-main-regression-evidence/v1",
+  "generated_utc": "2026-08-12",
+  "ratio_orientation": "baseline_time_over_candidate_time",
+  "scope": "GF8 AVX2 legacy-high K33/R32/B64 encode and N=128/R32 one-shot decode regressions found by the complete all-K atlas",
+  "implementation_commits": [
+    "7c687ee5a538aa898498ba4287a83176ef174e7d",
+    "fbc81a602ba9f9635b405159cda53c08f385290d"
+  ],
+  "artifacts": {
+    "candidate": {
+      "commit": "fbc81a602ba9f9635b405159cda53c08f385290d",
+      "tree": "6f76078af573d0d5d190af19b87f3a790d33de87",
+      "tracked_clean": true,
+      "executable_sha256": "4efdee46b31eaf05a446c6282f57bf2552a6eb89b8d058ef13e7609f2a27c16b",
+      "compiler": "GCC 13.3.0",
+      "build_type": "Release",
+      "backend": "AVX2",
+      "small_dual_regular_fallback": true,
+      "cuda": false
+    },
+    "pre_change_leopard2_control": {
+      "commit": "f3e4466a8296c9110b73b1f1c328d74a06cd4b67",
+      "tree": "5eeff2ac8201e3018f2f5e7e27c4a25761c6b178",
+      "tracked_clean": true,
+      "executable_sha256": "a2630f078a920faf46feedb4f1aebbc46e17f76ef82ea8b9c610ad64c1dbc228",
+      "small_dual_regular_fallback": true
+    },
+    "exact_leopard_main": {
+      "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "tree": "b7c8830d96a978f6ec14fe747095f066e351ae72",
+      "tracked_clean": true,
+      "executable_sha256": "2f8d1f42d767f97fe6c4d373892d849e679eda07cab2afbc4ec0a521b58516e6"
+    }
+  },
+  "method": {
+    "cpu": 2,
+    "thread_count": 1,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "memory_limit_bytes": 268435456,
+    "swap_limit_bytes": 0,
+    "comparison": "balanced invocation order, identical seeds and workload digests, frozen read-only executables",
+    "confidence_intervals": "two-sided Student-t interval over independent round-level log timing ratios",
+    "promotion_rules": {
+      "target_minimum_speedup": 1.05,
+      "neighbor_maximum_regression": 0.02
+    }
+  },
+  "encode": {
+    "k33_r32_b64": {
+      "rounds": 25,
+      "reuse": 8192,
+      "samples_per_invocation": 7,
+      "one_shot_candidate_median_us": 0.285557,
+      "pre_change_control_over_candidate": 1.386804843,
+      "pre_change_control_over_candidate_ci95": [1.371000057, 1.402791826],
+      "exact_main_over_candidate": 1.171022698,
+      "exact_main_over_candidate_ci95": [1.150435384, 1.191978427],
+      "batch_execution_exact_main_over_candidate": 1.185020664,
+      "batch_execution_exact_main_over_candidate_ci95": [1.166544847, 1.203789103],
+      "wire_identity": "legacy-high parity checked by production tests and benchmark workload digests"
+    },
+    "k32_r32_b64_neighbor": {
+      "rounds": 25,
+      "reuse": 8192,
+      "samples_per_invocation": 7,
+      "one_shot_candidate_median_us": 0.222343,
+      "pre_change_control_over_candidate": 0.996967313,
+      "pre_change_control_over_candidate_ci95": [0.989010984, 1.004987649],
+      "exact_main_over_candidate": 1.136730025,
+      "exact_main_over_candidate_ci95": [1.113517453, 1.160426490],
+      "neighbor_gate_passed": true,
+      "layout_note": "N=128 eligibility reuses the existing mutually-exclusive codec classification byte; leo2_codec does not grow"
+    },
+    "historical_regression_sweep": {
+      "rounds_per_cell": 9,
+      "cells": 14,
+      "k_b64": [35, 41, 43, 45, 47, 51, 57, 59, 61, 63, 64, 79, 91],
+      "additional_cells": ["K35/R32/B1024"],
+      "candidate_faster_point_estimate_cells": 14,
+      "minimum_exact_main_over_candidate": 1.020341261,
+      "minimum_exact_main_over_candidate_ci95": [1.002615724, 1.038380173],
+      "minimum_cell": "K63/R32/B64",
+      "all_ci95_lower_bounds_above_neighbor_floor": true
+    }
+  },
+  "decode": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "R": 32,
+    "parent_N": 128,
+    "rounds_per_cell": 6,
+    "samples_per_invocation": 5,
+    "cells": 35,
+    "workload_digest_triplets_checked": 210,
+    "all_candidate_faster_than_pre_change_control": true,
+    "all_candidate_faster_than_exact_main": true,
+    "regions": {
+      "two_loss_b1024": {
+        "K": [81, 83, 85, 95],
+        "minimum_pre_change_control_over_candidate": 1.443225,
+        "minimum_pre_change_control_over_candidate_ci95": [1.436613, 1.449866],
+        "minimum_exact_main_over_candidate": 1.619431,
+        "minimum_exact_main_over_candidate_ci95": [1.611095, 1.627810]
+      },
+      "ten_percent_loss_b1024": {
+        "K": [67, 69, 71, 73, 75, 77, 79, 81, 83, 85, 87, 89, 91, 93, 95],
+        "minimum_pre_change_control_over_candidate": 1.539499,
+        "minimum_pre_change_control_over_candidate_ci95": [1.533713, 1.545307],
+        "minimum_exact_main_over_candidate": 1.346607,
+        "minimum_exact_main_over_candidate_ci95": [1.339694, 1.353557]
+      },
+      "maximum_loss_b64": {
+        "K": [65, 67, 69, 71, 73, 75, 77, 79, 81, 83, 85, 87, 89, 91, 93, 95],
+        "minimum_pre_change_control_over_candidate": 1.080693,
+        "minimum_pre_change_control_over_candidate_ci95": [1.068426, 1.093101],
+        "minimum_exact_main_over_candidate": 1.020524,
+        "minimum_exact_main_over_candidate_ci95": [1.002691, 1.038673]
+      }
+    }
+  },
+  "correctness_and_safety": {
+    "release_focused": "4/4 passed after the layout-preserving fix; 8/8 passed at the preceding implementation commit",
+    "strict_gcc_13_3": "5/5 passed",
+    "strict_clang_18_1_3": "5/5 passed",
+    "clang_asan_ubsan_lsan": "5/5 passed",
+    "sanitizer_peak_rss_kib": 472976,
+    "tests": [
+      "leopard2_high_direct_production",
+      "leopard2_balanced_b64_terminal",
+      "leopard2_balanced_b64_terminal_production",
+      "leopard2_one_shot_no_loss",
+      "leopard2_one_shot_no_loss_hooks"
+    ],
+    "direct_oracle": "K33 parity is checked against the independent systematic generator-matrix oracle",
+    "failure_atomicity": "N=128 selected/fallback boundary and invalid presence/scratch cases are covered by one-shot tests"
+  },
+  "local_raw_evidence": [
+    "build/regression-final-fbc81a6-k32-confirm-prod-raw",
+    "build/regression-final-fbc81a6-k33-confirm-prod-raw",
+    "build/regression-final-fbc81a6-n128-prod-raw",
+    "build/regression-final-fbc81a6-encode-main-sweep-prod-raw"
+  ],
+  "invalid_attempts": [
+    "Exploratory layout-fix timings from build/release were discarded after detecting LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=OFF; every retained result above uses the production default ON.",
+    "The first final N=128 command combined --measure-one-shot-decode with unsupported --attest-source and exited before running a test; the successful replay removed the incompatible option and binds binaries by frozen SHA-256 plus clean source/build identities."
+  ],
+  "conclusion": "The atlas regressions in scope are eliminated. Every formerly losing decode cell and every historically slower encode K in the follow-up sweep is faster than exact Leopard main; the K32 neighboring control remains within the predeclared two-percent regression budget."
+}
