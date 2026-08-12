@@ -194,6 +194,11 @@ Leopard Decoder(2097.15 MB in 32768 pieces, 32768 losses): Input=190.471 MB/s, O
 More benchmark results are available here:
 [https://github.com/catid/leopard/blob/master/Benchmarks.md](https://github.com/catid/leopard/blob/master/Benchmarks.md)
 
+The reproducible Leopard2 all-K comparison against the exact Leopard `main`
+codec and shipping Wirehair, including 39 graphs and machine-readable evidence,
+is available in the
+[Leopard2 performance atlas](docs/performance/leopard2_atlas/README_PERFORMANCE.md).
+
 
 #### Comparisons:
 
