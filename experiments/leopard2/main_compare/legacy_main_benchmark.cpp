@@ -41,6 +41,9 @@
 #ifndef LEOPARD_MAIN_SOURCE_COMMIT
 #error "LEOPARD_MAIN_SOURCE_COMMIT must identify the verified source revision"
 #endif
+#ifndef LEO_MAIN_PURE_AVX2_PROFILE
+#error "LEO_MAIN_PURE_AVX2_PROFILE must bind the exact-main ISA profile"
+#endif
 
 namespace {
 
@@ -677,6 +680,8 @@ static std::string Run(const Options& options)
         << (padded_application ? 2 : 1) << "\",\n"
         << "  \"build\": {\n"
         << "    \"main_source_commit\": \"" << LEOPARD_MAIN_SOURCE_COMMIT << "\",\n"
+        << "    \"pure_avx2\": "
+        << (LEO_MAIN_PURE_AVX2_PROFILE ? "true" : "false") << ",\n"
         << "    \"cplusplus\": " << __cplusplus << "\n"
         << "  },\n"
         << "  \"parameters\": {\n"

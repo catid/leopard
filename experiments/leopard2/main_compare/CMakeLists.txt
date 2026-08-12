@@ -138,6 +138,13 @@ endif()
 add_executable(leopard_main_benchmark legacy_main_benchmark.cpp)
 target_compile_definitions(leopard_main_benchmark PRIVATE
     LEOPARD_MAIN_SOURCE_COMMIT="${LEOPARD_MAIN_EXPECTED_COMMIT}")
+if(LEO_MAIN_PURE_AVX2)
+    target_compile_definitions(leopard_main_benchmark PRIVATE
+        LEO_MAIN_PURE_AVX2_PROFILE=1)
+else()
+    target_compile_definitions(leopard_main_benchmark PRIVATE
+        LEO_MAIN_PURE_AVX2_PROFILE=0)
+endif()
 target_compile_options(leopard_main_benchmark PRIVATE
     ${LEO_MAIN_ISA_FLAGS} -Wall -Wextra)
 target_link_libraries(leopard_main_benchmark PRIVATE leopard_main_exact)

@@ -94,7 +94,8 @@ def positive_summary(value: object) -> None:
             raise RuntimeError(f"{name} is not derived from retained samples")
 
 
-def check_case(executable: Path, k: int, r: int, loss: int, seed: int) -> None:
+def check_case(executable: Path, k: int, r: int, loss: int, seed: int,
+               pure_avx2: bool) -> None:
     arguments = [
         "--k", str(k), "--r", str(r), "--bytes", "64",
         "--loss", str(loss), "--batch", "2", "--reuse", "1",
@@ -109,6 +110,8 @@ def check_case(executable: Path, k: int, r: int, loss: int, seed: int) -> None:
         raise RuntimeError("wrong schema")
     if one.get("build", {}).get("main_source_commit") != COMMIT:
         raise RuntimeError("wrong source commit")
+    if one.get("build", {}).get("pure_avx2") is not pure_avx2:
+        raise RuntimeError("wrong exact-main ISA-profile attestation")
     parameters = one.get("parameters", {})
     if (parameters.get("K"), parameters.get("R"),
             parameters.get("loss_count"),
@@ -240,10 +243,10 @@ def main() -> int:
     executable = options.benchmark.resolve()
     check_compile_commands(
         options.compile_commands.resolve(), options.pure_avx2)
-    check_case(executable, 8, 4, 0, 1)
-    check_case(executable, 8, 4, 4, 7)
-    check_case(executable, 129, 1, 1, 11)
-    check_case(executable, 240, 16, 3, 19)
+    check_case(executable, 8, 4, 0, 1, options.pure_avx2)
+    check_case(executable, 8, 4, 4, 7, options.pure_avx2)
+    check_case(executable, 129, 1, 1, 11, options.pure_avx2)
+    check_case(executable, 240, 16, 3, 19, options.pure_avx2)
     check_padded_case(executable, 8, 4, 1, 1, 23)
     check_padded_case(executable, 8, 4, 33, 4, 29)
     check_padded_case(executable, 16, 8, 63, 1, 31)
