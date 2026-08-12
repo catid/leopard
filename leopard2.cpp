@@ -635,16 +635,17 @@ enum TerminalR1Shape : uint8_t
     kTerminalR1None = 0,
     kTerminalR1K1Copy = 1,
     kTerminalR1K2AVX2Xor = 2,
-    /* These terminal codec identities are mutually exclusive.  Sharing this
-       setup-classification byte avoids growing the opaque codec merely to
-       name another single-shape terminal. */
+    /* These terminal/decoder codec identities are mutually exclusive.
+       Sharing this setup-classification byte avoids growing the opaque codec
+       merely to name another single-shape route. */
     kTerminalT8K8R8 = 3,
     kTerminalT2K4R2 = 4,
     kTerminalR1K3PlusAVX2Xor = 5,
     kTerminalR1K3PlusAVX2FixedXor = 6,
     kTerminalT8K5R5 = 7,
     kTerminalT8K6R6 = 8,
-    kTerminalT8K7R7 = 9
+    kTerminalT8K7R7 = 9,
+    kTerminalN128RawHighTransform = 10
 };
 
 static const uint32_t kCodecR1SmallReductionModeFlag = UINT32_C(0x80000000);
@@ -689,11 +690,8 @@ struct leo2_codec
        public codec options reject it. */
     uint32_t flags;
     bool high_t4_batch_binding_enabled;
-    /* Count/profile/backend eligibility for the N=128 atlas-selected raw
-       Algorithm 5 route.  Byte and loss-count policy remains per call. */
-    bool n128_raw_high_transform_eligible;
-    /* Immutable mutually-exclusive R=1, T=8, or K4/R2 terminal shape stored
-       in existing alignment padding beside the other setup-resolved state. */
+    /* Immutable mutually-exclusive R=1, T=8, K4/R2, or N=128 route stored in
+       existing alignment padding beside the other setup-resolved state. */
     uint8_t terminal_r1_t8_shape;
     /* Zero disables the packed GF8 AVX2 T=2 terminal.  Otherwise this is the
        fixed original count (2 or 3), resolved once during codec setup. */
@@ -10624,7 +10622,8 @@ TryOneShotRawNativeHighTransform(
         codec->parent_count == 128 && codec->padded_side == 32;
     const bool t32_atlas_shape = codec &&
         (shard_bytes == kScratchAlignment || shard_bytes == 1024) &&
-        codec->n128_raw_high_transform_eligible;
+        codec->terminal_r1_t8_shape ==
+            kTerminalN128RawHighTransform;
     const bool t64_cache_line_shape = codec &&
         shard_bytes == kScratchAlignment &&
         codec->original_count >= 65 && codec->original_count <= 192 &&
@@ -14659,16 +14658,6 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     codec->flags = options ? options->flags : 0;
     codec->high_t4_batch_binding_enabled =
         context->high_t4_batch_binding_enabled;
-    codec->n128_raw_high_transform_eligible =
-        original_count >= 33 && original_count <= 96 &&
-        recovery_count == 32 && parent == 128 && padded == 32 &&
-        codec->flags == 0 &&
-        profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
-        field == LEO2_FIELD_GF8 &&
-        shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
-        context->ops && context->ops->kind == LEO2_BACKEND_AVX2 &&
-        context->ops->ff8_multiply &&
-        !CanUseTranslatedLowDecode(codec);
     const bool r1_small_reduction_mode_enabled =
         g_r1_small_reduction_mode.load(std::memory_order_acquire) == 1U &&
         profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
@@ -14698,6 +14687,19 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         codec->terminal_r1_t8_shape = ClassifyTerminalT8Shape(codec);
     if (codec->terminal_r1_t8_shape == kTerminalR1None)
         codec->terminal_r1_t8_shape = ClassifyTerminalT2K4Shape(codec);
+    if (codec->terminal_r1_t8_shape == kTerminalR1None &&
+        original_count >= 33 && original_count <= 96 &&
+        recovery_count == 32 && parent == 128 && padded == 32 &&
+        codec->flags == 0 &&
+        profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        field == LEO2_FIELD_GF8 &&
+        shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        context->ops && context->ops->kind == LEO2_BACKEND_AVX2 &&
+        context->ops->ff8_multiply && !CanUseTranslatedLowDecode(codec))
+    {
+        codec->terminal_r1_t8_shape =
+            kTerminalN128RawHighTransform;
+    }
     if (r1_small_reduction_mode_enabled)
         codec->flags |= kCodecR1SmallReductionModeFlag;
     codec->terminal_t2_original_count = ClassifyTerminalT2Shape(codec);
@@ -20150,7 +20152,8 @@ static leo2_result TryOneShotNoLoss(
     uint32_t i = 0;
     const bool classify_n128_atlas_loss_count =
         (shard_bytes == kScratchAlignment || shard_bytes == 1024) &&
-        codec->n128_raw_high_transform_eligible;
+        codec->terminal_r1_t8_shape ==
+            kTerminalN128RawHighTransform;
     if (classify_n128_atlas_loss_count)
     {
         uint32_t missing_count = 0;
