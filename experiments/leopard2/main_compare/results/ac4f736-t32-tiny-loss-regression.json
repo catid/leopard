@@ -1,0 +1,211 @@
+{
+  "schema": "leopard2-main-regression-evidence/v1",
+  "generated_utc": "2026-08-17",
+  "ratio_orientation": "baseline_time_over_candidate_time",
+  "scope": "GF8 AVX2 legacy-high T=32 tiny-shard and partial-loss public one-shot decode regressions across N=128 and N=256",
+  "implementation_commits": [
+    "39ebf1801d9ab076c2bdbf1044804643b48411eb",
+    "ac4f7365f141d5b62584b1e1c92c66476b21de25"
+  ],
+  "implementation_tree": "f8277e5b549606389f1272ed1fc4f9f13377409a",
+  "artifacts": {
+    "candidate": {
+      "commit": "ac4f7365f141d5b62584b1e1c92c66476b21de25",
+      "tree": "f8277e5b549606389f1272ed1fc4f9f13377409a",
+      "tracked_clean": true,
+      "executable_sha256": "52b21c25871085e4022410fbb2606fa31f6aa4df7f936321a068bc61f611d2b4",
+      "compiler": "GCC 13.3.0",
+      "build_type": "Release",
+      "backend": "AVX2",
+      "small_dual_regular_fallback": true,
+      "cuda": false
+    },
+    "intermediate_leopard2": {
+      "commit": "39ebf1801d9ab076c2bdbf1044804643b48411eb",
+      "tree": "2ea015c41aa48e06612ea7e55decb0dffacaa093",
+      "tracked_clean": true,
+      "executable_sha256": "da49ef9078966ffc65d592bf483dbd2d5fdb0eea8d0982667a180c425d45943b"
+    },
+    "pre_task_leopard2_control": {
+      "commit": "fe8d8236296b83a799f9d66690ddba52c8e0555c",
+      "tree": "5a9ea348e48393e75248be0151731761c9a2fb4a",
+      "tracked_clean": true,
+      "executable_sha256": "f5e471c78861569cdec4c3c9bf720bd7c4ec985bc24fb16bc9d2c923a054266c"
+    },
+    "exact_leopard_main": {
+      "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "tree": "b7c8830d96a978f6ec14fe747095f066e351ae72",
+      "tracked_clean": true,
+      "executable_sha256": "2f8d1f42d767f97fe6c4d373892d849e679eda07cab2afbc4ec0a521b58516e6"
+    }
+  },
+  "method": {
+    "cpu_model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_cpu_set": "0-13,16-29",
+    "available_logical_cpus": 28,
+    "pinned_cpu": 13,
+    "thread_count": 1,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "rounds": 25,
+    "samples_per_invocation": 9,
+    "reuse": 8,
+    "warmup": 16,
+    "comparison": "six-order balanced rotation, fixed per-cell seeds, matching workload digests, frozen read-only executables, SHA-256 checks before and after timing",
+    "confidence_intervals": "two-sided Student-t interval over independent round-level log timing ratios; df=24; t95=2.0638985616280205",
+    "promotion_rules": {
+      "target_minimum_speedup": 1.05,
+      "neighbor_maximum_regression": 0.02
+    },
+    "primary_runner_sha256": "152435c576bd82373e20f45b84e9bfff5460a3dbebe9fd669bf1b1be16ed649d",
+    "primary_summary_sha256": "4eec8aa4037fa5012544890b210f95a0083140b0f108d649288e55cb8002b113",
+    "hybrid_runner_sha256": "c1c227772bc88733a466cc2fc46836a8c43e73cfbc55992cb00fbb911a8e8344",
+    "hybrid_summary_sha256": "1d7f19fbc72afad8fff3bf2300e2faac48e3b1b554b69bb1eae9a0b35d6c32fa"
+  },
+  "implementation": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "padded_side_T": 32,
+    "raw_one_shot_regions": [
+      "N=128, K=33..96, R=31..32, B=64, loss=2..R",
+      "N=256, K=97..224, R=31..32, B=64, loss=2..R",
+      "N=128 or N=256, R=31..32, B=127, loss=2..R",
+      "N=128, K=33..96, R=31..32, B=1024, loss=2..R-1"
+    ],
+    "retained_fallbacks": [
+      "one loss",
+      "R<=30",
+      "N=256 B=1024",
+      "non-selected byte counts and parent sizes"
+    ],
+    "k175_validation": "At exact N=256/T=32/K=175/B64/loss>=15, independently sorted staged systematic and parity input runs are merged during the output sweep when their slabs are globally reversed. Globally sorted ranges retain the existing linear validator and arbitrary permutations retain canonical sorting. Input-input aliasing remains allowed; input-output and output-output overlap are rejected atomically."
+  },
+  "primary_confirmation": {
+    "accepted": true,
+    "cells": 42,
+    "new_targets": {
+      "cells": 18,
+      "pre_task_leopard2_over_candidate_range": [1.111489353, 1.568056505],
+      "minimum_pre_task_ci95_lower": 1.108760240,
+      "exact_main_over_candidate_range": [1.083020902, 2.355759990],
+      "minimum_exact_main_ci95_lower": 1.080112510
+    },
+    "one_loss_retention": {
+      "cells": 10,
+      "pre_task_leopard2_over_candidate_range": [1.002667116, 1.033151493],
+      "minimum_pre_task_ci95_lower": 0.999744621,
+      "exact_main_over_candidate_range": [1.929759067, 4.204093824]
+    },
+    "retained_targets": {
+      "cells": 4,
+      "pre_task_leopard2_over_candidate_range": [1.008003518, 1.016126613],
+      "minimum_pre_task_ci95_lower": 1.004975543,
+      "exact_main_over_candidate_range": [1.155784499, 1.253418734],
+      "minimum_exact_main_ci95_lower": 1.152143490
+    },
+    "fallback_controls": {
+      "cells": 10,
+      "pre_task_leopard2_over_candidate_range": [0.997477878, 1.018815332],
+      "minimum_pre_task_ci95_lower": 0.995928604
+    },
+    "representative_cells": {
+      "k175_r31_b64_l28": {
+        "pre_task_leopard2_over_candidate": 1.368083638,
+        "pre_task_leopard2_over_candidate_ci95": [1.365731790, 1.370439537],
+        "exact_main_over_candidate": 1.285434664,
+        "exact_main_over_candidate_ci95": [1.282549789, 1.288326028]
+      },
+      "k175_r32_b64_l29": {
+        "pre_task_leopard2_over_candidate": 1.363060503,
+        "pre_task_leopard2_over_candidate_ci95": [1.358490508, 1.367645873],
+        "exact_main_over_candidate": 1.271897266,
+        "exact_main_over_candidate_ci95": [1.267793136, 1.276014682]
+      },
+      "k176_r32_b64_l30": {
+        "pre_task_leopard2_over_candidate": 1.361008893,
+        "exact_main_over_candidate": 1.271328901
+      },
+      "k224_r31_b64_l31": {
+        "pre_task_leopard2_over_candidate": 1.368099733,
+        "exact_main_over_candidate": 1.185699691
+      },
+      "k33_r31_b1024_l2": {
+        "pre_task_leopard2_over_candidate": 1.568056505,
+        "exact_main_over_candidate": 2.355759990
+      },
+      "k96_r31_b1024_l30": {
+        "pre_task_leopard2_over_candidate": 1.528487091,
+        "exact_main_over_candidate": 1.265066590
+      }
+    }
+  },
+  "k175_hybrid_confirmation": {
+    "accepted": true,
+    "cells": 17,
+    "comparison_control": "intermediate 39ebf18 build before the two-run validator merge",
+    "targets": {
+      "k175_r31_b64_l28": {
+        "intermediate_over_candidate": 1.239165324,
+        "intermediate_over_candidate_ci95": [1.233303192, 1.245055320],
+        "exact_main_over_candidate": 1.284069936,
+        "exact_main_over_candidate_ci95": [1.276589936, 1.291593763]
+      },
+      "k175_r32_b64_l29": {
+        "intermediate_over_candidate": 1.245972412,
+        "intermediate_over_candidate_ci95": [1.241202641, 1.250760513],
+        "exact_main_over_candidate": 1.277328070,
+        "exact_main_over_candidate_ci95": [1.273687281, 1.280979265]
+      }
+    },
+    "inactive_neighbors": {
+      "cells": 3,
+      "intermediate_over_candidate_range": [0.993830576, 1.006216136],
+      "minimum_intermediate_ci95_lower": 0.991258144
+    },
+    "one_loss_neighbors": {
+      "cells": 12,
+      "intermediate_over_candidate_range": [1.004256709, 1.016774293],
+      "minimum_intermediate_ci95_lower": 0.999526054
+    },
+    "elapsed_seconds": 17.956807375,
+    "peak_rss_kib": 21504
+  },
+  "correctness_and_safety": {
+    "primary_workload_digest_triplets_checked": 1050,
+    "hybrid_workload_digest_triplets_checked": 425,
+    "release_memory_capped": "9/9 focused tests passed; direct oracle, public API, one-shot production/hooks, high-pruned legacy/stage, arbitrary counts, boundaries, and the 420-check operation-count audit",
+    "thread_aware": "batch aliasing, decode-plan schedule, and decode-high acceptance passed 3/3",
+    "strict_gcc_13_3": "build and 2/2 focused tests passed",
+    "strict_clang_18_1_3": "build and 2/2 focused tests passed",
+    "debug": "build and 2/2 focused tests passed",
+    "clang_asan_ubsan_lsan": "2/2 focused tests passed",
+    "sanitizer_peak_rss_kib": 181160,
+    "field_matrix": "GF8-only and GF16-only Release libraries built",
+    "aliasing_and_failure_atomicity": "K175 reversed input slabs, arbitrary unsorted fallback, valid input-input aliasing, invalid output overlaps, and unchanged-on-error outputs are covered",
+    "hot_path_allocation": "selected raw one-shot and K175 hybrid paths retain zero post-creation allocation"
+  },
+  "local_raw_evidence": [
+    "build/regression-t32-neighbors-ac4f736-confirm25-raw",
+    "build/regression-t32-k175-ac4f736-confirm25-raw",
+    "build/regression-t32-k175-hybrid-multiseed-raw",
+    "build/regression-t32-k175-hybrid-layout-screen-raw",
+    "build/regression-t32-exact127-small-loss-screen-v2-raw"
+  ],
+  "failed_confirmatory_attempts": [
+    {
+      "path": "build/regression-t32-neighbors-39ebf18-confirm25-raw",
+      "summary_sha256": "b2c33fca27203c53ea53103206aee858c606b01705ebd6d7f419edc30e08650c",
+      "reason": "The first clean 25-round campaign deliberately failed the five-percent exact-main gate at K175/R31/B64/L28 (CI95 lower 1.035040) and K175/R32/B64/L29 (CI95 lower 1.019798). The result was retained and drove the K175 two-run merge; thresholds were not relaxed."
+    }
+  ],
+  "negative_results": [
+    "An unconditional split validator could improve high-loss K175 patterns by roughly 20-23 percent but regressed small losses by roughly 6-7 percent and was rejected.",
+    "Output-only and whole-run prescans remained pattern-dependent and were rejected rather than dispatched on favorable seeds.",
+    "The retained hybrid multiseed sweep covered 244 K175 cells across R31/R32, every loss 2..R, four seeds, and six rounds. No point estimate regressed by two percent; 101 of 140 high-loss cells improved by more than five percent.",
+    "The first B127 exact-main command was invalid because the exact-main harness rejects B127. No conclusion was retained from that attempt; the same-source differential was rerun successfully."
+  ],
+  "invalid_attempts": [
+    "build/regression-t32-exact127-small-loss-screen-raw contains the rejected B127 exact-main invocation and has no accepted summary."
+  ],
+  "host_limitations": "This host exposed 28 logical CPUs during the final campaign, not 128. Authoritative cache-sensitive timings were intentionally pinned to one physical core; no 128-core or multi-NUMA claim is made by this evidence.",
+  "conclusion": "The selected T32 tiny and partial-loss one-shot regressions are eliminated. All 18 new targets clear the predeclared five-percent lower-confidence floors against pre-task Leopard2 and exact Leopard main where comparable, retained targets stay qualified, controls stay within the two-percent regression budget, and the K175 hybrid independently clears its target and neighbor gates."
+}
