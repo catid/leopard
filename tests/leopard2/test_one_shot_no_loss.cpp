@@ -565,14 +565,16 @@ void run_raw_transient_case(
         expect_allocation_free, label.c_str());
 }
 
-void test_raw_transient_n256_split_validator_fallback(
-    leo2_context* context)
+void run_raw_transient_n256_validator_fallback(
+    leo2_context* context,
+    uint32_t k,
+    uint32_t losses,
+    const char* operation)
 {
-    const uint32_t k = 176;
     const uint32_t r = 32;
     const size_t bytes = 64;
     RawTransientFixture fixture(context, k, r, bytes);
-    fixture.Configure(r, 2, false);
+    fixture.Configure(losses, 2, false);
 
     /* The specialized N=256 validator merges two monotonic input runs.  Give
        every live coordinate its correct bytes in reverse-address order to
@@ -600,8 +602,8 @@ void test_raw_transient_n256_split_validator_fallback(
         memcpy(remapped, fixture.parity[i].data(), bytes);
         fixture.recovery[i] = remapped;
     }
-    require_raw_transient_success(fixture.Observe(), fixture, true,
-        "raw N256 split validator unsorted fallback");
+    require_raw_transient_success(
+        fixture.Observe(), fixture, true, operation);
 
     fixture.ResetOutputs();
     const std::vector<uint32_t> missing = fixture.Missing();
@@ -619,6 +621,15 @@ void test_raw_transient_n256_split_validator_fallback(
     fixture.restored[missing[0]] = saved_output;
     require_raw_transient_failure(overlap, LEO2_OVERLAP, fixture,
         "raw N256 split validator unsorted overlap");
+}
+
+void test_raw_transient_n256_split_validator_fallback(
+    leo2_context* context)
+{
+    run_raw_transient_n256_validator_fallback(context, 176, 32,
+        "raw N256 split validator unsorted fallback");
+    run_raw_transient_n256_validator_fallback(context, 175, 29,
+        "raw N256 two-run validator unsorted fallback");
 }
 
 void require_raw_transient_failure(
@@ -991,11 +1002,18 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     run_raw_transient_case(avx2, 96, 31, 64, 31, 2, true, true);
     run_raw_transient_case(avx2, 97, 31, 64, 9, 2, true, true);
     run_raw_transient_case(avx2, 128, 31, 64, 24, 0, true, true);
+    run_raw_transient_case(avx2, 175, 31, 64, 14, 0, true, true);
+    run_raw_transient_case(avx2, 175, 31, 64, 15, 2, true, true);
+    run_raw_transient_case(avx2, 175, 31, 64, 18, 0, true, true);
     run_raw_transient_case(avx2, 175, 31, 64, 28, 1, true, true);
     run_raw_transient_case(avx2, 33, 32, 64, 9, 2, true, true);
     run_raw_transient_case(avx2, 96, 32, 64, 28, 0, true, true);
     run_raw_transient_case(avx2, 97, 32, 64, 16, 1, true, true);
+    run_raw_transient_case(avx2, 175, 32, 64, 14, 0, true, true);
+    run_raw_transient_case(avx2, 175, 32, 64, 15, 1, true, true);
+    run_raw_transient_case(avx2, 175, 32, 64, 23, 0, true, true);
     run_raw_transient_case(avx2, 175, 32, 64, 29, 2, true, true);
+    run_raw_transient_case(avx2, 175, 32, 64, 30, 1, true, true);
     run_raw_transient_case(avx2, 175, 32, 64, 32, 2, false, true);
     run_raw_transient_case(avx2, 176, 32, 64, 32, 2, false, true);
     run_raw_transient_case(avx2, 193, 32, 64, 32, 1, true, true);
@@ -1070,6 +1088,7 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     test_raw_transient_failure_atomicity(avx2, 33, 31, 9, 64);
     test_raw_transient_failure_atomicity(avx2, 33, 31, 2, 127);
     test_raw_transient_failure_atomicity(avx2, 64, 31, 16, 1024);
+    test_raw_transient_failure_atomicity(avx2, 175, 31, 15, 64);
     test_raw_transient_failure_atomicity(avx2, 175, 31, 31, 64);
     test_raw_transient_failure_atomicity(avx2, 176, 31, 9, 64);
     test_raw_transient_n256_split_validator_fallback(avx2);

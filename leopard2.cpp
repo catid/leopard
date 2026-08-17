@@ -9590,6 +9590,82 @@ static bool BindRawTranslatedLowPatternStorage(
             pattern.output_dependency_words);
 }
 
+/*
+    The raw validator stages surviving originals followed by recovery inputs.
+    When each run is sorted but their slabs appear in the opposite address
+    order, merge the two runs during the output sweep instead of sorting all
+    ranges.  Unsorted caller arrays retain the general validator.
+*/
+static leo2_result ValidateTwoSortedInputRunsDisjointRanges(
+    AddressRange* input_ranges,
+    size_t first_input_count,
+    size_t input_count,
+    AddressRange* output_ranges,
+    size_t output_count)
+{
+    if (first_input_count > input_count)
+        return LEO2_INTERNAL_ERROR;
+    const size_t second_input_count = input_count - first_input_count;
+    if (!RangesSortedByBegin(input_ranges, first_input_count) ||
+        !RangesSortedByBegin(
+            input_ranges + first_input_count, second_input_count) ||
+        !RangesSortedByBegin(output_ranges, output_count))
+    {
+        return ValidateDisjointRanges(
+            input_ranges, input_count, output_ranges, output_count);
+    }
+    if (first_input_count == 0 || second_input_count == 0 ||
+        input_ranges[first_input_count - 1U].begin <=
+            input_ranges[first_input_count].begin)
+    {
+        return ValidateAlreadySortedDisjointRanges(
+            input_ranges, input_count, output_ranges, output_count);
+    }
+
+    size_t first_i = 0;
+    size_t second_i = first_input_count;
+    uintptr_t furthest_input_end = 0;
+    bool consumed_input = false;
+    for (size_t output_i = 0; output_i < output_count; ++output_i)
+    {
+        if (output_i != 0 &&
+            RangesOverlap(output_ranges[output_i - 1U],
+                output_ranges[output_i]))
+            return LEO2_OVERLAP;
+        for (;;)
+        {
+            const AddressRange* first = first_i < first_input_count
+                ? input_ranges + first_i : NULL;
+            const AddressRange* second = second_i < input_count
+                ? input_ranges + second_i : NULL;
+            const AddressRange* input = NULL;
+            bool use_first = false;
+            if (!second || (first && first->begin <= second->begin))
+            {
+                input = first;
+                use_first = true;
+            }
+            else
+            {
+                input = second;
+            }
+            if (!input || input->begin >= output_ranges[output_i].end)
+                break;
+            if (!consumed_input || input->end > furthest_input_end)
+                furthest_input_end = input->end;
+            consumed_input = true;
+            if (use_first)
+                ++first_i;
+            else
+                ++second_i;
+        }
+        if (consumed_input &&
+            furthest_input_end > output_ranges[output_i].begin)
+            return LEO2_OVERLAP;
+    }
+    return LEO2_SUCCESS;
+}
+
 static leo2_result ValidateRawOneShotDecodeBuffers(
     const leo2_codec* codec,
     uint64_t shard_bytes,
@@ -9602,7 +9678,8 @@ static leo2_result ValidateRawOneShotDecodeBuffers(
     const void* const* recovery,
     void* const* restored,
     const AddressRange& scratch_range,
-    AddressRange* ranges)
+    AddressRange* ranges,
+    bool use_two_input_run_merge = false)
 {
     if (!original || !recovery || !restored || !ranges)
         return LEO2_INVALID_ARGUMENT;
@@ -9650,6 +9727,7 @@ static leo2_result ValidateRawOneShotDecodeBuffers(
             ranges[output_staging_offset + output_count++] = range;
         }
     }
+    const size_t original_input_count = input_count;
     for (uint32_t i = 0; i < codec->recovery_count; ++i)
     {
         if ((recovery[i] != NULL) != (recovery_present[i] != 0))
@@ -9672,6 +9750,12 @@ static leo2_result ValidateRawOneShotDecodeBuffers(
     {
         memmove(outputs, staged_outputs,
             output_count * sizeof(*outputs));
+    }
+    if (use_two_input_run_merge)
+    {
+        return ValidateTwoSortedInputRunsDisjointRanges(
+            ranges, original_input_count, input_count,
+            outputs, output_count);
     }
     return ValidateDisjointRanges(
         ranges, input_count, outputs, output_count);
@@ -11032,12 +11116,15 @@ TryOneShotRawNativeHighTransform(
 
     handled = true;
     AddressRange* const ranges = reinterpret_cast<AddressRange*>(scratch);
-    /* The complete K=97..224 near-full-loss sweep found the split-run merge
-       slower below K=169 and a stable 18--23 percent one-shot win from K=176
-       onward.  Preserve a seven-count guard band around that validator-only
-       cliff; lower K still uses this raw transform with the generic validator. */
+    /* The complete K=97..224 near-full-loss sweep found the no-staging split
+       validator slower below K=169 and a stable 18--23 percent one-shot win
+       from K=176 onward.  K=175 is the boundary: once at least 15 outputs are
+       present, a staged two-run merge keeps the already-sorted fast case while
+       eliminating the expensive cross-slab input sort.  Lower K retains the
+       generic validator. */
     if (t32_raw_shape && codec->parent_count == kGF8Order &&
-        codec->original_count >= 176 && shard_bytes == kScratchAlignment)
+        codec->original_count >= 176 &&
+        shard_bytes == kScratchAlignment)
     {
         result = ValidateRawOneShotN256SplitMonotonicBuffers(
             codec, shard_bytes, original_present, recovery_present,
@@ -11047,10 +11134,16 @@ TryOneShotRawNativeHighTransform(
     }
     else
     {
+        const bool use_k175_two_run_merge =
+            t32_raw_shape && codec->parent_count == kGF8Order &&
+            codec->original_count == 175 &&
+            missing_original_count >= 15 &&
+            shard_bytes == kScratchAlignment;
         result = ValidateRawOneShotDecodeBuffers(codec, shard_bytes,
             original_present, recovery_present, original_presence_range,
             recovery_presence_range, missing_original_count, original,
-            recovery, restored, scratch_range, ranges);
+            recovery, restored, scratch_range, ranges,
+            use_k175_two_run_merge);
     }
     if (result != LEO2_SUCCESS)
         return result;
