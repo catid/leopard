@@ -1,0 +1,156 @@
+{
+  "schema": "leopard2-main-regression-evidence/v1",
+  "generated_utc": "2026-08-17",
+  "ratio_orientation": "baseline_time_over_candidate_time",
+  "scope": "GF8 AVX2 legacy-high N=256/T=32/R=32 B64 near-full-loss public one-shot decode setup regression",
+  "implementation_commit": "fe8d8236296b83a799f9d66690ddba52c8e0555c",
+  "implementation_tree": "5a9ea348e48393e75248be0151731761c9a2fb4a",
+  "artifacts": {
+    "candidate": {
+      "tracked_clean": true,
+      "executable_sha256": "f5e471c78861569cdec4c3c9bf720bd7c4ec985bc24fb16bc9d2c923a054266c",
+      "compiler": "GCC 13.3.0",
+      "build_type": "Release",
+      "backend": "AVX2",
+      "small_dual_regular_fallback": true,
+      "cuda": false
+    },
+    "pre_change_leopard2_control": {
+      "commit": "fbc81a602ba9f9635b405159cda53c08f385290d",
+      "tree": "6f76078af573d0d5d190af19b87f3a790d33de87",
+      "tracked_clean": true,
+      "executable_sha256": "4efdee46b31eaf05a446c6282f57bf2552a6eb89b8d058ef13e7609f2a27c16b"
+    },
+    "exact_leopard_main": {
+      "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "tree": "b7c8830d96a978f6ec14fe747095f066e351ae72",
+      "tracked_clean": true,
+      "executable_sha256": "2f8d1f42d767f97fe6c4d373892d849e679eda07cab2afbc4ec0a521b58516e6"
+    }
+  },
+  "method": {
+    "cpu_model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_cpu_set": "0-13,16-29",
+    "pinned_cpu": 13,
+    "thread_count": 1,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "rounds": 25,
+    "samples_per_invocation": 9,
+    "reuse": 8,
+    "warmup": 16,
+    "comparison": "six-order balanced rotation, fixed per-cell seeds, matching workload digests, frozen read-only executables",
+    "confidence_intervals": "two-sided Student-t interval over independent round-level log timing ratios; df=24; t95=2.0638985616280205",
+    "promotion_rules": {
+      "target_minimum_speedup": 1.05,
+      "neighbor_maximum_regression": 0.02
+    },
+    "raw_summary_sha256": "898c525547f0ef1876d0919fca66010589c5c7010ca131b8543826abb3b4a6aa"
+  },
+  "implementation": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "parent_N": 256,
+    "padded_side_T": 32,
+    "public_recovery_R": 32,
+    "scratch_owned_algorithm5_K_range": [97, 224],
+    "split_monotonic_validator_K_range": [176, 224],
+    "description": "Fuses erasure-map, coordinate-pointer, block-prefix, missing-output, and locator preparation. K>=176 additionally merges independently monotonic systematic/parity input runs against monotonic outputs; arbitrary pointer order falls back to the generic scratch-owned validator."
+  },
+  "targets": {
+    "k176_r32_b64_l31": {
+      "pre_change_over_candidate": 1.328703847,
+      "pre_change_over_candidate_ci95": [1.324039605, 1.333384521],
+      "exact_main_over_candidate": 1.231539582,
+      "exact_main_over_candidate_ci95": [1.227162067, 1.235932712]
+    },
+    "k176_r32_b64_l32": {
+      "pre_change_over_candidate": 1.331242575,
+      "pre_change_over_candidate_ci95": [1.327894925, 1.334598665],
+      "exact_main_over_candidate": 1.241911594,
+      "exact_main_over_candidate_ci95": [1.239362876, 1.244465553]
+    },
+    "k193_r32_b64_l32": {
+      "pre_change_over_candidate": 1.333154398,
+      "pre_change_over_candidate_ci95": [1.328487634, 1.337837555],
+      "exact_main_over_candidate": 1.179945851,
+      "exact_main_over_candidate_ci95": [1.175269935, 1.184640370]
+    },
+    "k224_r32_b64_l31": {
+      "pre_change_over_candidate": 1.363645568,
+      "pre_change_over_candidate_ci95": [1.360498956, 1.366799458],
+      "exact_main_over_candidate": 1.146563441,
+      "exact_main_over_candidate_ci95": [1.144132912, 1.148999134]
+    },
+    "k224_r32_b64_l32": {
+      "pre_change_over_candidate": 1.354763952,
+      "pre_change_over_candidate_ci95": [1.351781639, 1.357752844],
+      "exact_main_over_candidate": 1.149143641,
+      "exact_main_over_candidate_ci95": [1.146482850, 1.151810608]
+    }
+  },
+  "neighbors": {
+    "k175_r32_b64_l32_threshold": {
+      "pre_change_over_candidate": 1.096919169,
+      "pre_change_over_candidate_ci95": [1.093325195, 1.100524958],
+      "exact_main_over_candidate": 1.026672485,
+      "exact_main_over_candidate_ci95": [1.024120799, 1.029230529]
+    },
+    "k176_r32_b64_l30_unselected": {
+      "pre_change_over_candidate": 1.013958905,
+      "pre_change_over_candidate_ci95": [1.011785302, 1.016137177],
+      "exact_main_over_candidate": 0.934976563,
+      "exact_main_over_candidate_ci95": [0.933342679, 0.936613308]
+    },
+    "k176_r31_b64_l31_unselected": {
+      "pre_change_over_candidate": 1.006876197,
+      "pre_change_over_candidate_ci95": [1.004730625, 1.009026351],
+      "exact_main_over_candidate": 0.943575026,
+      "exact_main_over_candidate_ci95": [0.941098828, 0.946057740]
+    },
+    "k176_r32_b63_l32_unselected": {
+      "pre_change_over_candidate": 1.002516484,
+      "pre_change_over_candidate_ci95": [1.001031252, 1.004003919]
+    },
+    "k176_r32_b65_l32_unselected": {
+      "pre_change_over_candidate": 1.002067349,
+      "pre_change_over_candidate_ci95": [0.998519412, 1.005627892]
+    },
+    "k176_r32_b1024_l2_unselected": {
+      "pre_change_over_candidate": 1.005918171,
+      "pre_change_over_candidate_ci95": [1.004247804, 1.007591316],
+      "exact_main_over_candidate": 2.083232427,
+      "exact_main_over_candidate_ci95": [2.078120625, 2.088356803]
+    }
+  },
+  "correctness_and_safety": {
+    "workload_digest_triplets_checked": 225,
+    "workload_digest_pairs_checked": 50,
+    "release_focused": "2/2 passed",
+    "debug_assertions": "2/2 passed",
+    "strict_gcc_13_3": "build and 2/2 focused tests passed",
+    "strict_clang_18_1_3": "build and 2/2 focused tests passed",
+    "clang_asan_ubsan_lsan": "2/2 passed",
+    "sanitizer_peak_rss_kib": 158160,
+    "field_matrix": "GF8-only and GF16-only libraries built",
+    "broader_tests": "direct oracle, public API contract, batch aliasing, decode-plan schedule, decode-high acceptance, high-pruned legacy/stage, arbitrary-count acceptance, boundaries, and 420-check operation-count audit passed",
+    "aliasing": "K176 deliberately reverse-addressed inputs take the generic fallback, recover exactly, allocate zero hot-path bytes, and reject input/output overlap atomically"
+  },
+  "local_raw_evidence": [
+    "build/regression-t32-n256-v1-everyk-map-raw",
+    "build/regression-t32-n256-v2-fusion-screen-raw",
+    "build/regression-t32-n256-v6-everyk-validator-map-raw",
+    "build/regression-t32-n256-v7-threshold-screen-raw",
+    "build/regression-t32-n256-v7-neighbor-screen-raw",
+    "build/regression-t32-n256-fe8d823-confirm25-raw"
+  ],
+  "negative_results": [
+    "The split monotonic validator regressed K97..168 by roughly 7-10 percent; it is therefore dispatched only at K>=176, a seven-count guard band above the first point win at K169.",
+    "A global split-validator variant perturbed the already-qualified N=128 route and was rejected.",
+    "R31 full-loss and R32/L30 remain slower than exact main, but are outside this route and became 0.7-1.4 percent faster than the pre-change same-source control; they remain separate regression targets."
+  ],
+  "invalid_attempts": [
+    "A 256 MiB virtual-address-limited launch of four thread-aware tests failed before assertions through pthread/bad_alloc; the serialized unrestricted rerun passed 4/4 at 105060 KiB peak RSS.",
+    "The Debug build exceeded a 512 MiB virtual-address cap in an unrelated generated AVX2 translation unit; a serialized measured rebuild passed at 527300 KiB peak RSS and its focused tests passed at 97780 KiB."
+  ],
+  "conclusion": "The selected high-K tiny full-loss setup regression is eliminated. Every target clears the five-percent lower-confidence promotion floor against both pre-change Leopard2 and exact Leopard main, no measured neighbor exceeds the two-percent same-source regression budget, and all wire/correctness digests match."
+}
