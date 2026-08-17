@@ -537,6 +537,12 @@ void require_raw_transient_success(
     require(fixture.OutputsMatch(), output_message.c_str());
 }
 
+void require_raw_transient_failure(
+    const DecodeObservation& observation,
+    leo2_result expected,
+    const RawTransientFixture& fixture,
+    const char* operation);
+
 void run_raw_transient_case(
     leo2_context* context,
     uint32_t k,
@@ -557,6 +563,62 @@ void run_raw_transient_case(
         " mixed=" + std::to_string(mixed_recovery ? 1 : 0);
     require_raw_transient_success(fixture.Observe(), fixture,
         expect_allocation_free, label.c_str());
+}
+
+void test_raw_transient_n256_split_validator_fallback(
+    leo2_context* context)
+{
+    const uint32_t k = 176;
+    const uint32_t r = 32;
+    const size_t bytes = 64;
+    RawTransientFixture fixture(context, k, r, bytes);
+    fixture.Configure(r, 2, false);
+
+    /* The specialized N=256 validator merges two monotonic input runs.  Give
+       every live coordinate its correct bytes in reverse-address order to
+       force the generic scratch-owned validator without changing the codeword
+       or permitting a hot-path allocation. */
+    std::vector<uint8_t> original_storage(
+        static_cast<size_t>(k) * bytes);
+    for (uint32_t i = 0; i < k; ++i)
+    {
+        if (!fixture.original_present[i])
+            continue;
+        uint8_t* const remapped = original_storage.data() +
+            static_cast<size_t>(k - 1U - i) * bytes;
+        memcpy(remapped, fixture.originals[i].data(), bytes);
+        fixture.original[i] = remapped;
+    }
+    std::vector<uint8_t> recovery_storage(
+        static_cast<size_t>(r) * bytes);
+    for (uint32_t i = 0; i < r; ++i)
+    {
+        if (!fixture.recovery_present[i])
+            continue;
+        uint8_t* const remapped = recovery_storage.data() +
+            static_cast<size_t>(r - 1U - i) * bytes;
+        memcpy(remapped, fixture.parity[i].data(), bytes);
+        fixture.recovery[i] = remapped;
+    }
+    require_raw_transient_success(fixture.Observe(), fixture, true,
+        "raw N256 split validator unsorted fallback");
+
+    fixture.ResetOutputs();
+    const std::vector<uint32_t> missing = fixture.Missing();
+    require(!missing.empty(),
+        "raw N256 split validator fallback has no missing output");
+    uint32_t live_original = 0;
+    while (live_original < k && !fixture.original[live_original])
+        ++live_original;
+    require(live_original < k,
+        "raw N256 split validator fallback has no live original");
+    void* const saved_output = fixture.restored[missing[0]];
+    fixture.restored[missing[0]] =
+        const_cast<void*>(fixture.original[live_original]);
+    const DecodeObservation overlap = fixture.Observe();
+    fixture.restored[missing[0]] = saved_output;
+    require_raw_transient_failure(overlap, LEO2_OVERLAP, fixture,
+        "raw N256 split validator unsorted overlap");
 }
 
 void require_raw_transient_failure(
@@ -913,13 +975,20 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     /*
         The all-K atlas exposed transient-plan setup cliffs in the common
         N=128/T=32/R=32 high profile.  The qualified scratch-owned view covers
-        the exact 64-byte near-maximum and aligned 1 KiB regions while byte,
-        count, and loss neighbors retain the vector-owned fallback.
+        the exact 64-byte near-maximum region through the N=256 parent and the
+        aligned 1 KiB region for N=128, while byte, count, and loss neighbors
+        retain the vector-owned fallback.
     */
     run_raw_transient_case(avx2, 33, 32, 64, 31, 0, true, true);
     run_raw_transient_case(avx2, 65, 32, 64, 32, 1, false, true);
     run_raw_transient_case(avx2, 95, 32, 64, 32, 2, true, true);
     run_raw_transient_case(avx2, 96, 32, 64, 31, 1, true, true);
+    run_raw_transient_case(avx2, 97, 32, 64, 31, 0, true, true);
+    run_raw_transient_case(avx2, 175, 32, 64, 32, 2, false, true);
+    run_raw_transient_case(avx2, 176, 32, 64, 32, 2, false, true);
+    run_raw_transient_case(avx2, 193, 32, 64, 32, 1, true, true);
+    run_raw_transient_case(avx2, 224, 32, 64, 31, 2, true, true);
+    run_raw_transient_case(avx2, 224, 32, 64, 32, 0, true, true);
     run_raw_transient_case(avx2, 33, 32, 1024, 2, 0, true, true);
     run_raw_transient_case(avx2, 67, 32, 1024, 7, 1, false, true);
     run_raw_transient_case(avx2, 81, 32, 1024, 2, 2, true, true);
@@ -932,6 +1001,11 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     run_raw_transient_case(avx2, 81, 32, 1025, 2, 2, true, false);
     run_raw_transient_case(avx2, 81, 31, 1024, 2, 0, true, false);
     run_raw_transient_case(avx2, 97, 32, 1024, 2, 1, true, false);
+    run_raw_transient_case(avx2, 193, 32, 63, 32, 2, true, false);
+    run_raw_transient_case(avx2, 193, 32, 65, 32, 0, true, false);
+    run_raw_transient_case(avx2, 193, 31, 64, 31, 1, true, false);
+    run_raw_transient_case(avx2, 193, 32, 64, 30, 2, true, false);
+    run_raw_transient_case(avx2, 193, 32, 1024, 2, 0, true, false);
 
     // Native-high direct execution has separately measured output-major and
     // source-major intervals.  Their gap and the first byte above the latter
@@ -955,8 +1029,11 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     test_raw_transient_failure_atomicity(avx2, 192, 62, 31, 64);
     test_raw_transient_failure_atomicity(avx2, 81, 32, 2, 1024);
     test_raw_transient_failure_atomicity(avx2, 95, 32, 32, 64);
+    test_raw_transient_failure_atomicity(avx2, 224, 32, 32, 64);
+    test_raw_transient_n256_split_validator_fallback(avx2);
     test_raw_transient_reusable_plan(avx2, 32, 32, 9);
     test_raw_transient_reusable_plan(avx2, 16, 8, 8);
+    test_raw_transient_reusable_plan(avx2, 224, 32, 32);
 
     {
         RawTransientFixture fixture(avx2, 16, 8, 64,
