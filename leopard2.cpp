@@ -18510,12 +18510,11 @@ static LEO_FORCE_INLINE bool IsGF8AVX2K33R32B64PackedTerminalEligible(
 #define LEO2_BALANCED_B64_TERMINAL_NOINLINE __declspec(noinline)
 #elif defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
 #define LEO2_BALANCED_B64_TERMINAL_NOINLINE \
-    __attribute__((noinline, noipa, section(".leo2_balanced_b64_terminal"), \
-        aligned(64)))
+    __attribute__((noinline, noipa, aligned(64)))
 #elif defined(__clang__) && defined(__ELF__)
 #define LEO2_BALANCED_B64_TERMINAL_NOINLINE \
     __attribute__((noinline, section(".leo2_balanced_b64_terminal"), \
-        aligned(64)))
+        aligned(4096)))
 #elif defined(__GNUC__) || defined(__clang__)
 #define LEO2_BALANCED_B64_TERMINAL_NOINLINE \
     __attribute__((noinline, aligned(64)))
@@ -18660,6 +18659,22 @@ TryEncodeGF8BalancedB64PackedTerminal(
     result_out = LEO2_SUCCESS;
     return true;
 }
+
+/* Keep the qualified T=32 production terminal on a page-stable I-cache
+   placement.  GCC otherwise ignores the section attribute on the function
+   template definition and emits this instantiation in generic .text, where
+   unrelated decoder changes can move it across cache sets. */
+#if defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
+template __attribute__((section(".leo2_balanced_b64_t32"), aligned(4096)))
+bool TryEncodeGF8BalancedB64PackedTerminal<32, 0>(
+    const leo2_codec*,
+    const AddressRange*,
+    const void* const*,
+    void* const*,
+    void*,
+    size_t,
+    leo2_result&);
+#endif
 
 #if defined(_MSC_VER)
 #define LEO2_K33R32_B64_TERMINAL_NOINLINE __declspec(noinline)
