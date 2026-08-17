@@ -1458,6 +1458,19 @@ static const uint32_t kDirectMaxRepairLosses = 8;
 static const uint32_t kDirectMaxParentDimension = 256;
 static const uint64_t kDirectSimdTileBytes = 64;
 static const uint64_t kDirectMinimumMeasuredBytes = 1024;
+
+static uint32_t RawNativeHighCacheLineMinimumLoss(
+    const leo2_codec* codec)
+{
+    if (!codec)
+        return 0;
+    return (codec->parent_count == 128 ||
+            codec->parent_count == kGF8Order) &&
+        codec->recovery_count >= 31
+            ? 2U
+            : codec->recovery_count - 1U;
+}
+
 static const size_t kScalableBatchPreflightMinItems = 2;
 static const size_t kLegacyK1R1ScalableBatchPreflightMinItems = 9;
 static const size_t kSparseEncodeScheduleBudget = 65536;
@@ -9702,9 +9715,11 @@ ValidateRawOneShotN256SplitMonotonicBuffers(
     AddressRange* ranges)
 {
     LEO_DEBUG_ASSERT(codec && codec->parent_count == kGF8Order &&
-        codec->padded_side == 32 && codec->recovery_count == 32 &&
+        codec->padded_side == 32 && codec->recovery_count >= 31 &&
+        codec->recovery_count <= 32 &&
         shard_bytes == kScratchAlignment &&
-        (missing_original_count == 31 || missing_original_count == 32));
+        missing_original_count >= 2 &&
+        missing_original_count <= codec->recovery_count);
     if (!original || !recovery || !restored || !ranges)
         return LEO2_INVALID_ARGUMENT;
 
@@ -10534,9 +10549,11 @@ static bool PrepareRawNativeHighPattern(
     Keep a scratch-owned view for the measured regular-schedule winners:
 
       * dense partial T=64 loss at one native AVX2 cache line; and
-      * N=128 or N=256, T=32/R=32 near-maximum loss at 64 bytes;
-      * N=128/T=32/R=17..32 near-maximum loss at 127 bytes; and
-      * N=128/T=32/R=32 partial loss at one aligned KiB.
+      * N=128 or N=256, T=32/R=31..32 transform losses of at least two at
+        64 bytes;
+      * N=128/T=32 at 127 bytes: near-maximum loss for R=17..30 and every
+        transform loss of at least two for R=31..32; and
+      * N=128/T=32/R=31..32 partial loss at one aligned KiB.
 
     Aligned routes write complete public rows directly.  The exact-127 route
     synthesizes byte 127 while loading and stages complete 128-byte results
@@ -10931,9 +10948,11 @@ TryOneShotRawNativeHighTransform(
     if (exact127_shape ||
         (t32_raw_shape && shard_bytes == kScratchAlignment))
     {
+        const uint32_t minimum_loss =
+            RawNativeHighCacheLineMinimumLoss(codec);
         selected_loss_count =
             missing_original_count <= codec->recovery_count &&
-            missing_original_count + 1U >= codec->recovery_count;
+            missing_original_count >= minimum_loss;
     }
     else if (t32_raw_shape)
     {
@@ -11013,9 +11032,10 @@ TryOneShotRawNativeHighTransform(
 
     handled = true;
     AddressRange* const ranges = reinterpret_cast<AddressRange*>(scratch);
-    /* The complete K=97..224 sweep found the split-run merge slower below
-       K=169 and a stable 18--23 percent one-shot win from K=176 onward.
-       Preserve a seven-count guard band around the allocator/layout cliff. */
+    /* The complete K=97..224 near-full-loss sweep found the split-run merge
+       slower below K=169 and a stable 18--23 percent one-shot win from K=176
+       onward.  Preserve a seven-count guard band around that validator-only
+       cliff; lower K still uses this raw transform with the generic validator. */
     if (t32_raw_shape && codec->parent_count == kGF8Order &&
         codec->original_count >= 176 && shard_bytes == kScratchAlignment)
     {
@@ -14934,10 +14954,14 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         codec->terminal_r1_t8_shape = ClassifyTerminalT8Shape(codec);
     if (codec->terminal_r1_t8_shape == kTerminalR1None)
         codec->terminal_r1_t8_shape = ClassifyTerminalT2K4Shape(codec);
+    const bool n128_t32_raw_shape = parent == 128 &&
+        original_count >= 33 && original_count <= 96 &&
+        (recovery_count == 31 || recovery_count == 32);
+    const bool n256_t32_raw_shape = parent == kGF8Order &&
+        original_count >= 97 && original_count <= 224 &&
+        (recovery_count == 31 || recovery_count == 32);
     if (codec->terminal_r1_t8_shape == kTerminalR1None &&
-        original_count >= 33 && original_count <= 224 &&
-        recovery_count == 32 &&
-        (parent == 128 || parent == kGF8Order) && padded == 32 &&
+        (n128_t32_raw_shape || n256_t32_raw_shape) && padded == 32 &&
         codec->flags == 0 &&
         profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         field == LEO2_FIELD_GF8 &&
@@ -20456,7 +20480,8 @@ static leo2_result TryOneShotNoLoss(
             prefix_out.raw_native_high_transform_selected =
                 shard_bytes == kScratchAlignment
                     ? missing_count <= codec->recovery_count &&
-                        missing_count + 1U >= codec->recovery_count
+                        missing_count >=
+                            RawNativeHighCacheLineMinimumLoss(codec)
                     : missing_count >= 2 &&
                         missing_count < codec->recovery_count;
             prefix_valid_out = true;

@@ -974,37 +974,74 @@ void test_raw_transient_decode(leo2_context* automatic_context)
 
     /*
         The all-K atlas exposed transient-plan setup cliffs in the common
-        N=128/T=32/R=32 high profile.  The qualified scratch-owned view covers
-        the exact 64-byte near-maximum region through the N=256 parent and the
-        aligned 1 KiB region for N=128, while byte, count, and loss neighbors
-        retain the vector-owned fallback.
+        N=128/T=32/R=31..32 high profile.  The qualified scratch-owned view
+        covers every exact 64-byte N=128/N=256, R=31..32 transform loss of at
+        least two, the exact 127-byte N=128/R=31..32 region, and the aligned
+        1 KiB N=128/R=31..32 partial-loss region.
+        Byte, count, and parent-threshold neighbors retain their established
+        paths.
     */
     run_raw_transient_case(avx2, 33, 32, 64, 31, 0, true, true);
     run_raw_transient_case(avx2, 65, 32, 64, 32, 1, false, true);
     run_raw_transient_case(avx2, 95, 32, 64, 32, 2, true, true);
     run_raw_transient_case(avx2, 96, 32, 64, 31, 1, true, true);
     run_raw_transient_case(avx2, 97, 32, 64, 31, 0, true, true);
+    run_raw_transient_case(avx2, 33, 31, 64, 9, 0, true, true);
+    run_raw_transient_case(avx2, 64, 31, 64, 16, 1, true, true);
+    run_raw_transient_case(avx2, 96, 31, 64, 31, 2, true, true);
+    run_raw_transient_case(avx2, 97, 31, 64, 9, 2, true, true);
+    run_raw_transient_case(avx2, 128, 31, 64, 24, 0, true, true);
+    run_raw_transient_case(avx2, 175, 31, 64, 28, 1, true, true);
+    run_raw_transient_case(avx2, 33, 32, 64, 9, 2, true, true);
+    run_raw_transient_case(avx2, 96, 32, 64, 28, 0, true, true);
+    run_raw_transient_case(avx2, 97, 32, 64, 16, 1, true, true);
+    run_raw_transient_case(avx2, 175, 32, 64, 29, 2, true, true);
     run_raw_transient_case(avx2, 175, 32, 64, 32, 2, false, true);
     run_raw_transient_case(avx2, 176, 32, 64, 32, 2, false, true);
     run_raw_transient_case(avx2, 193, 32, 64, 32, 1, true, true);
     run_raw_transient_case(avx2, 224, 32, 64, 31, 2, true, true);
     run_raw_transient_case(avx2, 224, 32, 64, 32, 0, true, true);
+    run_raw_transient_case(avx2, 33, 31, 127, 2, 0, true, true);
+    run_raw_transient_case(avx2, 64, 31, 127, 16, 1, true, true);
+    run_raw_transient_case(avx2, 96, 31, 127, 31, 2, true, true);
+    run_raw_transient_case(avx2, 33, 32, 127, 2, 2, true, true);
+    run_raw_transient_case(avx2, 96, 32, 127, 30, 0, true, true);
     run_raw_transient_case(avx2, 33, 32, 1024, 2, 0, true, true);
     run_raw_transient_case(avx2, 67, 32, 1024, 7, 1, false, true);
     run_raw_transient_case(avx2, 81, 32, 1024, 2, 2, true, true);
     run_raw_transient_case(avx2, 95, 32, 1024, 10, 0, true, true);
     run_raw_transient_case(avx2, 96, 32, 1024, 31, 2, true, true);
     run_raw_transient_case(avx2, 96, 32, 1024, 32, 1, true, false);
+    run_raw_transient_case(avx2, 33, 31, 1024, 2, 0, true, true);
+    run_raw_transient_case(avx2, 64, 31, 1024, 16, 1, true, true);
+    run_raw_transient_case(avx2, 96, 31, 1024, 30, 2, true, true);
+    run_raw_transient_case(avx2, 96, 31, 1024, 31, 0, true, false);
 
-    run_raw_transient_case(avx2, 65, 32, 64, 30, 0, true, false);
+    run_raw_transient_case(avx2, 65, 32, 64, 30, 0, true, true);
     run_raw_transient_case(avx2, 81, 32, 1023, 2, 1, true, false);
     run_raw_transient_case(avx2, 81, 32, 1025, 2, 2, true, false);
-    run_raw_transient_case(avx2, 81, 31, 1024, 2, 0, true, false);
+    run_raw_transient_case(avx2, 81, 31, 1023, 2, 0, true, false);
+    run_raw_transient_case(avx2, 81, 31, 1025, 2, 1, true, false);
+    run_raw_transient_case(avx2, 81, 30, 1024, 2, 2, true, false);
     run_raw_transient_case(avx2, 97, 32, 1024, 2, 1, true, false);
     run_raw_transient_case(avx2, 193, 32, 63, 32, 2, true, false);
     run_raw_transient_case(avx2, 193, 32, 65, 32, 0, true, false);
-    run_raw_transient_case(avx2, 193, 31, 64, 31, 1, true, false);
-    run_raw_transient_case(avx2, 193, 32, 64, 30, 2, true, false);
+    run_raw_transient_case(avx2, 176, 31, 64, 31, 1, true, true);
+    run_raw_transient_case(avx2, 176, 31, 64, 9, 0, true, true);
+    run_raw_transient_case(avx2, 193, 31, 64, 17, 1, true, true);
+    run_raw_transient_case(avx2, 224, 31, 64, 28, 2, true, true);
+    run_raw_transient_case(avx2, 176, 32, 64, 9, 2, true, true);
+    run_raw_transient_case(avx2, 193, 32, 64, 17, 0, true, true);
+    run_raw_transient_case(avx2, 224, 32, 64, 29, 1, true, true);
+    run_raw_transient_case(avx2, 193, 32, 64, 30, 2, true, true);
+    /* Small losses use whichever allocation-free direct/raw route qualifies. */
+    run_raw_transient_case(avx2, 33, 31, 64, 8, 1, true, true);
+    run_raw_transient_case(avx2, 33, 30, 64, 30, 2, true, false);
+    run_raw_transient_case(avx2, 176, 30, 64, 30, 0, true, false);
+    run_raw_transient_case(avx2, 176, 31, 63, 31, 2, true, false);
+    run_raw_transient_case(avx2, 176, 31, 65, 31, 0, true, false);
+    run_raw_transient_case(avx2, 81, 31, 126, 2, 1, true, false);
+    run_raw_transient_case(avx2, 81, 31, 128, 2, 2, true, false);
     run_raw_transient_case(avx2, 193, 32, 1024, 2, 0, true, false);
 
     // Native-high direct execution has separately measured output-major and
@@ -1030,6 +1067,11 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     test_raw_transient_failure_atomicity(avx2, 81, 32, 2, 1024);
     test_raw_transient_failure_atomicity(avx2, 95, 32, 32, 64);
     test_raw_transient_failure_atomicity(avx2, 224, 32, 32, 64);
+    test_raw_transient_failure_atomicity(avx2, 33, 31, 9, 64);
+    test_raw_transient_failure_atomicity(avx2, 33, 31, 2, 127);
+    test_raw_transient_failure_atomicity(avx2, 64, 31, 16, 1024);
+    test_raw_transient_failure_atomicity(avx2, 175, 31, 31, 64);
+    test_raw_transient_failure_atomicity(avx2, 176, 31, 9, 64);
     test_raw_transient_n256_split_validator_fallback(avx2);
     test_raw_transient_reusable_plan(avx2, 32, 32, 9);
     test_raw_transient_reusable_plan(avx2, 16, 8, 8);
