@@ -371,6 +371,39 @@ void ExerciseSelectedPackedShape(
         }
     }
 
+    if (original_count == 62 && side == 32)
+    {
+        Require(leopard2_internal::
+                SetBalancedB64TerminalEnabledForDiagnostics(false),
+            "disable the K62/R32 terminal");
+        std::memset(output.bytes(), 0xa5,
+            static_cast<size_t>(side) * kShardBytes);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode(codec, kShardBytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size()),
+            LEO2_SUCCESS, "execute same-binary K62/R32 control route");
+        RequireTerminalCalls(0,
+            "same-binary K62/R32 control entered the packed terminal");
+        CheckVariableParity(field, generator, original_count, side,
+            original, recovery, kShardBytes,
+            "same-binary K62/R32 control differs from oracle");
+        Require(leopard2_internal::
+                SetBalancedB64TerminalEnabledForDiagnostics(true),
+            "restore the K62/R32 terminal");
+
+        std::memset(output.bytes(), 0xa5,
+            static_cast<size_t>(side) * kShardBytes);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode(codec, kShardBytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size()),
+            LEO2_SUCCESS, "reexecute restored K62/R32 terminal");
+        RequireTerminalCalls(1,
+            "restored K62/R32 route missed the packed terminal");
+        CheckVariableParity(field, generator, original_count, side,
+            original, recovery, kShardBytes,
+            "restored K62/R32 terminal differs from oracle");
+    }
+
     if (original_count == 16 && side == 16)
     {
         /* The codec is GF(2)-linear.  Exercising every systematic basis row
@@ -784,6 +817,10 @@ int main()
         ExerciseExcludedShape(context, 16, 16);
 #endif
         ExerciseSelectedPackedShape(context, 33, 32);
+        ExerciseSelectedPackedShape(context, 34, 32);
+        ExerciseSelectedPackedShape(context, 62, 32);
+        ExerciseSelectedPackedShape(context, 63, 32);
+        ExerciseSelectedPackedShape(context, 64, 32);
         ExerciseSelectedPackedShape(context, 64, 64);
         ExerciseSelectedPackedShape(context, 128, 128);
 
@@ -795,7 +832,7 @@ int main()
         ExerciseExcludedShape(context, 31, 32);
         ExerciseExcludedShape(context, 32, 31);
         ExerciseExcludedShape(context, 33, 31);
-        ExerciseExcludedShape(context, 34, 32);
+        ExerciseExcludedShape(context, 65, 32);
         ExerciseExcludedShape(context, 63, 64);
         ExerciseExcludedShape(context, 64, 63);
         ExerciseExcludedShape(context, 127, 128);

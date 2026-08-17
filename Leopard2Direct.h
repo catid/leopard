@@ -296,8 +296,9 @@ bool SetHighT16Q2B64FusedEnabledForDiagnostics(bool enabled);
 
 /*
     Process-local benchmark control for the exact balanced 64-byte packed
-    terminals.  Change it only while no encode call is executing.  This
-    remains outside the public API and changes no codec or wire identity.
+    terminals and the adjacent packed T=32/R=32/B=64 family.  Change it only
+    while no encode call is executing.  This remains outside the public API
+    and changes no codec or wire identity.
 */
 bool SetBalancedB64TerminalEnabledForDiagnostics(bool enabled);
 

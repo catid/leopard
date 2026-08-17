@@ -413,6 +413,31 @@ void ExerciseProductionPackedSide(
         "packed production batch modified output guard");
     CheckPackedParity(field, generator, original_count, side,
         &original[0], &recovery[0]);
+
+    std::memset(output.bytes(), kGuardValue, output.size());
+    const std::vector<uint8_t> output_before(
+        output.bytes(), output.bytes() + output.size());
+    RequireResult(leo2_encode(codec, kShardBytes,
+        &original[0], &recovery[0], scratch.data(), scratch.size() - 1U),
+        LEO2_SCRATCH_TOO_SMALL,
+        "reject undersized packed production scratch");
+    RequireResult(leo2_encode(codec, kShardBytes,
+        &original[0], &recovery[0], scratch.bytes() + 1U, scratch.size()),
+        LEO2_BAD_ALIGNMENT,
+        "reject misaligned packed production scratch");
+    Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
+        "rejected packed production scratch modified output");
+
+    void* const saved_recovery = recovery[0];
+    recovery[0] = input_base;
+    RequireResult(leo2_encode(codec, kShardBytes,
+        &original[0], &recovery[0], scratch.data(), scratch.size()),
+        LEO2_OVERLAP, "reject packed production source/output overlap");
+    recovery[0] = saved_recovery;
+    Require(std::memcmp(input.bytes(), &input_before[0], input.size()) == 0,
+        "rejected packed production overlap modified input");
+    Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
+        "rejected packed production overlap modified output");
     leo2_codec_destroy(codec);
 }
 
@@ -816,6 +841,10 @@ int main()
         ExerciseProduction(context);
         ExerciseProductionPackedSide(context, 16, 16);
         ExerciseProductionPackedSide(context, 33, 32);
+        ExerciseProductionPackedSide(context, 34, 32);
+        ExerciseProductionPackedSide(context, 62, 32);
+        ExerciseProductionPackedSide(context, 63, 32);
+        ExerciseProductionPackedSide(context, 64, 32);
         ExerciseProductionPackedSide(context, 64, 64);
         ExerciseProductionPackedSide(context, 128, 128);
 #if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
