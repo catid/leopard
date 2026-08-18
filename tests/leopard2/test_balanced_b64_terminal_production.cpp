@@ -183,7 +183,7 @@ void CheckParity(
         original, recovery);
 }
 
-size_t ExpectedProductionScratch(
+size_t ExpectedProductionWorkDataOffset(
     unsigned original_count,
     unsigned recovery_count,
     unsigned side)
@@ -192,9 +192,17 @@ size_t ExpectedProductionScratch(
     const size_t metadata_bytes =
         2U * (original_count + recovery_count) * sizeof(uintptr_t) +
         (original_count + 2U * side) * sizeof(void*);
-    const size_t data_offset =
-        (metadata_bytes + alignment - 1U) & ~(alignment - 1U);
-    return data_offset + 2U * side * kShardBytes;
+    return (metadata_bytes + alignment - 1U) & ~(alignment - 1U);
+}
+
+size_t ExpectedProductionScratch(
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned side)
+{
+    return ExpectedProductionWorkDataOffset(
+        original_count, recovery_count, side) +
+        2U * side * kShardBytes;
 }
 
 size_t ExpectedProductionScratch(unsigned side)
@@ -354,12 +362,23 @@ void ExerciseProductionPackedSide(
                 original_count, side, transform_side),
         "packed production scratch differs from fixed geometry");
     AlignedBuffer scratch(scratch_bytes);
+    const size_t work_data_offset = ExpectedProductionWorkDataOffset(
+        original_count, side, transform_side);
+    std::memset(scratch.bytes(), 0x5c, scratch.size());
+    const std::vector<uint8_t> scratch_prefix_before(
+        scratch.bytes(), scratch.bytes() + work_data_offset);
 
     const size_t input_bytes =
         static_cast<size_t>(original_count) * kShardBytes;
     const size_t output_bytes = static_cast<size_t>(side) * kShardBytes;
-    AlignedBuffer input(input_bytes + 2U * kGuardBytes + 8U);
-    AlignedBuffer output(output_bytes + 2U * kGuardBytes + 8U);
+    const size_t input_allocation_bytes = input_bytes > scratch_bytes
+        ? input_bytes : scratch_bytes;
+    const size_t output_allocation_bytes = output_bytes > scratch_bytes
+        ? output_bytes : scratch_bytes;
+    AlignedBuffer input(
+        input_allocation_bytes + 2U * kGuardBytes + 8U);
+    AlignedBuffer output(
+        output_allocation_bytes + 2U * kGuardBytes + 8U);
     std::memset(input.bytes(), kGuardValue, input.size());
     std::memset(output.bytes(), kGuardValue, output.size());
     const size_t input_offset = kGuardBytes + 1U;
@@ -401,6 +420,9 @@ void ExerciseProductionPackedSide(
         "execute production packed terminal");
     Require(std::memcmp(input.bytes(), &input_before[0], input.size()) == 0,
         "packed production encode modified source or guards");
+    Require(std::memcmp(scratch.bytes(), &scratch_prefix_before[0],
+            work_data_offset) == 0,
+        "packed production encode staged general-path scratch metadata");
     CheckGuards(output, output_offset, output_bytes,
         "packed production encode modified output guard");
 
@@ -413,6 +435,9 @@ void ExerciseProductionPackedSide(
     };
     RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
         "execute production packed one-item batch");
+    Require(std::memcmp(scratch.bytes(), &scratch_prefix_before[0],
+            work_data_offset) == 0,
+        "packed production batch staged general-path scratch metadata");
     CheckGuards(output, output_offset, output_bytes,
         "packed production batch modified output guard");
     CheckPackedParity(field, generator, original_count, side,
@@ -445,6 +470,7 @@ void ExerciseProductionPackedSide(
 
     const bool aggregate_overlap_shape =
         (original_count == 62 && side == 8)
+        || (original_count == 79 && side == 32)
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
         || (original_count == 65 && side == 9)
         || (original_count == 66 && side == 16)
@@ -477,6 +503,17 @@ void ExerciseProductionPackedSide(
             "aggregate scratch/data overlap modified input");
         Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
             "aggregate scratch/data overlap modified output");
+
+        Require(output.size() >= scratch.size(),
+            "aggregate output allocation cannot cover scratch-overlap probe");
+        RequireResult(leo2_encode(codec, kShardBytes,
+            &original[0], &recovery[0], output.data(), scratch.size()),
+            LEO2_OVERLAP,
+            "reject aggregate scratch/output overlap");
+        Require(std::memcmp(input.bytes(), &input_before[0], input.size()) == 0,
+            "aggregate scratch/output overlap modified input");
+        Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
+            "aggregate scratch/output overlap modified output");
 
         AlignedBuffer metadata_scratch(scratch.size());
         const void** const overlapping_original =
@@ -933,6 +970,9 @@ int main()
         ExerciseProductionPackedSide(context, 62, 32);
         ExerciseProductionPackedSide(context, 63, 32);
         ExerciseProductionPackedSide(context, 64, 32);
+        ExerciseProductionPackedSide(context, 65, 32);
+        ExerciseProductionPackedSide(context, 79, 32);
+        ExerciseProductionPackedSide(context, 96, 32);
         ExerciseProductionPackedSide(context, 33, 33);
         ExerciseProductionPackedSide(context, 34, 33);
         ExerciseProductionPackedSide(context, 62, 33);

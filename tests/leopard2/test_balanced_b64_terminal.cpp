@@ -170,6 +170,25 @@ void RequireTerminalCalls(uint64_t expected, const char* message)
     Require(counts.balanced_b64_packed_calls == expected, message);
 }
 
+bool CreateOptionalGF16Codec(
+    leo2_context* context,
+    unsigned original_count,
+    unsigned recovery_count,
+    leo2_codec** codec_out,
+    const char* message)
+{
+    const bool supported =
+        (leo2_context_field_mask(context) & LEO2_FIELD_MASK_GF16) != 0;
+    const leo2_result result = leo2_codec_create(
+        context, original_count, recovery_count,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL, codec_out);
+    RequireResult(result,
+        supported ? LEO2_SUCCESS : LEO2_UNSUPPORTED, message);
+    Require((*codec_out != NULL) == supported,
+        "GF16 codec result disagrees with the context field mask");
+    return supported;
+}
+
 leo2_codec* CreateCodec(leo2_context* context, leo2_profile profile)
 {
     leo2_codec* codec = NULL;
@@ -242,7 +261,6 @@ void CheckVariableParity(
     }
 }
 
-#ifdef LEO_HAS_FF16
 leopard2_test::Element ReadNativeGF16Symbol(
     const void* shard,
     size_t shard_bytes,
@@ -294,8 +312,6 @@ void CheckVariableParityGF16(
         }
     }
 }
-#endif
-
 void CheckLegacyParity(
     unsigned original_count,
     unsigned recovery_count,
@@ -382,6 +398,7 @@ void ExerciseSelectedPackedShape(
         "selected packed parity differs from direct oracle");
     const bool legacy_boundary =
         (original_count == 62 && side == 8) ||
+        (side == 32 && original_count >= 65 && original_count <= 96) ||
         ((side == 9 || side == 16) &&
          (original_count == 33 || original_count == 48 ||
           original_count == 49 || original_count == 64 ||
@@ -418,6 +435,35 @@ void ExerciseSelectedPackedShape(
         original, recovery, kShardBytes,
         "selected packed batch parity differs from oracle");
 
+    if (side == 32 && original_count >= 65 && original_count <= 96)
+    {
+        /* Each K changes the last live group in the third T=32 message
+           block.  Isolate that final systematic coordinate so shortened
+           zero handling cannot be hidden by a favorable dense random
+           message. */
+        std::memset(input.bytes(), 0,
+            static_cast<size_t>(original_count) * kShardBytes);
+        std::memset(input.bytes() +
+                static_cast<size_t>(original_count - 1U) * kShardBytes,
+            1, kShardBytes);
+        std::memset(output.bytes(), 0xa5,
+            static_cast<size_t>(side) * kShardBytes);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode(codec, kShardBytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size()),
+            LEO2_SUCCESS, "execute T32/Q3 final-source basis encode");
+        RequireTerminalCalls(1,
+            "T32/Q3 final-source basis encode missed the packed terminal");
+        CheckVariableParity(field, generator, original_count, side,
+            original, recovery, kShardBytes,
+            "T32/Q3 final-source basis parity differs from oracle");
+        CheckLegacyParity(original_count, side, original, recovery,
+            kShardBytes,
+            "T32/Q3 final-source basis parity differs from legacy leo_encode");
+        FillVariableInput(input.bytes(), original_count, kShardBytes,
+            UINT64_C(0x42414c414e434536));
+    }
+
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && \
     !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
     if (original_count == 62 && side == 9)
@@ -445,7 +491,8 @@ void ExerciseSelectedPackedShape(
     }
 #endif
 
-    if (original_count == 62 &&
+    if ((original_count == 62 ||
+         (original_count == 79 && side == 32)) &&
         (side == 8 || side == 16 || side == 32 || side == 33))
     {
         RequireResult(leo2_test_codec_set_encode_mode(
@@ -501,13 +548,14 @@ void ExerciseSelectedPackedShape(
         recovery[8] = saved_recovery;
     }
 
-    if (original_count == 33 && side == 32)
+    if ((original_count == 33 || original_count == 79) && side == 32)
     {
         /* A detached final source must retain the mature path: the terminal
            is a packed-layout optimization, not a new API restriction. */
         std::vector<uint8_t> detached(kShardBytes);
-        std::memcpy(&detached[0], original[32], kShardBytes);
-        original[32] = &detached[0];
+        const unsigned detached_source = original_count - 1U;
+        std::memcpy(&detached[0], original[detached_source], kShardBytes);
+        original[detached_source] = &detached[0];
         std::memset(output.bytes(), 0xa5,
             static_cast<size_t>(side) * kShardBytes);
         leopard::ff8::TestOnlyResetHighEncodeCounts();
@@ -520,7 +568,25 @@ void ExerciseSelectedPackedShape(
             original, recovery, kShardBytes,
             "detached K33/R32 parity differs from oracle");
 
-        original[32] = input.bytes() + 32U * kShardBytes;
+        original[detached_source] = input.bytes() +
+            static_cast<size_t>(detached_source) * kShardBytes;
+        if (original_count == 79)
+        {
+            void* const saved_recovery = recovery[31];
+            recovery[31] = NULL;
+            std::memset(output.bytes(), 0xa5,
+                static_cast<size_t>(side) * kShardBytes);
+            leopard::ff8::TestOnlyResetHighEncodeCounts();
+            RequireResult(leo2_encode(codec, kShardBytes,
+                &original[0], &recovery[0], scratch.data(), scratch.size()),
+                LEO2_SUCCESS, "execute sparse-output K79/R32 fallback");
+            RequireTerminalCalls(0,
+                "sparse-output K79/R32 entered the packed terminal");
+            CheckVariableParity(field, generator, original_count, side - 1U,
+                original, recovery, kShardBytes,
+                "sparse-output K79/R32 parity differs from oracle");
+            recovery[31] = saved_recovery;
+        }
         Require(leopard2_internal::
                 SetBalancedB64TerminalEnabledForDiagnostics(false),
             "disable the K33/R32 terminal");
@@ -916,11 +982,10 @@ void ExerciseK62MatureScope(leo2_context* context)
         "low-profile K62/R8 parity differs from oracle");
     leo2_codec_destroy(low_codec);
 
-#ifdef LEO_HAS_FF16
     leo2_codec* gf16_codec = NULL;
-    RequireResult(leo2_codec_create(context, original_count, recovery_count,
-        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL, &gf16_codec),
-        LEO2_SUCCESS, "create GF16 K62/R8 exclusion codec");
+    if (!CreateOptionalGF16Codec(context, original_count, recovery_count,
+            &gf16_codec, "create GF16 K62/R8 exclusion codec"))
+        return;
     size_t gf16_scratch_bytes = 0;
     RequireResult(leo2_encode_scratch_size(gf16_codec, kShardBytes,
         &gf16_scratch_bytes), LEO2_SUCCESS,
@@ -947,7 +1012,107 @@ void ExerciseK62MatureScope(leo2_context* context)
         recovery_count, original[0], recovery[0], kShardBytes,
         "GF16 K62/R8 parity differs from oracle");
     leo2_codec_destroy(gf16_codec);
-#endif
+}
+
+void ExerciseK79ProfileFieldExclusions(leo2_context* context)
+{
+    static const unsigned original_count = 79;
+    static const unsigned recovery_count = 32;
+    AlignedBuffer input(
+        static_cast<size_t>(original_count) * kShardBytes);
+    AlignedBuffer output(
+        static_cast<size_t>(recovery_count) * kShardBytes);
+    FillVariableInput(input.bytes(), original_count, kShardBytes,
+        UINT64_C(0x4b373950524f4649));
+    std::vector<const void*> original;
+    std::vector<void*> recovery;
+    SetVariablePackedPointers(input.bytes(), output.bytes(), original_count,
+        recovery_count, kShardBytes, original, recovery);
+
+    const leopard2_test::BinaryField gf8 =
+        leopard2_test::make_legacy_gf8();
+    const leopard2_test::ProfileLayout high_gf8_layout =
+        leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh, original_count, recovery_count);
+    const leopard2_test::Matrix high_gf8_generator =
+        leopard2_test::direct_systematic_generator(gf8, high_gf8_layout);
+    leo2_codec* auto_codec = NULL;
+    RequireResult(leo2_codec_create(context, original_count, recovery_count,
+        LEO2_PROFILE_AUTO, LEO2_FIELD_AUTO, NULL, &auto_codec),
+        LEO2_SUCCESS, "create AUTO K79/R32 codec");
+    Require(leo2_codec_profile(auto_codec) ==
+            LEO2_PROFILE_LEGACY_HIGH_V1 &&
+            leo2_codec_field(auto_codec) == LEO2_FIELD_GF8,
+        "AUTO K79/R32 resolved to the wrong wire profile or field");
+    size_t auto_scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(
+        auto_codec, kShardBytes, &auto_scratch_bytes), LEO2_SUCCESS,
+        "query AUTO K79/R32 scratch");
+    AlignedBuffer auto_scratch(auto_scratch_bytes);
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(auto_codec, kShardBytes,
+        &original[0], &recovery[0], auto_scratch.data(), auto_scratch.size()),
+        LEO2_SUCCESS, "execute AUTO K79/R32 encode");
+    RequireTerminalCalls(1,
+        "AUTO K79/R32 encode missed the packed terminal");
+    CheckVariableParity(gf8, high_gf8_generator, original_count,
+        recovery_count, original, recovery, kShardBytes,
+        "AUTO K79/R32 parity differs from oracle");
+    leo2_codec_destroy(auto_codec);
+
+    const leopard2_test::ProfileLayout low_layout =
+        leopard2_test::make_profile_layout(
+            leopard2_test::kLow, original_count, recovery_count);
+    const leopard2_test::Matrix low_generator =
+        leopard2_test::direct_systematic_generator(gf8, low_layout);
+    leo2_codec* low_codec = NULL;
+    RequireResult(leo2_codec_create(context, original_count, recovery_count,
+        LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, NULL, &low_codec),
+        LEO2_SUCCESS, "create low-profile K79/R32 exclusion codec");
+    size_t low_scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(
+        low_codec, kShardBytes, &low_scratch_bytes), LEO2_SUCCESS,
+        "query low-profile K79/R32 exclusion scratch");
+    AlignedBuffer low_scratch(low_scratch_bytes);
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(low_codec, kShardBytes,
+        &original[0], &recovery[0], low_scratch.data(), low_scratch.size()),
+        LEO2_SUCCESS, "execute low-profile K79/R32 exclusion");
+    RequireTerminalCalls(0,
+        "low-profile K79/R32 entered the legacy-high packed terminal");
+    CheckVariableParity(gf8, low_generator, original_count, recovery_count,
+        original, recovery, kShardBytes,
+        "low-profile K79/R32 parity differs from oracle");
+    leo2_codec_destroy(low_codec);
+
+    leo2_codec* gf16_codec = NULL;
+    if (!CreateOptionalGF16Codec(context, original_count, recovery_count,
+            &gf16_codec, "create GF16 K79/R32 exclusion codec"))
+        return;
+    const leopard2_test::BinaryField gf16 =
+        leopard2_test::make_legacy_gf16();
+    const leopard2_test::ProfileLayout high_layout =
+        leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh, original_count, recovery_count);
+    const leopard2_test::Matrix high_generator =
+        leopard2_test::direct_systematic_generator(gf16, high_layout);
+    size_t gf16_scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(
+        gf16_codec, kShardBytes, &gf16_scratch_bytes), LEO2_SUCCESS,
+        "query GF16 K79/R32 exclusion scratch");
+    AlignedBuffer gf16_scratch(gf16_scratch_bytes);
+    std::memset(output.bytes(), 0xa5, output.size());
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(gf16_codec, kShardBytes,
+        &original[0], &recovery[0], gf16_scratch.data(),
+        gf16_scratch.size()), LEO2_SUCCESS,
+        "execute GF16 K79/R32 exclusion");
+    RequireTerminalCalls(0,
+        "GF16 K79/R32 entered the GF8 packed terminal");
+    CheckVariableParityGF16(gf16, high_generator, original_count,
+        recovery_count, original, recovery, kShardBytes,
+        "GF16 K79/R32 parity differs from oracle");
+    leo2_codec_destroy(gf16_codec);
 }
 
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
@@ -1153,35 +1318,35 @@ void ExerciseK66R16TailBasis(leo2_context* context)
         "low-profile K66/R16 parity differs from direct oracle");
     leo2_codec_destroy(low_codec);
 
-#ifdef LEO_HAS_FF16
     leo2_codec* gf16_codec = NULL;
-    RequireResult(leo2_codec_create(context, original_count, recovery_count,
-        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL, &gf16_codec),
-        LEO2_SUCCESS, "create GF16 K66/R16 exclusion codec");
-    size_t gf16_scratch_bytes = 0;
-    RequireResult(leo2_encode_scratch_size(gf16_codec, kShardBytes,
-        &gf16_scratch_bytes), LEO2_SUCCESS,
-        "query GF16 K66/R16 exclusion scratch");
-    AlignedBuffer gf16_scratch(gf16_scratch_bytes);
-    const leopard2_test::BinaryField gf16 =
-        leopard2_test::make_legacy_gf16();
-    const leopard2_test::Matrix gf16_generator =
-        leopard2_test::direct_systematic_generator(gf16, layout);
-    std::memset(output.bytes(), 0xa5, output.size());
-    leopard::ff8::TestOnlyResetHighEncodeCounts();
-    RequireResult(leo2_encode(gf16_codec, kShardBytes,
-        &original[0], &recovery[0],
-        gf16_scratch.data(), gf16_scratch.size()), LEO2_SUCCESS,
-        "execute GF16 K66/R16 exclusion");
-    RequireTerminalCalls(0,
-        "GF16 K66/R16 entered the GF8 packed terminal");
-    Require(leopard::ff8::TestOnlyGetHighEncodeCounts().tail_column_calls == 0,
-        "GF16 K66/R16 entered the GF8 tail leaf");
-    CheckVariableParityGF16(gf16, gf16_generator, original_count,
-        recovery_count, original, recovery, kShardBytes,
-        "GF16 K66/R16 parity differs from direct oracle");
-    leo2_codec_destroy(gf16_codec);
-#endif
+    if (CreateOptionalGF16Codec(context, original_count, recovery_count,
+            &gf16_codec, "create GF16 K66/R16 exclusion codec"))
+    {
+        size_t gf16_scratch_bytes = 0;
+        RequireResult(leo2_encode_scratch_size(gf16_codec, kShardBytes,
+            &gf16_scratch_bytes), LEO2_SUCCESS,
+            "query GF16 K66/R16 exclusion scratch");
+        AlignedBuffer gf16_scratch(gf16_scratch_bytes);
+        const leopard2_test::BinaryField gf16 =
+            leopard2_test::make_legacy_gf16();
+        const leopard2_test::Matrix gf16_generator =
+            leopard2_test::direct_systematic_generator(gf16, layout);
+        std::memset(output.bytes(), 0xa5, output.size());
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode(gf16_codec, kShardBytes,
+            &original[0], &recovery[0],
+            gf16_scratch.data(), gf16_scratch.size()), LEO2_SUCCESS,
+            "execute GF16 K66/R16 exclusion");
+        RequireTerminalCalls(0,
+            "GF16 K66/R16 entered the GF8 packed terminal");
+        Require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    tail_column_calls == 0,
+            "GF16 K66/R16 entered the GF8 tail leaf");
+        CheckVariableParityGF16(gf16, gf16_generator, original_count,
+            recovery_count, original, recovery, kShardBytes,
+            "GF16 K66/R16 parity differs from direct oracle");
+        leo2_codec_destroy(gf16_codec);
+    }
 
     std::vector<uint8_t> detached(kShardBytes);
     std::memcpy(&detached[0], original[65], kShardBytes);
@@ -1707,6 +1872,7 @@ void ExerciseBackendRoute(leo2_backend requested_backend)
     ExerciseBackendShape(context, 66, 16);
 #endif
     ExerciseBackendShape(context, 62, 32);
+    ExerciseBackendShape(context, 79, 32);
     ExerciseBackendShape(context, 62, 33);
     leo2_context_destroy(context);
 }
@@ -1766,6 +1932,7 @@ int main()
         ExerciseExcludedShape(context, 62, 8);
 #endif
         ExerciseK62MatureScope(context);
+        ExerciseK79ProfileFieldExclusions(context);
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
         ExerciseSelectedPackedShape(context, 65, 9);
         ExerciseK65R9TailBasis(context);
@@ -1781,12 +1948,14 @@ int main()
         ExerciseSelectedPackedShape(context, 33, 31);
         ExerciseSelectedPackedShape(context, 62, 31);
         // Every K changes the ragged inverse-transform suffix.  Sweep the
-        // complete T32 and T64 boundary bands rather than sampling endpoints.
-        for (unsigned original_count = 33; original_count <= 64;
+        // complete two- and three-block T32/R32 band, and retain the one-block
+        // T64/R33 sweep separately.
+        for (unsigned original_count = 33; original_count <= 96;
              ++original_count)
         {
             ExerciseSelectedPackedShape(context, original_count, 32);
-            ExerciseSelectedPackedShape(context, original_count, 33);
+            if (original_count <= 64)
+                ExerciseSelectedPackedShape(context, original_count, 33);
         }
         ExerciseSelectedPackedShape(context, 33, 34);
         ExerciseSelectedPackedShape(context, 62, 34);
@@ -1806,7 +1975,9 @@ int main()
         ExerciseExcludedShape(context, 16, 15);
         ExerciseExcludedShape(context, 31, 32);
         ExerciseExcludedShape(context, 32, 31);
-        ExerciseExcludedShape(context, 65, 32);
+        ExerciseExcludedShape(context, 79, 31);
+        ExerciseExcludedShape(context, 79, 33);
+        ExerciseExcludedShape(context, 97, 32);
         ExerciseExcludedShape(context, 32, 33);
         ExerciseExcludedShape(context, 65, 33);
         ExerciseExcludedShape(context, 65, 34);

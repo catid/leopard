@@ -268,7 +268,7 @@
 #endif
 
 /* Same-text attribution control for the packed K=33..64/B=64 high-rate
-   terminal families at T=16, T=32, and T=64. */
+   terminal families at T=16, T=32, and T=64, plus K=65..96/R=32 at T=32. */
 #ifndef LEO2_DIAGNOSTIC_DISABLE_T32_B64_PACKED_TERMINAL
 #define LEO2_DIAGNOSTIC_DISABLE_T32_B64_PACKED_TERMINAL 0
 #endif
@@ -18567,20 +18567,22 @@ static LEO_FORCE_INLINE bool IsGF8AVX2K33PlusB64PackedTerminalEligible(
     uint64_t shard_bytes)
 {
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
-    static constexpr uint32_t kMaximumOriginalCount = 65;
+    static constexpr uint32_t kMaximumT16OriginalCount = 65;
 #else
-    static constexpr uint32_t kMaximumOriginalCount = 64;
+    static constexpr uint32_t kMaximumT16OriginalCount = 64;
 #endif
     if (!codec || shard_bytes != 64 || codec->original_count < 33 ||
-        codec->original_count > kMaximumOriginalCount)
+        codec->original_count > 96)
         return false;
     const bool t16_shape =
+        codec->original_count <= kMaximumT16OriginalCount &&
         codec->recovery_count >= 9 && codec->recovery_count <= 16 &&
         codec->padded_side == 16;
     const bool t32_shape =
-        codec->original_count <= 64 &&
+        codec->original_count <= 96 &&
         codec->recovery_count >= 17 && codec->recovery_count <= 32 &&
-        codec->padded_side == 32;
+        codec->padded_side == 32 &&
+        (codec->original_count <= 64 || codec->recovery_count == 32);
     const bool t64_shape =
         codec->original_count <= 64 &&
         codec->recovery_count >= 33 && codec->recovery_count <= 64 &&
@@ -18969,7 +18971,8 @@ static void ExecuteGF8AVX2K66R16B64PackedTerminal(
 
 /*
     The public B=64 high-rate bands cover two to four T=16 message blocks,
-    one to two T=32 blocks, or one shortened T=64 block.  The fused T16 build
+    one to two T=32 blocks, the exact three-block K=65..96/R=32 band, or one
+    shortened T=64 block.  The fused T16 build
     extends its exact packed band through K=65 and exact K=66/R=16.  Their
     arithmetic is already the mature high-rate transform.  This terminal
     changes only the public boundary: a packed slab is proven with aggregate
