@@ -1417,6 +1417,22 @@ static const Ops ScalarOps = {
     , NULL
 };
 
+#if defined(__ELF__) && defined(__GNUC__) && !defined(__clang__)
+// Table construction is setup-only and always linked with Leopard2.  Keep its
+// relatively large failure-atomic control flow behind the page-aligned codec
+// terminals so adding a small hot dispatch leaf does not displace them.
+#define LEO2_SCALAR_INITIALIZER_SECTION \
+    __attribute__((noinline, noipa, \
+        section(".leo2_z_cold_scalar_init"), aligned(64)))
+#elif defined(__ELF__) && defined(__clang__)
+#define LEO2_SCALAR_INITIALIZER_SECTION \
+    __attribute__((noinline, \
+        section(".leo2_z_cold_scalar_init"), aligned(64)))
+#else
+#define LEO2_SCALAR_INITIALIZER_SECTION
+#endif
+
+LEO2_SCALAR_INITIALIZER_SECTION
 const Ops* InitializeScalar(const InitializeArgs& args)
 {
 #ifdef LEO_HAS_FF8
@@ -1489,6 +1505,8 @@ const Ops* InitializeScalar(const InitializeArgs& args)
 #endif
     return &ScalarOps;
 }
+
+#undef LEO2_SCALAR_INITIALIZER_SECTION
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
 void TestGetScalarTableState(TestBackendState* state)

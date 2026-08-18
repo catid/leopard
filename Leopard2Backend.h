@@ -402,8 +402,9 @@ void AVX2FF8HighEncodeK8R8T8B1024(
     const void* const* data,
     void* const* work);
 
-#if defined(LEO2_HAVE_AVX2_BACKEND) && \
-    defined(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING)
+#if !defined(NO_LEO_HAS_FF8) && defined(LEO2_HAVE_AVX2_BACKEND) && \
+    LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && \
+    !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
 /* Exact K=12/R=8 companion with four active rows in the second T=8 block. */
 void AVX2FF8HighEncodeK12R8T8(
     const void* const* data,
@@ -423,6 +424,13 @@ void AVX2FF8HighEncodeK13R8T8(
     const uint8_t* forward_skew,
     uint16_t combined_tail_log,
     uint64_t byte_count);
+
+/* Exact packed K=62/R=T=8/B=64 multi-block circuit. */
+bool AVX2FF8HighEncodeK62R8T8B64Fused(
+    const void* const* data,
+    void* const* recovery,
+    const uint8_t* first_inverse_skew,
+    const uint8_t* forward_skew);
 #endif
 
 /*
@@ -809,7 +817,8 @@ void AVX2FF8HighEncodeT2K4Packed(
     const void* const* data,
     void* const* recovery,
     uint64_t byte_count);
-#if defined(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING)
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && \
+    !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
 /*
     Exact packed legacy-high K=10..11/R=5..8/B=256 tail-column circuit.  The
     first eight sources use the regular T=8 inverse/forward transform and the

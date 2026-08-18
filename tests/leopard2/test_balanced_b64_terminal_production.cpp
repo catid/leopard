@@ -443,8 +443,13 @@ void ExerciseProductionPackedSide(
     Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
         "rejected packed production overlap modified output");
 
+    const bool aggregate_overlap_shape =
+        (original_count == 62 && side == 8)
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
-    if (original_count == 65 && side == 9)
+        || (original_count == 65 && side == 9)
+#endif
+        ;
+    if (aggregate_overlap_shape)
     {
         std::vector<void*> packed_overlap(side);
         for (unsigned i = 0; i < side; ++i)
@@ -455,22 +460,22 @@ void ExerciseProductionPackedSide(
         RequireResult(leo2_encode(codec, kShardBytes,
             &original[0], &packed_overlap[0], scratch.data(), scratch.size()),
             LEO2_OVERLAP,
-            "reject aggregate packed K65/R9 source/output overlap");
+            "reject aggregate packed source/output overlap");
         Require(std::memcmp(input.bytes(), &input_before[0], input.size()) == 0,
-            "aggregate packed K65/R9 overlap modified input");
+            "aggregate packed overlap modified input");
         Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
-            "aggregate packed K65/R9 overlap modified output");
+            "aggregate packed overlap modified output");
 
         Require(input.size() >= scratch.size(),
-            "K65/R9 input allocation cannot cover scratch-overlap probe");
+            "aggregate input allocation cannot cover scratch-overlap probe");
         RequireResult(leo2_encode(codec, kShardBytes,
             &original[0], &recovery[0], input.bytes(), scratch.size()),
             LEO2_OVERLAP,
-            "reject aggregate K65/R9 scratch/data overlap");
+            "reject aggregate scratch/data overlap");
         Require(std::memcmp(input.bytes(), &input_before[0], input.size()) == 0,
-            "aggregate K65/R9 scratch/data overlap modified input");
+            "aggregate scratch/data overlap modified input");
         Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
-            "aggregate K65/R9 scratch/data overlap modified output");
+            "aggregate scratch/data overlap modified output");
 
         AlignedBuffer metadata_scratch(scratch.size());
         const void** const overlapping_original =
@@ -480,9 +485,9 @@ void ExerciseProductionPackedSide(
         RequireResult(leo2_encode(codec, kShardBytes,
             overlapping_original, &recovery[0], metadata_scratch.data(),
             metadata_scratch.size()), LEO2_OVERLAP,
-            "reject aggregate K65/R9 scratch/pointer-array overlap");
+            "reject aggregate scratch/pointer-array overlap");
         Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
-            "aggregate K65/R9 pointer overlap modified output");
+            "aggregate pointer overlap modified output");
 
         AlignedBuffer batch_scratch(scratch.size());
         leo2_encode_batch_item* const overlapping_item =
@@ -494,11 +499,10 @@ void ExerciseProductionPackedSide(
         overlapping_item->scratch_bytes = batch_scratch.size();
         RequireResult(leo2_encode_batch(codec, overlapping_item, 1),
             LEO2_OVERLAP,
-            "reject aggregate K65/R9 scratch/batch-descriptor overlap");
+            "reject aggregate scratch/batch-descriptor overlap");
         Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
-            "aggregate K65/R9 batch overlap modified output");
+            "aggregate batch overlap modified output");
     }
-#endif
     leo2_codec_destroy(codec);
 }
 
@@ -901,6 +905,7 @@ int main()
             "create production AVX2 context");
         ExerciseProduction(context);
         ExerciseProductionPackedSide(context, 16, 16);
+        ExerciseProductionPackedSide(context, 62, 8);
         // Exercise both three- and four-block T16 endpoints in the ordinary
         // production archive.  The diagnostic test performs the bounded
         // all-K sweep; these cases retain guard, scratch, batch, overlap, and

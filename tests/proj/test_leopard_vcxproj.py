@@ -28,7 +28,7 @@ BENCHMARK_ATTESTATION_MODULE = \
 BENCHMARK_ATTESTATION_GENERATOR = \
     ROOT / "cmake" / "GenerateBenchmarkSourceAttestation.cmake"
 BENCHMARK_ATTESTATION_MODULE_SHA256 = \
-    "55fbc86d8ff32430be0d254f8911a1aff69117f9ed2c52ff728f9ebef15151b2"
+    "c09359d9fcc36d59ec2a2773a77283deddc4e4126b4fd3bc0515efc68ef21de2"
 BENCHMARK_ATTESTATION_GENERATOR_SHA256 = \
     "21857083921f70d62f44f0d5327d88e375f845906ab97493dbbdecfe3e07a389"
 NS = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
@@ -49,6 +49,7 @@ AVX2_SOURCE_FILES = {
     "Leopard2BackendAVX2T8K8B1024.cpp",
     "Leopard2BackendAVX2T16B64.cpp",
     "Leopard2BackendAVX2T16Q2.cpp",
+    "Leopard2BackendAVX2T8K62.cpp",
     "Leopard2BackendAVX2T32B256.cpp",
     "Leopard2BackendAVX2Xor.cpp",
     "Leopard2LowP32B64AVX2.cpp",
@@ -743,6 +744,8 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING="
             "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>")),
         ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1")),
+        ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1")),
         ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1")),
@@ -1013,8 +1016,8 @@ class CMakeProductionGraph(object):
             "path", "ON")): 1,
         ("option", (
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING",
-            "Enable the promoted two-message-block AVX2 T=8 binding fast "
-            "path", "ON")): 1,
+            "Enable the promoted multi-block AVX2 T=8 binding fast paths",
+            "ON")): 1,
         ("option", (
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
             "Enable the promoted exact GF8/AVX2 K=R=T=32,B=256 encoder "
@@ -1346,8 +1349,8 @@ class CMakeProductionGraph(object):
             "path", "ON"))),
         ("trusted", ("option", (
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING",
-            "Enable the promoted two-message-block AVX2 T=8 binding fast "
-            "path", "ON"))),
+            "Enable the promoted multi-block AVX2 T=8 binding fast paths",
+            "ON"))),
         ("trusted", ("option", (
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
             "Enable the promoted exact GF8/AVX2 K=R=T=32,B=256 encoder "
@@ -1450,6 +1453,8 @@ class CMakeProductionGraph(object):
             "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>",
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING="
             "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>"))),
+        ("mutation", ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1"))),
         ("source-mutation", (
             "set_property", _small_dual_feature_source_property)),
         ("source-mutation", (
@@ -1664,10 +1669,32 @@ class CMakeProductionGraph(object):
         ("sparse-sidecar", (
             "add_custom_command", _sparse_sidecar_post_build)),
         ("test-enablement", ()),
+        ("test-hook-definition", (
+            "leopard_test_hooks", "target_compile_definitions", (
+                "PRIVATE", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1"))),
+        ("balanced-test-definition", (
+            "leopard2_balanced_b64_terminal_test",
+            "target_compile_definitions", (
+                "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1",
+                "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING="
+                "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>"))),
+        ("balanced-test-definition", (
+            "leopard2_balanced_b64_terminal_test",
+            "target_compile_definitions", (
+                "PRIVATE", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1"))),
         ("balanced-test-definition", (
             "leopard2_balanced_b64_terminal_test",
             "target_compile_definitions", (
                 "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1"))),
+        ("balanced-test-definition", (
+            "leopard2_balanced_b64_terminal_production_test",
+            "target_compile_definitions", (
+                "PRIVATE", "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING="
+                "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>"))),
+        ("balanced-test-definition", (
+            "leopard2_balanced_b64_terminal_production_test",
+            "target_compile_definitions", (
+                "PRIVATE", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1"))),
         ("balanced-test-definition", (
             "leopard2_balanced_b64_terminal_production_test",
             "target_compile_definitions", (
@@ -1730,6 +1757,27 @@ class CMakeProductionGraph(object):
         "leopard2_backend_avx2_fuzz", "target_compile_definitions", (
             "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1",
             "LEO2_HAVE_AVX2_BACKEND=1"))
+    _required_test_hook_t8_diagnostic_definitions = Counter({
+        ("leopard_test_hooks", "target_compile_definitions", (
+            "PRIVATE", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1")): 1,
+    })
+    _required_balanced_t8_test_definitions = Counter({
+        ("leopard2_balanced_b64_terminal_test",
+         "target_compile_definitions", (
+             "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1",
+             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING="
+             "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>")): 1,
+        ("leopard2_balanced_b64_terminal_test",
+         "target_compile_definitions", (
+             "PRIVATE", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1")): 1,
+        ("leopard2_balanced_b64_terminal_production_test",
+         "target_compile_definitions", (
+             "PRIVATE", "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING="
+             "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>")): 1,
+        ("leopard2_balanced_b64_terminal_production_test",
+         "target_compile_definitions", (
+             "PRIVATE", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1")): 1,
+    })
     _required_balanced_q2_test_definitions = Counter({
         ("leopard2_balanced_b64_terminal_test",
          "target_compile_definitions", (
@@ -1783,6 +1831,8 @@ class CMakeProductionGraph(object):
         self.attachments = {}
         self.target_build_mutations = []
         self.avx2_fuzz_backend_definition_count = 0
+        self.test_hook_t8_diagnostic_definition_counts = Counter()
+        self.balanced_t8_test_definition_counts = Counter()
         self.balanced_q2_test_definition_counts = Counter()
         self.directory_build_mutation_counts = Counter()
         self.trusted_command_counts = Counter()
@@ -1934,6 +1984,56 @@ class CMakeProductionGraph(object):
                 raise ContractError(
                     "AVX2 fuzzer backend compile-definition guard drift")
             self.avx2_fuzz_backend_definition_count += 1
+        is_test_hook_t8_diagnostic_definition = (
+            target == "leopard_test_hooks" and
+            command == "target_compile_definitions" and
+            any(token.split("=", 1)[0] ==
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR"
+                for token in specification))
+        if is_test_hook_t8_diagnostic_definition:
+            if key not in self._required_test_hook_t8_diagnostic_definitions:
+                raise ContractError(
+                    "unapproved test-hook T=8 diagnostic compile definition")
+            expected_guard = bool_and(
+                bool_atom("option:LEO2_BUILD_TESTS"),
+                bool_atom("option:LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR"))
+            if reasons or not self._formula_equivalent(guard, expected_guard):
+                raise ContractError(
+                    "test-hook T=8 diagnostic compile-definition guard drift")
+            self.test_hook_t8_diagnostic_definition_counts[key] += 1
+            self.contract_events.append(("test-hook-definition", key))
+        balanced_t8_targets = {
+            required_key[0]
+            for required_key in self._required_balanced_t8_test_definitions
+        }
+        balanced_t8_macro_names = {
+            "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
+        }
+        is_balanced_t8_definition = (
+            target in balanced_t8_targets and
+            command == "target_compile_definitions" and
+            any(token.split("=", 1)[0] in balanced_t8_macro_names
+                for token in specification))
+        if is_balanced_t8_definition:
+            if key not in self._required_balanced_t8_test_definitions:
+                raise ContractError(
+                    "unapproved balanced T=8 test compile definition")
+            expected_guard = bool_and(
+                bool_atom("option:LEO2_BUILD_TESTS"),
+                bool_atom("option:LEOPARD_ENABLE_GF8"))
+            if any(token.split("=", 1)[0] ==
+                   "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR"
+                   for token in specification):
+                expected_guard = bool_and(
+                    expected_guard,
+                    bool_atom(
+                        "option:LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR"))
+            if reasons or not self._formula_equivalent(guard, expected_guard):
+                raise ContractError(
+                    "balanced T=8 test compile-definition guard drift")
+            self.balanced_t8_test_definition_counts[key] += 1
+            self.contract_events.append(("balanced-test-definition", key))
         balanced_q2_targets = {
             required_key[0]
             for required_key in self._required_balanced_q2_test_definitions
@@ -2496,6 +2596,9 @@ class CMakeProductionGraph(object):
             ("leopard", (
                 "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1")):
                 "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
+            ("leopard", (
+                "PRIVATE", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1")):
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
             ("leopard2_backend_avx2", (
                 "PRIVATE", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1")):
                 "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
@@ -3832,6 +3935,32 @@ class CMakeProductionGraph(object):
             raise ContractError(
                 "missing or duplicate exact AVX2 fuzzer backend "
                 "compile definition")
+        if (self.require_mutation_contract and
+                self.test_hook_t8_diagnostic_definition_counts !=
+                self._required_test_hook_t8_diagnostic_definitions):
+            missing = (
+                self._required_test_hook_t8_diagnostic_definitions -
+                self.test_hook_t8_diagnostic_definition_counts)
+            extra = (
+                self.test_hook_t8_diagnostic_definition_counts -
+                self._required_test_hook_t8_diagnostic_definitions)
+            raise ContractError(
+                "missing or duplicate test-hook T=8 diagnostic compile "
+                "definition: missing=" +
+                repr(sorted(missing.elements(), key=repr)) + " extra=" +
+                repr(sorted(extra.elements(), key=repr)))
+        if (self.require_mutation_contract and
+                self.balanced_t8_test_definition_counts !=
+                self._required_balanced_t8_test_definitions):
+            missing = (self._required_balanced_t8_test_definitions -
+                       self.balanced_t8_test_definition_counts)
+            extra = (self.balanced_t8_test_definition_counts -
+                     self._required_balanced_t8_test_definitions)
+            raise ContractError(
+                "missing or duplicate balanced T=8 test compile "
+                "definition: missing=" +
+                repr(sorted(missing.elements(), key=repr)) + " extra=" +
+                repr(sorted(extra.elements(), key=repr)))
         if (self.require_mutation_contract and
                 self.balanced_q2_test_definition_counts !=
                 self._required_balanced_q2_test_definitions):
@@ -7391,6 +7520,200 @@ endif()'''
                 with self.assertRaisesRegex(
                         ContractError,
                         "balanced T16/Q2 test compile-definition guard drift"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+    def test_target_wide_t8_diagnostic_definitions_are_exact_and_required(self):
+        blocks = (
+            ("""if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+    target_compile_definitions(leopard PRIVATE
+        LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1)
+endif()""",
+             "missing or duplicate production target mutation",
+             "production target mutation guard drift|missing or duplicate "
+             "production target mutation"),
+            ("""if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1)
+    endif()""",
+             "missing or duplicate test-hook T=8 diagnostic compile "
+             "definition",
+             "test-hook T=8 diagnostic compile-definition guard drift"),
+        )
+        for block, missing_error, guard_error in blocks:
+            self.assertEqual(1, self.cmake.count(block))
+            command = block.splitlines()[1:-1]
+            command_text = "\n".join(command)
+            mutations = (
+                (self.cmake.replace(command_text, "", 1), missing_error),
+                (self.cmake.replace(
+                    command_text, command_text + "\n" + command_text, 1),
+                 missing_error),
+                (self.cmake.replace(
+                    command_text,
+                    command_text.replace(
+                        "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1",
+                        "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=0"), 1),
+                 "unapproved .*T=8 diagnostic|unapproved production target"),
+            )
+            for text, error in mutations:
+                with self.subTest(target=command[0].strip(), error=error):
+                    self.assertNotEqual(text, self.cmake)
+                    with self.assertRaisesRegex(ContractError, error):
+                        self.resolve_text(
+                            text, require_mutation_contract=True)
+
+            wrong_guard = block.replace(
+                "if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)",
+                "if(TRUE)", 1)
+            text = self.cmake.replace(block, wrong_guard, 1)
+            with self.subTest(target=command[0].strip(), error=guard_error):
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(ContractError, guard_error):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+    def test_k62_sources_and_portable_class_share_the_exact_disable_guard(self):
+        condition = (
+            "LEOPARD_ENABLE_GF8 AND "
+            "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING AND "
+            "NOT LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR")
+        guarded_records = (
+            (
+                "target_sources", "leopard2_backend_avx2",
+                "Leopard2BackendAVX2T8K62.cpp"),
+            (
+                "target_sources", "leopard2_backend_avx2_test_hooks",
+                "Leopard2BackendAVX2T8K62.cpp"),
+            (
+                "list", "LEO2_PORTABLE_ISA_EXPECTED_CLASSES",
+                "avx2_t8_k62"),
+        )
+        self.assertEqual(
+            2, self.cmake.count("Leopard2BackendAVX2T8K62.cpp"))
+        self.assertEqual(1, self.cmake.count("avx2_t8_k62"))
+
+        def normalized_condition(text, command, target, value):
+            if command == "target_sources":
+                body = (
+                    r"target_sources\(\s*" + re.escape(target) +
+                    r"\s+PRIVATE\s+" + re.escape(value) + r"\s*\)")
+            else:
+                body = (
+                    r"list\(\s*APPEND\s+" + re.escape(target) +
+                    r"\s+" + re.escape(value) + r"\s*\)")
+            matches = re.findall(
+                r"if\(([^)]*)\)\s*(?:#[^\n]*\s*)*" + body +
+                r"\s*endif\(\)",
+                text)
+            if len(matches) != 1:
+                raise ContractError(
+                    "missing or duplicate guarded K62 source/class record: " +
+                    target)
+            return " ".join(matches[0].split())
+
+        for command, target, value in guarded_records:
+            self.assertEqual(
+                condition,
+                normalized_condition(
+                    self.cmake, command, target, value),
+                target)
+
+        for command, target, value in guarded_records:
+            if command == "target_sources":
+                record_pattern = (
+                    r"(target_sources\(\s*" + re.escape(target) +
+                    r"\s+PRIVATE\s+)" + re.escape(value))
+            else:
+                record_pattern = (
+                    r"(list\(\s*APPEND\s+" + re.escape(target) +
+                    r"\s+)" + re.escape(value))
+            mutated, count = re.subn(
+                record_pattern, r"\1" + value + "_mutated",
+                self.cmake, count=1)
+            self.assertEqual(1, count)
+            with self.subTest(record=target), self.assertRaisesRegex(
+                    ContractError, "guarded K62 source/class record"):
+                normalized_condition(mutated, command, target, value)
+
+    def test_balanced_t8_test_definitions_are_exact_guarded_and_required(self):
+        feature_commands = (
+            """target_compile_definitions(
+            leopard2_balanced_b64_terminal_test PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)""",
+            """target_compile_definitions(
+            leopard2_balanced_b64_terminal_production_test PRIVATE
+            LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)""",
+        )
+        diagnostic_commands = (
+            """target_compile_definitions(
+                leopard2_balanced_b64_terminal_test PRIVATE
+                LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1)""",
+            """target_compile_definitions(
+                leopard2_balanced_b64_terminal_production_test PRIVATE
+                LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1)""",
+        )
+        for command in feature_commands + diagnostic_commands:
+            self.assertEqual(1, self.cmake.count(command))
+            replacement = (
+                "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=0"
+                if "TWO_BLOCK_BINDING" in command else
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=0")
+            original = (
+                "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING="
+                "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>"
+                if "TWO_BLOCK_BINDING" in command else
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1")
+            mutations = (
+                (self.cmake.replace(command, "", 1),
+                 "missing or duplicate balanced T=8 test compile "
+                 "definition"),
+                (self.cmake.replace(
+                    command, command + "\n" + command, 1),
+                 "missing or duplicate balanced T=8 test compile "
+                 "definition"),
+                (self.cmake.replace(
+                    command, command.replace(original, replacement), 1),
+                 "unapproved balanced T=8 test compile definition"),
+            )
+            for text, error in mutations:
+                with self.subTest(target=command.splitlines()[1].strip(),
+                                  error=error):
+                    self.assertNotEqual(text, self.cmake)
+                    with self.assertRaisesRegex(ContractError, error):
+                        self.resolve_text(
+                            text, require_mutation_contract=True)
+
+        for command in feature_commands:
+            guarded = (
+                "if(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING)\n" +
+                command + "\nendif()")
+            text = self.cmake.replace(command, guarded, 1)
+            with self.subTest(target=command.splitlines()[1].strip(),
+                              error="feature guard"):
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "balanced T=8 test compile-definition guard drift"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+        for command in diagnostic_commands:
+            block = (
+                "if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)\n"
+                "            " + command + "\n        endif()")
+            self.assertEqual(1, self.cmake.count(block))
+            wrong_guard = block.replace(
+                "if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)",
+                "if(TRUE)", 1)
+            text = self.cmake.replace(block, wrong_guard, 1)
+            with self.subTest(target=command.splitlines()[1].strip(),
+                              error="diagnostic guard"):
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "balanced T=8 test compile-definition guard drift"):
                     self.resolve_text(
                         text, require_mutation_contract=True)
 

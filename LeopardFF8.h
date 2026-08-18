@@ -209,6 +209,15 @@ void ReedSolomonEncodeK33To64R9To16T16B64Packed(
     const void* const* data,
     void** work);
 
+// Exact packed K=62/R=T=8/B=64 terminal core selected by Leopard2 after
+// public validation.  The production fused leaf consumes only work[0..7]
+// as recovery rows.  Feature-disabled diagnostic fallback builds also reuse
+// work[8..15] while exercising the mature blockwise implementation.
+bool ReedSolomonEncodeK62R8T8B64Packed(
+    const backend::Ops& ops,
+    const void* const* data,
+    void** work);
+
 /*
     Execute the already-qualified register-light AVX2 T=8 one-block callback
     after reusable public validation has established a dense eight-output
@@ -569,6 +578,7 @@ struct TestOnlyHighEncodeCounts
     uint64_t t8_two_block_b1024_packed_calls;
     uint64_t t8_k7_b1024_direct_calls;
     uint64_t t8_k8_b1024_direct_calls;
+    uint64_t t8_k62_b64_fused_calls;
     uint64_t balanced_b64_packed_calls;
     uint64_t t16_prepared_calls;
     uint64_t final_ifft2_range_calls;
@@ -623,6 +633,7 @@ void TestOnlyRecordT8PackedCall();
 void TestOnlyRecordT8TwoBlockB64PackedCall();
 void TestOnlyRecordT8TwoBlockB256PackedCall();
 void TestOnlyRecordT8TwoBlockB1024PackedCall();
+void TestOnlyRecordT8K62B64FusedCall();
 void TestOnlyRecordBalancedB64PackedCall();
 void TestOnlyRecordT16Q4B64FusedCall(unsigned original_count);
 void TestOnlyRecordT16PreparedCall();

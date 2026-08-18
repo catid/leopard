@@ -242,6 +242,60 @@ void CheckVariableParity(
     }
 }
 
+#ifdef LEO_HAS_FF16
+leopard2_test::Element ReadNativeGF16Symbol(
+    const void* shard,
+    size_t shard_bytes,
+    size_t symbol)
+{
+    const uint8_t* const bytes = static_cast<const uint8_t*>(shard);
+    const size_t total_symbols = shard_bytes / 2U;
+    const size_t tile_symbol = symbol & 31U;
+    const size_t tile_first = symbol - tile_symbol;
+    const size_t tile_symbols =
+        total_symbols - tile_first < 32U
+            ? total_symbols - tile_first : 32U;
+    const size_t tile_byte = tile_first * 2U;
+    return static_cast<leopard2_test::Element>(
+        bytes[tile_byte + tile_symbol] |
+        (static_cast<unsigned>(
+            bytes[tile_byte + tile_symbols + tile_symbol]) << 8));
+}
+
+void CheckVariableParityGF16(
+    const leopard2_test::BinaryField& field,
+    const leopard2_test::Matrix& generator,
+    unsigned original_count,
+    unsigned recovery_count,
+    const std::vector<const void*>& original,
+    const std::vector<void*>& recovery,
+    size_t shard_bytes,
+    const char* message)
+{
+    Require((shard_bytes & 1U) == 0,
+        "native GF16 parity check requires an even byte count");
+    const size_t symbols = shard_bytes / 2U;
+    for (unsigned parity = 0; parity < recovery_count; ++parity)
+    {
+        const std::vector<leopard2_test::Element>& row =
+            generator[original_count + parity];
+        for (size_t symbol = 0; symbol < symbols; ++symbol)
+        {
+            leopard2_test::Element expected = 0;
+            for (unsigned source = 0; source < original_count; ++source)
+            {
+                expected = field.add(expected, field.multiply(row[source],
+                    ReadNativeGF16Symbol(
+                        original[source], shard_bytes, symbol)));
+            }
+            Require(ReadNativeGF16Symbol(
+                    recovery[parity], shard_bytes, symbol) == expected,
+                message);
+        }
+    }
+}
+#endif
+
 void CheckLegacyParity(
     unsigned original_count,
     unsigned recovery_count,
@@ -309,10 +363,14 @@ void ExerciseSelectedPackedShape(
     RequireResult(leo2_encode(codec, kShardBytes, &original[0], &recovery[0],
         scratch.data(), scratch.size()), LEO2_SUCCESS,
         "execute selected balanced terminal");
-    RequireTerminalCalls(1,
-        "selected shape missed the packed terminal");
+    const bool k62_fused_shape = original_count == 62 && side == 8;
+    RequireTerminalCalls(k62_fused_shape ? 0U : 1U,
+        "selected shape used the wrong public terminal route");
     const leopard::ff8::TestOnlyHighEncodeCounts one_shot_counts =
         leopard::ff8::TestOnlyGetHighEncodeCounts();
+    Require(one_shot_counts.t8_k62_b64_fused_calls ==
+            (k62_fused_shape ? 1U : 0U),
+        "selected one-shot K62/R8 fused-leaf attribution is wrong");
     if (side >= 9 && side <= 16)
     {
         Require(one_shot_counts.tail_column_calls ==
@@ -322,10 +380,12 @@ void ExerciseSelectedPackedShape(
     CheckVariableParity(field, generator, original_count, side,
         original, recovery, kShardBytes,
         "selected packed parity differs from direct oracle");
-    const bool legacy_boundary = (side == 9 || side == 16) &&
-        (original_count == 33 || original_count == 48 ||
-         original_count == 49 || original_count == 64 ||
-         original_count == 65);
+    const bool legacy_boundary =
+        (original_count == 62 && side == 8) ||
+        ((side == 9 || side == 16) &&
+         (original_count == 33 || original_count == 48 ||
+          original_count == 49 || original_count == 64 ||
+          original_count == 65));
     if (legacy_boundary)
     {
         CheckLegacyParity(original_count, side, original, recovery,
@@ -341,10 +401,13 @@ void ExerciseSelectedPackedShape(
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
         "execute selected balanced one-item batch terminal");
-    RequireTerminalCalls(1,
-        "selected batch missed the packed terminal");
+    RequireTerminalCalls(k62_fused_shape ? 0U : 1U,
+        "selected batch used the wrong public terminal route");
     const leopard::ff8::TestOnlyHighEncodeCounts batch_counts =
         leopard::ff8::TestOnlyGetHighEncodeCounts();
+    Require(batch_counts.t8_k62_b64_fused_calls ==
+            (k62_fused_shape ? 1U : 0U),
+        "selected batch K62/R8 fused-leaf attribution is wrong");
     if (side >= 9 && side <= 16)
     {
         Require(batch_counts.tail_column_calls ==
@@ -355,8 +418,35 @@ void ExerciseSelectedPackedShape(
         original, recovery, kShardBytes,
         "selected packed batch parity differs from oracle");
 
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && \
+    !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+    if (original_count == 62 && side == 9)
+    {
+        Require(leopard2_internal::
+                SetK62R8B64FusedEnabledForDiagnostics(false),
+            "disable only the K62/R8 fused arithmetic leaf");
+        std::memset(output.bytes(), 0xa5,
+            static_cast<size_t>(side) * kShardBytes);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode(codec, kShardBytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size()),
+            LEO2_SUCCESS, "execute R9 with the K62/R8 selector disabled");
+        RequireTerminalCalls(1,
+            "K62/R8-only selector disabled the adjacent R9 terminal");
+        Require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    t8_k62_b64_fused_calls == 0,
+            "adjacent R9 encode entered the K62/R8 fused leaf");
+        CheckVariableParity(field, generator, original_count, side,
+            original, recovery, kShardBytes,
+            "K62/R8-only selector changed adjacent R9 parity");
+        Require(leopard2_internal::
+                SetK62R8B64FusedEnabledForDiagnostics(true),
+            "restore the K62/R8 fused arithmetic leaf");
+    }
+#endif
+
     if (original_count == 62 &&
-        (side == 16 || side == 32 || side == 33))
+        (side == 8 || side == 16 || side == 32 || side == 33))
     {
         RequireResult(leo2_test_codec_set_encode_mode(
             codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM), LEO2_SUCCESS,
@@ -486,11 +576,14 @@ void ExerciseSelectedPackedShape(
     }
 
     if ((original_count == 62 || original_count == 65) &&
-        side >= 9 && side <= 64)
+        side >= 8 && side <= 64)
     {
-        Require(leopard2_internal::
-                SetBalancedB64TerminalEnabledForDiagnostics(false),
-            "disable the K62 packed terminal");
+        Require(k62_fused_shape
+                ? leopard2_internal::
+                    SetK62R8B64FusedEnabledForDiagnostics(false)
+                : leopard2_internal::
+                    SetBalancedB64TerminalEnabledForDiagnostics(false),
+            "disable the selected K62/K65 arithmetic route");
         std::memset(output.bytes(), 0xa5,
             static_cast<size_t>(side) * kShardBytes);
         leopard::ff8::TestOnlyResetHighEncodeCounts();
@@ -502,9 +595,12 @@ void ExerciseSelectedPackedShape(
         CheckVariableParity(field, generator, original_count, side,
             original, recovery, kShardBytes,
             "same-binary K62 control differs from oracle");
-        Require(leopard2_internal::
-                SetBalancedB64TerminalEnabledForDiagnostics(true),
-            "restore the K62 packed terminal");
+        Require(k62_fused_shape
+                ? leopard2_internal::
+                    SetK62R8B64FusedEnabledForDiagnostics(true)
+                : leopard2_internal::
+                    SetBalancedB64TerminalEnabledForDiagnostics(true),
+            "restore the selected K62/K65 arithmetic route");
 
         std::memset(output.bytes(), 0xa5,
             static_cast<size_t>(side) * kShardBytes);
@@ -512,8 +608,12 @@ void ExerciseSelectedPackedShape(
         RequireResult(leo2_encode(codec, kShardBytes,
             &original[0], &recovery[0], scratch.data(), scratch.size()),
             LEO2_SUCCESS, "reexecute restored K62 terminal");
-        RequireTerminalCalls(1,
-            "restored K62 route missed the packed terminal");
+        RequireTerminalCalls(k62_fused_shape ? 0U : 1U,
+            "restored K62 route used the wrong public terminal");
+        Require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    t8_k62_b64_fused_calls ==
+                (k62_fused_shape ? 1U : 0U),
+            "restored K62 route used the wrong fused arithmetic leaf");
         CheckVariableParity(field, generator, original_count, side,
             original, recovery, kShardBytes,
             "restored K62 terminal differs from oracle");
@@ -544,7 +644,296 @@ void ExerciseSelectedPackedShape(
                 "T16 basis parity differs from direct oracle");
         }
     }
+
+    if (original_count == 62 && side == 8)
+    {
+        /* Exercise every systematic generator column at both AVX2 slices.
+           This includes all six live rows in the shortened final block. */
+        for (unsigned source = 0; source < original_count; ++source)
+        {
+            std::memset(input.bytes(), 0,
+                static_cast<size_t>(original_count) * kShardBytes);
+            std::memset(output.bytes(), 0xa5,
+                static_cast<size_t>(side) * kShardBytes);
+            input.bytes()[static_cast<size_t>(source) * kShardBytes] = 1;
+            input.bytes()[static_cast<size_t>(source) * kShardBytes + 63] =
+                0xa7;
+            leopard::ff8::TestOnlyResetHighEncodeCounts();
+            RequireResult(leo2_encode(codec, kShardBytes,
+                &original[0], &recovery[0], scratch.data(), scratch.size()),
+                LEO2_SUCCESS, "execute K62/R8 systematic basis message");
+            RequireTerminalCalls(0,
+                "K62/R8 basis message entered a public packed terminal");
+            const leopard::ff8::TestOnlyHighEncodeCounts basis_counts =
+                leopard::ff8::TestOnlyGetHighEncodeCounts();
+            Require(basis_counts.t8_k62_b64_fused_calls == 1,
+                "K62/R8 basis message missed the fused leaf");
+            CheckVariableParity(field, generator, original_count, side,
+                original, recovery, kShardBytes,
+                "K62/R8 basis parity differs from direct oracle");
+        }
+    }
+
+    if (original_count == 62 && side == 8)
+    {
+        FillVariableInput(input.bytes(), original_count, kShardBytes,
+            UINT64_C(0x4b36324445544143));
+        std::vector<uint8_t> detached(kShardBytes);
+        std::memcpy(&detached[0], original[61], kShardBytes);
+        original[61] = &detached[0];
+        std::memset(output.bytes(), 0xa5,
+            static_cast<size_t>(side) * kShardBytes);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode(codec, kShardBytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size()),
+            LEO2_SUCCESS, "execute detached K62/R8 fallback");
+        RequireTerminalCalls(0,
+            "detached K62/R8 source entered the packed terminal");
+        CheckVariableParity(field, generator, original_count, side,
+            original, recovery, kShardBytes,
+            "detached K62/R8 parity differs from direct oracle");
+        original[61] = input.bytes() + 61U * kShardBytes;
+
+        void* const saved_recovery = recovery[7];
+        recovery[7] = NULL;
+        std::memset(output.bytes(), 0xa5,
+            static_cast<size_t>(side) * kShardBytes);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode(codec, kShardBytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size()),
+            LEO2_SUCCESS, "execute sparse-output K62/R8 fallback");
+        RequireTerminalCalls(0,
+            "sparse-output K62/R8 entered the packed terminal");
+        CheckVariableParity(field, generator, original_count, side - 1U,
+            original, recovery, kShardBytes,
+            "sparse-output K62/R8 parity differs from direct oracle");
+        recovery[7] = saved_recovery;
+
+        const size_t byte_neighbors[] = { 63U, 65U };
+        for (size_t neighbor_index = 0;
+             neighbor_index < sizeof(byte_neighbors) /
+                 sizeof(byte_neighbors[0]); ++neighbor_index)
+        {
+            const size_t neighbor_bytes = byte_neighbors[neighbor_index];
+            size_t neighbor_scratch_bytes = 0;
+            RequireResult(leo2_encode_scratch_size(codec, neighbor_bytes,
+                &neighbor_scratch_bytes), LEO2_SUCCESS,
+                "query K62/R8 neighboring-byte scratch");
+            AlignedBuffer neighbor_scratch(neighbor_scratch_bytes);
+            AlignedBuffer neighbor_input(
+                static_cast<size_t>(original_count) * neighbor_bytes);
+            AlignedBuffer neighbor_output(
+                static_cast<size_t>(side) * neighbor_bytes);
+            FillVariableInput(neighbor_input.bytes(), original_count,
+                neighbor_bytes, UINT64_C(0x4b363252384e4549));
+            std::vector<const void*> neighbor_original;
+            std::vector<void*> neighbor_recovery;
+            SetVariablePackedPointers(neighbor_input.bytes(),
+                neighbor_output.bytes(), original_count, side,
+                neighbor_bytes, neighbor_original, neighbor_recovery);
+            leopard::ff8::TestOnlyResetHighEncodeCounts();
+            RequireResult(leo2_encode(codec, neighbor_bytes,
+                &neighbor_original[0], &neighbor_recovery[0],
+                neighbor_scratch.data(), neighbor_scratch.size()),
+                LEO2_SUCCESS,
+                "execute K62/R8 neighboring-byte mature path");
+            RequireTerminalCalls(0,
+                "neighboring byte count entered the K62/R8 terminal");
+            CheckVariableParity(field, generator, original_count, side,
+                neighbor_original, neighbor_recovery, neighbor_bytes,
+                "K62/R8 neighboring-byte parity differs from oracle");
+        }
+    }
     leo2_codec_destroy(codec);
+}
+
+void ExerciseK62MatureScope(leo2_context* context)
+{
+    static const unsigned original_count = 62;
+    static const unsigned recovery_count = 8;
+    static const size_t batch_count = 2;
+
+    leo2_codec* codec = NULL;
+    RequireResult(leo2_codec_create(context, original_count, recovery_count,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+        LEO2_SUCCESS, "create K62/R8 mature-scope codec");
+    size_t scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(codec, kShardBytes,
+        &scratch_bytes), LEO2_SUCCESS,
+        "query K62/R8 mature-scope scratch");
+    AlignedBuffer input0(
+        static_cast<size_t>(original_count) * kShardBytes);
+    AlignedBuffer input1(
+        static_cast<size_t>(original_count) * kShardBytes);
+    AlignedBuffer output0(
+        static_cast<size_t>(recovery_count) * kShardBytes);
+    AlignedBuffer output1(
+        static_cast<size_t>(recovery_count) * kShardBytes);
+    AlignedBuffer scratch0(scratch_bytes);
+    AlignedBuffer scratch1(scratch_bytes);
+    std::vector<std::vector<const void*> > original(
+        batch_count, std::vector<const void*>(original_count));
+    std::vector<std::vector<void*> > recovery(
+        batch_count, std::vector<void*>(recovery_count));
+    SetVariablePackedPointers(input0.bytes(), output0.bytes(),
+        original_count, recovery_count, kShardBytes,
+        original[0], recovery[0]);
+    SetVariablePackedPointers(input1.bytes(), output1.bytes(),
+        original_count, recovery_count, kShardBytes,
+        original[1], recovery[1]);
+    const leopard2_test::BinaryField field =
+        leopard2_test::make_legacy_gf8();
+    const leopard2_test::ProfileLayout layout =
+        leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh,
+            original_count, recovery_count);
+    const leopard2_test::Matrix generator =
+        leopard2_test::direct_systematic_generator(field, layout);
+    leo2_encode_batch_item items[batch_count] = {
+        { kShardBytes, &original[0][0], &recovery[0][0],
+            scratch0.data(), scratch0.size() },
+        { kShardBytes, &original[1][0], &recovery[1][0],
+            scratch1.data(), scratch1.size() }
+    };
+
+    FillVariableInput(input0.bytes(), original_count, kShardBytes,
+        UINT64_C(0x4b36324d554c5449));
+    FillVariableInput(input1.bytes(), original_count, kShardBytes,
+        UINT64_C(0x4b36324d554c5432));
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode_batch(codec, items, batch_count),
+        LEO2_SUCCESS, "execute K62/R8 multi-item mature batch");
+    leopard::ff8::TestOnlyHighEncodeCounts counts =
+        leopard::ff8::TestOnlyGetHighEncodeCounts();
+    Require(counts.t8_k62_b64_fused_calls == 0,
+        "K62/R8 multi-item batch entered the one-item fused leaf");
+    Require(counts.balanced_b64_packed_calls == 0,
+        "K62/R8 multi-item batch entered the public packed terminal");
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+    {
+        CheckVariableParity(field, generator, original_count,
+            recovery_count, original[item_i], recovery[item_i],
+            kShardBytes,
+            "K62/R8 multi-item mature parity differs from oracle");
+    }
+
+    leo2_encode_batch_binding* binding = NULL;
+    RequireResult(leo2_encode_batch_binding_create(
+        codec, items, batch_count, &binding), LEO2_SUCCESS,
+        "create reusable K62/R8 mature binding");
+    Require(leo2_encode_batch_binding_item_count(binding) == batch_count,
+        "K62/R8 reusable binding lost an item");
+    for (unsigned execution = 0; execution < 2; ++execution)
+    {
+        FillVariableInput(input0.bytes(), original_count, kShardBytes,
+            UINT64_C(0x4b363242494e4430) + execution);
+        FillVariableInput(input1.bytes(), original_count, kShardBytes,
+            UINT64_C(0x4b363242494e4431) + execution);
+        std::memset(output0.bytes(), 0xa5, output0.size());
+        std::memset(output1.bytes(), 0xa5, output1.size());
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode_batch_binding_execute(binding),
+            LEO2_SUCCESS, "execute reusable K62/R8 mature binding");
+        counts = leopard::ff8::TestOnlyGetHighEncodeCounts();
+        Require(counts.t8_k62_b64_fused_calls == 0,
+            "K62/R8 reusable binding entered the one-item fused leaf");
+        Require(counts.balanced_b64_packed_calls == 0,
+            "K62/R8 reusable binding entered the public packed terminal");
+        for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        {
+            CheckVariableParity(field, generator, original_count,
+                recovery_count, original[item_i], recovery[item_i],
+                kShardBytes,
+                "K62/R8 reusable binding parity differs from oracle");
+        }
+    }
+    leo2_encode_batch_binding_destroy(binding);
+
+    /* A non-null but detached recovery row is legal and must retain the
+       mature per-pointer validation path. */
+    std::vector<uint8_t> detached_recovery(kShardBytes, 0xa5);
+    void* const saved_recovery = recovery[0][7];
+    recovery[0][7] = &detached_recovery[0];
+    std::memset(output0.bytes(), 0xa5, output0.size());
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(codec, kShardBytes,
+        &original[0][0], &recovery[0][0], scratch0.data(), scratch0.size()),
+        LEO2_SUCCESS, "execute detached-recovery K62/R8 fallback");
+    counts = leopard::ff8::TestOnlyGetHighEncodeCounts();
+    Require(counts.t8_k62_b64_fused_calls == 0,
+        "detached K62/R8 recovery entered the fused leaf");
+    Require(counts.balanced_b64_packed_calls == 0,
+        "detached K62/R8 recovery entered the packed terminal");
+    CheckVariableParity(field, generator, original_count, recovery_count,
+        original[0], recovery[0], kShardBytes,
+        "detached K62/R8 recovery parity differs from oracle");
+    recovery[0][7] = saved_recovery;
+    leo2_codec_destroy(codec);
+
+    leo2_codec* low_codec = NULL;
+    RequireResult(leo2_codec_create(context, original_count, recovery_count,
+        LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, NULL, &low_codec),
+        LEO2_SUCCESS, "create low-profile K62/R8 exclusion codec");
+    size_t low_scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(low_codec, kShardBytes,
+        &low_scratch_bytes), LEO2_SUCCESS,
+        "query low-profile K62/R8 exclusion scratch");
+    AlignedBuffer low_scratch(low_scratch_bytes);
+    const leopard2_test::ProfileLayout low_layout =
+        leopard2_test::make_profile_layout(
+            leopard2_test::kLow, original_count, recovery_count);
+    const leopard2_test::Matrix low_generator =
+        leopard2_test::direct_systematic_generator(field, low_layout);
+    FillVariableInput(input0.bytes(), original_count, kShardBytes,
+        UINT64_C(0x4b36324c4f575052));
+    std::memset(output0.bytes(), 0xa5, output0.size());
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(low_codec, kShardBytes,
+        &original[0][0], &recovery[0][0],
+        low_scratch.data(), low_scratch.size()), LEO2_SUCCESS,
+        "execute low-profile K62/R8 exclusion");
+    counts = leopard::ff8::TestOnlyGetHighEncodeCounts();
+    Require(counts.t8_k62_b64_fused_calls == 0,
+        "low-profile K62/R8 entered the legacy-high fused leaf");
+    Require(counts.balanced_b64_packed_calls == 0,
+        "low-profile K62/R8 entered the legacy-high packed terminal");
+    CheckVariableParity(field, low_generator, original_count,
+        recovery_count, original[0], recovery[0], kShardBytes,
+        "low-profile K62/R8 parity differs from oracle");
+    leo2_codec_destroy(low_codec);
+
+#ifdef LEO_HAS_FF16
+    leo2_codec* gf16_codec = NULL;
+    RequireResult(leo2_codec_create(context, original_count, recovery_count,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL, &gf16_codec),
+        LEO2_SUCCESS, "create GF16 K62/R8 exclusion codec");
+    size_t gf16_scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(gf16_codec, kShardBytes,
+        &gf16_scratch_bytes), LEO2_SUCCESS,
+        "query GF16 K62/R8 exclusion scratch");
+    AlignedBuffer gf16_scratch(gf16_scratch_bytes);
+    const leopard2_test::BinaryField gf16 =
+        leopard2_test::make_legacy_gf16();
+    const leopard2_test::Matrix gf16_generator =
+        leopard2_test::direct_systematic_generator(gf16, layout);
+    FillVariableInput(input0.bytes(), original_count, kShardBytes,
+        UINT64_C(0x4b36324746313650));
+    std::memset(output0.bytes(), 0xa5, output0.size());
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(gf16_codec, kShardBytes,
+        &original[0][0], &recovery[0][0],
+        gf16_scratch.data(), gf16_scratch.size()), LEO2_SUCCESS,
+        "execute GF16 K62/R8 exclusion");
+    counts = leopard::ff8::TestOnlyGetHighEncodeCounts();
+    Require(counts.t8_k62_b64_fused_calls == 0,
+        "GF16 K62/R8 entered the GF8 fused leaf");
+    Require(counts.balanced_b64_packed_calls == 0,
+        "GF16 K62/R8 entered the GF8 packed terminal");
+    CheckVariableParityGF16(gf16, gf16_generator, original_count,
+        recovery_count, original[0], recovery[0], kShardBytes,
+        "GF16 K62/R8 parity differs from oracle");
+    leo2_codec_destroy(gf16_codec);
+#endif
 }
 
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
@@ -968,10 +1357,25 @@ void ExerciseBackendShape(
     RequireResult(leo2_encode(codec, kShardBytes,
         &original[0], &recovery[0], scratch.data(), scratch.size()),
         LEO2_SUCCESS, "execute backend-route packed encode");
-    const uint64_t expected_calls =
-        leo2_context_backend(context) == LEO2_BACKEND_AVX2 ? 1U : 0U;
-    RequireTerminalCalls(expected_calls,
+    bool terminal_shape_enabled = true;
+#if !LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING || \
+    defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+    if (original_count == 62 && recovery_count == 8)
+        terminal_shape_enabled = false;
+#endif
+    const bool k62_fused_shape =
+        original_count == 62 && recovery_count == 8;
+    const bool expected_avx2_route =
+        leo2_context_backend(context) == LEO2_BACKEND_AVX2 &&
+        terminal_shape_enabled;
+    RequireTerminalCalls(
+        expected_avx2_route && !k62_fused_shape ? 1U : 0U,
         "packed terminal selection disagrees with effective backend");
+    const leopard::ff8::TestOnlyHighEncodeCounts counts =
+        leopard::ff8::TestOnlyGetHighEncodeCounts();
+    Require(counts.t8_k62_b64_fused_calls ==
+            (expected_avx2_route && k62_fused_shape ? 1U : 0U),
+        "K62/R8 fused-leaf selection disagrees with effective backend");
 
     const leopard2_test::BinaryField field =
         leopard2_test::make_legacy_gf8();
@@ -999,6 +1403,7 @@ void ExerciseBackendRoute(leo2_backend requested_backend)
     RequireResult(context_result, LEO2_SUCCESS,
         "create backend-route K32/R32 context");
     ExerciseBackendShape(context, 32, 32);
+    ExerciseBackendShape(context, 62, 8);
     ExerciseBackendShape(context, 62, 16);
     ExerciseBackendShape(context, 62, 32);
     ExerciseBackendShape(context, 62, 33);
@@ -1050,7 +1455,15 @@ int main()
             ExerciseSelectedPackedShape(context, original_count, 16);
         }
         ExerciseSelectedPackedShape(context, 33, 9);
+        ExerciseSelectedPackedShape(context, 62, 9);
         ExerciseSelectedPackedShape(context, 64, 9);
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && \
+    !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+        ExerciseSelectedPackedShape(context, 62, 8);
+#else
+        ExerciseExcludedShape(context, 62, 8);
+#endif
+        ExerciseK62MatureScope(context);
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
         ExerciseSelectedPackedShape(context, 65, 9);
         ExerciseK65R9TailBasis(context);
@@ -1092,7 +1505,9 @@ int main()
         ExerciseExcludedShape(context, 32, 33);
         ExerciseExcludedShape(context, 65, 33);
         ExerciseExcludedShape(context, 65, 34);
-        ExerciseExcludedShape(context, 62, 8);
+        ExerciseExcludedShape(context, 61, 8);
+        ExerciseExcludedShape(context, 63, 8);
+        ExerciseExcludedShape(context, 62, 7);
         ExerciseExcludedShape(context, 66, 16);
         ExerciseExcludedShape(context, 62, 65);
         ExerciseExcludedShape(context, 127, 128);
@@ -1104,6 +1519,8 @@ int main()
         ExerciseBackendRoute(LEO2_BACKEND_AUTO);
         ExerciseBackendRoute(LEO2_BACKEND_SCALAR);
         ExerciseBackendRoute(LEO2_BACKEND_SSSE3);
+        ExerciseBackendRoute(LEO2_BACKEND_AVX512);
+        ExerciseBackendRoute(LEO2_BACKEND_GFNI);
         std::printf("balanced 64-byte packed AVX2 terminal checks passed\n");
         return 0;
     }

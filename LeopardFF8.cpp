@@ -112,6 +112,7 @@ static std::atomic<uint64_t> TestHighT8TwoBlockB256PackedCalls(0);
 static std::atomic<uint64_t> TestHighT8TwoBlockB1024PackedCalls(0);
 static std::atomic<uint64_t> TestHighT8K7B1024DirectCalls(0);
 static std::atomic<uint64_t> TestHighT8K8B1024DirectCalls(0);
+static std::atomic<uint64_t> TestHighT8K62B64FusedCalls(0);
 static std::atomic<uint64_t> TestHighBalancedB64PackedCalls(0);
 static std::atomic<uint64_t> TestHighT16PreparedCalls(0);
 static std::atomic<uint64_t> TestHighFinalIFFT2RangeCalls(0);
@@ -3203,6 +3204,62 @@ ReedSolomonEncodeK33To64R9To16T16B64Packed(
 
 #undef LEO2_T16_B64_CORE_NOINLINE
 
+#if defined(_MSC_VER)
+#define LEO2_T8_K62_B64_CORE_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_T8_K62_B64_CORE_NOINLINE \
+    __attribute__((noinline, \
+        section(".leo2_z_t8_k62_b64_packed_core"), aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_T8_K62_B64_CORE_NOINLINE \
+    __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_T8_K62_B64_CORE_NOINLINE
+#endif
+
+bool LEO2_T8_K62_B64_CORE_NOINLINE
+ReedSolomonEncodeK62R8T8B64Packed(
+    const backend::Ops& ops,
+    const void* const* data,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && \
+    defined(LEO2_HAVE_AVX2_BACKEND) && \
+    !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+    (void)ops;
+    if (!backend::AVX2FF8HighEncodeK62R8T8B64Fused(
+            data, work, FFTSkewStorage + 8, FFTSkewStorage))
+        return false;
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestOnlyRecordT8K62B64FusedCall();
+#endif
+#else
+    const ffe_t* skew = FFTSkewStorage + 8;
+    IFFT_DIT_Encoder(
+        ops, 64, data, 8, work, nullptr, 8, skew,
+        false, EncoderIFFTHigh, true);
+
+    for (unsigned offset = 8; offset <= 48; offset += 8)
+    {
+        skew += 8;
+        IFFT_DIT_Encoder(
+            ops, 64, data + offset, 8, work + 8, work, 8, skew,
+            false, EncoderIFFTHigh, true);
+    }
+
+    skew += 8;
+    IFFT_DIT_Encoder(
+        ops, 64, data + 56, 6, work + 8, work, 8, skew,
+        true, EncoderIFFTHigh, true);
+    FFT_DIT(ops, 64, work, 8, 8, FFTSkewStorage, false);
+#endif
+    return true;
+}
+
+#undef LEO2_T8_K62_B64_CORE_NOINLINE
+
 void ReedSolomonEncodeK33R32B64Packed(
     const backend::Ops& ops,
     const void* const* data,
@@ -3508,8 +3565,16 @@ bool ReedSolomonEncodeT8TailB256(
     TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
     TestHighTailColumnCalls.fetch_add(1, std::memory_order_relaxed);
 #endif
+#if !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
     return backend::TryAVX2FF8HighEncodeT8TailB256Packed(
         data, work, original_count, recovery_count);
+#else
+    (void)data;
+    (void)work;
+    (void)original_count;
+    (void)recovery_count;
+    return false;
+#endif
 }
 
 void ReedSolomonEncodeK12R8T8(
@@ -3520,7 +3585,8 @@ void ReedSolomonEncodeK12R8T8(
 {
     LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
     (void)ops;
-#if defined(LEO2_HAVE_AVX2_BACKEND) && !defined(LEO2_GFNI_VARIANT)
+#if defined(LEO2_HAVE_AVX2_BACKEND) && !defined(LEO2_GFNI_VARIANT) && \
+    !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
 #if defined(LEO2_ENABLE_TEST_HOOKS)
     TestHighIFFTButterfly4OutCalls.fetch_add(4, std::memory_order_relaxed);
     TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
@@ -3543,7 +3609,8 @@ void ReedSolomonEncodeK13R8T8(
 {
     LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
     (void)ops;
-#if defined(LEO2_HAVE_AVX2_BACKEND) && !defined(LEO2_GFNI_VARIANT)
+#if defined(LEO2_HAVE_AVX2_BACKEND) && !defined(LEO2_GFNI_VARIANT) && \
+    !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
 #if defined(LEO2_ENABLE_TEST_HOOKS)
     TestHighIFFTButterfly4OutCalls.fetch_add(4, std::memory_order_relaxed);
     TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
@@ -4642,6 +4709,7 @@ void TestOnlyResetHighEncodeCounts()
     TestHighT8TwoBlockB1024PackedCalls.store(0, std::memory_order_relaxed);
     TestHighT8K7B1024DirectCalls.store(0, std::memory_order_relaxed);
     TestHighT8K8B1024DirectCalls.store(0, std::memory_order_relaxed);
+    TestHighT8K62B64FusedCalls.store(0, std::memory_order_relaxed);
     TestHighBalancedB64PackedCalls.store(0, std::memory_order_relaxed);
     TestHighT16PreparedCalls.store(0, std::memory_order_relaxed);
     TestHighFinalIFFT2RangeCalls.store(0, std::memory_order_relaxed);
@@ -4685,6 +4753,8 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighT8K7B1024DirectCalls.load(std::memory_order_relaxed);
     result.t8_k8_b1024_direct_calls =
         TestHighT8K8B1024DirectCalls.load(std::memory_order_relaxed);
+    result.t8_k62_b64_fused_calls =
+        TestHighT8K62B64FusedCalls.load(std::memory_order_relaxed);
     result.balanced_b64_packed_calls =
         TestHighBalancedB64PackedCalls.load(std::memory_order_relaxed);
     result.t16_prepared_calls =
@@ -4738,6 +4808,11 @@ void TestOnlyRecordT8TwoBlockB1024PackedCall()
 void TestOnlyRecordBalancedB64PackedCall()
 {
     TestHighBalancedB64PackedCalls.fetch_add(1, std::memory_order_relaxed);
+}
+
+void TestOnlyRecordT8K62B64FusedCall()
+{
+    TestHighT8K62B64FusedCalls.fetch_add(1, std::memory_order_relaxed);
 }
 
 void TestOnlyRecordT16Q4B64FusedCall(

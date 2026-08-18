@@ -86,6 +86,9 @@
     <ClCompile Include="..\Leopard2BackendAVX2T16Q2.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\Leopard2BackendAVX2T8K62.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\Leopard2BackendAVX2T32B256.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

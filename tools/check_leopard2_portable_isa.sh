@@ -245,6 +245,7 @@ require_expected_members()
             ssse3) expected_member=Leopard2BackendSSSE3.cpp.o ;;
             avx2) expected_member=Leopard2BackendAVX2.cpp.o ;;
             avx2_t16_q2) expected_member=Leopard2BackendAVX2T16Q2.cpp.o ;;
+            avx2_t8_k62) expected_member=Leopard2BackendAVX2T8K62.cpp.o ;;
             avx2_xor) expected_member=Leopard2BackendAVX2Xor.cpp.o ;;
             avx2_t2_k4) expected_member=Leopard2BackendAVX2T2K4.cpp.o ;;
             avx2_t8_k8_b1024) expected_member=Leopard2BackendAVX2T8K8B1024.cpp.o ;;
@@ -325,6 +326,7 @@ scan_archive()
                 object_class=ssse3 ;;
             Leopard2BackendAVX2.cpp.o|Leopard2BackendAVX2.cpp.obj|\
             Leopard2BackendAVX2T16Q2.cpp.o|Leopard2BackendAVX2T16Q2.cpp.obj|\
+            Leopard2BackendAVX2T8K62.cpp.o|Leopard2BackendAVX2T8K62.cpp.obj|\
             Leopard2BackendAVX2Xor.cpp.o|Leopard2BackendAVX2Xor.cpp.obj|\
             Leopard2BackendAVX2T2K4.cpp.o|Leopard2BackendAVX2T2K4.cpp.obj|\
             Leopard2BackendAVX2T8K8B1024.cpp.o|Leopard2BackendAVX2T8K8B1024.cpp.obj|\
@@ -448,7 +450,7 @@ scan_build_metadata()
         violating_lines="$scratch_root/metadata-violations"
         candidate_lines="$scratch_root/metadata-candidates"
         LC_ALL=C grep -Ein -- "$forbidden_metadata" "$compile_commands" |
-            grep -Ev '(^|[/[:space:]"])(Leopard2Backend(SSSE3|AVX2|AVX2T16Q2|AVX2Xor|AVX2T2K4|AVX2T8K8B1024|AVX2T16B64|AVX2T32B256|AVX512|GFNI)|Leopard2LowP32B64AVX2)[.]cpp([[:space:]",]|$)' > \
+            grep -Ev '(^|[/[:space:]"])(Leopard2Backend(SSSE3|AVX2|AVX2T16Q2|AVX2T8K62|AVX2Xor|AVX2T2K4|AVX2T8K8B1024|AVX2T16B64|AVX2T32B256|AVX512|GFNI)|Leopard2LowP32B64AVX2)[.]cpp([[:space:]",]|$)' > \
                 "$candidate_lines" || true
         : > "$violating_lines"
         while IFS= read -r candidate_line
@@ -482,6 +484,7 @@ scan_build_metadata()
         for avx2_source in \
             Leopard2BackendAVX2.cpp \
             Leopard2BackendAVX2T16Q2.cpp \
+            Leopard2BackendAVX2T8K62.cpp \
             Leopard2BackendAVX2Xor.cpp \
             Leopard2LowP32B64AVX2.cpp
         do
@@ -912,6 +915,26 @@ expect_missing_avx2_t8_k8_b1024_member_rejected()
     fi
 }
 
+expect_missing_avx2_t8_k62_member_rejected()
+{
+    fixture_archive=$(write_classified_archive missing_expected_avx2_t8_k62 \
+        'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0')
+    fixture_log="$scratch_root/missing-avx2-t8-k62-member.log"
+    if scan_archive "$fixture_archive" "$ar_bin" \
+        'avx2,avx2_t8_k62' > "$fixture_log" 2>&1
+    then
+        echo "portable ISA checker self-test: missing AVX2 T8/K62 member was accepted" >&2
+        return 1
+    fi
+    if ! grep -q 'expected exactly one avx2_t8_k62 member, found 0' \
+        "$fixture_log"
+    then
+        cat "$fixture_log" >&2
+        echo "portable ISA checker self-test: missing AVX2 T8/K62 rejection reason missing" >&2
+        return 1
+    fi
+}
+
 expect_missing_avx2_t32_b256_member_rejected()
 {
     fixture_archive=$(write_classified_archive missing_expected_avx2_t32_b256 \
@@ -1135,6 +1158,9 @@ run_negative_controls()
     expect_classified_archive_accepted good_avx2_t8_k8_b1024 \
         'Leopard2BackendAVX2T8K8B1024.cpp.o' \
         'vpxor %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_accepted good_avx2_t8_k62 \
+        'Leopard2BackendAVX2T8K62.cpp.o' \
+        'vpxor %ymm0, %ymm0, %ymm0'
     expect_classified_archive_accepted good_avx2_t16_b64 \
         'Leopard2BackendAVX2T16B64.cpp.o' \
         'vpxor %ymm0, %ymm0, %ymm0'
@@ -1239,6 +1265,17 @@ run_negative_controls()
         'vpxord %zmm0, %zmm0, %zmm0'
     expect_classified_archive_rejected avx2_t8_k8_b1024_leaks_probe \
         'Leopard2BackendAVX2T8K8B1024.cpp.o' 'xgetbv'
+    expect_classified_archive_rejected avx2_t8_k62_leaks_fma \
+        'Leopard2BackendAVX2T8K62.cpp.o' \
+        'vfmadd132ps %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx2_t8_k62_leaks_evex \
+        'Leopard2BackendAVX2T8K62.cpp.o' \
+        'vpternlogd $0, %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx2_t8_k62_leaks_zmm \
+        'Leopard2BackendAVX2T8K62.cpp.o' \
+        'vpxord %zmm0, %zmm0, %zmm0'
+    expect_classified_archive_rejected avx2_t8_k62_leaks_probe \
+        'Leopard2BackendAVX2T8K62.cpp.o' 'xgetbv'
     expect_classified_archive_rejected avx2_t16_b64_leaks_fma \
         'Leopard2BackendAVX2T16B64.cpp.o' \
         'vfmadd132ps %ymm0, %ymm0, %ymm0'
@@ -1333,6 +1370,12 @@ run_negative_controls()
     expect_classified_archive_rejected lookalike_avx2_t8_k8_b1024_suffix \
         'Leopard2BackendAVX2T8K8B1024Extra.cpp.o' \
         'vpxor %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected lookalike_avx2_t8_k62_prefix \
+        'NotLeopard2BackendAVX2T8K62.cpp.o' \
+        'vpxor %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected lookalike_avx2_t8_k62_suffix \
+        'Leopard2BackendAVX2T8K62Extra.cpp.o' \
+        'vpxor %ymm0, %ymm0, %ymm0'
     expect_classified_archive_rejected lookalike_avx2_t16_b64_prefix \
         'NotLeopard2BackendAVX2T16B64.cpp.o' \
         'vpxor %ymm0, %ymm0, %ymm0'
@@ -1358,6 +1401,7 @@ run_negative_controls()
     expect_missing_avx2_xor_member_rejected
     expect_missing_avx2_t2_k4_member_rejected
     expect_missing_avx2_t8_k8_b1024_member_rejected
+    expect_missing_avx2_t8_k62_member_rejected
     expect_missing_avx2_t16_b64_member_rejected
     expect_missing_avx2_t32_b256_member_rejected
     expect_missing_gfni_member_rejected

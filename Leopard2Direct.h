@@ -303,6 +303,14 @@ bool SetHighT16Q2B64FusedEnabledForDiagnostics(bool enabled);
 */
 bool SetBalancedB64TerminalEnabledForDiagnostics(bool enabled);
 
+/*
+    Arithmetic-only same-executable benchmark control for the exact
+    K=62/R=8/B=64 fused AVX2 leaf.  It deliberately does not affect adjacent
+    T16/T32/T64 terminals.  Change it only while no encode call or path
+    introspection is executing.  This is not public API or wire identity.
+*/
+bool SetK62R8B64FusedEnabledForDiagnostics(bool enabled);
+
 bool SetHighT16PreparedTerminalEnabledForDiagnostics(bool enabled);
 
 /*

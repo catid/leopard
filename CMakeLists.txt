@@ -74,7 +74,7 @@ option(LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING
     "Enable the promoted shortened/punctured AVX2 T=8 binding fast path"
     ON)
 option(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
-    "Enable the promoted two-message-block AVX2 T=8 binding fast path"
+    "Enable the promoted multi-block AVX2 T=8 binding fast paths"
     ON)
 option(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED
     "Enable the promoted exact GF8/AVX2 K=R=T=32,B=256 encoder when available"
@@ -366,6 +366,10 @@ target_compile_definitions(leopard PRIVATE
     LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
     LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>
     LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>)
+if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+    target_compile_definitions(leopard PRIVATE
+        LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1)
+endif()
 set_property(SOURCE
     leopard2.cpp
     tests/leopard2/test_api.cpp
@@ -731,6 +735,15 @@ if(LEO2_HAVE_AVX2_BACKEND)
         target_compile_definitions(leopard PRIVATE
             LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1)
     endif()
+    if(LEOPARD_ENABLE_GF8 AND
+       LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING AND
+       NOT LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+        # Keep the exact K=62/R=8/B=64 circuit after the T16 Q4 object in the
+        # archive.  GNU ld then encounters the mature Q4 orphan section first,
+        # so this large terminal cannot move Q4 onto a different code page.
+        target_sources(leopard2_backend_avx2 PRIVATE
+            Leopard2BackendAVX2T8K62.cpp)
+    endif()
     if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
         target_compile_definitions(leopard2_backend_avx2 PRIVATE
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
@@ -1041,6 +1054,10 @@ if(LEO2_BUILD_TESTS)
         LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
         LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>
         LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>)
+    if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1)
+    endif()
     if(LEOPARD_ENABLE_GF8)
         target_sources(leopard_test_hooks PRIVATE LeopardFF8.cpp LeopardFF8.h)
     else()
@@ -1109,6 +1126,12 @@ if(LEO2_BUILD_TESTS)
                 LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1)
             target_compile_definitions(leopard_test_hooks PRIVATE
                 LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1)
+        endif()
+        if(LEOPARD_ENABLE_GF8 AND
+           LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING AND
+           NOT LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+            target_sources(leopard2_backend_avx2_test_hooks PRIVATE
+                Leopard2BackendAVX2T8K62.cpp)
         endif()
         if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
             target_compile_definitions(
@@ -1437,6 +1460,12 @@ if(LEO2_BUILD_TESTS)
                 if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
                         avx2_t16_q2)
+                endif()
+                if(LEOPARD_ENABLE_GF8 AND
+                   LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING AND
+                   NOT LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+                    list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
+                        avx2_t8_k62)
                 endif()
                 if(LEOPARD_ENABLE_GF8)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2_xor)
@@ -1786,7 +1815,13 @@ if(LEO2_BUILD_TESTS)
             leopard2_balanced_b64_terminal_test PRIVATE tests/leopard2)
         target_compile_definitions(
             leopard2_balanced_b64_terminal_test PRIVATE
-            LEO2_ENABLE_TEST_HOOKS=1)
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
+        if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+            target_compile_definitions(
+                leopard2_balanced_b64_terminal_test PRIVATE
+                LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1)
+        endif()
         if(LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
             target_compile_definitions(
                 leopard2_balanced_b64_terminal_test PRIVATE
@@ -1849,6 +1884,14 @@ if(LEO2_BUILD_TESTS)
         target_include_directories(
             leopard2_balanced_b64_terminal_production_test PRIVATE
             tests/leopard2)
+        target_compile_definitions(
+            leopard2_balanced_b64_terminal_production_test PRIVATE
+            LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
+        if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+            target_compile_definitions(
+                leopard2_balanced_b64_terminal_production_test PRIVATE
+                LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1)
+        endif()
         if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
             target_compile_definitions(
                 leopard2_balanced_b64_terminal_production_test PRIVATE

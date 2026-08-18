@@ -127,6 +127,7 @@ struct Options
     int r1_fixed_avx2_mode;
     int k8r3r4_t4_terminal_mode;
     int balanced_b64_terminal_mode;
+    int k62r8_b64_fused_mode;
     int high_t16_prepared_terminal_mode;
     int high_t8_two_block_b64_terminal_mode;
     int high_t8_two_block_b256_terminal_mode;
@@ -192,6 +193,7 @@ struct Options
         , r1_fixed_avx2_mode(-1)
         , k8r3r4_t4_terminal_mode(-1)
         , balanced_b64_terminal_mode(-1)
+        , k62r8_b64_fused_mode(-1)
         , high_t16_prepared_terminal_mode(-1)
         , high_t8_two_block_b64_terminal_mode(-1)
         , high_t8_two_block_b256_terminal_mode(-1)
@@ -509,6 +511,9 @@ static void Usage(std::ostream& output, const char* program)
         << "  --balanced-b64-terminal-mode 0|1\n"
         << "                         Attribution-only: mature or packed balanced path\n"
         << "                         in identical executable text using schema v22\n"
+        << "  --k62r8-b64-fused-mode 0|1\n"
+        << "                         Attribution-only: mature or fused exact K62/R8/B64\n"
+        << "                         arithmetic in identical text using schema v29\n"
         << "  --high-t8-two-block-b64-terminal-mode 0|1\n"
         << "                         Attribution-only: mature or packed two-block T8 B64\n"
         << "                         path in identical executable text using schema v25\n"
@@ -703,6 +708,16 @@ static Options ParseOptions(int argc, char** argv)
             else
                 Fail("--balanced-b64-terminal-mode must be exactly 0 or 1");
         }
+        else if (argument == "--k62r8-b64-fused-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.k62r8_b64_fused_mode = 0;
+            else if (mode == "1")
+                options.k62r8_b64_fused_mode = 1;
+            else
+                Fail("--k62r8-b64-fused-mode must be exactly 0 or 1");
+        }
         else if (argument == "--high-t16-prepared-terminal-mode")
         {
             const std::string mode = NeedValue(argc, argv, i);
@@ -828,6 +843,16 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--loss cannot exceed K");
     if (options.losses > options.r)
         Fail("--loss cannot exceed R when only transmitted recovery shards are used");
+    if (options.k62r8_b64_fused_mode >= 0 &&
+        (options.batch != 1 || options.threads != 1 ||
+         options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+         options.field != LEO2_FIELD_GF8 ||
+         options.backend != LEO2_BACKEND_AVX2 ||
+         !options.skip_legacy || !options.retain_samples))
+    {
+        Fail("--k62r8-b64-fused-mode requires explicit high/GF8/AVX2, "
+             "batch=1, one thread, --skip-legacy, and --retain-samples");
+    }
     if (options.r1_small_reduction_mode >= 0 &&
         (options.r != 1 || options.batch != 1 || options.losses != 1 ||
          options.threads != 1 ||
@@ -1721,6 +1746,10 @@ static int Run(const Options& options)
         !leopard2_internal::SetBalancedB64TerminalEnabledForDiagnostics(
             options.balanced_b64_terminal_mode == 1))
         Fail("cannot set the balanced B64 terminal attribution mode");
+    if (options.k62r8_b64_fused_mode >= 0 &&
+        !leopard2_internal::SetK62R8B64FusedEnabledForDiagnostics(
+            options.k62r8_b64_fused_mode == 1))
+        Fail("cannot set the K62/R8/B64 fused attribution mode");
     if (options.high_t16_prepared_terminal_mode >= 0 &&
         !leopard2_internal::SetHighT16PreparedTerminalEnabledForDiagnostics(
             options.high_t16_prepared_terminal_mode == 1))
@@ -2080,6 +2109,7 @@ static int Run(const Options& options)
         options.r1_small_reduction_mode >= 0 ||
         options.r1_fixed_avx2_mode >= 0 ||
         options.balanced_b64_terminal_mode >= 0 ||
+        options.k62r8_b64_fused_mode >= 0 ||
         options.high_t16_prepared_terminal_mode >= 0 ||
         options.high_t8_two_block_b64_terminal_mode >= 0 ||
         options.high_t8_two_block_b256_terminal_mode >= 0 ||
@@ -2090,6 +2120,7 @@ static int Run(const Options& options)
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.k62r8_b64_fused_mode >= 0 ? 29 :
         options.high_t8_two_block_b1024_terminal_mode >= 0 ? 28 :
         options.small_dual_regular_fallback_mode >= 0 ? 27 :
         options.high_t8_two_block_b256_terminal_mode >= 0 ? 26 :
@@ -2520,6 +2551,15 @@ static int Run(const Options& options)
              << options.balanced_b64_terminal_mode << ",\n"
              << "    \"balanced_b64_terminal_enabled\": "
              << (options.balanced_b64_terminal_mode == 1
+                    ? "true" : "false");
+    }
+    if (options.k62r8_b64_fused_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"k62r8_b64_fused_diagnostic_mode\": "
+             << options.k62r8_b64_fused_mode << ",\n"
+             << "    \"k62r8_b64_fused_diagnostic_disabled\": "
+             << (options.k62r8_b64_fused_mode == 0
                     ? "true" : "false");
     }
     if (options.high_t16_prepared_terminal_mode >= 0)
