@@ -30,7 +30,8 @@ from typing import Any, Mapping, Sequence
 SCHEMA = "leopard2-gf8-k5r5-b64-terminal-abba/v1"
 SUMMARY_SCHEMA = "leopard2-gf8-k5r5-b64-terminal-summary/v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
-MODE_SYMBOL = "_ZN12_GLOBAL__N_1L24g_k5r5_b64_terminal_modeE"
+MODE_SYMBOL: str | None = \
+    "_ZN12_GLOBAL__N_1L24g_k5r5_b64_terminal_modeE"
 ALLOW_IDENTICAL_CANDIDATE_CONTROL = False
 ALLOW_MULTIPLE_TARGETS = False
 CANDIDATE_SCHEMA = "leopard2-benchmark-v5"
@@ -956,7 +957,13 @@ def main() -> int:
         require(executable_sections["candidate"]["sections"] ==
                 executable_sections["control"]["sections"],
                 "candidate and control executable instruction sections differ")
-        if ALLOW_IDENTICAL_CANDIDATE_CONTROL:
+        if MODE_SYMBOL is None:
+            mode_words = {
+                "not_applicable": {
+                    "reason": "campaign has no runtime diagnostic selector",
+                },
+            }
+        elif ALLOW_IDENTICAL_CANDIDATE_CONTROL:
             shared_mode = mode_word_identity(
                 Path(str(identities["candidate"]["path"])))
             mode_words = {"shared_binary_default": shared_mode}
@@ -966,7 +973,9 @@ def main() -> int:
                 for name in ("candidate", "control")
             }
         raw["mode_words"] = mode_words
-        if ALLOW_IDENTICAL_CANDIDATE_CONTROL:
+        if MODE_SYMBOL is None:
+            pass
+        elif ALLOW_IDENTICAL_CANDIDATE_CONTROL:
             require(mode_words["shared_binary_default"]["value"] == 1,
                     "shared binary does not default to the candidate route")
         else:
