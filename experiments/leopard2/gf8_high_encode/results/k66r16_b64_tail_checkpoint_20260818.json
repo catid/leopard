@@ -1,0 +1,226 @@
+{
+  "schema": "leopard2-gf8-k66r16-b64-tail-checkpoint/v1",
+  "status": "accepted",
+  "candidate": {
+    "source_commit": "18141649e679f4042ec885e11d6fd075d2b0c3f9",
+    "source_tree": "5112ef0d09fbb0b725cded5b81ddd8fdc9f0a0a3",
+    "executable_sha256": "2e529fe4398f6e0eaf9c01b410ffce55ded547fa0e06532f6c570f3b93288bab",
+    "archive_sha256": "745bb94b78c1e8b620170cb866b8fb02f3ac9b771567b441af2dbe2e134d16fc",
+    "backend": "avx2",
+    "profile": "legacy_high_v1",
+    "field": "gf8"
+  },
+  "exact_main": {
+    "source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93"
+  },
+  "campaign": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_k66r16_b64_tail_abba.py",
+    "runner_schema": "leopard2-gf8-k66r16-b64-tail-abba/v2",
+    "summary_schema": "leopard2-gf8-k66r16-b64-tail-summary/v2",
+    "rounds": 25,
+    "iterations_per_process": 31,
+    "warmup_calls": 64,
+    "reuse": 8192,
+    "benchmark_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "process_count": 750,
+    "discarded_process_count": 0,
+    "discarded_round_attempts": 0,
+    "all_workload_digests_matched": true,
+    "all_accepted_rounds_had_zero_sibling_nonidle_ticks": true,
+    "candidate_control_shared_one_frozen_path_and_inode": true,
+    "raw_sha256": "839bee0b0ef18b9be8d9b38b1e50fd2fc372375844fd3760fe0136b13f81e693",
+    "summary_sha256": "3ee09088956eee31d4ac68475c7423c9150dcb33c2fe6ed4c70f98d728f9062c",
+    "candidate_control_executable_sections_sha256": "e3b91f51a5b0799b178b63abebc9d684d45857e00a58ccd0789f25f338951108"
+  },
+  "target": {
+    "K": 66,
+    "R": 16,
+    "shard_bytes": 64,
+    "loss_count": 1,
+    "encode_execution": {
+      "mature_control_over_candidate": {
+        "speedup": 1.472092654114537,
+        "ci95": [
+          1.449204871611787,
+          1.495341911104542
+        ]
+      },
+      "exact_main_over_candidate": {
+        "speedup": 1.493412813253836,
+        "ci95": [
+          1.4665861806648797,
+          1.5207301556459738
+        ]
+      }
+    },
+    "one_shot_encode": {
+      "mature_control_over_candidate": {
+        "speedup": 1.466229868115299,
+        "ci95": [
+          1.4554319739967996,
+          1.477107872138952
+        ]
+      },
+      "exact_main_over_candidate": {
+        "speedup": 1.5139400039581583,
+        "ci95": [
+          1.4947874832600143,
+          1.5333379234525868
+        ]
+      }
+    },
+    "second_tail_column": {
+      "systematic_source_index": 65,
+      "parent_coordinate": 81,
+      "multiplier_logs_for_parity_0_through_15": [
+        248,
+        124,
+        227,
+        72,
+        199,
+        143,
+        132,
+        62,
+        36,
+        33,
+        144,
+        31,
+        18,
+        66,
+        241,
+        9
+      ],
+      "field_elements_for_parity_0_through_15": [
+        127,
+        85,
+        96,
+        251,
+        80,
+        120,
+        244,
+        102,
+        173,
+        197,
+        134,
+        68,
+        201,
+        167,
+        64,
+        142
+      ],
+      "all_one_source_parity_sha256": "f59dcfcdace67b21fbb98b608968dbe25ed2f5c16c8f943f348a296f4b61e"
+    }
+  },
+  "neighbor_equivalence": {
+    "required_band": [
+      0.9803921568627451,
+      1.02
+    ],
+    "all_passed": true,
+    "cells": [
+      {
+        "id": "K65_R16_B64",
+        "encode_execution_ci95": [
+          0.9936446737731008,
+          1.0070123050389848
+        ],
+        "one_shot_encode_ci95": [
+          0.9909190979178472,
+          1.0099965955075847
+        ]
+      },
+      {
+        "id": "K67_R16_B64",
+        "encode_execution_ci95": [
+          0.9948456155011274,
+          1.0053944905404257
+        ],
+        "one_shot_encode_ci95": [
+          0.9940209291675627,
+          1.0066007374074477
+        ]
+      },
+      {
+        "id": "K66_R15_B64",
+        "encode_execution_ci95": [
+          0.9963087276441437,
+          1.0071657130509144
+        ],
+        "one_shot_encode_ci95": [
+          0.9975616913883003,
+          1.0092549003714344
+        ]
+      },
+      {
+        "id": "K66_R17_B64",
+        "encode_execution_ci95": [
+          0.9962940549269459,
+          1.0051971555635058
+        ],
+        "one_shot_encode_ci95": [
+          0.9956006426176657,
+          1.0029880109109548
+        ]
+      },
+      {
+        "id": "K66_R16_B63",
+        "encode_execution_ci95": [
+          0.9975866999149005,
+          1.0050722809893222
+        ],
+        "one_shot_encode_ci95": [
+          0.9978307978442759,
+          1.0047264549420705
+        ]
+      },
+      {
+        "id": "K66_R16_B65",
+        "encode_execution_ci95": [
+          0.9976954348633145,
+          1.005849547278311
+        ],
+        "one_shot_encode_ci95": [
+          0.9981246602270717,
+          1.0056135449772796
+        ]
+      }
+    ]
+  },
+  "correctness_and_safety": {
+    "coordinate_81_tail_basis": "matched exact golden elements, the direct generator, the mature transform, and legacy leo_encode",
+    "release_focused_tests": "2/2 passed",
+    "gcc_13_strict_production_tests": "2/2 passed",
+    "clang_18_strict_production_tests": "2/2 passed",
+    "clang_18_asan_ubsan_lsan_tests": "2/2 passed",
+    "sanitizer_peak_test_rss_kib": 66048,
+    "feature_off_build": "2/2 passed; K66 object absent",
+    "backend_profile_field_and_scope_exclusions": "passed",
+    "portable_isa_scan": "passed",
+    "benchmark_json_regression": "passed",
+    "benchmark_attestation_refresh": "passed",
+    "build_provenance_tests": "116/116 normal and 116/116 python-O passed",
+    "all_k_contract_tests": "81/81 normal and 81/81 python-O passed",
+    "project_graph_tests": "171/171 normal and 171/171 python-O passed",
+    "same_binary_freeze_tests": "normal and python-O passed"
+  },
+  "invalid_attempts": [
+    {
+      "reason": "CMAKE_CXX_COMPILER cache type was STRING rather than FILEPATH",
+      "timings_retained": false
+    },
+    {
+      "reason": "candidate used the Ninja generator rather than the canonical Unix Makefiles generator",
+      "timings_retained": false
+    },
+    {
+      "reason": "runner v1 froze candidate and control as separate same-byte files; cache-page placement produced a false K65 neighbor label effect and the equivalence gate rejected the campaign",
+      "timings_retained": false
+    },
+    {
+      "reason": "all-K Python test could not create its default 8 MiB pthread stacks under an artificial 512 MiB address-space cap; the 4 MiB-stack rerun passed 81/81",
+      "timings_retained": false
+    }
+  ]
+}
