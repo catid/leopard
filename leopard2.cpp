@@ -555,6 +555,8 @@ struct leo2_context
     const leopard::backend::Ops* baseline_ops;
     bool auto_requested;
     bool auto_avx512_encode_host;
+    leopard::backend::FF8K65R65B64PackedKernel
+        auto_k65r65_b64_avx512_gfni_kernel;
     bool calibrated_k1_avx2_copy_host;
     bool high_t4_batch_binding_enabled;
     bool gf8_avx2_walsh_locator_enabled;
@@ -1174,6 +1176,11 @@ static volatile uint32_t g_t32_b64_packed_terminal_mode =
    terminal.  Keep it independent of the balanced and T32 family selectors so
    K64/R64 and the adjacent K/R/byte cells remain true same-binary controls. */
 static volatile uint32_t g_k65r65_b64_packed_terminal_mode = 1U;
+// Operation-specific selector layered inside the packed terminal.  Mode two
+// preserves the validator and mature transform so same-binary benchmarks can
+// attribute only the AVX-512/GFNI arithmetic leaf.
+static volatile uint32_t g_k65r65_b64_avx512_gfni_mode = 1U;
+static thread_local unsigned g_k65r65_b64_avx512_gfni_call_count = 0U;
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && \
     !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
 /* Arithmetic-only attribution selector for the exact K=62/R=8/B=64 fused
@@ -14719,6 +14726,11 @@ LEO2_EXPORT leo2_result leo2_context_create(
     context->auto_requested = requested == LEO2_BACKEND_AUTO;
     context->auto_avx512_encode_host = context->auto_requested &&
         leopard::backend::IsCalibratedAutoAVX512EncodeHost();
+    context->auto_k65r65_b64_avx512_gfni_kernel =
+        context->auto_requested &&
+        leopard::backend::IsCalibratedK65R65B64AVX512GFNIHost()
+            ? leopard::backend::GetQualifiedAVX512GFNIT128()
+            : NULL;
     context->calibrated_k1_avx2_copy_host =
         leopard::backend::IsCalibratedK1AVX2CopyHost();
 #ifdef LEO_HAS_FF8
@@ -15893,6 +15905,50 @@ bool SetK65R65B64PackedTerminalEnabledForDiagnostics(bool enabled)
 #endif
 }
 
+bool SetK65R65B64AVX512GFNIEnabledForDiagnostics(bool enabled)
+{
+#ifdef LEO_HAS_FF8
+    g_k65r65_b64_avx512_gfni_call_count = 0U;
+    g_k65r65_b64_avx512_gfni_mode = enabled ? 3U : 4U;
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
+unsigned K65R65B64AVX512GFNIModeForDiagnostics()
+{
+#ifdef LEO_HAS_FF8
+    const unsigned mode = g_k65r65_b64_avx512_gfni_mode;
+    return mode == 3U ? 1U : mode == 4U ? 2U : mode;
+#else
+    return 0;
+#endif
+}
+
+unsigned K65R65B64AVX512GFNICallCountForDiagnostics()
+{
+#ifdef LEO_HAS_FF8
+    return g_k65r65_b64_avx512_gfni_call_count;
+#else
+    return 0U;
+#endif
+}
+
+bool FinishK65R65B64AVX512GFNIRouteProbeForDiagnostics()
+{
+#ifdef LEO_HAS_FF8
+    const unsigned mode = g_k65r65_b64_avx512_gfni_mode;
+    if (mode != 3U && mode != 4U)
+        return false;
+    g_k65r65_b64_avx512_gfni_mode = mode == 3U ? 1U : 2U;
+    return true;
+#else
+    return false;
+#endif
+}
+
 unsigned K65R65B64PackedTerminalModeForDiagnostics()
 {
 #if defined(LEO_HAS_FF8) && defined(LEO2_HAVE_AVX2_BACKEND)
@@ -15904,6 +15960,24 @@ unsigned K65R65B64PackedTerminalModeForDiagnostics()
 
 #ifndef LEO_HAS_FF8
 bool K65R65B64PackedTerminalSelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    (void)codec;
+    (void)shard_bytes;
+    return false;
+}
+
+bool K65R65B64AVX512GFNISelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    (void)codec;
+    (void)shard_bytes;
+    return false;
+}
+
+bool K65R65B64AVX512GFNIAvailableForDiagnostics(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
@@ -18621,6 +18695,25 @@ bool K65R65B64PackedTerminalSelectedForDiagnostics(
     return IsGF8AVX2K65R65B64PackedTerminalEligible(codec, shard_bytes);
 }
 
+bool K65R65B64AVX512GFNISelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    return IsGF8AVX2K65R65B64PackedTerminalEligible(codec, shard_bytes) &&
+        K65R65B64AVX512GFNIAvailableForDiagnostics(codec, shard_bytes) &&
+        (g_k65r65_b64_avx512_gfni_mode == 1U ||
+         g_k65r65_b64_avx512_gfni_mode == 3U);
+}
+
+bool K65R65B64AVX512GFNIAvailableForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    (void)shard_bytes;
+    return codec && codec->context &&
+        codec->context->auto_k65r65_b64_avx512_gfni_kernel != NULL;
+}
+
 } // namespace leopard2_internal
 
 static bool TryEncodeGF8K65R65B64PackedTerminal(
@@ -19480,6 +19573,22 @@ TryEncodeGF8K65R65B64PackedTerminal(
         base + layout.pointer_offset);
     void** const work = pointers + kOriginalCount;
     uint8_t* const work_storage = base + work_data_offset;
+
+    if ((g_k65r65_b64_avx512_gfni_mode == 1U ||
+         g_k65r65_b64_avx512_gfni_mode == 3U) &&
+        codec->context->auto_k65r65_b64_avx512_gfni_kernel != NULL)
+    {
+        codec->context->auto_k65r65_b64_avx512_gfni_kernel(
+            original[0], recovery[0], work_storage);
+        if (g_k65r65_b64_avx512_gfni_mode == 3U)
+            ++g_k65r65_b64_avx512_gfni_call_count;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        leopard::ff8::TestOnlyRecordBalancedB64PackedCall();
+#endif
+        result_out = LEO2_SUCCESS;
+        return true;
+    }
+
     for (size_t i = 0; i < kRecoveryCount; ++i)
         work[i] = recovery[i];
     for (size_t i = kRecoveryCount; i < kWorkCount; ++i)

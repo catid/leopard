@@ -644,6 +644,26 @@ bool IsCalibratedAutoGFNIHost()
     return IsCalibratedAutoGFNIProcessor(DetectX86Processor());
 }
 
+bool IsCalibratedK65R65B64AVX512GFNIProcessor(
+    const X86ProcessorIdentity& identity)
+{
+    /*
+        Operation-specific qualification for the exact packed T=128 terminal.
+        Family 1Ah/model 08h is the Zen 5 Threadripper class on which the
+        conversion/layout-inclusive candidate campaign was run.  ISA feature
+        checks establish safety independently; this identity allowlist only
+        decides whether AUTO may select the measured performance exception.
+    */
+    return identity.authentic_amd && identity.family == 0x1aU &&
+        identity.model == 0x08U;
+}
+
+bool IsCalibratedK65R65B64AVX512GFNIHost()
+{
+    return IsCalibratedK65R65B64AVX512GFNIProcessor(
+        DetectX86Processor());
+}
+
 bool IsCalibratedK1AVX2CopyProcessor(
     const X86ProcessorIdentity& identity)
 {

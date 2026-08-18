@@ -825,6 +825,12 @@ void MultiplyAddBytes(
 static ffe_t FFTSkewStorage[kOrder];
 static ffe_t* const FFTSkew = FFTSkewStorage + 1;
 
+
+const ffe_t* SkewLogTable()
+{
+    return FFTSkewStorage;
+}
+
 // log(s_j(v_j)) for the normalized LCH basis.  General p_i values are the
 // sum of the entries selected by the bits of i.
 static ffe_t LchBasisNormalizerLog[kBits];

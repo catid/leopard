@@ -321,6 +321,26 @@ bool K65R65B64PackedTerminalSelectedForDiagnostics(
     uint64_t shard_bytes);
 
 /*
+    Same-executable control for the operation-specific AVX-512/GFNI leaf
+    inside the packed K=R=65/B=64 terminal.  Disabling it retains all public
+    validation and changes only the terminal execution implementation.  The
+    setter arms a calling-thread route probe; finish it after the untimed
+    ordinary and one-shot calls so measured execution uses the normalized mode
+    with no accounting overhead.
+*/
+bool SetK65R65B64AVX512GFNIEnabledForDiagnostics(bool enabled);
+unsigned K65R65B64AVX512GFNIModeForDiagnostics();
+// True when this AUTO context retained a startup-KAT-qualified leaf.
+bool K65R65B64AVX512GFNIAvailableForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes);
+bool K65R65B64AVX512GFNISelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes);
+unsigned K65R65B64AVX512GFNICallCountForDiagnostics();
+bool FinishK65R65B64AVX512GFNIRouteProbeForDiagnostics();
+
+/*
     Arithmetic-only same-executable benchmark control for the exact
     K=62/R=8/B=64 fused AVX2 leaf.  It deliberately does not affect adjacent
     T16/T32/T64 terminals.  Change it only while no encode call or path

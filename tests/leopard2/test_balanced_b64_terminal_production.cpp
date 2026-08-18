@@ -27,6 +27,7 @@
 */
 
 #include "direct_oracle.h"
+#include "Leopard2Direct.h"
 #include "leopard2.h"
 #if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
 #include "Leopard2Backend.h"
@@ -217,6 +218,7 @@ void CheckProductionPackedScratchMetadata(
     unsigned original_count,
     unsigned recovery_count,
     unsigned transform_side,
+    bool avx512_gfni_selected,
     void* const* recovery,
     const char* message)
 {
@@ -227,6 +229,23 @@ void CheckProductionPackedScratchMetadata(
     {
         Require(std::memcmp(scratch.bytes(), &before[0],
                 work_data_offset) == 0, message);
+        return;
+    }
+
+    if (avx512_gfni_selected)
+    {
+        Require(std::memcmp(scratch.bytes(), &before[0],
+                work_data_offset) == 0,
+            "K65/R65 AVX-512/GFNI leaf modified scratch metadata");
+        const size_t live_state_bytes =
+            static_cast<size_t>(transform_side) * kShardBytes;
+        Require(work_data_offset + live_state_bytes <= scratch.size(),
+            "K65/R65 AVX-512/GFNI state exceeds public scratch");
+        Require(std::memcmp(scratch.bytes() + work_data_offset +
+                    live_state_bytes,
+                &before[work_data_offset + live_state_bytes],
+                scratch.size() - work_data_offset - live_state_bytes) == 0,
+            "K65/R65 AVX-512/GFNI leaf modified unused scratch rows");
         return;
     }
 
@@ -350,7 +369,6 @@ void ExerciseProduction(leo2_context* context)
             kOriginalCount, kRecoveryCount);
     const leopard2_test::Matrix generator =
         leopard2_test::direct_systematic_generator(field, layout);
-
     RequireResult(leo2_encode(codec, kShardBytes, original, recovery,
         scratch.data(), scratch_bytes), LEO2_SUCCESS,
         "execute production packed terminal");
@@ -476,6 +494,8 @@ void ExerciseProductionPackedSide(
             leopard2_test::kLegacyHigh, original_count, side);
     const leopard2_test::Matrix generator =
         leopard2_test::direct_systematic_generator(field, layout);
+    const bool avx512_gfni_selected = leopard2_internal::
+        K65R65B64AVX512GFNISelectedForDiagnostics(codec, kShardBytes);
 
     RequireResult(leo2_encode(codec, kShardBytes, &original[0], &recovery[0],
         scratch.data(), scratch.size()), LEO2_SUCCESS,
@@ -484,6 +504,7 @@ void ExerciseProductionPackedSide(
         "packed production encode modified source or guards");
     CheckProductionPackedScratchMetadata(scratch, scratch_prefix_before,
         work_data_offset, original_count, side, transform_side,
+        avx512_gfni_selected,
         &recovery[0],
         "packed production encode staged general-path scratch metadata");
     CheckGuards(output, output_offset, output_bytes,
@@ -500,6 +521,7 @@ void ExerciseProductionPackedSide(
         "execute production packed one-item batch");
     CheckProductionPackedScratchMetadata(scratch, scratch_prefix_before,
         work_data_offset, original_count, side, transform_side,
+        avx512_gfni_selected,
         &recovery[0],
         "packed production batch staged general-path scratch metadata");
     CheckGuards(output, output_offset, output_bytes,
@@ -1058,7 +1080,22 @@ int main()
         ExerciseProductionT32TwoBlockBatch(context);
 #endif
         leo2_context_destroy(context);
+
+        if (kShardBytes == 64)
+        {
+            // The operation-specific raised-ISA route is deliberately
+            // AUTO-only and byte-exact.  Recreate only its B=64 production
+            // geometry; this source also builds the independent B=256 suite.
+            options.backend = LEO2_BACKEND_AUTO;
+            options.thread_count = 1;
+            context = NULL;
+            RequireResult(leo2_context_create(&options, &context),
+                LEO2_SUCCESS, "create production AUTO T128 context");
+            ExerciseProductionPackedSide(context, 65, 65);
+            leo2_context_destroy(context);
+        }
 #if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
+        options.backend = LEO2_BACKEND_AVX2;
         options.thread_count = 2;
         context = NULL;
         RequireResult(leo2_context_create(&options, &context),

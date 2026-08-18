@@ -170,7 +170,12 @@ int InitializeLibrary(
         NULL,
 #endif
 #ifdef LEO_HAS_FF16
-        leopard::ff16::MultiplyLogElement
+        leopard::ff16::MultiplyLogElement,
+#else
+        NULL,
+#endif
+#ifdef LEO_HAS_FF8
+        leopard::ff8::SkewLogTable()
 #else
         NULL
 #endif

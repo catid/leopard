@@ -86,6 +86,9 @@ ffe_t MultiplyLogElement(ffe_t value, ffe_t multiplier_log);
 // setup kernels amortize the call boundary while preserving the exact legacy
 // Cantor/log representation.  Entries cover every uint8_t value/log.
 const ffe_t* ElementLogTable();
+// Exact 256-entry additive-FFT skew schedule in logarithmic form.  Immutable
+// after Initialize(); log 255 is the zero-multiplier sentinel.
+const ffe_t* SkewLogTable();
 
 // Fixed-multiplier execution helpers.  multiplier_log is produced by
 // ElementLog(), source and destination must not overlap, and byte_count may be

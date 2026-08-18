@@ -441,6 +441,7 @@ set(LEO2_HAVE_SSSE3_BACKEND OFF)
 set(LEO2_HAVE_AVX2_BACKEND OFF)
 set(LEO2_HAVE_AVX512_BACKEND OFF)
 set(LEO2_HAVE_GFNI_BACKEND OFF)
+set(LEO2_HAVE_AVX512_GFNI_T128 OFF)
 if(LEO2_X86_TARGET)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
        CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
@@ -527,6 +528,32 @@ if(LEO2_X86_TARGET)
                     -falign-functions=64)
             endif()
             set(LEO2_HAVE_GFNI_BACKEND ON)
+        endif()
+
+        if(LEOPARD_ENABLE_GF8 AND LEO2_HAVE_AVX2_BACKEND AND
+           LEO2_FLAG_MAVX512F AND LEO2_FLAG_MAVX512BW AND
+           LEO2_FLAG_MAVX512VL AND LEO2_FLAG_MGFNI)
+            # Exact K=R=65/B=64 operation kernel.  This object deliberately
+            # uses 512-bit GFNI and remains separate from both the VEX-only
+            # GFNI backend and the 256-bit AVX-512VL backend.  Baseline code
+            # calls its initializer only after CPUID/XCR0 qualification.
+            add_library(leopard2_backend_avx512_gfni_t128 OBJECT
+                Leopard2BackendAVX512GFNIT128.cpp)
+            target_include_directories(
+                leopard2_backend_avx512_gfni_t128 PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR})
+            target_compile_definitions(
+                leopard2_backend_avx512_gfni_t128 PRIVATE
+                LEO2_HAVE_AVX512_GFNI_T128=1)
+            target_compile_options(
+                leopard2_backend_avx512_gfni_t128 PRIVATE
+                -mavx2 -mavx512f -mavx512bw -mavx512vl -mgfni)
+            if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+                target_compile_options(
+                    leopard2_backend_avx512_gfni_t128 PRIVATE
+                    -falign-functions=64)
+            endif()
+            set(LEO2_HAVE_AVX512_GFNI_T128 ON)
         endif()
     elseif(MSVC)
         # x64 MSVC accepts SSSE3 intrinsics without raising other translation
@@ -847,6 +874,12 @@ if(LEO2_HAVE_GFNI_BACKEND)
     target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_gfni>)
     target_compile_definitions(leopard PRIVATE LEO2_HAVE_GFNI_BACKEND=1)
+endif()
+if(LEO2_HAVE_AVX512_GFNI_T128)
+    target_sources(leopard PRIVATE
+        $<TARGET_OBJECTS:leopard2_backend_avx512_gfni_t128>)
+    target_compile_definitions(leopard PRIVATE
+        LEO2_HAVE_AVX512_GFNI_T128=1)
 endif()
 if(ENABLE_OPENMP)
     if(TARGET OpenMP::OpenMP_CXX)
@@ -1282,6 +1315,14 @@ if(LEO2_BUILD_TESTS)
         target_compile_definitions(leopard_test_hooks PRIVATE
             LEO2_HAVE_GFNI_BACKEND=1)
     endif()
+    if(LEO2_HAVE_AVX512_GFNI_T128)
+        # The operation kernel contains no conditional test instrumentation,
+        # so the same isolated object is safe to reuse in the hook archive.
+        target_sources(leopard_test_hooks PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx512_gfni_t128>)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_HAVE_AVX512_GFNI_T128=1)
+    endif()
     if(ENABLE_OPENMP)
         if(TARGET OpenMP::OpenMP_CXX)
             target_link_libraries(leopard_test_hooks PUBLIC OpenMP::OpenMP_CXX)
@@ -1536,6 +1577,10 @@ if(LEO2_BUILD_TESTS)
             endif()
             if(LEO2_HAVE_GFNI_BACKEND)
                 list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES gfni)
+            endif()
+            if(LEO2_HAVE_AVX512_GFNI_T128)
+                list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
+                    avx512_gfni_t128)
             endif()
             string(REPLACE ";" "," LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG
                 "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES}")
@@ -2156,6 +2201,10 @@ if(LEO2_BUILD_TESTS)
 
     add_executable(leopard2_backend_ops_test
         tests/leopard2/test_backend_ops.cpp)
+    if(LEO2_HAVE_AVX512_GFNI_T128)
+        target_compile_definitions(leopard2_backend_ops_test PRIVATE
+            LEO2_HAVE_AVX512_GFNI_T128=1)
+    endif()
     target_link_libraries(leopard2_backend_ops_test leopard)
     add_test(NAME leopard2_backend_ops COMMAND leopard2_backend_ops_test)
     set_tests_properties(leopard2_backend_ops PROPERTIES

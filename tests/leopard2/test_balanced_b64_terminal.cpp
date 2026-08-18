@@ -2377,6 +2377,17 @@ void ExerciseBackendRoute(leo2_backend requested_backend)
         return;
     RequireResult(context_result, LEO2_SUCCESS,
         "create backend-route K32/R32 context");
+    if (requested_backend != LEO2_BACKEND_AUTO)
+    {
+        leo2_codec* probe = NULL;
+        RequireResult(leo2_codec_create(context, 65, 65,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &probe),
+            LEO2_SUCCESS, "create explicit-backend K65/R65 probe");
+        Require(!leopard2_internal::
+                K65R65B64AVX512GFNISelectedForDiagnostics(probe, 64),
+            "explicit backend request widened to AVX-512/GFNI T128");
+        leo2_codec_destroy(probe);
+    }
     ExerciseBackendShape(context, 32, 32);
     ExerciseBackendShape(context, 62, 8);
     ExerciseBackendShape(context, 62, 16);
@@ -2387,6 +2398,124 @@ void ExerciseBackendRoute(leo2_backend requested_backend)
     ExerciseBackendShape(context, 79, 32);
     ExerciseBackendShape(context, 62, 33);
     ExerciseBackendShape(context, 65, 65);
+    leo2_context_destroy(context);
+}
+
+void ExerciseK65R65AVX512GFNIAutoRoute()
+{
+    static const unsigned original_count = 65;
+    static const unsigned recovery_count = 65;
+    static const size_t shard_bytes = 64;
+
+    leo2_context_options options = {};
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AUTO;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    RequireResult(leo2_context_create(&options, &context), LEO2_SUCCESS,
+        "create AUTO K65/R65 AVX-512/GFNI context");
+    leo2_codec* codec = NULL;
+    RequireResult(leo2_codec_create(context, original_count, recovery_count,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+        LEO2_SUCCESS, "create AUTO K65/R65 AVX-512/GFNI codec");
+
+    if (!leopard2_internal::K65R65B64AVX512GFNISelectedForDiagnostics(
+            codec, shard_bytes))
+    {
+        leo2_codec_destroy(codec);
+        leo2_context_destroy(context);
+        return;
+    }
+
+    size_t scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(codec, shard_bytes,
+        &scratch_bytes), LEO2_SUCCESS,
+        "query AUTO K65/R65 AVX-512/GFNI scratch");
+    AlignedBuffer scratch(scratch_bytes);
+    AlignedBuffer control_scratch(scratch_bytes);
+    AlignedBuffer input_allocation(original_count * shard_bytes + 8U);
+    AlignedBuffer output_allocation(recovery_count * shard_bytes + 8U);
+    AlignedBuffer control_allocation(recovery_count * shard_bytes + 8U);
+    uint8_t* const input = input_allocation.bytes() + 1U;
+    uint8_t* const output = output_allocation.bytes() + 3U;
+    uint8_t* const control = control_allocation.bytes() + 5U;
+    std::vector<const void*> original;
+    std::vector<void*> recovery;
+    std::vector<void*> control_recovery;
+    SetVariablePackedPointers(input, output, original_count, recovery_count,
+        shard_bytes, original, recovery);
+    std::vector<const void*> unused_original;
+    SetVariablePackedPointers(input, control, original_count, recovery_count,
+        shard_bytes, unused_original, control_recovery);
+
+    FillVariableInput(input, original_count, shard_bytes,
+        UINT64_C(0x4155544f36354746));
+    Require(leopard2_internal::
+            SetK65R65B64AVX512GFNIEnabledForDiagnostics(false),
+        "disable K65/R65 AVX-512/GFNI leaf");
+    RequireResult(leo2_encode(codec, shard_bytes, &original[0],
+        &control_recovery[0], control_scratch.data(), control_scratch.size()),
+        LEO2_SUCCESS, "execute mature K65/R65 same-binary control");
+    Require(leopard2_internal::
+            FinishK65R65B64AVX512GFNIRouteProbeForDiagnostics(),
+        "finish disabled K65/R65 AVX-512/GFNI route probe");
+    Require(!leopard2_internal::
+            K65R65B64AVX512GFNISelectedForDiagnostics(codec, shard_bytes),
+        "disabled K65/R65 AVX-512/GFNI leaf remained selected");
+    Require(leopard2_internal::
+            SetK65R65B64AVX512GFNIEnabledForDiagnostics(true),
+        "restore K65/R65 AVX-512/GFNI leaf");
+    Require(leopard2_internal::
+            K65R65B64AVX512GFNISelectedForDiagnostics(codec, shard_bytes),
+        "restored K65/R65 AVX-512/GFNI leaf was not selected");
+    RequireResult(leo2_encode(codec, shard_bytes, &original[0], &recovery[0],
+        scratch.data(), scratch.size()), LEO2_SUCCESS,
+        "execute K65/R65 AVX-512/GFNI leaf");
+    Require(std::memcmp(output, control,
+            recovery_count * shard_bytes) == 0,
+        "K65/R65 AVX-512/GFNI parity differs from mature control");
+
+    const leopard2_test::BinaryField field =
+        leopard2_test::make_legacy_gf8();
+    const leopard2_test::ProfileLayout layout =
+        leopard2_test::make_profile_layout(leopard2_test::kLegacyHigh,
+            original_count, recovery_count);
+    const leopard2_test::Matrix generator =
+        leopard2_test::direct_systematic_generator(field, layout);
+    for (unsigned source = 0; source < original_count; ++source)
+    {
+        std::memset(input, 0, original_count * shard_bytes);
+        for (size_t offset = 0; offset < shard_bytes; ++offset)
+        {
+            input[static_cast<size_t>(source) * shard_bytes + offset] =
+                static_cast<uint8_t>(offset * 29U + source * 17U + 1U);
+        }
+        std::memset(output, 0xa5, recovery_count * shard_bytes);
+        RequireResult(leo2_encode(codec, shard_bytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size()),
+            LEO2_SUCCESS,
+            "execute K65/R65 AVX-512/GFNI systematic basis encode");
+        CheckVariableBasisParity(field, generator, original_count,
+            recovery_count, source, original, recovery, shard_bytes,
+            "K65/R65 AVX-512/GFNI basis differs from direct oracle");
+    }
+
+    FillVariableInput(input, original_count, shard_bytes,
+        UINT64_C(0x4155544f42415443));
+    leo2_encode_batch_item item = {
+        shard_bytes, &original[0], &recovery[0],
+        scratch.data(), scratch.size()
+    };
+    RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
+        "execute K65/R65 AVX-512/GFNI one-item batch");
+    CheckVariableParity(field, generator, original_count, recovery_count,
+        original, recovery, shard_bytes,
+        "K65/R65 AVX-512/GFNI batch differs from direct oracle");
+    Require(leopard2_internal::
+            FinishK65R65B64AVX512GFNIRouteProbeForDiagnostics(),
+        "finish enabled K65/R65 AVX-512/GFNI route probe");
+
+    leo2_codec_destroy(codec);
     leo2_context_destroy(context);
 }
 
@@ -2480,6 +2609,7 @@ int main()
         ExerciseSelectedPackedShape(context, 64, 63);
         ExerciseSelectedPackedShape(context, 64, 64);
         ExerciseK65R65PackedTerminal(context);
+        ExerciseK65R65AVX512GFNIAutoRoute();
         ExerciseSelectedPackedShape(context, 128, 128);
 
         // The selector is deliberately exact.  Exercise both immediate count

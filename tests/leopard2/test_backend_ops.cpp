@@ -144,6 +144,21 @@ void test_processor_classifier()
         "calibrated AMD processor classification");
     require(leopard::backend::IsCalibratedK1AVX2CopyProcessor(zen5),
         "calibrated K1 AVX2 copy processor classification");
+    require(!leopard::backend::
+            IsCalibratedK65R65B64AVX512GFNIProcessor(zen5),
+        "Granite Ridge entered the Threadripper-only T128 selector");
+
+    const uint32_t family_1a_model_08 =
+        (0xfU << 8) | (0xbU << 20) | (8U << 4);
+    const leopard::backend::X86ProcessorIdentity threadripper =
+        leopard::backend::ClassifyX86Processor(
+            amd_ebx, amd_edx, amd_ecx, family_1a_model_08);
+    require(threadripper.authentic_amd && threadripper.family == 0x1aU &&
+            threadripper.model == 0x08U,
+        "Threadripper extended family/model classification");
+    require(leopard::backend::
+            IsCalibratedK65R65B64AVX512GFNIProcessor(threadripper),
+        "calibrated Threadripper T128 processor classification");
 
     const leopard::backend::X86ProcessorIdentity wrong_vendor =
         leopard::backend::ClassifyX86Processor(
@@ -157,6 +172,13 @@ void test_processor_classifier()
     require(!leopard::backend::IsCalibratedK1AVX2CopyProcessor(
                 wrong_vendor),
         "non-AMD processor entered the calibrated K1 copy selector");
+    const leopard::backend::X86ProcessorIdentity wrong_t128_vendor =
+        leopard::backend::ClassifyX86Processor(
+            amd_ebx ^ 1U, amd_edx, amd_ecx, family_1a_model_08);
+    require(!leopard::backend::
+            IsCalibratedK65R65B64AVX512GFNIProcessor(
+                wrong_t128_vendor),
+        "non-AMD processor entered the calibrated T128 selector");
 
     const uint32_t family_6_model_9e =
         (6U << 8) | (0xeU << 4) | (9U << 16);
@@ -587,6 +609,17 @@ void verify_expected_backend(leo2_backend backend)
         throw std::runtime_error("invalid expected backend");
 }
 
+bool expected_forced_variant()
+{
+    const char* expected = std::getenv("LEO2_EXPECT_BACKEND");
+    if (!expected || expected[0] == '\0')
+        return false;
+    return std::strcmp(expected, "scalar") == 0 ||
+        std::strcmp(expected, "ssse3") == 0 ||
+        std::strcmp(expected, "avx2") == 0 ||
+        std::strcmp(expected, "avx512") == 0;
+}
+
 void verify_forced_avx512_qualification_cap()
 {
     const char* expected = std::getenv("LEO2_EXPECT_BACKEND");
@@ -629,6 +662,29 @@ int main()
         require(leo_init() == Leopard_Success, "Leopard initialization");
         require(leopard::backend::StartupSelfTestPassed(),
             "backend startup known-answer tests");
+#if defined(LEO2_HAVE_AVX512_GFNI_T128) && defined(LEO_HAS_FF8)
+        {
+            const leopard::backend::X86Features detected =
+                leopard::backend::DetectX86Features();
+            if (expected_forced_variant())
+                require(
+                    leopard::backend::GetQualifiedAVX512GFNIT128() == NULL,
+                    "forced variant published independent AVX-512/GFNI leaf");
+            else
+            {
+                const bool expected_qualified = detected.avx512 &&
+                    detected.gfni && leopard::backend::
+                        IsCalibratedK65R65B64AVX512GFNIHost();
+                require(
+                    (leopard::backend::GetQualifiedAVX512GFNIT128() != NULL) ==
+                        expected_qualified,
+                    "AVX-512/GFNI T128 KAT publication disagrees with ISA gate");
+            }
+        }
+#else
+        require(leopard::backend::GetQualifiedAVX512GFNIT128() == NULL,
+            "uncompiled AVX-512/GFNI T128 kernel was published");
+#endif
         const char* baseline_xor_only =
             std::getenv("LEO2_TEST_BASELINE_XOR_ONLY");
         if (baseline_xor_only && std::strcmp(baseline_xor_only, "1") == 0)

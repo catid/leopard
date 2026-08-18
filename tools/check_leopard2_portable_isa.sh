@@ -100,6 +100,13 @@ allowed_gfni_vex_mnemonics="$allowed_avx2_vex_mnemonics|$allowed_gfni_extra_mnem
 # access the expanded vector register file.  Keep the allowlist exact.
 allowed_avx512vl_mnemonics='^(valignq|vbroadcasti32x4|vextracti64x2|vmovdqa32|vmovdqa64|vmovdqu8|vmovdqu64|vpandq|vpinsrq|vpshufb|vpsrlq|vpternlogd|vpternlogq|vpxord|vpxorq)$'
 
+# The exact T=128 member is separately gated on AVX2, AVX-512F/BW/VL,
+# complete OS ZMM state, and GFNI.  Unlike the general AVX-512 member it is
+# intentionally ZMM-wide, and unlike the GFNI backend it is intentionally
+# EVEX-encoded.  Keep its compiler-emitted initialization forms explicit;
+# every listed instruction is covered by F/BW/VL plus baseline AVX2.
+allowed_avx512_gfni_t128_extra_mnemonics='^(vgf2p8affineqb|vinserti64x4|vpaddb|vpbroadcastb|vpbroadcastq|vpermi2d|vpermi2w|vpermt2d|vpermt2w|vpmovwb|vpsllq|vpsllw|vpsrlw|vpsubb)$'
+
 # Reject target-raising options in Make, Ninja, or compilation-database
 # metadata.  -mno-* and the x86-64 SSE2 baseline remain allowed.  All -march
 # and -mcpu values are conservatively rejected because proving that an
@@ -216,6 +223,21 @@ scan_object()
                 return 1
             fi
             ;;
+        avx512_gfni_t128)
+            grep -Ev "$allowed_avx2_vex_mnemonics|$allowed_avx512vl_mnemonics|$allowed_avx512_gfni_t128_extra_mnemonics|^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|movsldup|fisttp[[:alnum:]]*|pabs[bdw]|palignr|phadd(d|sw|w)|phsub(d|sw|w)|pmaddubsw|pmulhrsw|pshufb|psign[bdw])$" \
+                "$forbidden_file" > "$violations_file" || true
+            if ! grep -Eq '^vgf2p8affineqb$' "$mnemonics_file"; then
+                echo "portable ISA check: AVX-512/GFNI T128 member has no affine instruction: $object_name" >&2
+                return 1
+            fi
+            if ! grep -Eq '^[[:space:]]*[0-9a-f]+:[[:space:]]+62([[:space:]]|$)' \
+                "$raw_disassembly_file" ||
+               ! grep -Eq '%zmm[0-9]+' "$disassembly_file"
+            then
+                echo "portable ISA check: AVX-512/GFNI T128 member is not ZMM/EVEX: $object_name" >&2
+                return 1
+            fi
+            ;;
         *)
             echo "portable ISA check: unknown object class: $object_class" >&2
             return 1
@@ -255,6 +277,8 @@ require_expected_members()
             avx2_p32) expected_member=Leopard2LowP32B64AVX2.cpp.o ;;
             gfni) expected_member=Leopard2BackendGFNI.cpp.o ;;
             avx512) expected_member=Leopard2BackendAVX512.cpp.o ;;
+            avx512_gfni_t128)
+                expected_member=Leopard2BackendAVX512GFNIT128.cpp.o ;;
             '') continue ;;
             *)
                 echo "portable ISA check: unknown expected class: $object_class" >&2
@@ -340,6 +364,8 @@ scan_archive()
                 object_class=gfni ;;
             Leopard2BackendAVX512.cpp.o|Leopard2BackendAVX512.cpp.obj)
                 object_class=avx512 ;;
+            Leopard2BackendAVX512GFNIT128.cpp.o|Leopard2BackendAVX512GFNIT128.cpp.obj)
+                object_class=avx512_gfni_t128 ;;
             Leopard2CpuFeatures.cpp.o|Leopard2CpuFeatures.cpp.obj)
                 object_class=cpu_features ;;
             *) object_class=baseline ;;
@@ -452,7 +478,7 @@ scan_build_metadata()
         violating_lines="$scratch_root/metadata-violations"
         candidate_lines="$scratch_root/metadata-candidates"
         LC_ALL=C grep -Ein -- "$forbidden_metadata" "$compile_commands" |
-            grep -Ev '(^|[/[:space:]"])(Leopard2Backend(SSSE3|AVX2|AVX2T16Q2|AVX2T16K66|AVX2T8K62|AVX2Xor|AVX2T2K4|AVX2T8K8B1024|AVX2T16B64|AVX2T32B256|AVX512|GFNI)|Leopard2LowP32B64AVX2)[.]cpp([[:space:]",]|$)' > \
+            grep -Ev '(^|[/[:space:]"])(Leopard2Backend(SSSE3|AVX2|AVX2T16Q2|AVX2T16K66|AVX2T8K62|AVX2Xor|AVX2T2K4|AVX2T8K8B1024|AVX2T16B64|AVX2T32B256|AVX512|AVX512GFNIT128|GFNI)|Leopard2LowP32B64AVX2)[.]cpp([[:space:]",]|$)' > \
                 "$candidate_lines" || true
         : > "$violating_lines"
         while IFS= read -r candidate_line
@@ -743,6 +769,30 @@ scan_build_metadata()
                 "$avx512_lines" > "$avx512_command"
             if grep -Ein -- "$forbidden_metadata" "$avx512_command"; then
                 echo "portable ISA check: AVX-512 object has an unrelated ISA/LTO flag" >&2
+                return 1
+            fi
+        fi
+        if grep -q 'Leopard2BackendAVX512GFNIT128[.]cpp' \
+            "$compile_commands"
+        then
+            t128_lines="$scratch_root/avx512-gfni-t128-lines"
+            grep 'Leopard2BackendAVX512GFNIT128[.]cpp' \
+                "$compile_commands" > "$t128_lines"
+            for required_flag in \
+                -mavx2 -mavx512f -mavx512bw -mavx512vl -mgfni
+            do
+                required_flag_pattern="(^|[[:space:]\"=,:])$required_flag([[:space:]\",]|$)"
+                if ! grep -Eq -- "$required_flag_pattern" "$t128_lines"; then
+                    echo "portable ISA check: AVX-512/GFNI T128 object lacks $required_flag" >&2
+                    return 1
+                fi
+            done
+            t128_command="$scratch_root/avx512-gfni-t128-command"
+            sed -E \
+                's/(^|[[:space:]"=,:])-mavx2([[:space:]",]|$)/\1\2/g; s/(^|[[:space:]"=,:])-mavx512f([[:space:]",]|$)/\1\2/g; s/(^|[[:space:]"=,:])-mavx512bw([[:space:]",]|$)/\1\2/g; s/(^|[[:space:]"=,:])-mavx512vl([[:space:]",]|$)/\1\2/g; s/(^|[[:space:]"=,:])-mgfni([[:space:]",]|$)/\1\2/g' \
+                "$t128_lines" > "$t128_command"
+            if grep -Ein -- "$forbidden_metadata" "$t128_command"; then
+                echo "portable ISA check: AVX-512/GFNI T128 object has an unrelated ISA/LTO flag" >&2
                 return 1
             fi
         fi
@@ -1057,6 +1107,27 @@ expect_missing_gfni_member_rejected()
     fi
 }
 
+expect_missing_avx512_gfni_t128_member_rejected()
+{
+    fixture_archive=$(write_classified_archive missing_expected_t128 \
+        'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0')
+    fixture_log="$scratch_root/missing-avx512-gfni-t128-member.log"
+    if scan_archive "$fixture_archive" "$ar_bin" \
+        'avx2,avx512_gfni_t128' > "$fixture_log" 2>&1
+    then
+        echo "portable ISA checker self-test: missing AVX-512/GFNI T128 member was accepted" >&2
+        return 1
+    fi
+    if ! grep -q \
+        'expected exactly one avx512_gfni_t128 member, found 0' \
+        "$fixture_log"
+    then
+        cat "$fixture_log" >&2
+        echo "portable ISA checker self-test: missing AVX-512/GFNI T128 rejection reason missing" >&2
+        return 1
+    fi
+}
+
 expect_listing_failure_rejected()
 {
     fixture_archive=$(write_assembly_archive listing_failure_archive \
@@ -1271,6 +1342,20 @@ run_negative_controls()
     expect_classified_archive_accepted good_avx512vl_extract \
         'Leopard2BackendAVX512.cpp.o' \
         'vextracti64x2 $1, %ymm0, %xmm0'
+    expect_classified_archive_accepted good_avx512_gfni_t128 \
+        'Leopard2BackendAVX512GFNIT128.cpp.o' \
+        'vgf2p8affineqb $0, %zmm0, %zmm0, %zmm0; vpternlogd $0, %zmm0, %zmm0, %zmm0'
+    expect_classified_archive_rejected avx512_gfni_t128_leaks_fma \
+        'Leopard2BackendAVX512GFNIT128.cpp.o' \
+        'vfmadd132ps %zmm0, %zmm0, %zmm0'
+    expect_classified_archive_rejected avx512_gfni_t128_leaks_mulb \
+        'Leopard2BackendAVX512GFNIT128.cpp.o' \
+        'vgf2p8mulb %zmm0, %zmm0, %zmm0'
+    expect_classified_archive_rejected avx512_gfni_t128_stays_ymm \
+        'Leopard2BackendAVX512GFNIT128.cpp.o' \
+        'vgf2p8affineqb $0, %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx512_gfni_t128_leaks_probe \
+        'Leopard2BackendAVX512GFNIT128.cpp.o' 'xgetbv'
     # Sanitizer instrumentation can materialize an integer argument with the
     # VEX-encoded AVX vmovd form.  AVX is already required by the runtime
     # probe, so admit this exact move while retaining the fail-closed v* list.
@@ -1488,6 +1573,7 @@ run_negative_controls()
     expect_missing_avx2_t16_k66_member_rejected
     expect_missing_avx2_t32_b256_member_rejected
     expect_missing_gfni_member_rejected
+    expect_missing_avx512_gfni_t128_member_rejected
     expect_listing_failure_rejected
 
     expect_metadata_rejected flag_make_ssse3 make '-mssse3'
@@ -1708,6 +1794,32 @@ run_negative_controls()
         'c++ -mavx2 -mgfni -mno-avx512f -o CMakeFiles/leopard2_backend_gfni.dir/Leopard2BackendGFNIXcpp.o -c /src/Leopard2BackendGFNIXcpp' \
         /src/Leopard2BackendGFNIXcpp \
         CMakeFiles/leopard2_backend_gfni.dir/Leopard2BackendGFNIXcpp.o
+
+    t128_source=/src/Leopard2BackendAVX512GFNIT128.cpp
+    t128_output=CMakeFiles/leopard2_backend_avx512_gfni_t128.dir/Leopard2BackendAVX512GFNIT128.cpp.o
+    t128_flags='-mavx2 -mavx512f -mavx512bw -mavx512vl -mgfni'
+    expect_fixture_metadata_accepted exact_avx512_gfni_t128_source \
+        "c++ $t128_flags -o $t128_output -c $t128_source" \
+        "$t128_source" "$t128_output"
+    expect_fixture_metadata_rejected t128_missing_gfni \
+        "c++ -mavx2 -mavx512f -mavx512bw -mavx512vl -o $t128_output -c $t128_source" \
+        "$t128_source" "$t128_output"
+    expect_fixture_metadata_rejected t128_missing_avx512bw \
+        "c++ -mavx2 -mavx512f -mavx512vl -mgfni -o $t128_output -c $t128_source" \
+        "$t128_source" "$t128_output"
+    expect_fixture_metadata_rejected t128_avx512f_lookalike_only \
+        "c++ -mavx2 -mavx512fp16 -mavx512bw -mavx512vl -mgfni -o $t128_output -c $t128_source" \
+        "$t128_source" "$t128_output"
+    expect_fixture_metadata_rejected t128_unrelated_avx512fp16 \
+        "c++ $t128_flags -mavx512fp16 -o $t128_output -c $t128_source" \
+        "$t128_source" "$t128_output"
+    expect_fixture_metadata_rejected t128_unrelated_fma \
+        "c++ $t128_flags -mfma -o $t128_output -c $t128_source" \
+        "$t128_source" "$t128_output"
+    expect_fixture_metadata_rejected t128_lookalike_prefix \
+        "c++ $t128_flags -o CMakeFiles/leopard2_backend_avx512_gfni_t128.dir/NotLeopard2BackendAVX512GFNIT128.cpp.o -c /src/NotLeopard2BackendAVX512GFNIT128.cpp" \
+        /src/NotLeopard2BackendAVX512GFNIT128.cpp \
+        CMakeFiles/leopard2_backend_avx512_gfni_t128.dir/NotLeopard2BackendAVX512GFNIT128.cpp.o
 
     fixture_prefix='c++ -DLEO2_ENABLE_TEST_HOOKS=1 -DLEO2_PORTABLE_ISA_PRIVILEGED_FIXTURE=1 -mssse3 -mno-avx'
     expect_fixture_metadata_accepted exact_legacy_fixture \

@@ -90,7 +90,16 @@ struct InitializeArgs
 {
     FF8MultiplyLog ff8_multiply_log;
     FF16MultiplyLog ff16_multiply_log;
+    // Immutable 256-entry GF8 skew-log storage.  It is published only after
+    // ff8::Initialize() and lets a bounded raised-ISA kernel build its exact
+    // constants without duplicating the field schedule.
+    const uint8_t* ff8_skew_log_storage;
 };
+
+typedef void (*FF8K65R65B64PackedKernel)(
+    const void* packed_input,
+    void* packed_output,
+    void* aligned_state);
 
 typedef void (*FixedMultiply)(
     void* destination,
@@ -685,6 +694,9 @@ bool IsCalibratedAutoAVX512EncodeProcessor(
 bool IsCalibratedAutoAVX512EncodeHost();
 bool IsCalibratedAutoGFNIProcessor(const X86ProcessorIdentity& identity);
 bool IsCalibratedAutoGFNIHost();
+bool IsCalibratedK65R65B64AVX512GFNIProcessor(
+    const X86ProcessorIdentity& identity);
+bool IsCalibratedK65R65B64AVX512GFNIHost();
 bool IsCalibratedK1AVX2CopyProcessor(
     const X86ProcessorIdentity& identity);
 bool IsCalibratedK1AVX2CopyHost();
@@ -930,6 +942,12 @@ const Ops* InitializeAVX512(const InitializeArgs& args);
 const Ops* InitializeGFNI(const InitializeArgs& args);
 #endif
 
+#if defined(LEO2_HAVE_AVX512_GFNI_T128)
+FF8K65R65B64PackedKernel InitializeAVX512GFNIT128(
+    FF8MultiplyLog multiply_log,
+    const uint8_t* skew_log_storage);
+#endif
+
 // Called once after both legacy fields have initialized their logarithm tables.
 // Returns false on allocation or known-answer-test failure.
 bool Initialize(const InitializeArgs& args);
@@ -952,6 +970,9 @@ enum QualificationStatus
 const Ops* GetQualifiedOps(
     leo2_backend requested,
     QualificationStatus* status = NULL);
+// Null unless startup proved the exact AVX-512/GFNI feature contract and the
+// raised-ISA kernel passed its independent scalar known-answer test.
+FF8K65R65B64PackedKernel GetQualifiedAVX512GFNIT128();
 leo2_backend SelectedBackend();
 // Reports the effective public execution backend.  This can differ from the
 // fixed-ops table on the existing ARM paths, where legacy native NEON or

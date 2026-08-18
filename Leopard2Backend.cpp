@@ -69,10 +69,11 @@ enum QualificationState
 };
 static QualificationState QualificationStates[LEO2_BACKEND_GFNI + 1] = {};
 static QualificationStatus QualificationFailures[LEO2_BACKEND_GFNI + 1] = {};
-static InitializeArgs SavedInitializeArgs = { NULL, NULL };
+static InitializeArgs SavedInitializeArgs = { NULL, NULL, NULL };
 static uint32_t QualifiableBackendMask = 0;
 static bool SelfTestPassed = false;
 static QualificationStatus StartupFailure = QualificationAvailable;
+static FF8K65R65B64PackedKernel QualifiedAVX512GFNIT128 = NULL;
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
 static std::atomic<unsigned> TestFault(TestSetupFaultNone);
@@ -3741,6 +3742,26 @@ bool Initialize(const InitializeArgs& args)
         return false;
     }
 
+    FF8K65R65B64PackedKernel avx512_gfni_t128 = NULL;
+#if defined(LEO2_HAVE_AVX512_GFNI_T128) && defined(LEO_HAS_FF8) && \
+    !defined(LEO2_BACKEND_FORCE_SCALAR) && \
+    !defined(LEO2_BACKEND_FORCE_SSSE3) && \
+    !defined(LEO2_BACKEND_FORCE_AVX2) && \
+    !defined(LEO2_BACKEND_FORCE_AVX512)
+    // This is the sole baseline-to-raised-ISA call site.  The object may use
+    // ZMM GFNI instructions from its first instruction, so prove both the CPU
+    // bits and OS-managed ZMM state before entering it.  A failed private KAT
+    // merely withholds the optional operation; the established backend stays
+    // available.  Forced diagnostic builds retain their exact selected
+    // backend and therefore never initialize this independent operation leaf.
+    if (features.avx512 && features.gfni &&
+        IsCalibratedK65R65B64AVX512GFNIHost())
+    {
+        avx512_gfni_t128 = InitializeAVX512GFNIT128(
+            args.ff8_multiply_log, args.ff8_skew_log_storage);
+    }
+#endif
+
     const uint32_t qualifiable_mask =
         QualifiableBackendMaskFor(features, selected_kind);
 
@@ -3751,9 +3772,15 @@ bool Initialize(const InitializeArgs& args)
         QualificationStates[selected_kind] = QualificationPassed;
         StartupFailure = QualificationAvailable;
         SelfTestPassed = true;
+        QualifiedAVX512GFNIT128 = avx512_gfni_t128;
         SelectedOps = QualifiedOps[selected_kind];
     }
     return true;
+}
+
+FF8K65R65B64PackedKernel GetQualifiedAVX512GFNIT128()
+{
+    return QualifiedAVX512GFNIT128;
 }
 
 const Ops& GetOps()
