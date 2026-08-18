@@ -1,0 +1,4991 @@
+{
+  "aggregate_results": {
+    "exact_main_over_current": {
+      "decode": {
+        "maximum": 14.484903818524456,
+        "median": 1.4861308586225264,
+        "minimum": 1.0560448532491922
+      },
+      "encode": {
+        "maximum": 1.1740008224084855,
+        "median": 1.1208425083051963,
+        "minimum": 1.033204314345321
+      }
+    },
+    "tightest_same_binary_equivalence": {
+      "K": 47,
+      "R": 32,
+      "atlas_cell_id": "k047_b0000064_l01",
+      "loss": 1,
+      "operation": "encode",
+      "ratio": [
+        1.0053015945481045,
+        0.9963070817141667,
+        1.0143773085123011
+      ],
+      "shard_bytes": 64
+    },
+    "weakest_exact_main_decode": {
+      "K": 95,
+      "R": 32,
+      "atlas_cell_id": "k095_b0000064_l32",
+      "loss": 32,
+      "ratio": [
+        1.0560448532491922,
+        1.0544208246892983,
+        1.057671383152669
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    "weakest_exact_main_encode_all_cells": {
+      "K": 34,
+      "R": 32,
+      "atlas_cell_id": "k034_b0001024_l01",
+      "loss": 1,
+      "ratio": [
+        1.033204314345321,
+        1.031403393397027,
+        1.035008379859827
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    "weakest_exact_main_encode_target": {
+      "K": 35,
+      "R": 32,
+      "atlas_cell_id": "k035_b0001024_l01",
+      "loss": 1,
+      "ratio": [
+        1.0471098708657975,
+        1.0459903327829592,
+        1.0482306072059042
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    }
+  },
+  "campaign": {
+    "accepted_artifacts": 7275,
+    "accepted_processes": 43650,
+    "balanced_order_cycles": 25,
+    "benchmark_cpu": 13,
+    "completed_utc": "2026-08-18T11:52:26.063384Z",
+    "created_utc": "2026-08-18T09:55:56.570082Z",
+    "decision_evidence": "this standalone 75-round campaign only",
+    "discarded_artifacts": 5,
+    "discarded_processes": 30,
+    "iterations_per_process": 31,
+    "matrix_sha256": "fe21e525ff084564af37a4e7b43f17df8e971f96a252199125e26d50e445da8b",
+    "maximum_isolation_attempts_per_round": 8,
+    "ordered_artifact_sha256": "39e6afd3f8a6cb0ce30d8ee339ff71b61179d07664dcb7377ea6a5bdfdeaaa25",
+    "pooling": "none",
+    "raw_schema": "leopard2-current-atlas-final97-confirmation-abba/v3",
+    "raw_sha256": "bcebaf2a3f9a60e0d6d39ba27cc8a1ba0c6841390db0469cca676e1c55634dd7",
+    "reserved_smt_sibling": 29,
+    "rounds_per_cell": 75,
+    "runner": "experiments/leopard2/gf8_high_encode/run_current_atlas_final97_confirmation_abba.py",
+    "runner_sha256": "7cfed68b4cf47dc88c75e8f62a846550e3b55c96a5bc2fbf206d72987903077d",
+    "six_process_order_cycle": [
+      [
+        "main",
+        "candidate",
+        "control",
+        "control",
+        "candidate",
+        "main"
+      ],
+      [
+        "control",
+        "main",
+        "candidate",
+        "candidate",
+        "main",
+        "control"
+      ],
+      [
+        "candidate",
+        "control",
+        "main",
+        "main",
+        "control",
+        "candidate"
+      ]
+    ],
+    "statistical_campaign_retries": 0,
+    "summary_schema": "leopard2-current-atlas-final97-confirmation-summary/v3",
+    "summary_sha256": "27c5cdc7927300ecd3e6da94fbbd7b21c3da0df3cc11fe9b5323059bdaac259d",
+    "trimming": "none",
+    "warmup_iterations_per_process": 64
+  },
+  "candidate": {
+    "archive_sha256": "60ef83eeb4fbba7bafea09c5256acf577abefa3a2889c541af1802d8eb3e89d5",
+    "cmake_cache_sha256": "df34fcdf48d921f1b2d287ac1c3651e73364fc94c9ac76235bdc04764264dbb2",
+    "effective_configuration_schema": "leopard2-benchmark-build-configuration/v13",
+    "effective_configuration_sha256": "4172a7bb940fccaf70994df229f0da0d813ef8d18e2b11977aa72f419872426b",
+    "executable_sections_sha256": "92f05239ad14e64169b7301e1b753f66ce74e7e0ca10ec7874bc51945de45249",
+    "executable_sha256": "a8d9fe801cfe1662e8548894d37b7c5fdabf9686abe0a8e2e4bca4ec68dfec4d",
+    "production_build_closure_schema": "leopard2-production-build-closure/v2",
+    "reproducible_build_proof_schema": "leopard2-reproducible-build-proof/v3",
+    "source_commit": "970107e9c295ff3b4cec601836ba1df17dee7564",
+    "source_tree": "0ea848d4a9eb5c56f4b85ec6ecf7c7bd784a0a39"
+  },
+  "discarded_isolation_attempts": {
+    "cells": [
+      {
+        "atlas_cell_id": "k077_b0001024_l08",
+        "round": 70
+      },
+      {
+        "atlas_cell_id": "k092_b0000064_l01",
+        "round": 73
+      },
+      {
+        "atlas_cell_id": "k079_b0001024_l02",
+        "round": 10
+      },
+      {
+        "atlas_cell_id": "k035_b0000064_l32",
+        "round": 71
+      },
+      {
+        "atlas_cell_id": "k053_b0000064_l32",
+        "round": 37
+      }
+    ],
+    "reason": "each discarded attempt observed exactly one non-idle jiffy on reserved SMT sibling 29; no discarded observation entered inference"
+  },
+  "exact_main": {
+    "executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "identity": "standalone exact Leopard main adapter; not the in-process legacy API linked to Leopard2 kernels",
+    "source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "gates": {
+    "exact_main": {
+      "failed_intervals": 0,
+      "passed_intervals": 194,
+      "required_ci95_lower_floor": 1.0,
+      "scope": "all_97_cells_both_encode_and_decode"
+    },
+    "integrity": {
+      "all_accepted_rounds_had_zero_reserved_sibling_nonidle_ticks": true,
+      "all_workload_digests_matched": true,
+      "complete_matrix_selected_before_timing": true,
+      "discarded_attempts_used_in_inference": false,
+      "outcome_selected_cells": false,
+      "raw_to_summary_and_round_journal_replay": "independently audited clean"
+    },
+    "same_binary_equivalence": {
+      "candidate_and_control_shared_one_frozen_path_and_inode": true,
+      "failed_intervals": 0,
+      "passed_intervals": 194,
+      "required_ci95_band": [
+        0.9803921568627451,
+        1.02
+      ],
+      "scope": "all_97_cells_both_encode_and_decode"
+    }
+  },
+  "invalid_pre_timing_attempts": [
+    {
+      "cells_timed": 0,
+      "failure_sha256": "ac5a3ee6856c743e0726185fad7df2fa23e73e1a4f4d13ffb962a6938fbeebed",
+      "output": "build/regression-current-atlas-final97-9ce8990-final25-v1/failure.json",
+      "reason": "candidate CMakeCache recorded CMAKE_CXX_COMPILER as STRING instead of required FILEPATH",
+      "timings_retained": false
+    }
+  ],
+  "per_cell_projection": [
+    {
+      "K": 33,
+      "R": 32,
+      "atlas_cell_id": "k033_b0000064_l01",
+      "historical_role": "former_major",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            4.512159269012248,
+            4.5018867987977575,
+            4.522455179097402
+          ],
+          "same_binary_control_over_candidate": [
+            1.0002010161755879,
+            0.997648590920886,
+            1.0027599716602125
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1678576693477725,
+            1.1614983924506637,
+            1.1742517636866592
+          ],
+          "same_binary_control_over_candidate": [
+            0.9980635263864015,
+            0.9934679026033849,
+            1.0026804087907581
+          ]
+        }
+      },
+      "missing_original_indices": [
+        8
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 35,
+      "R": 32,
+      "atlas_cell_id": "k035_b0000064_l01",
+      "historical_role": "former_marginal",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            4.24809314994805,
+            4.239515148196265,
+            4.256688507956738
+          ],
+          "same_binary_control_over_candidate": [
+            1.0002924693450879,
+            0.9979162925028876,
+            1.002674304193303
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1235937276173888,
+            1.118949026873466,
+            1.1282577082788796
+          ],
+          "same_binary_control_over_candidate": [
+            1.0047581445164147,
+            0.9999629535497236,
+            1.0095763301913852
+          ]
+        }
+      },
+      "missing_original_indices": [
+        29
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 41,
+      "R": 32,
+      "atlas_cell_id": "k041_b0000064_l01",
+      "historical_role": "former_marginal",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            3.9415099106348612,
+            3.9358057924835324,
+            3.9472222956991425
+          ],
+          "same_binary_control_over_candidate": [
+            1.0007743863880212,
+            0.9990297658348962,
+            1.002522053597991
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.120318853750083,
+            1.1145568498664422,
+            1.1261106458753545
+          ],
+          "same_binary_control_over_candidate": [
+            1.0001780647856213,
+            0.9962832862033917,
+            1.0040880692583325
+          ]
+        }
+      },
+      "missing_original_indices": [
+        23
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 43,
+      "R": 32,
+      "atlas_cell_id": "k043_b0000064_l01",
+      "historical_role": "former_marginal",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            3.739973627618935,
+            3.732835196197131,
+            3.7471257101130435
+          ],
+          "same_binary_control_over_candidate": [
+            0.9988294818780348,
+            0.9967832711826439,
+            1.000879893063473
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.107435904383193,
+            1.1024681347836134,
+            1.1124260589697086
+          ],
+          "same_binary_control_over_candidate": [
+            0.9999886046709836,
+            0.9967461961729162,
+            1.003241560701521
+          ]
+        }
+      },
+      "missing_original_indices": [
+        42
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 45,
+      "R": 32,
+      "atlas_cell_id": "k045_b0000064_l01",
+      "historical_role": "former_marginal",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            3.6219930606351234,
+            3.61743863036176,
+            3.626553225030675
+          ],
+          "same_binary_control_over_candidate": [
+            0.999608330571314,
+            0.9977152761137366,
+            1.001504976890483
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1166972378993687,
+            1.1108810514617247,
+            1.1225438758643236
+          ],
+          "same_binary_control_over_candidate": [
+            1.0015016726640726,
+            0.9972950206133324,
+            1.0057260686332226
+          ]
+        }
+      },
+      "missing_original_indices": [
+        44
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 47,
+      "R": 32,
+      "atlas_cell_id": "k047_b0000064_l01",
+      "historical_role": "former_marginal",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            3.507047007225599,
+            3.5004043881336835,
+            3.5137022318291944
+          ],
+          "same_binary_control_over_candidate": [
+            0.998816905853901,
+            0.9968687239672626,
+            1.000768895075018
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1106751243974469,
+            1.1056405128344717,
+            1.1157326614170198
+          ],
+          "same_binary_control_over_candidate": [
+            1.0053015945481045,
+            0.9963070817141667,
+            1.0143773085123011
+          ]
+        }
+      },
+      "missing_original_indices": [
+        11
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 51,
+      "R": 32,
+      "atlas_cell_id": "k051_b0000064_l01",
+      "historical_role": "former_marginal",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            3.4235892106603245,
+            3.4177242125800347,
+            3.4294642733919263
+          ],
+          "same_binary_control_over_candidate": [
+            1.0012066370016137,
+            0.9990402778169045,
+            1.0033776938068506
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.102338982528684,
+            1.0972473748297051,
+            1.1074542170501596
+          ],
+          "same_binary_control_over_candidate": [
+            0.9997173113239776,
+            0.9965709107576035,
+            1.0028736457911078
+          ]
+        }
+      },
+      "missing_original_indices": [
+        28
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 57,
+      "R": 32,
+      "atlas_cell_id": "k057_b0000064_l01",
+      "historical_role": "former_marginal",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            3.0722489862528324,
+            3.067734530555599,
+            3.07677008539005
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998399717303327,
+            0.9982565882830089,
+            1.0014258666593443
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0977086474529003,
+            1.0930379638390924,
+            1.102399289463527
+          ],
+          "same_binary_control_over_candidate": [
+            1.0005584752838848,
+            0.9969313611837572,
+            1.004198785835852
+          ]
+        }
+      },
+      "missing_original_indices": [
+        28
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 59,
+      "R": 32,
+      "atlas_cell_id": "k059_b0000064_l01",
+      "historical_role": "former_marginal",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            3.0433354708627927,
+            3.0390252674877765,
+            3.047651787333785
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998377083982718,
+            0.99780833110671,
+            1.0018712131079592
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0907069037878772,
+            1.0866834710275364,
+            1.094745233260654
+          ],
+          "same_binary_control_over_candidate": [
+            1.0004747709955009,
+            0.9976063406407163,
+            1.003351448985014
+          ]
+        }
+      },
+      "missing_original_indices": [
+        47
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 61,
+      "R": 32,
+      "atlas_cell_id": "k061_b0000064_l01",
+      "historical_role": "former_marginal",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            2.9318942164255652,
+            2.926172215480892,
+            2.937627406491179
+          ],
+          "same_binary_control_over_candidate": [
+            0.9995731999850406,
+            0.9977782369971185,
+            1.0013713920393108
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.092467005137203,
+            1.0879265649844108,
+            1.0970263947278014
+          ],
+          "same_binary_control_over_candidate": [
+            1.0007452458592132,
+            0.9970752467032014,
+            1.004428753417775
+          ]
+        }
+      },
+      "missing_original_indices": [
+        18
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 63,
+      "R": 32,
+      "atlas_cell_id": "k063_b0000064_l01",
+      "historical_role": "former_major",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            2.8869262133042124,
+            2.881683535648281,
+            2.8921784290196375
+          ],
+          "same_binary_control_over_candidate": [
+            1.000713227470202,
+            0.9984361590887894,
+            1.0029954890133068
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0820426940748742,
+            1.0761836783787644,
+            1.0879336077319146
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000559739538848,
+            0.9952579411982793,
+            1.0048771375154562
+          ]
+        }
+      },
+      "missing_original_indices": [
+        4
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 64,
+      "R": 32,
+      "atlas_cell_id": "k064_b0000064_l01",
+      "historical_role": "former_major",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            2.8822529350172283,
+            2.8778144508802184,
+            2.886698264675995
+          ],
+          "same_binary_control_over_candidate": [
+            0.9999793959140398,
+            0.9982834144594758,
+            1.0016782586676944
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0959103166823763,
+            1.0899891813146263,
+            1.101863617363915
+          ],
+          "same_binary_control_over_candidate": [
+            1.0016824564759923,
+            0.9973398443565488,
+            1.006043977175221
+          ]
+        }
+      },
+      "missing_original_indices": [
+        55
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 79,
+      "R": 32,
+      "atlas_cell_id": "k079_b0000064_l01",
+      "historical_role": "former_marginal",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            2.5056392678373003,
+            2.5019729548387106,
+            2.509310953336411
+          ],
+          "same_binary_control_over_candidate": [
+            0.9988667184812811,
+            0.9972032584726244,
+            1.0005329533497036
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1201219553298254,
+            1.1154456528599344,
+            1.1248178623449796
+          ],
+          "same_binary_control_over_candidate": [
+            0.9975715023217634,
+            0.9933024369400908,
+            1.0018589155082487
+          ]
+        }
+      },
+      "missing_original_indices": [
+        63
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 91,
+      "R": 32,
+      "atlas_cell_id": "k091_b0000064_l01",
+      "historical_role": "former_marginal",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            2.3227247472705783,
+            2.3194596084418166,
+            2.3259944824852963
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998186997115314,
+            0.998216120301218,
+            1.0014238519722667
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1152705655529416,
+            1.1115812399455698,
+            1.118972135990424
+          ],
+          "same_binary_control_over_candidate": [
+            1.0024636676182335,
+            0.9996325793599634,
+            1.005302773883211
+          ]
+        }
+      },
+      "missing_original_indices": [
+        13
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 35,
+      "R": 32,
+      "atlas_cell_id": "k035_b0001024_l01",
+      "historical_role": "former_marginal",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            14.007065105362456,
+            13.969037166210459,
+            14.045196568052901
+          ],
+          "same_binary_control_over_candidate": [
+            1.0013704923949893,
+            0.9971455443413015,
+            1.0056133417331565
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0471098708657975,
+            1.0459903327829592,
+            1.0482306072059042
+          ],
+          "same_binary_control_over_candidate": [
+            0.9990762662275995,
+            0.9984631706258069,
+            0.9996897382941712
+          ]
+        }
+      },
+      "missing_original_indices": [
+        29
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 65,
+      "R": 32,
+      "atlas_cell_id": "k065_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0952092126030535,
+            1.0924971680119295,
+            1.097927989647203
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998166968621737,
+            0.9975147919710915,
+            1.0021239137207276
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1480620760399836,
+            1.1440626041666933,
+            1.1520755294691845
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000490977638055,
+            0.9972816135363333,
+            1.002824261837016
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        3,
+        5,
+        6,
+        7,
+        8,
+        9,
+        11,
+        12,
+        14,
+        16,
+        18,
+        21,
+        22,
+        23,
+        24,
+        25,
+        28,
+        31,
+        35,
+        36,
+        37,
+        38,
+        39,
+        41,
+        44,
+        51,
+        56,
+        58,
+        60,
+        61,
+        63
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 67,
+      "R": 32,
+      "atlas_cell_id": "k067_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0978135212964015,
+            1.0961156028697803,
+            1.099514069853436
+          ],
+          "same_binary_control_over_candidate": [
+            0.9999795288067743,
+            0.9982608442465,
+            1.0017011723898679
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1424086858497737,
+            1.1360196579766144,
+            1.148833645915547
+          ],
+          "same_binary_control_over_candidate": [
+            0.9993290813071397,
+            0.9936579898014708,
+            1.0050325393606507
+          ]
+        }
+      },
+      "missing_original_indices": [
+        1,
+        3,
+        4,
+        6,
+        9,
+        12,
+        17,
+        20,
+        22,
+        23,
+        24,
+        25,
+        26,
+        29,
+        31,
+        32,
+        33,
+        37,
+        38,
+        40,
+        43,
+        45,
+        47,
+        48,
+        49,
+        50,
+        53,
+        56,
+        62,
+        63,
+        64,
+        65
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 71,
+      "R": 32,
+      "atlas_cell_id": "k071_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0816527785087338,
+            1.0801913230670972,
+            1.0831162112408395
+          ],
+          "same_binary_control_over_candidate": [
+            1.0012545191908615,
+            0.9998110145811105,
+            1.0027001079000353
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.139984366981159,
+            1.1358553237131719,
+            1.1441284200817834
+          ],
+          "same_binary_control_over_candidate": [
+            0.9990501741824325,
+            0.9954957581182646,
+            1.0026172812836582
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        2,
+        3,
+        4,
+        8,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        18,
+        23,
+        25,
+        26,
+        27,
+        29,
+        32,
+        34,
+        36,
+        43,
+        45,
+        46,
+        47,
+        50,
+        52,
+        55,
+        56,
+        57,
+        61,
+        65,
+        69
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 73,
+      "R": 32,
+      "atlas_cell_id": "k073_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0713470298423216,
+            1.0698259935651013,
+            1.072870228668751
+          ],
+          "same_binary_control_over_candidate": [
+            1.0007226675694512,
+            0.9992831352507053,
+            1.002164273628085
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1398309661937966,
+            1.1354159551444354,
+            1.144263144804066
+          ],
+          "same_binary_control_over_candidate": [
+            0.9992251746029369,
+            0.9955297291751778,
+            1.0029343376691646
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        2,
+        5,
+        6,
+        9,
+        12,
+        13,
+        14,
+        18,
+        19,
+        20,
+        30,
+        31,
+        32,
+        34,
+        35,
+        36,
+        37,
+        42,
+        46,
+        49,
+        51,
+        52,
+        57,
+        59,
+        63,
+        65,
+        66,
+        69,
+        70,
+        71,
+        72
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 75,
+      "R": 32,
+      "atlas_cell_id": "k075_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0809915753568806,
+            1.0793636490498524,
+            1.0826219569476898
+          ],
+          "same_binary_control_over_candidate": [
+            1.0008870707065545,
+            0.9995246420049987,
+            1.0022513565028621
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1338380774584447,
+            1.1275830459101555,
+            1.1401278074884218
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000401202157614,
+            0.9956967746999923,
+            1.0044024119114807
+          ]
+        }
+      },
+      "missing_original_indices": [
+        1,
+        3,
+        7,
+        8,
+        9,
+        10,
+        15,
+        16,
+        17,
+        22,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        31,
+        32,
+        36,
+        41,
+        45,
+        48,
+        49,
+        51,
+        52,
+        55,
+        59,
+        65,
+        66,
+        67,
+        69,
+        71
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 77,
+      "R": 32,
+      "atlas_cell_id": "k077_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0734412861756464,
+            1.0719113781187455,
+            1.0749733778259958
+          ],
+          "same_binary_control_over_candidate": [
+            1.0007253958686437,
+            0.998981702439148,
+            1.0024721328641715
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.131376355178807,
+            1.126276792871528,
+            1.136499007312575
+          ],
+          "same_binary_control_over_candidate": [
+            1.0009585908116574,
+            0.9965091122653722,
+            1.0054279365714887
+          ]
+        }
+      },
+      "missing_original_indices": [
+        1,
+        2,
+        4,
+        8,
+        10,
+        16,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        26,
+        30,
+        31,
+        35,
+        36,
+        39,
+        41,
+        46,
+        47,
+        49,
+        52,
+        53,
+        62,
+        63,
+        64,
+        69,
+        70,
+        74,
+        75
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 79,
+      "R": 32,
+      "atlas_cell_id": "k079_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0813588221009403,
+            1.0800809124336708,
+            1.0826382437411546
+          ],
+          "same_binary_control_over_candidate": [
+            0.9999866725751227,
+            0.9988743959405529,
+            1.0011001877631251
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1189723669086333,
+            1.1136994017017694,
+            1.1242702977049825
+          ],
+          "same_binary_control_over_candidate": [
+            0.9976018704512035,
+            0.9937964893783348,
+            1.0014218228425107
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        2,
+        4,
+        12,
+        16,
+        21,
+        22,
+        25,
+        27,
+        33,
+        34,
+        37,
+        38,
+        39,
+        40,
+        41,
+        43,
+        50,
+        52,
+        55,
+        56,
+        57,
+        58,
+        64,
+        65,
+        66,
+        67,
+        70,
+        72,
+        74,
+        76,
+        78
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 81,
+      "R": 32,
+      "atlas_cell_id": "k081_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0777028924034862,
+            1.076264859566536,
+            1.0791428466433526
+          ],
+          "same_binary_control_over_candidate": [
+            1.0003682854850722,
+            0.9989754879198065,
+            1.0017630249248697
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1194299283293927,
+            1.115102616926007,
+            1.1237740324688887
+          ],
+          "same_binary_control_over_candidate": [
+            1.0015206320974606,
+            0.9979538731477171,
+            1.005100138900334
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        3,
+        6,
+        7,
+        8,
+        14,
+        17,
+        21,
+        23,
+        28,
+        30,
+        32,
+        35,
+        41,
+        42,
+        47,
+        49,
+        53,
+        55,
+        59,
+        60,
+        64,
+        66,
+        68,
+        69,
+        71,
+        72,
+        74,
+        75,
+        76,
+        78,
+        79
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 83,
+      "R": 32,
+      "atlas_cell_id": "k083_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0802376677590178,
+            1.0785914827907055,
+            1.0818863651938135
+          ],
+          "same_binary_control_over_candidate": [
+            0.9986157741283164,
+            0.9967751446064875,
+            1.0004598025280718
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1165179582411802,
+            1.111910714879429,
+            1.1211442918869896
+          ],
+          "same_binary_control_over_candidate": [
+            1.0008505060597346,
+            0.9959315729078132,
+            1.0057937339564067
+          ]
+        }
+      },
+      "missing_original_indices": [
+        2,
+        3,
+        4,
+        7,
+        10,
+        12,
+        15,
+        21,
+        22,
+        27,
+        28,
+        29,
+        37,
+        38,
+        40,
+        46,
+        54,
+        56,
+        59,
+        60,
+        63,
+        64,
+        68,
+        69,
+        73,
+        74,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 85,
+      "R": 32,
+      "atlas_cell_id": "k085_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0816605205193452,
+            1.079768626006256,
+            1.0835557298767098
+          ],
+          "same_binary_control_over_candidate": [
+            0.9999498322435522,
+            0.9986713783139303,
+            1.0012299227920716
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1183132565100704,
+            1.1126659954348048,
+            1.1239891798773296
+          ],
+          "same_binary_control_over_candidate": [
+            0.9981502505194499,
+            0.9935826865913163,
+            1.0027388118346348
+          ]
+        }
+      },
+      "missing_original_indices": [
+        3,
+        4,
+        6,
+        12,
+        13,
+        20,
+        23,
+        27,
+        28,
+        30,
+        31,
+        32,
+        33,
+        42,
+        43,
+        44,
+        45,
+        46,
+        48,
+        51,
+        59,
+        61,
+        67,
+        68,
+        69,
+        70,
+        72,
+        73,
+        75,
+        82,
+        83,
+        84
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 87,
+      "R": 32,
+      "atlas_cell_id": "k087_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0709765499733277,
+            1.0695892064928252,
+            1.0723656929502363
+          ],
+          "same_binary_control_over_candidate": [
+            0.9999080774805005,
+            0.9986344636615194,
+            1.001183315609696
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1148021570904032,
+            1.1106603172317708,
+            1.1189594425692202
+          ],
+          "same_binary_control_over_candidate": [
+            0.9985156968419742,
+            0.9950637617143703,
+            1.001979606936996
+          ]
+        }
+      },
+      "missing_original_indices": [
+        1,
+        7,
+        8,
+        11,
+        13,
+        16,
+        17,
+        18,
+        21,
+        22,
+        27,
+        28,
+        29,
+        35,
+        38,
+        49,
+        53,
+        57,
+        59,
+        61,
+        62,
+        66,
+        67,
+        69,
+        73,
+        76,
+        78,
+        82,
+        83,
+        84,
+        85,
+        86
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 89,
+      "R": 32,
+      "atlas_cell_id": "k089_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0789154049156444,
+            1.0773208992037526,
+            1.0805122706007504
+          ],
+          "same_binary_control_over_candidate": [
+            0.9995726346524987,
+            0.9980590009471579,
+            1.0010885639004794
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1162927011353545,
+            1.111052061810701,
+            1.1215580596441712
+          ],
+          "same_binary_control_over_candidate": [
+            0.9991529073104843,
+            0.9948587859661685,
+            1.003465563424136
+          ]
+        }
+      },
+      "missing_original_indices": [
+        1,
+        3,
+        8,
+        13,
+        14,
+        15,
+        20,
+        22,
+        23,
+        25,
+        26,
+        29,
+        30,
+        37,
+        39,
+        43,
+        48,
+        50,
+        51,
+        52,
+        55,
+        57,
+        60,
+        61,
+        66,
+        68,
+        70,
+        75,
+        76,
+        78,
+        83,
+        86
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 91,
+      "R": 32,
+      "atlas_cell_id": "k091_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0586175358945333,
+            1.0569314720191196,
+            1.0603062894536845
+          ],
+          "same_binary_control_over_candidate": [
+            0.9986748623050711,
+            0.9973184662630487,
+            1.0000331031040945
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.113320612305255,
+            1.108505227012051,
+            1.1181569157997964
+          ],
+          "same_binary_control_over_candidate": [
+            0.9982887084585531,
+            0.9945439264139668,
+            1.0020475908281115
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        1,
+        2,
+        6,
+        10,
+        15,
+        16,
+        18,
+        19,
+        20,
+        26,
+        30,
+        32,
+        33,
+        35,
+        47,
+        48,
+        50,
+        52,
+        59,
+        60,
+        61,
+        64,
+        65,
+        69,
+        72,
+        74,
+        75,
+        80,
+        81,
+        88,
+        89
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 93,
+      "R": 32,
+      "atlas_cell_id": "k093_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.05658403188712,
+            1.055189677475571,
+            1.0579802288339653
+          ],
+          "same_binary_control_over_candidate": [
+            0.9985657322673529,
+            0.9971460660820956,
+            0.9999874196731174
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.115589388703945,
+            1.11226409769267,
+            1.1189246212033364
+          ],
+          "same_binary_control_over_candidate": [
+            1.0029252461665803,
+            0.9980285478419471,
+            1.0078459695098712
+          ]
+        }
+      },
+      "missing_original_indices": [
+        2,
+        7,
+        8,
+        12,
+        13,
+        16,
+        25,
+        26,
+        31,
+        33,
+        34,
+        36,
+        38,
+        39,
+        43,
+        46,
+        48,
+        49,
+        52,
+        54,
+        55,
+        56,
+        57,
+        59,
+        63,
+        66,
+        70,
+        76,
+        77,
+        78,
+        84,
+        90
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 95,
+      "R": 32,
+      "atlas_cell_id": "k095_b0000064_l32",
+      "historical_role": "former_decode",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0560448532491922,
+            1.0544208246892983,
+            1.057671383152669
+          ],
+          "same_binary_control_over_candidate": [
+            0.9985773176381676,
+            0.9972029934494623,
+            0.9999535358915599
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1079218101950354,
+            1.1038962722654735,
+            1.111962027905687
+          ],
+          "same_binary_control_over_candidate": [
+            1.001215747095304,
+            0.9977870086993268,
+            1.0046562678124435
+          ]
+        }
+      },
+      "missing_original_indices": [
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        22,
+        26,
+        27,
+        30,
+        32,
+        41,
+        42,
+        43,
+        47,
+        49,
+        54,
+        57,
+        61,
+        64,
+        69,
+        71,
+        73,
+        75,
+        77,
+        78,
+        84,
+        88,
+        89,
+        92,
+        94
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 67,
+      "R": 32,
+      "atlas_cell_id": "k067_b0001024_l07",
+      "historical_role": "former_decode",
+      "loss": 7,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.538491481392267,
+            1.5374312245115518,
+            1.5395524694566831
+          ],
+          "same_binary_control_over_candidate": [
+            0.9996781930345967,
+            0.9990881170389502,
+            1.0002686175377218
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.112539902947886,
+            1.1110394923928306,
+            1.1140423397421966
+          ],
+          "same_binary_control_over_candidate": [
+            0.9995340628733831,
+            0.99878953157433,
+            1.0002791491710998
+          ]
+        }
+      },
+      "missing_original_indices": [
+        11,
+        12,
+        13,
+        15,
+        26,
+        37,
+        45
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 69,
+      "R": 32,
+      "atlas_cell_id": "k069_b0001024_l07",
+      "historical_role": "former_decode",
+      "loss": 7,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.5796864547921243,
+            1.5785266027132083,
+            1.5808471590941466
+          ],
+          "same_binary_control_over_candidate": [
+            0.9996768237171682,
+            0.9991509421516547,
+            1.0002029820691103
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1038935626871016,
+            1.1024495546158386,
+            1.1053394621458672
+          ],
+          "same_binary_control_over_candidate": [
+            1.0006472483735998,
+            0.999123268820674,
+            1.0021735524782103
+          ]
+        }
+      },
+      "missing_original_indices": [
+        8,
+        9,
+        10,
+        19,
+        26,
+        27,
+        32
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 71,
+      "R": 32,
+      "atlas_cell_id": "k071_b0001024_l08",
+      "historical_role": "former_decode",
+      "loss": 8,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4612494993744791,
+            1.4600929752070204,
+            1.4624069396124708
+          ],
+          "same_binary_control_over_candidate": [
+            0.9999028106754306,
+            0.9993714792656709,
+            1.0004344245758086
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1186167953445183,
+            1.117603320300958,
+            1.1196311894365867
+          ],
+          "same_binary_control_over_candidate": [
+            0.9992766447966314,
+            0.9987047784166834,
+            0.999848838631863
+          ]
+        }
+      },
+      "missing_original_indices": [
+        11,
+        17,
+        19,
+        21,
+        24,
+        48,
+        68,
+        70
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 73,
+      "R": 32,
+      "atlas_cell_id": "k073_b0001024_l08",
+      "historical_role": "former_decode",
+      "loss": 8,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.449104405953174,
+            1.448217688932529,
+            1.4499916658943208
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998425279875369,
+            0.9992224353202795,
+            1.000463005468928
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1042280286496668,
+            1.1021955747153513,
+            1.1062642304388004
+          ],
+          "same_binary_control_over_candidate": [
+            1.0008748468668025,
+            0.998579878220267,
+            1.003175089884676
+          ]
+        }
+      },
+      "missing_original_indices": [
+        17,
+        27,
+        32,
+        41,
+        48,
+        52,
+        59,
+        69
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 75,
+      "R": 32,
+      "atlas_cell_id": "k075_b0001024_l08",
+      "historical_role": "former_decode",
+      "loss": 8,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4663238962913088,
+            1.4653665406462053,
+            1.4672818773975551
+          ],
+          "same_binary_control_over_candidate": [
+            1.0004390502674767,
+            0.9999819408182307,
+            1.0008963686695447
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.123297694099074,
+            1.1222796467950942,
+            1.1243166648986516
+          ],
+          "same_binary_control_over_candidate": [
+            0.999306366143012,
+            0.9986727617229573,
+            0.999940372551162
+          ]
+        }
+      },
+      "missing_original_indices": [
+        11,
+        13,
+        17,
+        19,
+        27,
+        41,
+        54,
+        65
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 77,
+      "R": 32,
+      "atlas_cell_id": "k077_b0001024_l08",
+      "historical_role": "former_decode",
+      "loss": 8,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.531558597641883,
+            1.5304646251387224,
+            1.532653352114008
+          ],
+          "same_binary_control_over_candidate": [
+            0.9995708851126094,
+            0.9990184935223556,
+            1.00012358213912
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1065729752411533,
+            1.1044662421998126,
+            1.1086837268064995
+          ],
+          "same_binary_control_over_candidate": [
+            0.9978107835133283,
+            0.9953098848173971,
+            1.000317966176075
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        8,
+        9,
+        16,
+        18,
+        23,
+        38,
+        53
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 79,
+      "R": 32,
+      "atlas_cell_id": "k079_b0001024_l08",
+      "historical_role": "former_decode",
+      "loss": 8,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4932608867936987,
+            1.4923416105598735,
+            1.494180729297866
+          ],
+          "same_binary_control_over_candidate": [
+            0.999390541687662,
+            0.9986932284208331,
+            1.0000883418365265
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.12412609806486,
+            1.1232711866930853,
+            1.1249816601018185
+          ],
+          "same_binary_control_over_candidate": [
+            0.9987229598768689,
+            0.9981655783215145,
+            0.9992806526773763
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        5,
+        9,
+        10,
+        23,
+        41,
+        70,
+        74
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 81,
+      "R": 32,
+      "atlas_cell_id": "k081_b0001024_l09",
+      "historical_role": "former_decode",
+      "loss": 9,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4033672347240451,
+            1.4024656651237182,
+            1.4042693838948845
+          ],
+          "same_binary_control_over_candidate": [
+            1.0002983114167057,
+            0.9997415524145006,
+            1.0008553804796319
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1257076289058952,
+            1.124757940901332,
+            1.1266581187783742
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998331112436316,
+            0.9990661917122332,
+            1.000600619490345
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        17,
+        24,
+        30,
+        42,
+        47,
+        49,
+        55,
+        76
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 83,
+      "R": 32,
+      "atlas_cell_id": "k083_b0001024_l09",
+      "historical_role": "former_decode",
+      "loss": 9,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4854671297882753,
+            1.4840733847577794,
+            1.4868621837332965
+          ],
+          "same_binary_control_over_candidate": [
+            0.9991193248416742,
+            0.9983383392085547,
+            0.9999009214285506
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1284813230811352,
+            1.1274292805162858,
+            1.129534347342644
+          ],
+          "same_binary_control_over_candidate": [
+            0.9996243214725664,
+            0.9988858420973215,
+            1.0003633468078847
+          ]
+        }
+      },
+      "missing_original_indices": [
+        2,
+        22,
+        32,
+        41,
+        44,
+        47,
+        51,
+        52,
+        59
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 85,
+      "R": 32,
+      "atlas_cell_id": "k085_b0001024_l09",
+      "historical_role": "former_decode",
+      "loss": 9,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4915709833227822,
+            1.4905808127868365,
+            1.4925618116142028
+          ],
+          "same_binary_control_over_candidate": [
+            1.0001790112092095,
+            0.9995914053877182,
+            1.0007669624524398
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1323389394429226,
+            1.1313924076116118,
+            1.1332862631502456
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998896047742749,
+            0.9990771969239117,
+            1.000702673240772
+          ]
+        }
+      },
+      "missing_original_indices": [
+        4,
+        8,
+        17,
+        20,
+        26,
+        45,
+        53,
+        54,
+        55
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 87,
+      "R": 32,
+      "atlas_cell_id": "k087_b0001024_l09",
+      "historical_role": "former_decode",
+      "loss": 9,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.445116981563021,
+            1.4441862687531026,
+            1.4460482941753008
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000644605391544,
+            0.9995503657855411,
+            1.0005788197050722
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1345376145417512,
+            1.1337429968143664,
+            1.1353327892007636
+          ],
+          "same_binary_control_over_candidate": [
+            0.9996715591076653,
+            0.9991372867372178,
+            1.0002061171715502
+          ]
+        }
+      },
+      "missing_original_indices": [
+        8,
+        17,
+        22,
+        32,
+        40,
+        49,
+        54,
+        57,
+        68
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 89,
+      "R": 32,
+      "atlas_cell_id": "k089_b0001024_l09",
+      "historical_role": "former_decode",
+      "loss": 9,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.432946416033985,
+            1.4320584954896045,
+            1.4338348871165563
+          ],
+          "same_binary_control_over_candidate": [
+            1.000184425151227,
+            0.9995207934747021,
+            1.0008484974459015
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1359003364869498,
+            1.1348853534204433,
+            1.1369162273020867
+          ],
+          "same_binary_control_over_candidate": [
+            0.9992693312919929,
+            0.9987281198512789,
+            0.9998108360155511
+          ]
+        }
+      },
+      "missing_original_indices": [
+        1,
+        4,
+        15,
+        17,
+        26,
+        39,
+        47,
+        68,
+        81
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 91,
+      "R": 32,
+      "atlas_cell_id": "k091_b0001024_l10",
+      "historical_role": "former_decode",
+      "loss": 10,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.3960083114738808,
+            1.3951587511523709,
+            1.3968583891219954
+          ],
+          "same_binary_control_over_candidate": [
+            1.00018296538614,
+            0.9995809408087574,
+            1.0007853525490593
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1406499616954313,
+            1.1398166012253408,
+            1.1414839314650111
+          ],
+          "same_binary_control_over_candidate": [
+            0.9990377161147871,
+            0.9984050089845811,
+            0.9996708242028299
+          ]
+        }
+      },
+      "missing_original_indices": [
+        14,
+        17,
+        27,
+        32,
+        34,
+        47,
+        48,
+        53,
+        60,
+        78
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 93,
+      "R": 32,
+      "atlas_cell_id": "k093_b0001024_l10",
+      "historical_role": "former_decode",
+      "loss": 10,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.3967767818424104,
+            1.3958189131482126,
+            1.3977353078657406
+          ],
+          "same_binary_control_over_candidate": [
+            1.0008674775059028,
+            1.000110187543734,
+            1.0016253408929743
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.138471976346244,
+            1.1365811322284753,
+            1.1403659661184464
+          ],
+          "same_binary_control_over_candidate": [
+            0.9995012760695289,
+            0.9987325840813892,
+            1.0002705596948918
+          ]
+        }
+      },
+      "missing_original_indices": [
+        21,
+        23,
+        25,
+        26,
+        32,
+        43,
+        44,
+        67,
+        75,
+        88
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 95,
+      "R": 32,
+      "atlas_cell_id": "k095_b0001024_l10",
+      "historical_role": "former_decode",
+      "loss": 10,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.3890872163855712,
+            1.3881955020813797,
+            1.3899795034868934
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000864169923878,
+            0.9994332608426016,
+            1.0007399999970452
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1464406976801718,
+            1.1454665247049631,
+            1.1474156991501163
+          ],
+          "same_binary_control_over_candidate": [
+            0.99816100577647,
+            0.9975109453174269,
+            0.9988114898685594
+          ]
+        }
+      },
+      "missing_original_indices": [
+        21,
+        41,
+        47,
+        53,
+        55,
+        57,
+        59,
+        61,
+        73,
+        78
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 81,
+      "R": 32,
+      "atlas_cell_id": "k081_b0001024_l02",
+      "historical_role": "former_decode",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.60519721137865,
+            1.604096690103748,
+            1.6062984876872628
+          ],
+          "same_binary_control_over_candidate": [
+            1.000178752481317,
+            0.999512312819487,
+            1.000845636501678
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.125945656104298,
+            1.1248302567411925,
+            1.127062161514944
+          ],
+          "same_binary_control_over_candidate": [
+            0.9996285468661313,
+            0.9989823086390057,
+            1.0002752031425481
+          ]
+        }
+      },
+      "missing_original_indices": [
+        26,
+        41
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 83,
+      "R": 32,
+      "atlas_cell_id": "k083_b0001024_l02",
+      "historical_role": "former_decode",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.595530527879617,
+            1.59443896526769,
+            1.5966228377819465
+          ],
+          "same_binary_control_over_candidate": [
+            1.000406266781348,
+            0.9996089456035124,
+            1.001204223928943
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1272892320807795,
+            1.1262551899853837,
+            1.1283242235552011
+          ],
+          "same_binary_control_over_candidate": [
+            0.9992459620974032,
+            0.9986030453130217,
+            0.9998892928020042
+          ]
+        }
+      },
+      "missing_original_indices": [
+        27,
+        45
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 85,
+      "R": 32,
+      "atlas_cell_id": "k085_b0001024_l02",
+      "historical_role": "former_decode",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.594194794837151,
+            1.5929447423831775,
+            1.5954458282612087
+          ],
+          "same_binary_control_over_candidate": [
+            1.0004784326393388,
+            0.9998130577877858,
+            1.0011442502973642
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1325017131618957,
+            1.1313120453068772,
+            1.1336926320507128
+          ],
+          "same_binary_control_over_candidate": [
+            0.9990527112334334,
+            0.9981260522018363,
+            0.9999802305741657
+          ]
+        }
+      },
+      "missing_original_indices": [
+        18,
+        53
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 95,
+      "R": 32,
+      "atlas_cell_id": "k095_b0001024_l02",
+      "historical_role": "former_decode",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.6356080215162974,
+            1.6345630489383873,
+            1.6366536621428882
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000318311972798,
+            0.9994531638557016,
+            1.0006108335779618
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1458154202020763,
+            1.1447357123555615,
+            1.146896146422545
+          ],
+          "same_binary_control_over_candidate": [
+            0.9991588431945725,
+            0.9986125756425147,
+            0.9997054095694627
+          ]
+        }
+      },
+      "missing_original_indices": [
+        3,
+        60
+      ],
+      "role": "target",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 32,
+      "R": 32,
+      "atlas_cell_id": "k032_b0000064_l01",
+      "historical_role": "encode_neighbor",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            5.725274615514007,
+            5.713160991616329,
+            5.73741392394677
+          ],
+          "same_binary_control_over_candidate": [
+            1.0014051013737262,
+            0.9986623750186687,
+            1.004155360352468
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1199262367972496,
+            1.1122583327284106,
+            1.1276470033631172
+          ],
+          "same_binary_control_over_candidate": [
+            0.9977150147206716,
+            0.9934144258165456,
+            1.0020342212977866
+          ]
+        }
+      },
+      "missing_original_indices": [
+        12
+      ],
+      "role": "neighbor",
+      "shard_bytes": 64
+    },
+    {
+      "K": 34,
+      "R": 32,
+      "atlas_cell_id": "k034_b0000064_l01",
+      "historical_role": "encode_neighbor",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            4.37523378727292,
+            4.367811798379887,
+            4.382668387954572
+          ],
+          "same_binary_control_over_candidate": [
+            1.0009283464959207,
+            0.9986817513197103,
+            1.0031799955242506
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1235350981157803,
+            1.1167226285603407,
+            1.1303891265509785
+          ],
+          "same_binary_control_over_candidate": [
+            0.9959141761593728,
+            0.9905048981543755,
+            1.0013529949456321
+          ]
+        }
+      },
+      "missing_original_indices": [
+        30
+      ],
+      "role": "neighbor",
+      "shard_bytes": 64
+    },
+    {
+      "K": 36,
+      "R": 32,
+      "atlas_cell_id": "k036_b0000064_l01",
+      "historical_role": "encode_neighbor",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            4.153093809262364,
+            4.146105189752141,
+            4.160094208696256
+          ],
+          "same_binary_control_over_candidate": [
+            0.9987981516629652,
+            0.9967860860208019,
+            1.000814278766464
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1288191683220674,
+            1.1213477320661147,
+            1.1363403860669643
+          ],
+          "same_binary_control_over_candidate": [
+            0.9973199243308641,
+            0.9922621521653013,
+            1.0024034770416417
+          ]
+        }
+      },
+      "missing_original_indices": [
+        2
+      ],
+      "role": "neighbor",
+      "shard_bytes": 64
+    },
+    {
+      "K": 62,
+      "R": 32,
+      "atlas_cell_id": "k062_b0000064_l01",
+      "historical_role": "encode_neighbor",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            2.932939199888401,
+            2.9282390426702416,
+            2.9376469013942885
+          ],
+          "same_binary_control_over_candidate": [
+            1.0009864036153335,
+            0.998966899246587,
+            1.0030099905997287
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0886450600440272,
+            1.0844765251804707,
+            1.092829618014129
+          ],
+          "same_binary_control_over_candidate": [
+            0.9984318551220874,
+            0.9949087103868003,
+            1.0019674759254764
+          ]
+        }
+      },
+      "missing_original_indices": [
+        15
+      ],
+      "role": "neighbor",
+      "shard_bytes": 64
+    },
+    {
+      "K": 65,
+      "R": 32,
+      "atlas_cell_id": "k065_b0000064_l01",
+      "historical_role": "encode_neighbor",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            2.8967226658348615,
+            2.89292032303452,
+            2.900530006287802
+          ],
+          "same_binary_control_over_candidate": [
+            1.0006789652974504,
+            0.9989895351549084,
+            1.0023712525011588
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1478690267758365,
+            1.1438347883625073,
+            1.151917493712149
+          ],
+          "same_binary_control_over_candidate": [
+            1.0018600502205746,
+            0.9983364785271345,
+            1.0053960581594545
+          ]
+        }
+      },
+      "missing_original_indices": [
+        8
+      ],
+      "role": "neighbor",
+      "shard_bytes": 64
+    },
+    {
+      "K": 80,
+      "R": 32,
+      "atlas_cell_id": "k080_b0000064_l01",
+      "historical_role": "encode_neighbor",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            2.475212916750181,
+            2.471530076232095,
+            2.478901245089116
+          ],
+          "same_binary_control_over_candidate": [
+            0.9988056413199531,
+            0.99720765622436,
+            1.0004061871222854
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.128695636878725,
+            1.124659693621436,
+            1.132746063484238
+          ],
+          "same_binary_control_over_candidate": [
+            1.0004991961074776,
+            0.9969639974150387,
+            1.0040469304880935
+          ]
+        }
+      },
+      "missing_original_indices": [
+        44
+      ],
+      "role": "neighbor",
+      "shard_bytes": 64
+    },
+    {
+      "K": 92,
+      "R": 32,
+      "atlas_cell_id": "k092_b0000064_l01",
+      "historical_role": "encode_neighbor",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            2.282113262238656,
+            2.2791519786294243,
+            2.285078393419571
+          ],
+          "same_binary_control_over_candidate": [
+            1.0013008992696872,
+            0.9998459114540822,
+            1.0027580044010902
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1183980519148788,
+            1.1137789579927704,
+            1.1230363022670022
+          ],
+          "same_binary_control_over_candidate": [
+            0.9990972433942055,
+            0.9955962544431736,
+            1.0026105434839954
+          ]
+        }
+      },
+      "missing_original_indices": [
+        54
+      ],
+      "role": "neighbor",
+      "shard_bytes": 64
+    },
+    {
+      "K": 96,
+      "R": 32,
+      "atlas_cell_id": "k096_b0000064_l01",
+      "historical_role": "encode_neighbor",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            2.2172790127160664,
+            2.2148544188765693,
+            2.2197062607504563
+          ],
+          "same_binary_control_over_candidate": [
+            1.0003391224664224,
+            0.9992893673516674,
+            1.001389980350642
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.124531137884816,
+            1.1200977126293759,
+            1.1289821109481606
+          ],
+          "same_binary_control_over_candidate": [
+            0.9994410144721744,
+            0.9958360107984561,
+            1.0030590685390766
+          ]
+        }
+      },
+      "missing_original_indices": [
+        45
+      ],
+      "role": "neighbor",
+      "shard_bytes": 64
+    },
+    {
+      "K": 34,
+      "R": 32,
+      "atlas_cell_id": "k034_b0001024_l01",
+      "historical_role": "encode_neighbor",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            14.484903818524456,
+            14.450707307007674,
+            14.519181253512668
+          ],
+          "same_binary_control_over_candidate": [
+            1.001453459810897,
+            0.9980686323237865,
+            1.0048497665257343
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.033204314345321,
+            1.031403393397027,
+            1.035008379859827
+          ],
+          "same_binary_control_over_candidate": [
+            1.0007795954481533,
+            0.9986842334880478,
+            1.0028793537345415
+          ]
+        }
+      },
+      "missing_original_indices": [
+        30
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 36,
+      "R": 32,
+      "atlas_cell_id": "k036_b0001024_l01",
+      "historical_role": "encode_neighbor",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            13.268099870065821,
+            13.239012104283367,
+            13.297251545308557
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000363654548239,
+            0.9967942655578095,
+            1.0032890103681023
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0702481140999518,
+            1.0692083784311945,
+            1.071288860844083
+          ],
+          "same_binary_control_over_candidate": [
+            1.0003482226913372,
+            0.9995524180959342,
+            1.001144660875277
+          ]
+        }
+      },
+      "missing_original_indices": [
+        2
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 64,
+      "R": 32,
+      "atlas_cell_id": "k064_b0000064_l32",
+      "historical_role": "decode_neighbor",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.148858835355991,
+            1.1468984642938713,
+            1.1508225572419373
+          ],
+          "same_binary_control_over_candidate": [
+            0.9994576255031341,
+            0.9981830654851932,
+            1.000733812981303
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0938863676601074,
+            1.0894820772529952,
+            1.098308462650145
+          ],
+          "same_binary_control_over_candidate": [
+            0.9985030849143022,
+            0.9953089455528373,
+            1.0017074748882084
+          ]
+        }
+      },
+      "missing_original_indices": [
+        1,
+        3,
+        5,
+        6,
+        7,
+        9,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        22,
+        26,
+        29,
+        30,
+        31,
+        34,
+        36,
+        37,
+        40,
+        43,
+        45,
+        48,
+        49,
+        50,
+        52,
+        55,
+        56,
+        61,
+        62,
+        63
+      ],
+      "role": "neighbor",
+      "shard_bytes": 64
+    },
+    {
+      "K": 66,
+      "R": 32,
+      "atlas_cell_id": "k066_b0000064_l32",
+      "historical_role": "decode_neighbor",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.096971213452102,
+            1.0953543566741792,
+            1.0985904568785319
+          ],
+          "same_binary_control_over_candidate": [
+            1.0002110823163692,
+            0.9987075192580984,
+            1.0017169090022051
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1484668622091934,
+            1.1436481863500678,
+            1.1533058411976487
+          ],
+          "same_binary_control_over_candidate": [
+            1.0013452817666761,
+            0.9983573259974241,
+            1.0043421801053336
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        1,
+        2,
+        5,
+        7,
+        10,
+        12,
+        13,
+        14,
+        19,
+        20,
+        22,
+        25,
+        29,
+        31,
+        32,
+        34,
+        36,
+        38,
+        40,
+        41,
+        44,
+        47,
+        49,
+        50,
+        53,
+        55,
+        56,
+        58,
+        59,
+        61,
+        63
+      ],
+      "role": "neighbor",
+      "shard_bytes": 64
+    },
+    {
+      "K": 96,
+      "R": 32,
+      "atlas_cell_id": "k096_b0000064_l32",
+      "historical_role": "decode_neighbor",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.0718345796283788,
+            1.0703522156193002,
+            1.0733189966093888
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998788840994612,
+            0.9985340956129659,
+            1.0012254836969454
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1259807330088603,
+            1.122221574391035,
+            1.1297524838578779
+          ],
+          "same_binary_control_over_candidate": [
+            1.0014516786529515,
+            0.9980693336963187,
+            1.0048454859970353
+          ]
+        }
+      },
+      "missing_original_indices": [
+        4,
+        7,
+        9,
+        13,
+        16,
+        17,
+        19,
+        21,
+        24,
+        34,
+        35,
+        38,
+        41,
+        45,
+        47,
+        50,
+        54,
+        56,
+        57,
+        67,
+        69,
+        71,
+        72,
+        74,
+        75,
+        80,
+        81,
+        83,
+        84,
+        86,
+        89,
+        93
+      ],
+      "role": "neighbor",
+      "shard_bytes": 64
+    },
+    {
+      "K": 97,
+      "R": 32,
+      "atlas_cell_id": "k097_b0000064_l32",
+      "historical_role": "decode_neighbor",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.528877760567453,
+            1.527077042475546,
+            1.5306806020529786
+          ],
+          "same_binary_control_over_candidate": [
+            0.9999690291351279,
+            0.9987748335742994,
+            1.0011646525483506
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0670342979987801,
+            1.064129419509328,
+            1.0699471062746695
+          ],
+          "same_binary_control_over_candidate": [
+            0.9986361508593962,
+            0.9965052334679195,
+            1.0007716249845224
+          ]
+        }
+      },
+      "missing_original_indices": [
+        1,
+        5,
+        18,
+        21,
+        24,
+        26,
+        29,
+        32,
+        33,
+        34,
+        40,
+        49,
+        50,
+        54,
+        55,
+        56,
+        57,
+        61,
+        62,
+        67,
+        70,
+        73,
+        74,
+        81,
+        82,
+        86,
+        87,
+        88,
+        91,
+        94,
+        95,
+        96
+      ],
+      "role": "neighbor",
+      "shard_bytes": 64
+    },
+    {
+      "K": 65,
+      "R": 32,
+      "atlas_cell_id": "k065_b0001024_l07",
+      "historical_role": "decode_neighbor",
+      "loss": 7,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.60582560763929,
+            1.6047497131512625,
+            1.6069022234541013
+          ],
+          "same_binary_control_over_candidate": [
+            0.9999124477670202,
+            0.9993013625271758,
+            1.000523906693106
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.101563949594615,
+            1.0999992715424902,
+            1.103130853300402
+          ],
+          "same_binary_control_over_candidate": [
+            1.0002508335625775,
+            0.9996074030572356,
+            1.0008946782333346
+          ]
+        }
+      },
+      "missing_original_indices": [
+        1,
+        4,
+        7,
+        13,
+        23,
+        59,
+        64
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 66,
+      "R": 32,
+      "atlas_cell_id": "k066_b0001024_l07",
+      "historical_role": "decode_neighbor",
+      "loss": 7,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.5436289474989042,
+            1.5423957542033522,
+            1.5448631267707855
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000472389829753,
+            0.999405616291365,
+            1.000689273599105
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1105642084744574,
+            1.1096155828089973,
+            1.1115136451330823
+          ],
+          "same_binary_control_over_candidate": [
+            1.00005799868451,
+            0.9995289564604627,
+            1.0005873209261325
+          ]
+        }
+      },
+      "missing_original_indices": [
+        2,
+        4,
+        7,
+        35,
+        52,
+        54,
+        65
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 96,
+      "R": 32,
+      "atlas_cell_id": "k096_b0001024_l10",
+      "historical_role": "decode_neighbor",
+      "loss": 10,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4335960618425387,
+            1.4327381518623985,
+            1.4344544855310162
+          ],
+          "same_binary_control_over_candidate": [
+            1.000282695108586,
+            0.9998231968253158,
+            1.0007424045678652
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1711225874691589,
+            1.1702464298461948,
+            1.1719994010669337
+          ],
+          "same_binary_control_over_candidate": [
+            0.9995466530863159,
+            0.9989292322058079,
+            1.0001644555839908
+          ]
+        }
+      },
+      "missing_original_indices": [
+        3,
+        5,
+        9,
+        10,
+        16,
+        23,
+        37,
+        70,
+        88,
+        91
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 97,
+      "R": 32,
+      "atlas_cell_id": "k097_b0001024_l10",
+      "historical_role": "decode_neighbor",
+      "loss": 10,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            2.0330025908066136,
+            2.0315960026604545,
+            2.0344101528128364
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998739697707977,
+            0.9993739536376792,
+            1.0003742360766694
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1307934748236896,
+            1.1297608134571677,
+            1.131827080097528
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998094561416377,
+            0.9990921386296244,
+            1.0005272886656236
+          ]
+        }
+      },
+      "missing_original_indices": [
+        9,
+        16,
+        18,
+        20,
+        45,
+        48,
+        51,
+        63,
+        70,
+        92
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 79,
+      "R": 32,
+      "atlas_cell_id": "k079_b0001024_l02",
+      "historical_role": "decode_neighbor",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.69660539987615,
+            1.6952397197200637,
+            1.6979721802201726
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000674868682287,
+            0.9994303528877998,
+            1.0007050270197404
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1249094630074417,
+            1.123833276244047,
+            1.1259866803311285
+          ],
+          "same_binary_control_over_candidate": [
+            0.9997677232367688,
+            0.9990588171425374,
+            1.0004771323522856
+          ]
+        }
+      },
+      "missing_original_indices": [
+        10,
+        44
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 80,
+      "R": 32,
+      "atlas_cell_id": "k080_b0001024_l02",
+      "historical_role": "decode_neighbor",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.6819111836342877,
+            1.6808045584466884,
+            1.6830185374130249
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000730440891885,
+            0.9994869977034192,
+            1.0006594341016053
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1522991605653525,
+            1.1514005301678505,
+            1.1531984923144434
+          ],
+          "same_binary_control_over_candidate": [
+            1.000185955069706,
+            0.999498876964415,
+            1.000873505488007
+          ]
+        }
+      },
+      "missing_original_indices": [
+        55,
+        71
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 86,
+      "R": 32,
+      "atlas_cell_id": "k086_b0001024_l02",
+      "historical_role": "decode_neighbor",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.6420173230961645,
+            1.6409777393932528,
+            1.6430575653907498
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998891629333231,
+            0.9993617206412141,
+            1.0004168835984832
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.134562076595002,
+            1.1335788447611914,
+            1.1355461612542188
+          ],
+          "same_binary_control_over_candidate": [
+            0.9995715747660711,
+            0.9988886121621574,
+            1.0002550043268732
+          ]
+        }
+      },
+      "missing_original_indices": [
+        27,
+        67
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 96,
+      "R": 32,
+      "atlas_cell_id": "k096_b0001024_l02",
+      "historical_role": "decode_neighbor",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.6706849758508708,
+            1.6695038077865934,
+            1.671866979587394
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998564660205594,
+            0.9993193792984202,
+            1.0003938414013127
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1709569620923834,
+            1.1698545079145357,
+            1.1720604552073006
+          ],
+          "same_binary_control_over_candidate": [
+            0.9997301798334066,
+            0.9990488738867042,
+            1.000411950399814
+          ]
+        }
+      },
+      "missing_original_indices": [
+        21,
+        69
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 97,
+      "R": 32,
+      "atlas_cell_id": "k097_b0001024_l02",
+      "historical_role": "decode_neighbor",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            2.4225272394535335,
+            2.420810063406556,
+            2.4242456335612013
+          ],
+          "same_binary_control_over_candidate": [
+            1.000227910751205,
+            0.9997309327339341,
+            1.0007251358220997
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.130200533904873,
+            1.1291689461732346,
+            1.1312330640758619
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000209024726687,
+            0.999430928914519,
+            1.0006112242978065
+          ]
+        }
+      },
+      "missing_original_indices": [
+        29,
+        34
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 65,
+      "R": 32,
+      "atlas_cell_id": "k065_b0001024_l01",
+      "historical_role": "one_loss_control",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            9.000283166671734,
+            8.97532472179711,
+            9.025311015605805
+          ],
+          "same_binary_control_over_candidate": [
+            0.9962856570555143,
+            0.9931068382709614,
+            0.9994746508670389
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1006857694077106,
+            1.0996625274461012,
+            1.1017099635015297
+          ],
+          "same_binary_control_over_candidate": [
+            0.9996087864103683,
+            0.998897823531382,
+            1.0003202553152997
+          ]
+        }
+      },
+      "missing_original_indices": [
+        8
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 81,
+      "R": 32,
+      "atlas_cell_id": "k081_b0001024_l01",
+      "historical_role": "one_loss_control",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            7.706615749087079,
+            7.686667818475122,
+            7.726615447245791
+          ],
+          "same_binary_control_over_candidate": [
+            0.9983032051738574,
+            0.9950454541107208,
+            1.0015716220231101
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.124204654239331,
+            1.1232494459210154,
+            1.1251606748642402
+          ],
+          "same_binary_control_over_candidate": [
+            0.9995355693382185,
+            0.9988745810796501,
+            1.0001969949945206
+          ]
+        }
+      },
+      "missing_original_indices": [
+        24
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 95,
+      "R": 32,
+      "atlas_cell_id": "k095_b0001024_l01",
+      "historical_role": "one_loss_control",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            6.824098038942803,
+            6.803461453104585,
+            6.844797220663719
+          ],
+          "same_binary_control_over_candidate": [
+            0.9979999811912506,
+            0.9942148470516514,
+            1.001799525938876
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1448633519834717,
+            1.14392336845358,
+            1.1458041079156598
+          ],
+          "same_binary_control_over_candidate": [
+            0.9991182404710229,
+            0.9985943331695759,
+            0.9996424226376993
+          ]
+        }
+      },
+      "missing_original_indices": [
+        5
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 96,
+      "R": 32,
+      "atlas_cell_id": "k096_b0001024_l01",
+      "historical_role": "one_loss_control",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            6.759880313635452,
+            6.74590690908466,
+            6.773882662557603
+          ],
+          "same_binary_control_over_candidate": [
+            1.0006469575024879,
+            0.9976890474327197,
+            1.0036136370701305
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1710835130867234,
+            1.1702048238747982,
+            1.1719628620931695
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000154558750451,
+            0.9993676176740918,
+            1.0006637140359083
+          ]
+        }
+      },
+      "missing_original_indices": [
+        45
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 97,
+      "R": 32,
+      "atlas_cell_id": "k097_b0001024_l01",
+      "historical_role": "one_loss_control",
+      "loss": 1,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            11.063328329515318,
+            11.033929653118479,
+            11.092805335410446
+          ],
+          "same_binary_control_over_candidate": [
+            1.001248040062323,
+            0.9981993019583776,
+            1.0043060897376228
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1314440505207217,
+            1.1305511832723343,
+            1.1323376229224316
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000482938763862,
+            0.9993408760441073,
+            1.000756212478724
+          ]
+        }
+      },
+      "missing_original_indices": [
+        16
+      ],
+      "role": "neighbor",
+      "shard_bytes": 1024
+    },
+    {
+      "K": 33,
+      "R": 32,
+      "atlas_cell_id": "k033_b0000064_l02",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4861308586225264,
+            1.4838795556906386,
+            1.4883855771718557
+          ],
+          "same_binary_control_over_candidate": [
+            0.9992172450757332,
+            0.9974887648771469,
+            1.0009487204396808
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1694133135998055,
+            1.1631378437070354,
+            1.1757226414936612
+          ],
+          "same_binary_control_over_candidate": [
+            0.997270902197045,
+            0.9931546743644324,
+            1.0014041901432607
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        11
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 33,
+      "R": 32,
+      "atlas_cell_id": "k033_b0000064_l04",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 4,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4441632285320003,
+            1.442062102366314,
+            1.4462674160992428
+          ],
+          "same_binary_control_over_candidate": [
+            0.9994405749058224,
+            0.9978556712590473,
+            1.0010279958701234
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1680199108444733,
+            1.1602587687451675,
+            1.175832968368431
+          ],
+          "same_binary_control_over_candidate": [
+            1.0009831692605196,
+            0.995743478330085,
+            1.0062504319116272
+          ]
+        }
+      },
+      "missing_original_indices": [
+        4,
+        12,
+        19,
+        22
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 33,
+      "R": 32,
+      "atlas_cell_id": "k033_b0000064_l32",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.3145625752066503,
+            1.3123897071298547,
+            1.3167390408091302
+          ],
+          "same_binary_control_over_candidate": [
+            0.9986881661780144,
+            0.9971840069276832,
+            1.0001945943125583
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1740008224084855,
+            1.1682663181584017,
+            1.1797634748115062
+          ],
+          "same_binary_control_over_candidate": [
+            1.0028549559695181,
+            0.9967925364824908,
+            1.0089542466495889
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        29,
+        30,
+        31,
+        32
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 35,
+      "R": 32,
+      "atlas_cell_id": "k035_b0000064_l04",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 4,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4496682925112494,
+            1.4476223572053573,
+            1.4517171193525307
+          ],
+          "same_binary_control_over_candidate": [
+            1.0010235982419697,
+            0.9990769336110198,
+            1.0029740558773
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1293495951410637,
+            1.1228135495132463,
+            1.1359236879517525
+          ],
+          "same_binary_control_over_candidate": [
+            1.0039894517633297,
+            0.9993169134930199,
+            1.0086838375712852
+          ]
+        }
+      },
+      "missing_original_indices": [
+        3,
+        10,
+        12,
+        23
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 35,
+      "R": 32,
+      "atlas_cell_id": "k035_b0000064_l32",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.293842065797024,
+            1.2922443270099164,
+            1.2954417800381368
+          ],
+          "same_binary_control_over_candidate": [
+            1.0001885894547866,
+            0.998797011774368,
+            1.0015821059560246
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1208425083051963,
+            1.1149637205769667,
+            1.1267522926878601
+          ],
+          "same_binary_control_over_candidate": [
+            0.9954448211819664,
+            0.990912252323,
+            0.9999981226339683
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        13,
+        14,
+        15,
+        16,
+        17,
+        19,
+        20,
+        21,
+        22,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 37,
+      "R": 32,
+      "atlas_cell_id": "k037_b0000064_l02",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4158145546889223,
+            1.4138629802817777,
+            1.41776882288091
+          ],
+          "same_binary_control_over_candidate": [
+            1.0001143373353898,
+            0.9984990576754825,
+            1.0017322300457145
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.133951317853678,
+            1.1289839124178893,
+            1.138940579328771
+          ],
+          "same_binary_control_over_candidate": [
+            1.0019465456339465,
+            0.9985416122291674,
+            1.0053630895428336
+          ]
+        }
+      },
+      "missing_original_indices": [
+        23,
+        32
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 39,
+      "R": 32,
+      "atlas_cell_id": "k039_b0000064_l02",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4421366114835381,
+            1.4405300808018286,
+            1.443744933825738
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998375365210721,
+            0.9985936031632157,
+            1.0010830194284088
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.125074464355194,
+            1.1190482369138284,
+            1.131133143853564
+          ],
+          "same_binary_control_over_candidate": [
+            1.0024059537579404,
+            0.9966977078991704,
+            1.0081468916461251
+          ]
+        }
+      },
+      "missing_original_indices": [
+        2,
+        25
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 43,
+      "R": 32,
+      "atlas_cell_id": "k043_b0000064_l05",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 5,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.3820740760231607,
+            1.3803578111331416,
+            1.3837924748274077
+          ],
+          "same_binary_control_over_candidate": [
+            0.9995991666408154,
+            0.9981425085008984,
+            1.0010579505823274
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1140815609478592,
+            1.108835144543058,
+            1.1193528005964293
+          ],
+          "same_binary_control_over_candidate": [
+            1.0022096573118942,
+            0.998529826289663,
+            1.0059030494276404
+          ]
+        }
+      },
+      "missing_original_indices": [
+        5,
+        22,
+        25,
+        27,
+        32
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 45,
+      "R": 32,
+      "atlas_cell_id": "k045_b0000064_l05",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 5,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.3885510835068593,
+            1.3865787834242203,
+            1.3905261890324074
+          ],
+          "same_binary_control_over_candidate": [
+            1.000940974545475,
+            0.9995366609447182,
+            1.002347261157094
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1262919225781185,
+            1.1209130204816828,
+            1.1316966363006435
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998643481096003,
+            0.996120551124396,
+            1.0036222156968524
+          ]
+        }
+      },
+      "missing_original_indices": [
+        13,
+        15,
+        18,
+        19,
+        37
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 51,
+      "R": 32,
+      "atlas_cell_id": "k051_b0000064_l02",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4179413474419535,
+            1.4160849716270432,
+            1.4198001568192808
+          ],
+          "same_binary_control_over_candidate": [
+            1.0008213395512915,
+            0.9992747798122439,
+            1.0023702928732403
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1018730848658558,
+            1.0959382037829415,
+            1.1078401053644298
+          ],
+          "same_binary_control_over_candidate": [
+            1.0002647052502671,
+            0.995052521616031,
+            1.0055041908184685
+          ]
+        }
+      },
+      "missing_original_indices": [
+        13,
+        42
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 53,
+      "R": 32,
+      "atlas_cell_id": "k053_b0000064_l02",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4063487900102971,
+            1.4036648746544804,
+            1.409037837218999
+          ],
+          "same_binary_control_over_candidate": [
+            0.9995887494796626,
+            0.9974061184472022,
+            1.0017761567794186
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1004203366718823,
+            1.0958261434274343,
+            1.1050337908289247
+          ],
+          "same_binary_control_over_candidate": [
+            0.9991534322979146,
+            0.9958737781359858,
+            1.0024438871573396
+          ]
+        }
+      },
+      "missing_original_indices": [
+        13,
+        42
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 53,
+      "R": 32,
+      "atlas_cell_id": "k053_b0000064_l32",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.176178730097331,
+            1.1744629337555699,
+            1.1778970330802143
+          ],
+          "same_binary_control_over_candidate": [
+            1.0010630893649592,
+            0.99979456045822,
+            1.0023332277679398
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.1022623313817699,
+            1.0965073190685966,
+            1.1080475488437362
+          ],
+          "same_binary_control_over_candidate": [
+            0.9990012940978599,
+            0.9955273753164586,
+            1.0024873352095949
+          ]
+        }
+      },
+      "missing_original_indices": [
+        4,
+        5,
+        6,
+        9,
+        10,
+        12,
+        13,
+        16,
+        18,
+        19,
+        20,
+        21,
+        22,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        33,
+        34,
+        35,
+        36,
+        39,
+        42,
+        43,
+        44,
+        47,
+        49,
+        50,
+        51
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 59,
+      "R": 32,
+      "atlas_cell_id": "k059_b0000064_l02",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.4578286639671794,
+            1.4559399235907116,
+            1.4597198545410432
+          ],
+          "same_binary_control_over_candidate": [
+            1.001007581663886,
+            0.9992075679402462,
+            1.0028108380064862
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0888950490720666,
+            1.084399323372015,
+            1.093409413247018
+          ],
+          "same_binary_control_over_candidate": [
+            1.0026775197590188,
+            0.9987382218633255,
+            1.006632355327719
+          ]
+        }
+      },
+      "missing_original_indices": [
+        35,
+        48
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 59,
+      "R": 32,
+      "atlas_cell_id": "k059_b0000064_l06",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 6,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.3225164201989257,
+            1.3207328714952462,
+            1.3243023774486835
+          ],
+          "same_binary_control_over_candidate": [
+            0.9994742633697357,
+            0.9982369976517036,
+            1.0007130626178418
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0901946814976844,
+            1.0854269783347505,
+            1.0949833266437305
+          ],
+          "same_binary_control_over_candidate": [
+            0.9994880574484927,
+            0.9958845887366717,
+            1.0031045648064618
+          ]
+        }
+      },
+      "missing_original_indices": [
+        8,
+        22,
+        25,
+        40,
+        52,
+        57
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 59,
+      "R": 32,
+      "atlas_cell_id": "k059_b0000064_l32",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.173879142572686,
+            1.1722113101248002,
+            1.1755493480270855
+          ],
+          "same_binary_control_over_candidate": [
+            0.9998924939241793,
+            0.9986842732252826,
+            1.0011021763435581
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0871505159730595,
+            1.0817854759378887,
+            1.0925421635521648
+          ],
+          "same_binary_control_over_candidate": [
+            1.0000324485265129,
+            0.9961376860573592,
+            1.0039424389856357
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        1,
+        2,
+        7,
+        9,
+        11,
+        13,
+        16,
+        17,
+        18,
+        19,
+        20,
+        24,
+        29,
+        30,
+        31,
+        32,
+        33,
+        35,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        45,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 61,
+      "R": 32,
+      "atlas_cell_id": "k061_b0000064_l07",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 7,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.3115501408206292,
+            1.309432171940769,
+            1.313671535454241
+          ],
+          "same_binary_control_over_candidate": [
+            0.9991434585524873,
+            0.9974251615250476,
+            1.0008647157465527
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.090342414412155,
+            1.0856284048340987,
+            1.0950768931361943
+          ],
+          "same_binary_control_over_candidate": [
+            1.0006454428901899,
+            0.9971058582032878,
+            1.004197592601811
+          ]
+        }
+      },
+      "missing_original_indices": [
+        0,
+        3,
+        11,
+        24,
+        32,
+        40,
+        58
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 63,
+      "R": 32,
+      "atlas_cell_id": "k063_b0000064_l07",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 7,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.3324183116101183,
+            1.330665612987992,
+            1.3341733188155804
+          ],
+          "same_binary_control_over_candidate": [
+            1.0001427025640988,
+            0.9987045658067653,
+            1.001582910241506
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0857606489072318,
+            1.0808640893589665,
+            1.0906793909811687
+          ],
+          "same_binary_control_over_candidate": [
+            0.9995195177014438,
+            0.9947067809016337,
+            1.0043555401930264
+          ]
+        }
+      },
+      "missing_original_indices": [
+        2,
+        10,
+        12,
+        19,
+        21,
+        44,
+        50
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 64,
+      "R": 32,
+      "atlas_cell_id": "k064_b0000064_l07",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 7,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.3110431437980263,
+            1.3083041372529525,
+            1.3137878846036903
+          ],
+          "same_binary_control_over_candidate": [
+            0.9993366304429019,
+            0.9974535943858666,
+            1.001223221376888
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0945765053932954,
+            1.090113345401112,
+            1.0990579385285424
+          ],
+          "same_binary_control_over_candidate": [
+            1.0002208435084152,
+            0.9963200419354331,
+            1.0041369175363029
+          ]
+        }
+      },
+      "missing_original_indices": [
+        8,
+        15,
+        16,
+        19,
+        28,
+        51,
+        52
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 81,
+      "R": 32,
+      "atlas_cell_id": "k081_b0000064_l02",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 2,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.3143571473217877,
+            1.3128676046717038,
+            1.3158483799650578
+          ],
+          "same_binary_control_over_candidate": [
+            0.9987353770236015,
+            0.9976955723689048,
+            0.9997762653693056
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.127864280961871,
+            1.1233783835619584,
+            1.1323680915384808
+          ],
+          "same_binary_control_over_candidate": [
+            1.0033893753538836,
+            0.9985602348707588,
+            1.0082418700594091
+          ]
+        }
+      },
+      "missing_original_indices": [
+        26,
+        41
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    },
+    {
+      "K": 209,
+      "R": 32,
+      "atlas_cell_id": "k209_b0000064_l32",
+      "historical_role": "supplemental_atlas_loss",
+      "loss": 32,
+      "metrics": {
+        "decode": {
+          "exact_main_over_current": [
+            1.165824265426994,
+            1.1645298159140292,
+            1.16712015380354
+          ],
+          "same_binary_control_over_candidate": [
+            0.9999551480000469,
+            0.9987300021578361,
+            1.0011817967332606
+          ]
+        },
+        "encode": {
+          "exact_main_over_current": [
+            1.0815948567839444,
+            1.0752234159169152,
+            1.08800405283573
+          ],
+          "same_binary_control_over_candidate": [
+            0.9993750003373852,
+            0.9937935914104716,
+            1.0049877559401867
+          ]
+        }
+      },
+      "missing_original_indices": [
+        4,
+        11,
+        14,
+        17,
+        28,
+        33,
+        34,
+        38,
+        39,
+        42,
+        43,
+        45,
+        53,
+        74,
+        90,
+        92,
+        93,
+        105,
+        117,
+        120,
+        130,
+        135,
+        145,
+        150,
+        157,
+        161,
+        178,
+        183,
+        184,
+        193,
+        204,
+        206
+      ],
+      "role": "target",
+      "shard_bytes": 64
+    }
+  ],
+  "ratio_orientation": "reference_time_over_current_Leopard2_time; values above 1 favor current Leopard2",
+  "ratio_tuple": [
+    "geometric_mean_speedup",
+    "ci95_lower",
+    "ci95_upper"
+  ],
+  "rejected_v2_pilot": {
+    "accepted_processes": 14550,
+    "discarded_processes": 6,
+    "exact_main_failed_intervals": 0,
+    "ordered_artifact_sha256": "713b35a81cefcf59964699bbc5eed6f5bc364a8a4dec37fe09293db7b1bea2ad",
+    "raw_sha256": "5823b85c41b2f3cff081dfc1ee776b139a61354427afdfa294703081be3d4d1c",
+    "rounds_per_cell": 25,
+    "same_binary_equivalence_failures": [
+      {
+        "atlas_cell_id": "k041_b0000064_l01",
+        "confirmation_exact_main_ratio": [
+          1.120318853750083,
+          1.1145568498664422,
+          1.1261106458753545
+        ],
+        "confirmation_ratio": [
+          1.0001780647856213,
+          0.9962832862033917,
+          1.0040880692583325
+        ],
+        "operation": "encode",
+        "pilot_ratio": [
+          0.9894937187953059,
+          0.9733932674203523,
+          1.0058604803484306
+        ]
+      },
+      {
+        "atlas_cell_id": "k036_b0000064_l01",
+        "confirmation_exact_main_ratio": [
+          1.1288191683220674,
+          1.1213477320661147,
+          1.1363403860669643
+        ],
+        "confirmation_ratio": [
+          0.9973199243308641,
+          0.9922621521653013,
+          1.0024034770416417
+        ],
+        "operation": "encode",
+        "pilot_ratio": [
+          0.9914724852647687,
+          0.9801134967259826,
+          1.0029631183743675
+        ]
+      },
+      {
+        "atlas_cell_id": "k066_b0000064_l32",
+        "confirmation_exact_main_ratio": [
+          1.1484668622091934,
+          1.1436481863500678,
+          1.1533058411976487
+        ],
+        "confirmation_ratio": [
+          1.0013452817666761,
+          0.9983573259974241,
+          1.0043421801053336
+        ],
+        "operation": "encode",
+        "pilot_ratio": [
+          0.9905473718677013,
+          0.9795133947263257,
+          1.00170564404395
+        ]
+      }
+    ],
+    "source_commit": "9ce8990f2c774e6b56d0bc24a942aaf92b749a0f",
+    "source_tree": "34e7b20c64e4727a8e3eb49470bcc22b94fe7373",
+    "status": "rejected",
+    "summary_sha256": "a4df8880ca7c70d892f6b0da0647792daed163e0316612beeb6e9f9bb529c29c",
+    "used_for_acceptance": false
+  },
+  "schema": "leopard2-current-atlas-final97-confirmation-checkpoint/v1",
+  "scope": {
+    "K_max": 209,
+    "K_min": 32,
+    "K_values": [
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      39,
+      41,
+      43,
+      45,
+      47,
+      51,
+      53,
+      57,
+      59,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      69,
+      71,
+      73,
+      75,
+      77,
+      79,
+      80,
+      81,
+      83,
+      85,
+      86,
+      87,
+      89,
+      91,
+      92,
+      93,
+      95,
+      96,
+      97,
+      209
+    ],
+    "R": 32,
+    "batch": 1,
+    "decode_metric": "one_shot_decode_including_setup",
+    "effective_backend": "avx2",
+    "encode_metric": "encode_execution",
+    "erasure_patterns": "deterministic committed-atlas missing-original index sets recorded per cell",
+    "excluded_claims": [
+      "GF16",
+      "LOW_V1",
+      "R values other than 32",
+      "shard sizes other than 64 and 1024 bytes",
+      "batch sizes or thread counts other than one",
+      "backends other than AVX2",
+      "other hardware"
+    ],
+    "field": "gf8",
+    "loss_counts": [
+      1,
+      2,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      32
+    ],
+    "neighbor_cells": 28,
+    "shard_bytes": [
+      64,
+      1024
+    ],
+    "target_cells": 69,
+    "thread_count": 1,
+    "wire_profile": "legacy_high_v1"
+  },
+  "status": "accepted"
+}

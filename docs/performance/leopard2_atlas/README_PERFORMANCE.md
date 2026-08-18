@@ -10,6 +10,18 @@ left blank rather than interpolated.
 > Values above 1× in speedup graphs mean Leopard2 is faster. These are
 > single-core results on one recorded host, not universal performance claims.
 
+> **Current-source regression closure (2026-08-18):** the plots below retain
+> the original full-atlas evidence identity recorded later in this file.  Five
+> subsequent GF8 encoder/decoder fixes were checked on a predeclared union of
+> 97 formerly losing and boundary-control workloads.  A fresh standalone
+> 75-round campaign at commit `970107e` found zero exact-main regressions in
+> all 97 encode and all 97 setup-inclusive decode comparisons; the weakest
+> lower 95% confidence bounds were 1.031× and 1.054× respectively.  Every
+> identical-binary control interval also remained inside ±2%.  See
+> [optimization report 38](../../../experiments/leopard2/optimization_log/38-current-atlas-final97-regression-closure.md)
+> for the exact scope and reproducible evidence.  This targeted closure does
+> not silently replace or extrapolate the remaining full-atlas cells.
+
 ## Headline graphs
 
 ### Encoding

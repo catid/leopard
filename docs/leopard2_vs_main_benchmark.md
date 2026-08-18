@@ -444,6 +444,32 @@ The low profile is not included in an exact-main performance ratio: main
 rejects `R>K`, and comparing a different generator/wire profile would not be a
 like-for-like compatibility benchmark.
 
+## Current GF8 R=32 regression closure (2026-08-18)
+
+The original performance atlas exposed a finite set of GF8 legacy-high AVX2
+regressions against exact Leopard main.  After the targeted fixes, one fresh
+predeclared confirmation reran 97 former-loss and boundary-control workloads
+at `R=32`, 64- and 1024-byte shards, and deterministic one, two, ten-percent,
+and maximum-loss patterns.  Each cell used 75 independent balanced rounds;
+one-shot decode kept setup charged.
+
+All 194 exact-main comparisons passed with a lower 95% confidence bound above
+1.0.  The weakest encode result was 1.0332x, CI95 [1.0314,1.0350], and the
+weakest setup-inclusive decode result was 1.0560x, CI95
+[1.0544,1.0577].  All 194 identical-binary control intervals were wholly
+inside the predeclared `[1/1.02,1.02]` equivalence band.  Five contaminated
+attempts were retained as rejected evidence and retried under the unchanged
+external-isolation rule; all 7,275 accepted rounds recorded zero sibling
+activity.
+
+This is a targeted current-source regression closure, not a replacement for
+the entire older atlas and not a claim about GF16, low-rate, large-shard, batch,
+or multicore regimes.  The compact checkpoint and exact reproduction command
+are in
+`experiments/leopard2/gf8_high_encode/results/current_atlas_final97_confirmation_checkpoint_20260818.json`
+and
+`experiments/leopard2/optimization_log/38-current-atlas-final97-regression-closure.md`.
+
 ## Historical findings and current gaps
 
 The 2026-07-16 audit found no high/low coordinate-map or Algorithm 4/5

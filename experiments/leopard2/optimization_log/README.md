@@ -127,6 +127,7 @@ Scratch falls with all of it: encode 1073.8 MB -> 8.5 MB (126x) at legacy-high
 | 35 | R10 one-shot schedule elision | **landed** | specialized decoder now wins every paper K; 1.22x weakest T32 target |
 | 36 | GF8 T=16 Q3/Q4 fused B64 encoder | **landed** | 1.60-1.86x vs exact Leopard1 in target cells |
 | 37 | GF8 T=32 Q3 packed B64 boundary | **landed** | 1.08-1.14x vs exact Leopard1 across K65..96/R32 |
+| 38 | Current-source R32 regression closure | **accepted** | zero main regressions in 97 cells × encode/decode; weakest lower CI 1.031x |
 
 ## Method notes worth keeping
 

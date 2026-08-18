@@ -643,3 +643,41 @@ The allowed CPU set currently contains 30 logical CPUs:
 Authoritative timing additionally requires frozen lane-owned binaries and the
 provenance checks in `AGENTS.md`. The exact-main campaign remains a bare-
 terminal-only task on this host.
+
+## 2026-08-18 GF8 R=32 regression closure
+
+The current-source regression line `leopard-79h.38.22` reached its acceptance
+point after the K62/R33, T16 Q3/Q4, K62/R8, K66/R16, and T32 Q3 boundary
+changes.  The authoritative decision is the standalone 75-round campaign in
+`build/regression-current-atlas-final97-970107e-confirm75-v1`; the earlier
+25-round v2 bundle is a rejected pilot and must never be pooled with it.
+
+The accepted candidate is commit `970107e9c295ff3b4cec601836ba1df17dee7564`,
+tree `0ea848d4a9eb5c56f4b85ec6ecf7c7bd784a0a39`, executable SHA-256
+`a8d9fe801cfe1662e8548894d37b7c5fdabf9686abe0a8e2e4bca4ec68dfec4d`.
+The exact-main executable SHA-256 is
+`78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93`.
+
+The campaign covered 97 predeclared GF8 legacy-high AVX2 `R=32` workloads,
+64- and 1024-byte shards, and both encode and setup-inclusive decode.  All 194
+exact-main comparisons passed and all 194 identical-binary confidence
+intervals stayed inside `[1/1.02,1.02]`.  The weakest exact-main lower bounds
+were 1.031403x for encode and 1.054421x for decode.  Five attempts with one
+reserved-sibling non-idle jiffy were retained as discarded evidence and
+retried; all 7,275 accepted rounds recorded zero sibling activity.
+
+Evidence identities:
+
+- raw SHA-256 `bcebaf2a3f9a60e0d6d39ba27cc8a1ba0c6841390db0469cca676e1c55634dd7`;
+- summary SHA-256 `27c5cdc7927300ecd3e6da94fbbd7b21c3da0df3cc11fe9b5323059bdaac259d`;
+- ordered artifact SHA-256 `39e6afd3f8a6cb0ce30d8ee339ff71b61179d07664dcb7377ea6a5bdfdeaaa25`;
+- matrix SHA-256 `fe21e525ff084564af37a4e7b43f17df8e971f96a252199125e26d50e445da8b`.
+
+The compact checkpoint and reproduction note are
+`experiments/leopard2/gf8_high_encode/results/current_atlas_final97_confirmation_checkpoint_20260818.json`
+and
+`experiments/leopard2/optimization_log/38-current-atlas-final97-regression-closure.md`.
+The 541 MiB raw bundle remains ignored build evidence; validate it by the
+hashes above when present.  Follow-up resumable journal work is tracked in
+`leopard-27x`; broader open work remains under the Beads graph rather than this
+file.
