@@ -39,6 +39,19 @@ def load_runner() -> Any:
     return module
 
 
+def load_k66_runner() -> Any:
+    path = Path(__file__).resolve().with_name(
+        "run_k66r16_b64_tail_abba.py")
+    specification = importlib.util.spec_from_file_location(
+        "leopard2_k66r16_b64_runner_test_target", path)
+    require(specification is not None and specification.loader is not None,
+            "cannot load K66/R16/B64 runner")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    specification.loader.exec_module(module)
+    return module
+
+
 RUNNER = load_runner()
 BASE = RUNNER.BASE
 
@@ -322,7 +335,122 @@ def exercise_mocked_provenance_contract() -> None:
             RUNNER._BUILD_CLOSURE_BASELINE = None
 
 
+def exercise_k66_shared_frozen_executable() -> None:
+    k66 = load_k66_runner()
+
+    def rejected(callback: Any, message: str) -> None:
+        try:
+            callback()
+        except k66.BASE.EvidenceError:
+            return
+        raise RuntimeError(message)
+
+    with tempfile.TemporaryDirectory(
+            prefix="leo2-k66r16-shared-freeze-") as directory:
+        root = Path(directory)
+        executable = root / "bench_leopard2"
+        executable.write_bytes(b"shared executable fixture\n")
+        executable.chmod(0o755)
+        main = root / "bench_main"
+        main.write_bytes(b"main executable fixture\n")
+        main.chmod(0o755)
+        executable_sha256 = identity(executable)["sha256"]
+        main_sha256 = identity(main)["sha256"]
+
+        frozen = root / "frozen"
+        frozen.mkdir()
+        k66._SHARED_FROZEN_CANDIDATE = None
+        k66._SHARED_FROZEN_PHYSICAL_IDENTITY = None
+        candidate = k66.freeze_shared_candidate_control(
+            executable, executable_sha256, frozen / "candidate")
+        control = k66.freeze_shared_candidate_control(
+            executable, executable_sha256, frozen / "control")
+        frozen_main = k66.freeze_shared_candidate_control(
+            main, main_sha256, frozen / "main")
+        require(
+            candidate["input"] == control["input"] and
+            candidate["frozen"] == control["frozen"] and
+            candidate["frozen"]["path"] ==
+                str((frozen / "candidate").resolve()) and
+            candidate["frozen_physical_identity"] ==
+                control["frozen_physical_identity"] and
+            candidate["frozen_physical_identity"]["device"] ==
+                (frozen / "candidate").stat().st_dev and
+            candidate["frozen_physical_identity"]["inode"] ==
+                (frozen / "candidate").stat().st_ino and
+            control["shared_physical_executable"] == "candidate" and
+            not (frozen / "control").exists() and
+            Path(frozen_main["frozen"]["path"]) ==
+                (frozen / "main").resolve() and
+            k66.BASE.SCHEMA ==
+                "leopard2-gf8-k66r16-b64-tail-abba/v2" and
+            k66.BASE.SUMMARY_SCHEMA ==
+                "leopard2-gf8-k66r16-b64-tail-summary/v2",
+            "K66 candidate/control did not share one frozen executable")
+
+        control_first = root / "control-first"
+        control_first.mkdir()
+        k66._SHARED_FROZEN_CANDIDATE = None
+        k66._SHARED_FROZEN_PHYSICAL_IDENTITY = None
+        rejected(
+            lambda: k66.freeze_shared_candidate_control(
+                executable, executable_sha256,
+                control_first / "control"),
+            "K66 control was accepted before freezing the candidate")
+
+        different = root / "different-input"
+        different.write_bytes(executable.read_bytes())
+        different.chmod(0o755)
+        mismatch = root / "mismatch"
+        mismatch.mkdir()
+        k66._SHARED_FROZEN_CANDIDATE = None
+        k66._SHARED_FROZEN_PHYSICAL_IDENTITY = None
+        k66.freeze_shared_candidate_control(
+            executable, executable_sha256, mismatch / "candidate")
+        rejected(
+            lambda: k66.freeze_shared_candidate_control(
+                different, executable_sha256, mismatch / "control"),
+            "distinct same-byte candidate/control inputs were accepted")
+
+        wrong_hash = root / "wrong-hash"
+        wrong_hash.mkdir()
+        k66._SHARED_FROZEN_CANDIDATE = None
+        k66._SHARED_FROZEN_PHYSICAL_IDENTITY = None
+        k66.freeze_shared_candidate_control(
+            executable, executable_sha256, wrong_hash / "candidate")
+        rejected(
+            lambda: k66.freeze_shared_candidate_control(
+                executable, "0" * 64, wrong_hash / "control"),
+            "incorrect shared-control SHA-256 was accepted")
+
+        wrong_candidate = root / "wrong-candidate"
+        wrong_candidate.mkdir()
+        k66._SHARED_FROZEN_CANDIDATE = None
+        k66._SHARED_FROZEN_PHYSICAL_IDENTITY = None
+        rejected(
+            lambda: k66.freeze_shared_candidate_control(
+                executable, "0" * 64, wrong_candidate / "candidate"),
+            "incorrect shared-candidate SHA-256 was accepted")
+
+        replaced = root / "replaced"
+        replaced.mkdir()
+        k66._SHARED_FROZEN_CANDIDATE = None
+        k66._SHARED_FROZEN_PHYSICAL_IDENTITY = None
+        replaced_record = k66.freeze_shared_candidate_control(
+            executable, executable_sha256, replaced / "candidate")
+        replaced_path = Path(replaced_record["frozen"]["path"])
+        replaced_payload = replaced_path.read_bytes()
+        replacement_path = replaced / "replacement"
+        replacement_path.write_bytes(replaced_payload)
+        replacement_path.chmod(0o555)
+        replacement_path.replace(replaced_path)
+        rejected(
+            k66.require_shared_frozen_physical_identity,
+            "same-byte shared executable inode replacement was accepted")
+
+
 def main() -> int:
+    exercise_k66_shared_frozen_executable()
     cells = RUNNER.cells()
     require(
         [(cell["K"], cell["R"], cell["bytes"]) for cell in cells] == [

@@ -10,9 +10,10 @@ complete confidence intervals must stay inside the two-percent band.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
 SUPPORT_PATH = Path(__file__).resolve().with_name(
@@ -34,8 +35,8 @@ SUPPORT = load_support()
 BASE = SUPPORT.BASE
 BASE.__doc__ = __doc__
 SUPPORT.__doc__ = __doc__
-BASE.SCHEMA = "leopard2-gf8-k66r16-b64-tail-abba/v1"
-BASE.SUMMARY_SCHEMA = "leopard2-gf8-k66r16-b64-tail-summary/v1"
+BASE.SCHEMA = "leopard2-gf8-k66r16-b64-tail-abba/v2"
+BASE.SUMMARY_SCHEMA = "leopard2-gf8-k66r16-b64-tail-summary/v2"
 BASE.MODE_SYMBOL = \
     "_ZN12_GLOBAL__N_1L22g_k66r16_b64_tail_modeE"
 BASE.ALLOW_IDENTICAL_CANDIDATE_CONTROL = True
@@ -56,6 +57,126 @@ BASE.RUNNER_DEPENDENCIES = (
     Path(BASE.MAIN_SUPPORT.__file__).resolve(),
     SUPPORT.PROVENANCE_PATH.resolve(),
 )
+
+
+# The candidate and diagnostic control are the same executable and differ only
+# by a command-line selector.  Running separate byte-for-byte copies can put
+# their text on different physical cache pages and create a stable false label
+# effect for these sub-microsecond kernels.  Freeze the input once and execute
+# both labels through that one immutable path.  Both caller inputs and hashes
+# are still checked independently and must identify the same source file.
+_BASE_FREEZE_EXECUTABLE = BASE.freeze_executable
+_BASE_RUN_ONE = BASE.run_one
+_BASE_BUILD_CLOSURE_IDENTITY = BASE.build_closure_identity
+_SHARED_FROZEN_CANDIDATE: Mapping[str, Any] | None = None
+_SHARED_FROZEN_PHYSICAL_IDENTITY: Mapping[str, Any] | None = None
+
+
+def physical_file_identity(path: Path) -> dict[str, Any]:
+    resolved = path.resolve(strict=True)
+    status = resolved.stat()
+    BASE.require(resolved.is_file() and status.st_size > 0,
+                 f"physical identity is not a nonempty file: {resolved}")
+    return {
+        "path": str(resolved),
+        "device": status.st_dev,
+        "inode": status.st_ino,
+    }
+
+
+def require_shared_frozen_physical_identity() -> None:
+    BASE.require(_SHARED_FROZEN_PHYSICAL_IDENTITY is not None,
+                 "shared frozen physical identity was not established")
+    observed = physical_file_identity(Path(str(
+        _SHARED_FROZEN_PHYSICAL_IDENTITY["path"])))
+    BASE.require(observed == _SHARED_FROZEN_PHYSICAL_IDENTITY,
+                 "shared frozen executable inode changed")
+
+
+def freeze_shared_candidate_control(
+    source: Path,
+    expected_sha256: str | None,
+    destination: Path,
+) -> dict[str, Any]:
+    global _SHARED_FROZEN_CANDIDATE, _SHARED_FROZEN_PHYSICAL_IDENTITY
+    if destination.name == "candidate":
+        BASE.require(_SHARED_FROZEN_CANDIDATE is None and
+                     _SHARED_FROZEN_PHYSICAL_IDENTITY is None,
+                     "shared candidate was frozen more than once")
+        record = _BASE_FREEZE_EXECUTABLE(
+            source, expected_sha256, destination)
+        record = dict(record)
+        _SHARED_FROZEN_PHYSICAL_IDENTITY = physical_file_identity(
+            Path(str(record["frozen"]["path"])))
+        record["frozen_physical_identity"] = dict(
+            _SHARED_FROZEN_PHYSICAL_IDENTITY)
+        _SHARED_FROZEN_CANDIDATE = record
+        return record
+    if destination.name == "control":
+        BASE.require(_SHARED_FROZEN_CANDIDATE is not None,
+                     "control was frozen before the shared candidate")
+        input_identity = BASE.T8_SUPPORT.file_identity(source)
+        BASE.require(
+            expected_sha256 is None or
+            (re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is not None and
+             input_identity["sha256"] == expected_sha256),
+            f"control input binary SHA-256 changed: {source}")
+        BASE.require(
+            input_identity == _SHARED_FROZEN_CANDIDATE["input"],
+            "candidate/control inputs do not name one physical executable")
+        frozen_identity = dict(_SHARED_FROZEN_CANDIDATE["frozen"])
+        BASE.require(
+            Path(str(frozen_identity["path"])).parent ==
+                destination.parent.resolve(strict=True) and
+            not destination.exists(),
+            "shared control destination is ambiguous")
+        return {
+            "input": input_identity,
+            "frozen": frozen_identity,
+            "shared_physical_executable": "candidate",
+            "frozen_physical_identity": dict(
+                _SHARED_FROZEN_PHYSICAL_IDENTITY),
+        }
+    BASE.require(destination.name == "main",
+                 f"unexpected executable freeze label: {destination.name}")
+    return _BASE_FREEZE_EXECUTABLE(source, expected_sha256, destination)
+
+
+def run_one_from_shared_frozen_executable(
+    implementation: str,
+    identity: Mapping[str, Any],
+    cell: Mapping[str, Any],
+    cpu: int,
+    source_commit: str,
+    source_tree: str,
+    iterations: int,
+    warmup: int,
+    failure_output: Path,
+) -> dict[str, Any]:
+    if implementation in {"candidate", "control"}:
+        require_shared_frozen_physical_identity()
+        BASE.require(
+            identity.get("path") ==
+                _SHARED_FROZEN_PHYSICAL_IDENTITY["path"],
+            "candidate/control invocation escaped the shared executable")
+    result = _BASE_RUN_ONE(
+        implementation, identity, cell, cpu, source_commit, source_tree,
+        iterations, warmup, failure_output)
+    if implementation in {"candidate", "control"}:
+        require_shared_frozen_physical_identity()
+    return result
+
+
+def build_closure_with_shared_frozen_executable(options: Any) -> Any:
+    require_shared_frozen_physical_identity()
+    result = _BASE_BUILD_CLOSURE_IDENTITY(options)
+    require_shared_frozen_physical_identity()
+    return result
+
+
+BASE.freeze_executable = freeze_shared_candidate_control
+BASE.run_one = run_one_from_shared_frozen_executable
+BASE.build_closure_identity = build_closure_with_shared_frozen_executable
 
 
 def cells() -> list[dict[str, Any]]:
