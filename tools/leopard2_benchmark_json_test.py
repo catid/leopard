@@ -52,6 +52,12 @@ R1_DECODE_BINDING_SETUP_API = "leo2_decode_batch_binding_create"
 R1_FIXED_AVX2_SELECTOR_CONTRACT = (
     "LEGACY_HIGH_V1,GF8,AVX2,R=1,K=3..255,B=64|256,"
     "native_layout,auto_encode_decode")
+K65R65_B64_SELECTOR_CONTRACT = (
+    "LEGACY_HIGH_V1,GF8,AVX2,K=65,R=65,T=128,B=64,native_layout,"
+    "auto_encode,one_shot_and_one_item_batch")
+K65R65_B64_TIMED_ORDINARY_ENCODE_API = (
+    "leo2_encode_batch:item_count=1:no_preflight_scratch")
+K65R65_B64_TIMED_ONE_SHOT_ENCODE_API = "leo2_encode"
 ONE_SHOT_SCHEMAS = frozenset({
     "leopard2-benchmark-v8", "leopard2-benchmark-v9",
     "leopard2-benchmark-v12", "leopard2-benchmark-v15",
@@ -362,10 +368,13 @@ def run(
     prevalidated_binding: bool = False,
     one_shot_plan_setup_mode: int | None = None,
     gf8_avx2_walsh_locator_mode: int | None = None,
+    k65r65_b64_packed_terminal_mode: int | None = None,
+    measure_one_shot_encode: bool = False,
     *,
     k: int = 3,
     r: int = 2,
     losses: int = 1,
+    shard_bytes: int = 64,
 ) -> dict[str, Any]:
     require(r1_small_reduction_mode is None or
             (type(r1_small_reduction_mode) is int and
@@ -389,18 +398,28 @@ def run(
             (type(gf8_avx2_walsh_locator_mode) is int and
              gf8_avx2_walsh_locator_mode in {0, 1}),
             "GF8 AVX2 Walsh-locator mode must be absent, zero, or one")
+    require(k65r65_b64_packed_terminal_mode is None or
+            (type(k65r65_b64_packed_terminal_mode) is int and
+             k65r65_b64_packed_terminal_mode in {0, 1}),
+            "K65/R65/B64 packed-terminal mode must be absent, zero, or one")
+    require(type(measure_one_shot_encode) is bool,
+            "one-shot encode measurement mode must be Boolean")
+    require(type(shard_bytes) is int and shard_bytes > 0,
+            "benchmark shard byte count must be a positive integer")
     with tempfile.TemporaryDirectory(prefix="leo2-benchmark-json-") as temporary:
         output = Path(temporary) / "result.json"
         diagnostic_avx2 = (
             r1_small_reduction_mode is not None or
             r1_fixed_avx2_mode is not None or
             one_shot_plan_setup_mode is not None or
-            gf8_avx2_walsh_locator_mode is not None)
+            gf8_avx2_walsh_locator_mode is not None or
+            k65r65_b64_packed_terminal_mode is not None)
         field = "gf8" if diagnostic_avx2 else "auto"
         backend = "avx2" if diagnostic_avx2 else "auto"
         command = [
             str(executable), "--k", str(k), "--r", str(r), "--profile", "high",
-            "--field", field, "--backend", backend, "--bytes", "64",
+            "--field", field, "--backend", backend,
+            "--bytes", str(shard_bytes),
             "--loss", str(losses), "--batch", "1", "--reuse", "1",
             "--iterations", "1", "--warmup", "0", "--threads", "1",
             "--seed", "7",
@@ -415,6 +434,8 @@ def run(
             command.append("--report-direct-executor")
         if measure_one_shot_decode:
             command.append("--measure-one-shot-decode")
+        if measure_one_shot_encode:
+            command.append("--measure-one-shot-encode")
         if disable_k16r8_b256_terminal:
             command.append("--disable-k16r8-b256-terminal")
         if disable_k9r5_b256_terminal:
@@ -441,6 +462,10 @@ def run(
             command.extend((
                 "--gf8-avx2-walsh-locator-mode",
                 str(gf8_avx2_walsh_locator_mode)))
+        if k65r65_b64_packed_terminal_mode is not None:
+            command.extend((
+                "--k65r65-b64-packed-terminal-mode",
+                str(k65r65_b64_packed_terminal_mode)))
         command.extend(("--json", str(output)))
         completed = run_process(command)
         require(completed.returncode == 0,
@@ -465,6 +490,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 "leopard2-benchmark-v10", "leopard2-benchmark-v11",
                 "leopard2-benchmark-v12", "leopard2-benchmark-v15",
                 "leopard2-benchmark-v16", "leopard2-benchmark-v23",
+                "leopard2-benchmark-v31",
             }, "benchmark schema is unsupported")
     expected_top = {
         "schema", "build", "parameters", "resolved", "correctness",
@@ -476,7 +502,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "leopard2-benchmark-v9", "leopard2-benchmark-v10",
         "leopard2-benchmark-v11", "leopard2-benchmark-v12",
         "leopard2-benchmark-v15", "leopard2-benchmark-v16",
-        "leopard2-benchmark-v23",
+        "leopard2-benchmark-v23", "leopard2-benchmark-v31",
     }:
         expected_top.add("workload_digests")
     require(set(document) == expected_top, "top-level JSON keys changed")
@@ -485,6 +511,13 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             "metrics", "legacy"):
         require(isinstance(document[section], dict),
                 f"benchmark {section} is not an object")
+    is_k65r65_v31 = document["schema"] == "leopard2-benchmark-v31"
+    k65r65_v31_attested = (
+        is_k65r65_v31 and
+        document["parameters"].get("attest_source") is True)
+    k65r65_v31_one_shot = (
+        is_k65r65_v31 and
+        document["parameters"].get("measure_one_shot_encode") is True)
     expected_build = {
         "compiler", "compiler_version", "cplusplus",
         "k8r3r4_t4_terminal_diagnostic_disabled",
@@ -521,6 +554,19 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             "r1_timed_reused_decode_api",
             "r1_timed_one_shot_decode_api",
         })
+    if document["schema"] == "leopard2-benchmark-v31":
+        expected_build.update({
+            "k65r65_b64_packed_terminal_diagnostic_mode",
+            "k65r65_b64_packed_terminal_diagnostic_disabled",
+            "k65r65_b64_packed_terminal_mode_latched",
+            "k65r65_b64_packed_terminal_selector_expected_selected",
+            "k65r65_b64_packed_terminal_selector_selected",
+            "k65r65_b64_packed_terminal_selector_contract",
+            "k65r65_b64_packed_terminal_timed_ordinary_encode_api",
+        })
+        if k65r65_v31_one_shot:
+            expected_build.add(
+                "k65r65_b64_packed_terminal_timed_one_shot_encode_api")
     if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
         expected_build.update({
             "one_shot_plan_setup_diagnostic_mode",
@@ -536,7 +582,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             "gf8_avx2_walsh_locator_enabled",
         })
     if document["schema"] in {
-            "leopard2-benchmark-v5", "leopard2-benchmark-v7"}:
+            "leopard2-benchmark-v5", "leopard2-benchmark-v7"} or \
+            k65r65_v31_attested:
         expected_build.update({
             "source_commit", "source_tree", "source_tracked_dirty"})
     if document["schema"] in {
@@ -588,6 +635,43 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 build["r1_fixed_avx2_selector_contract"] ==
                     R1_FIXED_AVX2_SELECTOR_CONTRACT,
                 "fixed AVX2 R=1 mode metadata is invalid")
+    if document["schema"] == "leopard2-benchmark-v31":
+        build = document["build"]
+        mode = build["k65r65_b64_packed_terminal_diagnostic_mode"]
+        selector_expected = mode == 1 and \
+            document["parameters"]["K"] == 65 and \
+            document["parameters"]["R"] == 65 and \
+            document["parameters"]["shard_bytes"] == 64
+        require(type(mode) is int and mode in {0, 1} and
+                type(build[
+                    "k65r65_b64_packed_terminal_diagnostic_disabled"]) is
+                    bool and
+                build[
+                    "k65r65_b64_packed_terminal_diagnostic_disabled"] is
+                    (mode == 0) and
+                type(build[
+                    "k65r65_b64_packed_terminal_mode_latched"]) is int and
+                build["k65r65_b64_packed_terminal_mode_latched"] == mode and
+                type(build[
+                    "k65r65_b64_packed_terminal_selector_expected_selected"])
+                    is bool and
+                type(build[
+                    "k65r65_b64_packed_terminal_selector_selected"]) is bool and
+                build[
+                    "k65r65_b64_packed_terminal_selector_expected_selected"]
+                    is selector_expected and
+                build["k65r65_b64_packed_terminal_selector_selected"] is
+                    selector_expected and
+                build["k65r65_b64_packed_terminal_selector_contract"] ==
+                    K65R65_B64_SELECTOR_CONTRACT and
+                build[
+                    "k65r65_b64_packed_terminal_timed_ordinary_encode_api"] ==
+                    K65R65_B64_TIMED_ORDINARY_ENCODE_API and
+                (not k65r65_v31_one_shot or
+                 build[
+                    "k65r65_b64_packed_terminal_timed_one_shot_encode_api"] ==
+                    K65R65_B64_TIMED_ONE_SHOT_ENCODE_API),
+                "K65/R65/B64 packed-terminal mode metadata is invalid")
     if document["schema"] in R1_SCHEMAS:
         build = document["build"]
         for name in (
@@ -646,7 +730,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                     "cauchy_log_reuse_enabled"]) is bool,
                 "Cauchy-log-reuse build selector is not Boolean")
     if document["schema"] in {
-            "leopard2-benchmark-v5", "leopard2-benchmark-v7"}:
+            "leopard2-benchmark-v5", "leopard2-benchmark-v7"} or \
+            k65r65_v31_attested:
         for name in ("source_commit", "source_tree"):
             value = document["build"][name]
             require(value == "unknown" or
@@ -720,6 +805,49 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         require(type(mode) is int and mode in {0, 1} and
                 mode == document["build"]["r1_fixed_avx2_diagnostic_mode"],
                 "fixed AVX2 R=1 parameter is invalid or inconsistent")
+    if document["schema"] == "leopard2-benchmark-v31":
+        expected_parameters = {
+            "K", "R", "requested_profile", "requested_field",
+            "requested_backend", "force_generic_decode",
+            "force_specialized_decode", "force_tiled_decode",
+            "force_materialized_decode", "skip_legacy", "retain_samples",
+            "k65r65_b64_packed_terminal_mode", "shard_bytes", "loss_count",
+            "missing_original_indices", "batch", "reuse", "iterations",
+            "warmup", "thread_count", "seed",
+        }
+        if k65r65_v31_attested:
+            expected_parameters.add("attest_source")
+        if k65r65_v31_one_shot:
+            expected_parameters.add("measure_one_shot_encode")
+        mode = parameters.get("k65r65_b64_packed_terminal_mode")
+        require(set(parameters) == expected_parameters and
+                type(mode) is int and mode in {0, 1} and
+                mode == document["build"][
+                    "k65r65_b64_packed_terminal_diagnostic_mode"] and
+                parameters["requested_profile"] == "legacy_high_v1" and
+                parameters["requested_field"] == "gf8" and
+                parameters["requested_backend"] == "avx2" and
+                parameters["batch"] == 1 and
+                parameters["thread_count"] == 1 and
+                parameters["skip_legacy"] is True and
+                parameters["retain_samples"] is True and
+                all(parameters[name] is False for name in (
+                    "force_generic_decode", "force_specialized_decode",
+                    "force_tiled_decode", "force_materialized_decode")) and
+                type(parameters["warmup"]) is int and
+                parameters["warmup"] >= 0 and
+                type(parameters["reuse"]) is int and
+                parameters["reuse"] > 0 and
+                type(parameters["iterations"]) is int and
+                parameters["iterations"] > 0 and
+                type(parameters["seed"]) is int and
+                0 <= parameters["seed"] <= (1 << 64) - 1 and
+                (not k65r65_v31_attested or
+                 parameters["attest_source"] is True) and
+                (not k65r65_v31_one_shot or
+                 parameters["measure_one_shot_encode"] is True),
+                "K65/R65/B64 packed-terminal parameters are invalid or "
+                "ambiguous")
     require(type(document["resolved"]["thread_count"]) is int and
             document["resolved"]["thread_count"] > 0 and
             type(document["resolved"]["parent_count"]) is int and
@@ -727,6 +855,14 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             type(document["resolved"]["padded_side"]) is int and
             document["resolved"]["padded_side"] > 0,
             "resolved numeric codec identity is invalid")
+    if document["schema"] == "leopard2-benchmark-v31":
+        resolved = document["resolved"]
+        require(resolved["profile"] == "legacy_high_v1" and
+                resolved["field"] == "gf8" and
+                resolved["backend"] == "avx2" and
+                type(resolved["thread_count"]) is int and
+                resolved["thread_count"] == 1,
+                "K65/R65/B64 resolved codec identity is invalid")
     if document["schema"] in {
         "leopard2-benchmark-v3", "leopard2-benchmark-v6",
         "leopard2-benchmark-v7",
@@ -814,6 +950,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         expected_metrics.add("one_shot_decode_including_setup")
     if document["schema"] in R1_SCHEMAS:
         expected_metrics.add("one_shot_encode")
+    if k65r65_v31_one_shot:
+        expected_metrics.add("one_shot_encode")
     if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
         expected_metrics.update({
             "one_shot_transient_plan_setup",
@@ -849,7 +987,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         input_rate_name="input_GB_per_s",
         output_rate_name="parity_output_GB_per_s",
         input_bytes=encode_input_bytes, output_bytes=encode_output_bytes)
-    if document["schema"] in R1_SCHEMAS:
+    if document["schema"] in R1_SCHEMAS or k65r65_v31_one_shot:
         validate_timing_summary(
             document["metrics"]["one_shot_encode"], "one_shot_encode",
             retain_samples=retain_samples, iterations=iterations,
@@ -1452,6 +1590,10 @@ def main() -> int:
     require(default["build"][
                 "k9r5_b1024_terminal_diagnostic_disabled"] is False,
             "default benchmark disabled the K9/R5/1024 terminal")
+    require(all(not name.startswith("k65r65_b64_packed_terminal_")
+                for name in default["build"]) and
+            "k65r65_b64_packed_terminal_mode" not in default["parameters"],
+            "default benchmark exposed the opt-in K65/R65/B64 diagnostic")
     require(set(default["parameters"]) == {
         "K", "R", "requested_profile", "requested_field",
         "requested_backend", "force_generic_decode",
@@ -1508,6 +1650,296 @@ def main() -> int:
             "external-evidence mode claimed a legacy comparison")
     validate_isal_comparison_contract(external)
 
+    k65r65_mode_zero = run(
+        executable, True, k65r65_b64_packed_terminal_mode=0,
+        k=65, r=65, losses=1)
+    k65r65_mode_one = run(
+        executable, True, k65r65_b64_packed_terminal_mode=1,
+        k=65, r=65, losses=1)
+    for mode, document in enumerate((k65r65_mode_zero, k65r65_mode_one)):
+        require(document["schema"] == "leopard2-benchmark-v31",
+                "K65/R65/B64 diagnostic schema changed")
+        validate_common(document, True)
+        validate_workload_digests(document)
+        require(document["build"][
+                    "k65r65_b64_packed_terminal_diagnostic_mode"] == mode and
+                document["build"][
+                    "k65r65_b64_packed_terminal_diagnostic_disabled"] is
+                    (mode == 0) and
+                document["build"][
+                    "k65r65_b64_packed_terminal_mode_latched"] == mode and
+                document["build"][
+                    "k65r65_b64_packed_terminal_selector_expected_selected"]
+                    is (mode == 1) and
+                document["build"][
+                    "k65r65_b64_packed_terminal_selector_selected"] is
+                    (mode == 1) and
+                document["parameters"][
+                    "k65r65_b64_packed_terminal_mode"] == mode,
+                "K65/R65/B64 diagnostic selector was not recorded exactly")
+    require(k65r65_mode_zero["workload_digests"] ==
+                k65r65_mode_one["workload_digests"],
+            "K65/R65/B64 packed terminal changed encoded or recovered data")
+
+    k65r65_attested = run(
+        executable, True, attest_source=True,
+        k65r65_b64_packed_terminal_mode=1,
+        k=65, r=65, losses=1)
+    k65r65_one_shot = run(
+        executable, True, measure_one_shot_encode=True,
+        k65r65_b64_packed_terminal_mode=1,
+        k=65, r=65, losses=1)
+    k65r65_attested_one_shot_zero = run(
+        executable, True, attest_source=True,
+        measure_one_shot_encode=True,
+        k65r65_b64_packed_terminal_mode=0,
+        k=65, r=65, losses=1)
+    k65r65_attested_one_shot_one = run(
+        executable, True, attest_source=True,
+        measure_one_shot_encode=True,
+        k65r65_b64_packed_terminal_mode=1,
+        k=65, r=65, losses=1)
+    k65r65_variants = (
+        k65r65_mode_zero, k65r65_mode_one, k65r65_attested,
+        k65r65_one_shot, k65r65_attested_one_shot_zero,
+        k65r65_attested_one_shot_one,
+    )
+    for document in k65r65_variants:
+        validate_common(document, True)
+        validate_workload_digests(document)
+    require(all(document["workload_digests"] ==
+                k65r65_mode_zero["workload_digests"]
+                for document in k65r65_variants),
+            "K65/R65/B64 evidence options changed the workload")
+    require(set(k65r65_attested["build"]) ==
+                set(k65r65_mode_one["build"]) |
+                {"source_commit", "source_tree", "source_tracked_dirty"} and
+            set(k65r65_attested["parameters"]) ==
+                set(k65r65_mode_one["parameters"]) | {"attest_source"},
+            "K65/R65/B64 source attestation keys are ambiguous")
+    require(set(k65r65_one_shot["build"]) ==
+                set(k65r65_mode_one["build"]) | {
+                    "k65r65_b64_packed_terminal_timed_one_shot_encode_api"} and
+            set(k65r65_one_shot["parameters"]) ==
+                set(k65r65_mode_one["parameters"]) |
+                {"measure_one_shot_encode"} and
+            set(k65r65_one_shot["metrics"]) ==
+                set(k65r65_mode_one["metrics"]) | {"one_shot_encode"},
+            "K65/R65/B64 one-shot encode keys are ambiguous")
+
+    k65r65_neighbor_shapes = (
+        (64, 65, 64), (66, 65, 64),
+        (65, 64, 64), (65, 66, 64),
+        (65, 65, 63), (65, 65, 65),
+    )
+    for neighbor_k, neighbor_r, neighbor_bytes in k65r65_neighbor_shapes:
+        neighbor_documents = tuple(
+            run(executable, True,
+                k65r65_b64_packed_terminal_mode=mode,
+                k=neighbor_k, r=neighbor_r, losses=1,
+                shard_bytes=neighbor_bytes)
+            for mode in (0, 1))
+        for mode, document in enumerate(neighbor_documents):
+            validate_common(document, True)
+            validate_workload_digests(document)
+            build = document["build"]
+            require(build[
+                        "k65r65_b64_packed_terminal_mode_latched"] == mode and
+                    build[
+                        "k65r65_b64_packed_terminal_selector_expected_selected"]
+                        is False and
+                    build[
+                        "k65r65_b64_packed_terminal_selector_selected"] is
+                        False,
+                    "K65/R65/B64 neighbor selected the exact terminal")
+        require(neighbor_documents[0]["workload_digests"] ==
+                    neighbor_documents[1]["workload_digests"],
+                "K65/R65/B64 neighbor mode changed the workload")
+
+    malformed_k65r65_build_mode = copy.deepcopy(k65r65_mode_zero)
+    malformed_k65r65_build_mode["build"][
+        "k65r65_b64_packed_terminal_diagnostic_mode"] = False
+    require_common_rejected(
+        malformed_k65r65_build_mode,
+        "Boolean K65/R65/B64 packed-terminal build mode")
+    malformed_k65r65_disabled = copy.deepcopy(k65r65_mode_zero)
+    malformed_k65r65_disabled["build"][
+        "k65r65_b64_packed_terminal_diagnostic_disabled"] = False
+    require_common_rejected(
+        malformed_k65r65_disabled,
+        "inconsistent K65/R65/B64 packed-terminal disabled marker")
+    malformed_k65r65_parameter = copy.deepcopy(k65r65_mode_zero)
+    malformed_k65r65_parameter["parameters"][
+        "k65r65_b64_packed_terminal_mode"] = 1
+    require_common_rejected(
+        malformed_k65r65_parameter,
+        "inconsistent K65/R65/B64 packed-terminal parameter")
+    missing_k65r65_parameter = copy.deepcopy(k65r65_mode_zero)
+    del missing_k65r65_parameter["parameters"][
+        "k65r65_b64_packed_terminal_mode"]
+    require_common_rejected(
+        missing_k65r65_parameter,
+        "missing K65/R65/B64 packed-terminal parameter")
+
+    malformed_k65r65_latched = copy.deepcopy(k65r65_mode_zero)
+    malformed_k65r65_latched["build"][
+        "k65r65_b64_packed_terminal_mode_latched"] = True
+    require_common_rejected(
+        malformed_k65r65_latched,
+        "Boolean K65/R65/B64 latched mode")
+    malformed_k65r65_expected = copy.deepcopy(k65r65_mode_zero)
+    malformed_k65r65_expected["build"][
+        "k65r65_b64_packed_terminal_selector_expected_selected"] = True
+    require_common_rejected(
+        malformed_k65r65_expected,
+        "incorrect K65/R65/B64 expected selector")
+    malformed_k65r65_selected = copy.deepcopy(k65r65_mode_zero)
+    malformed_k65r65_selected["build"][
+        "k65r65_b64_packed_terminal_selector_selected"] = True
+    require_common_rejected(
+        malformed_k65r65_selected,
+        "incorrect K65/R65/B64 actual selector")
+    malformed_k65r65_contract = copy.deepcopy(k65r65_mode_zero)
+    malformed_k65r65_contract["build"][
+        "k65r65_b64_packed_terminal_selector_contract"] = "ambiguous"
+    require_common_rejected(
+        malformed_k65r65_contract,
+        "ambiguous K65/R65/B64 selector contract")
+    malformed_k65r65_ordinary_api = copy.deepcopy(k65r65_mode_zero)
+    malformed_k65r65_ordinary_api["build"][
+        "k65r65_b64_packed_terminal_timed_ordinary_encode_api"] = \
+        "leo2_encode"
+    require_common_rejected(
+        malformed_k65r65_ordinary_api,
+        "incorrect K65/R65/B64 ordinary timed API")
+
+    unexpected_k65r65_attestation = copy.deepcopy(k65r65_mode_zero)
+    unexpected_k65r65_attestation["build"]["source_commit"] = "unknown"
+    require_common_rejected(
+        unexpected_k65r65_attestation,
+        "unrequested K65/R65/B64 source attestation")
+    missing_k65r65_attestation = copy.deepcopy(k65r65_attested)
+    del missing_k65r65_attestation["build"]["source_commit"]
+    require_common_rejected(
+        missing_k65r65_attestation,
+        "incomplete K65/R65/B64 source attestation")
+    malformed_k65r65_attestation_parameter = copy.deepcopy(k65r65_attested)
+    malformed_k65r65_attestation_parameter["parameters"][
+        "attest_source"] = False
+    require_common_rejected(
+        malformed_k65r65_attestation_parameter,
+        "false K65/R65/B64 source-attestation parameter")
+
+    unexpected_k65r65_one_shot = copy.deepcopy(k65r65_mode_zero)
+    unexpected_k65r65_one_shot["build"][
+        "k65r65_b64_packed_terminal_timed_one_shot_encode_api"] = \
+        K65R65_B64_TIMED_ONE_SHOT_ENCODE_API
+    require_common_rejected(
+        unexpected_k65r65_one_shot,
+        "unrequested K65/R65/B64 one-shot API marker")
+    missing_k65r65_one_shot_marker = copy.deepcopy(k65r65_one_shot)
+    del missing_k65r65_one_shot_marker["build"][
+        "k65r65_b64_packed_terminal_timed_one_shot_encode_api"]
+    require_common_rejected(
+        missing_k65r65_one_shot_marker,
+        "missing K65/R65/B64 one-shot API marker")
+    malformed_k65r65_one_shot_api = copy.deepcopy(k65r65_one_shot)
+    malformed_k65r65_one_shot_api["build"][
+        "k65r65_b64_packed_terminal_timed_one_shot_encode_api"] = \
+        "leo2_encode_batch"
+    require_common_rejected(
+        malformed_k65r65_one_shot_api,
+        "incorrect K65/R65/B64 one-shot API marker")
+    missing_k65r65_one_shot_metric = copy.deepcopy(k65r65_one_shot)
+    del missing_k65r65_one_shot_metric["metrics"]["one_shot_encode"]
+    require_common_rejected(
+        missing_k65r65_one_shot_metric,
+        "missing K65/R65/B64 one-shot metric")
+    malformed_k65r65_one_shot_parameter = copy.deepcopy(k65r65_one_shot)
+    malformed_k65r65_one_shot_parameter["parameters"][
+        "measure_one_shot_encode"] = False
+    require_common_rejected(
+        malformed_k65r65_one_shot_parameter,
+        "false K65/R65/B64 one-shot parameter")
+
+    k65r65_parameter_mutations = (
+        ("force_generic_decode", True),
+        ("force_specialized_decode", True),
+        ("force_tiled_decode", True),
+        ("force_materialized_decode", True),
+        ("warmup", True), ("warmup", -1),
+        ("reuse", True), ("reuse", 0),
+        ("iterations", True), ("iterations", 0),
+        ("seed", True), ("seed", -1), ("seed", 1 << 64),
+    )
+    for name, value in k65r65_parameter_mutations:
+        malformed = copy.deepcopy(k65r65_mode_zero)
+        malformed["parameters"][name] = value
+        require_common_rejected(
+            malformed, f"invalid K65/R65/B64 {name} parameter")
+    for name, value in (
+            ("profile", "low_v1"), ("field", "gf16"),
+            ("backend", "scalar"), ("thread_count", 2),
+            ("thread_count", True)):
+        malformed = copy.deepcopy(k65r65_mode_zero)
+        malformed["resolved"][name] = value
+        require_common_rejected(
+            malformed, f"invalid K65/R65/B64 resolved {name}")
+
+    require_schema_modes_rejected(
+        executable, ("--k65r65-b64-packed-terminal-mode", "2"),
+        "--k65r65-b64-packed-terminal-mode must be exactly 0 or 1")
+    require_schema_modes_rejected(
+        executable, ("--k65r65-b64-packed-terminal-mode", "0"),
+        "--k65r65-b64-packed-terminal-mode requires explicit "
+        "high/GF8/AVX2, batch=1, one thread, --skip-legacy, and "
+        "--retain-samples")
+    k65r65_contract_arguments = (
+        "--k", "65", "--r", "65", "--profile", "high",
+        "--field", "gf8", "--backend", "avx2", "--bytes", "64",
+        "--loss", "1", "--batch", "1", "--reuse", "1",
+        "--iterations", "1", "--warmup", "0", "--threads", "1",
+        "--skip-legacy", "--retain-samples",
+        "--k65r65-b64-packed-terminal-mode", "0",
+    )
+    k65r65_conflict_diagnostic = (
+        "--k65r65-b64-packed-terminal-mode cannot be combined with another "
+        "diagnostic mode, terminal-disable control, or decode-path override")
+    k65r65_conflicting_modes = (
+        ("--force-generic",),
+        ("--force-specialized",),
+        ("--force-tiled",),
+        ("--force-materialized",),
+        ("--report-decode-path",),
+        ("--report-direct-executor",),
+        ("--measure-one-shot-decode",),
+        ("--one-shot-plan-setup-mode", "0"),
+        ("--low-p32-b64-terminal-mode", "0"),
+        ("--low-p128-b64-terminal-mode", "0"),
+        ("--low-p16-partial-direct-output-mode", "0"),
+        ("--gf8-avx2-walsh-locator-mode", "0"),
+        ("--small-dual-regular-fallback-mode", "0"),
+        ("--r1-small-reduction-mode", "0"),
+        ("--r1-fixed-avx2-mode", "0"),
+        ("--k8r3r4-t4-terminal-mode", "0"),
+        ("--balanced-b64-terminal-mode", "0"),
+        ("--k62r8-b64-fused-mode", "0"),
+        ("--k66r16-b64-tail-mode", "0"),
+        ("--high-t16-prepared-terminal-mode", "0"),
+        ("--high-t8-two-block-b64-terminal-mode", "0"),
+        ("--high-t8-two-block-b256-terminal-mode", "0"),
+        ("--high-t8-two-block-b1024-terminal-mode", "0"),
+        ("--disable-t8-full-parity-terminal",),
+        ("--disable-k16r8-b256-terminal",),
+        ("--disable-k9r5-b256-terminal",),
+        ("--disable-k9r5-b1024-terminal",),
+        ("--disable-k9r6r8-b256-terminal",),
+    )
+    for conflicting_mode in k65r65_conflicting_modes:
+        require_schema_modes_rejected(
+            executable, k65r65_contract_arguments + conflicting_mode,
+            k65r65_conflict_diagnostic)
+
     disabled_k16_terminal = run(
         executable, True, disable_k16r8_b256_terminal=True)
     validate_common(disabled_k16_terminal, True)
@@ -1559,6 +1991,9 @@ def main() -> int:
         "bench_leopard2_prevalidated_batch" + executable.suffix)
     require(prevalidated_executable.is_file(),
             "prevalidated benchmark target is absent")
+    require_schema_modes_rejected(
+        prevalidated_executable, k65r65_contract_arguments,
+        "--k65r65-b64-packed-terminal-mode requires the ordinary benchmark")
     prevalidated = run(
         prevalidated_executable, True, k=1, r=1, losses=1)
     require(prevalidated["schema"] == "leopard2-benchmark-v2",

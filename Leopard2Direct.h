@@ -305,6 +305,22 @@ bool SetHighT16Q2B64FusedEnabledForDiagnostics(bool enabled);
 bool SetBalancedB64TerminalEnabledForDiagnostics(bool enabled);
 
 /*
+    Process-local same-executable control for the exact K=R=65/B=64 packed
+    T=128 public-boundary terminal.  Adjacent balanced, K/R, and byte cells do
+    not read this selector.  Change it only while no encode call or path
+    introspection is executing.  This is not public API or wire identity.
+*/
+bool SetK65R65B64PackedTerminalEnabledForDiagnostics(bool enabled);
+
+// Normalized selector word: one is the packed terminal, two is mature.
+unsigned K65R65B64PackedTerminalModeForDiagnostics();
+
+// Production selector introspection for an already-created codec.
+bool K65R65B64PackedTerminalSelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes);
+
+/*
     Arithmetic-only same-executable benchmark control for the exact
     K=62/R=8/B=64 fused AVX2 leaf.  It deliberately does not affect adjacent
     T16/T32/T64 terminals.  Change it only while no encode call or path

@@ -1170,6 +1170,10 @@ static volatile uint32_t g_balanced_b64_terminal_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_BALANCED_B64_TERMINAL;
 static volatile uint32_t g_t32_b64_packed_terminal_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_T32_B64_PACKED_TERMINAL;
+/* Exact public-boundary attribution for the shortened T=128 K=R=65/B=64
+   terminal.  Keep it independent of the balanced and T32 family selectors so
+   K64/R64 and the adjacent K/R/byte cells remain true same-binary controls. */
+static volatile uint32_t g_k65r65_b64_packed_terminal_mode = 1U;
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && \
     !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
 /* Arithmetic-only attribution selector for the exact K=62/R=8/B=64 fused
@@ -15878,6 +15882,37 @@ bool SetBalancedB64TerminalEnabledForDiagnostics(bool enabled)
 #endif
 }
 
+bool SetK65R65B64PackedTerminalEnabledForDiagnostics(bool enabled)
+{
+#if defined(LEO_HAS_FF8) && defined(LEO2_HAVE_AVX2_BACKEND)
+    g_k65r65_b64_packed_terminal_mode = enabled ? 1U : 2U;
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
+unsigned K65R65B64PackedTerminalModeForDiagnostics()
+{
+#if defined(LEO_HAS_FF8) && defined(LEO2_HAVE_AVX2_BACKEND)
+    return g_k65r65_b64_packed_terminal_mode;
+#else
+    return 0;
+#endif
+}
+
+#ifndef LEO_HAS_FF8
+bool K65R65B64PackedTerminalSelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    (void)codec;
+    (void)shard_bytes;
+    return false;
+}
+#endif
+
 bool SetK62R8B64FusedEnabledForDiagnostics(bool enabled)
 {
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8) && \
@@ -18556,6 +18591,48 @@ static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
 #endif
 }
 
+static LEO_FORCE_INLINE bool IsGF8AVX2K65R65B64PackedTerminalEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    if (!codec || shard_bytes != 64 || codec->original_count != 65 ||
+        codec->recovery_count != 65 || codec->padded_side != 128 ||
+        g_k65r65_b64_packed_terminal_mode != 1U ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 ||
+        codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
+        !codec->context || codec->context->backend != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2)
+        return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
+#else
+    return true;
+#endif
+}
+
+namespace leopard2_internal {
+
+bool K65R65B64PackedTerminalSelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    return IsGF8AVX2K65R65B64PackedTerminalEligible(codec, shard_bytes);
+}
+
+} // namespace leopard2_internal
+
+static bool TryEncodeGF8K65R65B64PackedTerminal(
+    const leo2_codec* codec,
+    const AddressRange* protected_range,
+    size_t protected_count,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    leo2_result& result_out);
+
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
 static bool IsGF8AVX2K66R16B64PackedTerminalEligible(
     const leo2_codec* codec,
@@ -19270,6 +19347,154 @@ ExecuteGF8AVX2K66R16B64PackedTerminal(
 #undef LEO2_HIGH_B64_PACKED_TERMINAL_NOINLINE
 
 #undef LEO2_BALANCED_B64_TERMINAL_NOINLINE
+
+#if defined(_MSC_VER)
+#define LEO2_K65R65_B64_TERMINAL_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
+#define LEO2_K65R65_B64_TERMINAL_NOINLINE \
+    __attribute__((noinline, noipa, aligned(64)))
+#elif defined(__clang__) && defined(__ELF__)
+#define LEO2_K65R65_B64_TERMINAL_NOINLINE \
+    __attribute__((noinline, aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_K65R65_B64_TERMINAL_NOINLINE \
+    __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_K65R65_B64_TERMINAL_NOINLINE
+#endif
+
+/*
+    K=R=65 is one shortened T=128 systematic block.  The transform touches
+    only work[0..127], but the public scratch query intentionally retains the
+    established 2T-row ABI.  This exact packed terminal proves both public
+    slabs with aggregate ranges, writes the 128 live work pointers into the
+    caller's reserved pointer area, and otherwise executes the mature
+    wire-identical transform.
+*/
+static LEO2_K65R65_B64_TERMINAL_NOINLINE bool
+TryEncodeGF8K65R65B64PackedTerminal(
+    const leo2_codec* codec,
+    const AddressRange* protected_range,
+    size_t protected_count,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    leo2_result& result_out)
+{
+    LEO_DEBUG_ASSERT(
+        IsGF8AVX2K65R65B64PackedTerminalEligible(codec, 64));
+    LEO_DEBUG_ASSERT(protected_count <= 1U);
+    LEO_DEBUG_ASSERT(
+        (protected_count == 0 && !protected_range) ||
+        (protected_count == 1 && protected_range));
+
+    static constexpr size_t kOriginalCount = 65;
+    static constexpr size_t kRecoveryCount = 65;
+    static constexpr size_t kSide = 128;
+    static constexpr size_t kWorkCount = kSide;
+    static constexpr size_t kPublicWorkCount = 2U * kSide;
+
+    ScratchLayout layout;
+    size_t work_data_offset = 0;
+    if (!ComputeSplitScratchLayout(
+            kOriginalCount + kRecoveryCount,
+            kOriginalCount + kPublicWorkCount,
+            0, kPublicWorkCount, 64U, layout, work_data_offset))
+    {
+        result_out = LEO2_INTERNAL_ERROR;
+        return true;
+    }
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    EncodeScratchGeometry geometry;
+    result_out = EncodeLayout(codec, 64, geometry);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    layout = geometry.layout;
+    work_data_offset = geometry.work_data_offset;
+#endif
+
+    AddressRange scratch_range;
+    result_out = CheckScratch(
+        scratch, scratch_bytes, layout, scratch_range);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    if (!original || !recovery)
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+
+    AddressRange metadata_ranges[3];
+    if (!MakeArrayRange(original, kOriginalCount, sizeof(*original),
+            metadata_ranges[0]) ||
+        !MakeArrayRange(recovery, kRecoveryCount, sizeof(*recovery),
+            metadata_ranges[1]))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    if (protected_count != 0)
+        metadata_ranges[2] = *protected_range;
+    if (RangeOverlapsAny(
+            scratch_range, metadata_ranges, 2U + protected_count))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    if (!original[0] || !recovery[0])
+        return false;
+    AddressRange input_range;
+    AddressRange output_range;
+    if (!MakeRange(original[0], kOriginalCount * 64U, input_range) ||
+        !MakeRange(recovery[0], kRecoveryCount * 64U, output_range))
+        return false;
+
+    uintptr_t pointer_mismatch = 0;
+    for (size_t i = 0; i < kOriginalCount; ++i)
+    {
+        pointer_mismatch |= reinterpret_cast<uintptr_t>(original[i]) ^
+            (input_range.begin + i * 64U);
+    }
+    for (size_t i = 0; i < kRecoveryCount; ++i)
+    {
+        pointer_mismatch |= reinterpret_cast<uintptr_t>(recovery[i]) ^
+            (output_range.begin + i * 64U);
+    }
+    if (pointer_mismatch != 0)
+        return false;
+
+    if (RangesOverlap(input_range, scratch_range) ||
+        RangesOverlap(output_range, scratch_range) ||
+        RangesOverlap(input_range, output_range) ||
+        RangeOverlapsAny(
+            output_range, metadata_ranges, 2U + protected_count))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    uint8_t* const base = static_cast<uint8_t*>(scratch);
+    void** const pointers = reinterpret_cast<void**>(
+        base + layout.pointer_offset);
+    void** const work = pointers + kOriginalCount;
+    uint8_t* const work_storage = base + work_data_offset;
+    for (size_t i = 0; i < kRecoveryCount; ++i)
+        work[i] = recovery[i];
+    for (size_t i = kRecoveryCount; i < kWorkCount; ++i)
+        work[i] = work_storage + (i - kRecoveryCount) * 64U;
+
+    leopard::ff8::ReedSolomonEncodeK65R65T128B64Packed(
+        *codec->context->ops, original, work);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    leopard::ff8::TestOnlyRecordBalancedB64PackedCall();
+#endif
+    result_out = LEO2_SUCCESS;
+    return true;
+}
+
+#undef LEO2_K65R65_B64_TERMINAL_NOINLINE
 
 #if LEO2_HAVE_HIGH_T16_B64_GENERATED
 #if defined(_MSC_VER)
@@ -21492,6 +21717,15 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
             if (handled)
                 return terminal_result;
         }
+        if (IsGF8AVX2K65R65B64PackedTerminalEligible(
+                codec, shard_bytes))
+        {
+            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+            if (TryEncodeGF8K65R65B64PackedTerminal(
+                    codec, NULL, 0, original, recovery, scratch,
+                    scratch_bytes, terminal_result))
+                return terminal_result;
+        }
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
         if (IsGF8AVX2HighT16Q2B64FusedEligible(codec, shard_bytes))
         {
@@ -21835,6 +22069,16 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
                         items[0].scratch_bytes, terminal_result);
                 }
                 if (handled)
+                    return terminal_result;
+            }
+            if (IsGF8AVX2K65R65B64PackedTerminalEligible(
+                    codec, items[0].shard_bytes))
+            {
+                leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+                if (TryEncodeGF8K65R65B64PackedTerminal(
+                        codec, &item_range, 1, items[0].original,
+                        items[0].recovery, items[0].scratch,
+                        items[0].scratch_bytes, terminal_result))
                     return terminal_result;
             }
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED

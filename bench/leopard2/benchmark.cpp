@@ -127,6 +127,7 @@ struct Options
     int r1_fixed_avx2_mode;
     int k8r3r4_t4_terminal_mode;
     int balanced_b64_terminal_mode;
+    int k65r65_b64_packed_terminal_mode;
     int k62r8_b64_fused_mode;
     int k66r16_b64_tail_mode;
     int high_t16_prepared_terminal_mode;
@@ -194,6 +195,7 @@ struct Options
         , r1_fixed_avx2_mode(-1)
         , k8r3r4_t4_terminal_mode(-1)
         , balanced_b64_terminal_mode(-1)
+        , k65r65_b64_packed_terminal_mode(-1)
         , k62r8_b64_fused_mode(-1)
         , k66r16_b64_tail_mode(-1)
         , high_t16_prepared_terminal_mode(-1)
@@ -513,6 +515,9 @@ static void Usage(std::ostream& output, const char* program)
         << "  --balanced-b64-terminal-mode 0|1\n"
         << "                         Attribution-only: mature or packed balanced path\n"
         << "                         in identical executable text using schema v22\n"
+        << "  --k65r65-b64-packed-terminal-mode 0|1\n"
+        << "                         Attribution-only: mature or packed exact K65/R65/B64\n"
+        << "                         path in identical executable text using schema v31\n"
         << "  --k62r8-b64-fused-mode 0|1\n"
         << "                         Attribution-only: mature or fused exact K62/R8/B64\n"
         << "                         arithmetic in identical text using schema v29\n"
@@ -713,6 +718,19 @@ static Options ParseOptions(int argc, char** argv)
             else
                 Fail("--balanced-b64-terminal-mode must be exactly 0 or 1");
         }
+        else if (argument == "--k65r65-b64-packed-terminal-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.k65r65_b64_packed_terminal_mode = 0;
+            else if (mode == "1")
+                options.k65r65_b64_packed_terminal_mode = 1;
+            else
+            {
+                Fail("--k65r65-b64-packed-terminal-mode must be exactly "
+                     "0 or 1");
+            }
+        }
         else if (argument == "--k62r8-b64-fused-mode")
         {
             const std::string mode = NeedValue(argc, argv, i);
@@ -858,6 +876,52 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--loss cannot exceed K");
     if (options.losses > options.r)
         Fail("--loss cannot exceed R when only transmitted recovery shards are used");
+    if (options.k65r65_b64_packed_terminal_mode >= 0 &&
+        (options.batch != 1 || options.threads != 1 ||
+         options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+         options.field != LEO2_FIELD_GF8 ||
+         options.backend != LEO2_BACKEND_AVX2 ||
+         !options.skip_legacy || !options.retain_samples))
+    {
+        Fail("--k65r65-b64-packed-terminal-mode requires explicit "
+             "high/GF8/AVX2, batch=1, one thread, --skip-legacy, and "
+             "--retain-samples");
+    }
+    if (options.k65r65_b64_packed_terminal_mode >= 0 &&
+        (options.force_generic_decode || options.force_specialized_decode ||
+         options.force_tiled_decode || options.force_materialized_decode ||
+         options.report_decode_path || options.report_direct_executor ||
+         options.measure_one_shot_decode ||
+         options.one_shot_plan_setup_mode >= 0 ||
+         options.low_p32_b64_terminal_mode >= 0 ||
+         options.low_p128_b64_terminal_mode >= 0 ||
+         options.low_p16_partial_direct_output_mode >= 0 ||
+         options.gf8_avx2_walsh_locator_mode >= 0 ||
+         options.small_dual_regular_fallback_mode >= 0 ||
+         options.r1_small_reduction_mode >= 0 ||
+         options.r1_fixed_avx2_mode >= 0 ||
+         options.k8r3r4_t4_terminal_mode >= 0 ||
+         options.balanced_b64_terminal_mode >= 0 ||
+         options.k62r8_b64_fused_mode >= 0 ||
+         options.k66r16_b64_tail_mode >= 0 ||
+         options.high_t16_prepared_terminal_mode >= 0 ||
+         options.high_t8_two_block_b64_terminal_mode >= 0 ||
+         options.high_t8_two_block_b256_terminal_mode >= 0 ||
+         options.high_t8_two_block_b1024_terminal_mode >= 0 ||
+         options.disable_t8_full_parity_terminal ||
+         options.disable_k16r8_b256_terminal ||
+         options.disable_k9r5_b256_terminal ||
+         options.disable_k9r5_b1024_terminal ||
+         options.disable_k9r6r8_b256_terminal
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+         || options.disable_high_t16_q2_b64_fused
+#endif
+         ))
+    {
+        Fail("--k65r65-b64-packed-terminal-mode cannot be combined with "
+             "another diagnostic mode, terminal-disable control, or decode-"
+             "path override");
+    }
     if (options.k62r8_b64_fused_mode >= 0 &&
         (options.batch != 1 || options.threads != 1 ||
          options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
@@ -1055,6 +1119,11 @@ static Options ParseOptions(int argc, char** argv)
              "--retain-samples, and --measure-one-shot-encode");
     }
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+    if (options.k65r65_b64_packed_terminal_mode >= 0)
+    {
+        Fail("--k65r65-b64-packed-terminal-mode requires the ordinary "
+             "benchmark");
+    }
     if (options.r1_small_reduction_mode >= 0)
         Fail("--r1-small-reduction-mode requires the ordinary benchmark");
     if (options.r1_fixed_avx2_mode >= 0 &&
@@ -1078,6 +1147,11 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--low-p16-partial-direct-output-mode requires the ordinary benchmark");
 #elif defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
     defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+    if (options.k65r65_b64_packed_terminal_mode >= 0)
+    {
+        Fail("--k65r65-b64-packed-terminal-mode requires the ordinary "
+             "benchmark");
+    }
     if (options.r1_small_reduction_mode >= 0)
         Fail("--r1-small-reduction-mode requires the ordinary benchmark");
     if (options.r1_fixed_avx2_mode >= 0)
@@ -1771,6 +1845,13 @@ static int Run(const Options& options)
         !leopard2_internal::SetBalancedB64TerminalEnabledForDiagnostics(
             options.balanced_b64_terminal_mode == 1))
         Fail("cannot set the balanced B64 terminal attribution mode");
+    if (options.k65r65_b64_packed_terminal_mode >= 0 &&
+        !leopard2_internal::
+            SetK65R65B64PackedTerminalEnabledForDiagnostics(
+                options.k65r65_b64_packed_terminal_mode == 1))
+    {
+        Fail("cannot set the K65/R65/B64 packed-terminal attribution mode");
+    }
     if (options.k62r8_b64_fused_mode >= 0 &&
         !leopard2_internal::SetK62R8B64FusedEnabledForDiagnostics(
             options.k62r8_b64_fused_mode == 1))
@@ -1878,6 +1959,37 @@ static int Run(const Options& options)
         context, options.k, options.r, options.profile, options.field,
         &codec_options, &codec),
         "codec create");
+    unsigned k65r65_b64_packed_terminal_mode_latched = 0;
+    bool k65r65_b64_packed_terminal_selector_expected_selected = false;
+    bool k65r65_b64_packed_terminal_selector_selected = false;
+    if (options.k65r65_b64_packed_terminal_mode >= 0)
+    {
+        const unsigned mode_word = leopard2_internal::
+            K65R65B64PackedTerminalModeForDiagnostics();
+        if (mode_word != 1U && mode_word != 2U)
+            Fail("K65/R65/B64 packed-terminal selector did not latch a "
+                 "normalized mode");
+        k65r65_b64_packed_terminal_mode_latched =
+            mode_word == 1U ? 1U : 0U;
+        if (k65r65_b64_packed_terminal_mode_latched !=
+            static_cast<unsigned>(options.k65r65_b64_packed_terminal_mode))
+        {
+            Fail("K65/R65/B64 packed-terminal selector did not latch the "
+                 "requested mode");
+        }
+        k65r65_b64_packed_terminal_selector_expected_selected =
+            options.k65r65_b64_packed_terminal_mode == 1 &&
+            options.k == 65 && options.r == 65 && options.bytes == 64;
+        k65r65_b64_packed_terminal_selector_selected = leopard2_internal::
+            K65R65B64PackedTerminalSelectedForDiagnostics(
+                codec, options.bytes);
+        if (k65r65_b64_packed_terminal_selector_selected !=
+            k65r65_b64_packed_terminal_selector_expected_selected)
+        {
+            Fail("K65/R65/B64 packed-terminal production selector differs "
+                 "from the requested diagnostic mode");
+        }
+    }
     leopard2_internal::CodecR1ReductionPathInfo r1_reduction_path_info = {};
     if ((options.r1_small_reduction_mode >= 0 ||
          options.r1_fixed_avx2_mode >= 0) &&
@@ -2024,6 +2136,12 @@ static int Run(const Options& options)
         Fail("R=1 attribution requires the ordinary one-item batch APIs "
              "without batch-preflight scratch");
     }
+    if (options.k65r65_b64_packed_terminal_mode >= 0 &&
+        encode_batch_preflight_bytes != 0)
+    {
+        Fail("K65/R65/B64 attribution requires the ordinary one-item encode "
+             "batch API without batch-preflight scratch");
+    }
     AlignedBuffer encode_batch_preflight(encode_batch_preflight_bytes);
     AlignedBuffer decode_batch_preflight(decode_batch_preflight_bytes);
     leo2_encode_batch_binding* encode_batch_binding = NULL;
@@ -2138,6 +2256,7 @@ static int Run(const Options& options)
         options.r1_small_reduction_mode >= 0 ||
         options.r1_fixed_avx2_mode >= 0 ||
         options.balanced_b64_terminal_mode >= 0 ||
+        options.k65r65_b64_packed_terminal_mode >= 0 ||
         options.k62r8_b64_fused_mode >= 0 ||
         options.k66r16_b64_tail_mode >= 0 ||
         options.high_t16_prepared_terminal_mode >= 0 ||
@@ -2150,6 +2269,7 @@ static int Run(const Options& options)
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.k65r65_b64_packed_terminal_mode >= 0 ? 31 :
         options.k66r16_b64_tail_mode >= 0 ? 30 :
         options.k62r8_b64_fused_mode >= 0 ? 29 :
         options.high_t8_two_block_b1024_terminal_mode >= 0 ? 28 :
@@ -2584,6 +2704,34 @@ static int Run(const Options& options)
              << (options.balanced_b64_terminal_mode == 1
                     ? "true" : "false");
     }
+    if (options.k65r65_b64_packed_terminal_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"k65r65_b64_packed_terminal_diagnostic_mode\": "
+             << options.k65r65_b64_packed_terminal_mode << ",\n"
+             << "    \"k65r65_b64_packed_terminal_diagnostic_disabled\": "
+             << (options.k65r65_b64_packed_terminal_mode == 0
+                    ? "true" : "false") << ",\n"
+             << "    \"k65r65_b64_packed_terminal_mode_latched\": "
+             << k65r65_b64_packed_terminal_mode_latched << ",\n"
+             << "    \"k65r65_b64_packed_terminal_selector_expected_selected\": "
+             << (k65r65_b64_packed_terminal_selector_expected_selected
+                    ? "true" : "false") << ",\n"
+             << "    \"k65r65_b64_packed_terminal_selector_selected\": "
+             << (k65r65_b64_packed_terminal_selector_selected
+                    ? "true" : "false") << ",\n"
+             << "    \"k65r65_b64_packed_terminal_selector_contract\": "
+                "\"LEGACY_HIGH_V1,GF8,AVX2,K=65,R=65,T=128,B=64,"
+                "native_layout,auto_encode,one_shot_and_one_item_batch\",\n"
+             << "    \"k65r65_b64_packed_terminal_timed_ordinary_encode_api\": "
+                "\"leo2_encode_batch:item_count=1:no_preflight_scratch\"";
+        if (options.measure_one_shot_encode)
+        {
+            json << ",\n"
+                 << "    \"k65r65_b64_packed_terminal_timed_one_shot_encode_api\": "
+                    "\"leo2_encode\"";
+        }
+    }
     if (options.k62r8_b64_fused_mode >= 0)
     {
         json << ",\n"
@@ -2912,6 +3060,11 @@ static int Run(const Options& options)
             json << "    \"measure_one_shot_encode\": true,\n";
         if (options.measure_one_shot_decode)
             json << "    \"measure_one_shot_decode\": true,\n";
+        if (options.k65r65_b64_packed_terminal_mode >= 0)
+        {
+            json << "    \"k65r65_b64_packed_terminal_mode\": "
+                 << options.k65r65_b64_packed_terminal_mode << ",\n";
+        }
         if (options.low_p32_b64_terminal_mode >= 0)
             json << "    \"low_p32_b64_terminal_mode\": "
                  << options.low_p32_b64_terminal_mode << ",\n";

@@ -199,6 +199,12 @@ void ReedSolomonEncodeK33To64R33To64T64B64Packed(
     const void* const* data,
     void** work);
 
+// Exact shortened one-block core used by the packed K=R=65/B=64 boundary.
+void ReedSolomonEncodeK65R65T128B64Packed(
+    const backend::Ops& ops,
+    const void* const* data,
+    void** work);
+
 // Exact packed K=33..64/R=9..16/T=16/B=64 terminal core selected by
 // Leopard2 after public validation.  work[0..15] is the coefficient
 // accumulator and work[16..31] is reused by every later message block.

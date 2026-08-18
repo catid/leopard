@@ -3149,6 +3149,34 @@ ReedSolomonEncodeK33To64R33To64T64B64Packed(
 #undef LEO2_T64R33_B64_CORE_NOINLINE
 
 #if defined(_MSC_VER)
+#define LEO2_T128K65_B64_CORE_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) && !defined(__clang__)
+#define LEO2_T128K65_B64_CORE_NOINLINE \
+    __attribute__((noinline, noipa, aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_T128K65_B64_CORE_NOINLINE \
+    __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_T128K65_B64_CORE_NOINLINE
+#endif
+
+void LEO2_T128K65_B64_CORE_NOINLINE
+ReedSolomonEncodeK65R65T128B64Packed(
+    const backend::Ops& ops,
+    const void* const* data,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+
+    IFFT_DIT_Encoder(
+        ops, 64, data, 65, work, nullptr, 128,
+        FFTSkewStorage + 128, false, EncoderIFFTHigh, true);
+    FFT_DIT(ops, 64, work, 65, 128, FFTSkewStorage, false);
+}
+
+#undef LEO2_T128K65_B64_CORE_NOINLINE
+
+#if defined(_MSC_VER)
 #define LEO2_T16_B64_CORE_NOINLINE __declspec(noinline)
 #elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
 #define LEO2_T16_B64_CORE_NOINLINE \
@@ -6632,7 +6660,6 @@ bool Initialize()
     IsInitialized = true;
     return true;
 }
-
 
 }} // namespace leopard::ff8
 

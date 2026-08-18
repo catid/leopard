@@ -210,6 +210,68 @@ size_t ExpectedProductionScratch(unsigned side)
     return ExpectedProductionScratch(side, side, side);
 }
 
+void CheckProductionPackedScratchMetadata(
+    const AlignedBuffer& scratch,
+    const std::vector<uint8_t>& before,
+    size_t work_data_offset,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned transform_side,
+    void* const* recovery,
+    const char* message)
+{
+    const bool k65r65_terminal =
+        original_count == 65 && recovery_count == 65 &&
+        transform_side == 128 && kShardBytes == 64;
+    if (!k65r65_terminal)
+    {
+        Require(std::memcmp(scratch.bytes(), &before[0],
+                work_data_offset) == 0, message);
+        return;
+    }
+
+    const size_t pointer_offset =
+        2U * (original_count + recovery_count) * sizeof(uintptr_t);
+    const size_t work_pointer_offset =
+        pointer_offset + original_count * sizeof(void*);
+    const size_t work_pointer_bytes =
+        static_cast<size_t>(transform_side) * sizeof(void*);
+    Require(work_pointer_offset + work_pointer_bytes <= work_data_offset,
+        "K65/R65 staged-pointer geometry exceeds scratch metadata");
+    Require(std::memcmp(scratch.bytes(), &before[0],
+            work_pointer_offset) == 0,
+        "K65/R65 terminal modified metadata before its work pointers");
+    Require(std::memcmp(scratch.bytes() + work_pointer_offset +
+                work_pointer_bytes,
+            &before[work_pointer_offset + work_pointer_bytes],
+            work_data_offset - work_pointer_offset - work_pointer_bytes) == 0,
+        "K65/R65 terminal modified metadata after its work pointers");
+
+    void* const* const work = reinterpret_cast<void* const*>(
+        scratch.bytes() + work_pointer_offset);
+    for (unsigned parity = 0; parity < recovery_count; ++parity)
+    {
+        Require(work[parity] == recovery[parity],
+            "K65/R65 terminal staged the wrong public output pointer");
+    }
+    for (unsigned slot = recovery_count; slot < transform_side; ++slot)
+    {
+        Require(work[slot] == scratch.bytes() + work_data_offset +
+                static_cast<size_t>(slot - recovery_count) * kShardBytes,
+            "K65/R65 terminal staged the wrong private work pointer");
+    }
+
+    const size_t live_private_rows = transform_side - recovery_count;
+    const size_t unused_data_offset =
+        work_data_offset + live_private_rows * kShardBytes;
+    Require(unused_data_offset <= scratch.size(),
+        "K65/R65 live private rows exceed public scratch");
+    Require(std::memcmp(scratch.bytes() + unused_data_offset,
+            &before[unused_data_offset],
+            scratch.size() - unused_data_offset) == 0,
+        "K65/R65 terminal modified unused public work-data rows");
+}
+
 void CheckGuards(
     const AlignedBuffer& buffer,
     size_t payload_offset,
@@ -366,7 +428,7 @@ void ExerciseProductionPackedSide(
         original_count, side, transform_side);
     std::memset(scratch.bytes(), 0x5c, scratch.size());
     const std::vector<uint8_t> scratch_prefix_before(
-        scratch.bytes(), scratch.bytes() + work_data_offset);
+        scratch.bytes(), scratch.bytes() + scratch.size());
 
     const size_t input_bytes =
         static_cast<size_t>(original_count) * kShardBytes;
@@ -420,8 +482,9 @@ void ExerciseProductionPackedSide(
         "execute production packed terminal");
     Require(std::memcmp(input.bytes(), &input_before[0], input.size()) == 0,
         "packed production encode modified source or guards");
-    Require(std::memcmp(scratch.bytes(), &scratch_prefix_before[0],
-            work_data_offset) == 0,
+    CheckProductionPackedScratchMetadata(scratch, scratch_prefix_before,
+        work_data_offset, original_count, side, transform_side,
+        &recovery[0],
         "packed production encode staged general-path scratch metadata");
     CheckGuards(output, output_offset, output_bytes,
         "packed production encode modified output guard");
@@ -435,8 +498,9 @@ void ExerciseProductionPackedSide(
     };
     RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
         "execute production packed one-item batch");
-    Require(std::memcmp(scratch.bytes(), &scratch_prefix_before[0],
-            work_data_offset) == 0,
+    CheckProductionPackedScratchMetadata(scratch, scratch_prefix_before,
+        work_data_offset, original_count, side, transform_side,
+        &recovery[0],
         "packed production batch staged general-path scratch metadata");
     CheckGuards(output, output_offset, output_bytes,
         "packed production batch modified output guard");
@@ -471,6 +535,7 @@ void ExerciseProductionPackedSide(
     const bool aggregate_overlap_shape =
         (original_count == 62 && side == 8)
         || (original_count == 79 && side == 32)
+        || (original_count == 65 && side == 65)
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
         || (original_count == 65 && side == 9)
         || (original_count == 66 && side == 16)
@@ -984,6 +1049,7 @@ int main()
         ExerciseProductionPackedSide(context, 33, 64);
         ExerciseProductionPackedSide(context, 62, 64);
         ExerciseProductionPackedSide(context, 64, 64);
+        ExerciseProductionPackedSide(context, 65, 65);
         ExerciseProductionPackedSide(context, 128, 128);
 #if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
         ExerciseProductionT32TwoBlockFamily(context, 64);
