@@ -1,0 +1,127 @@
+{
+  "schema": "leopard2-gf8-k62r8-b64-fused-checkpoint/v1",
+  "status": "accepted",
+  "candidate": {
+    "source_commit": "8306863135b231f4b8495bc5549d2a28694fe9db",
+    "source_tree": "04b49aabdb550ef3623eca298291046418be3dff",
+    "executable_sha256": "83242c7e74b702cea9f594d0ae3efb37f10fd82c4860447f7fafad74a851a52b",
+    "archive_sha256": "242c01f2f0a74f20e348afbf698958b7a63e6cc96652fd240848c00dd80e2a09",
+    "backend": "avx2",
+    "profile": "legacy_high_v1",
+    "field": "gf8"
+  },
+  "exact_main": {
+    "source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93"
+  },
+  "campaign": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_k62r8_b64_fused_abba.py",
+    "rounds": 25,
+    "iterations_per_process": 31,
+    "warmup_calls": 64,
+    "reuse": 8192,
+    "benchmark_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "process_count": 750,
+    "discarded_process_count": 6,
+    "discarded_round_attempts": 1,
+    "all_workload_digests_matched": true,
+    "all_accepted_rounds_had_zero_sibling_nonidle_ticks": true,
+    "raw_sha256": "1b6c6145e521ed1ddcf758beb400ca2984c001ceac98577142b5f423220ee076",
+    "summary_sha256": "ca8e3777465e6fd6be9308944dbd1b69b8cbff3e87706fc2843cd3433404cf2f",
+    "candidate_control_executable_sections_sha256": "892c6b842240c4d88a5bf157ae77818ed8d6f105d00f5a29e3827f1fcb3f7408"
+  },
+  "target": {
+    "K": 62,
+    "R": 8,
+    "shard_bytes": 64,
+    "loss_count": 1,
+    "encode_execution": {
+      "mature_control_over_candidate": {
+        "speedup": 2.06538557440296,
+        "ci95": [2.058109180888128, 2.072687693425007]
+      },
+      "exact_main_over_candidate": {
+        "speedup": 1.6828484265929942,
+        "ci95": [1.666853397279606, 1.6989969432875482]
+      }
+    },
+    "one_shot_encode": {
+      "mature_control_over_candidate": {
+        "speedup": 2.1126436437544966,
+        "ci95": [2.1075389968953715, 2.117760654522235]
+      },
+      "exact_main_over_candidate": {
+        "speedup": 1.6893966474326383,
+        "ci95": [1.6741157249475471, 1.7048170504736524]
+      }
+    }
+  },
+  "neighbor_equivalence": {
+    "required_band": [0.9803921568627451, 1.02],
+    "all_passed": true,
+    "cells": [
+      {
+        "id": "K61_R8_B64",
+        "encode_execution_ci95": [0.9912605301261219, 0.9987997507302596],
+        "one_shot_encode_ci95": [0.9926486579893914, 1.0031076284746805]
+      },
+      {
+        "id": "K63_R8_B64",
+        "encode_execution_ci95": [0.9931863764018073, 1.002644525063981],
+        "one_shot_encode_ci95": [0.9927725135941761, 1.0003284517789228]
+      },
+      {
+        "id": "K62_R7_B64",
+        "encode_execution_ci95": [0.9912987206228481, 1.0011250120921114],
+        "one_shot_encode_ci95": [0.9922115400933864, 1.0005963768321793]
+      },
+      {
+        "id": "K62_R9_B64",
+        "encode_execution_ci95": [0.9973061338367665, 1.0013155580094268],
+        "one_shot_encode_ci95": [0.9943037937509772, 1.0071276966924667]
+      },
+      {
+        "id": "K62_R8_B63",
+        "encode_execution_ci95": [0.988960026715616, 0.9987074941966535],
+        "one_shot_encode_ci95": [0.9897566123004687, 1.0005223509104177]
+      },
+      {
+        "id": "K62_R8_B65",
+        "encode_execution_ci95": [0.9946000577123502, 1.0049321178179782],
+        "one_shot_encode_ci95": [0.995318717713645, 1.006002116831433]
+      }
+    ]
+  },
+  "correctness_and_safety": {
+    "direct_generator_and_legacy_parity": "passed",
+    "all_62_systematic_basis_sources": "passed",
+    "release_focused_tests": "2/2 passed",
+    "gcc_13_strict_production_test": "passed",
+    "clang_18_strict_production_test": "passed",
+    "clang_18_asan_ubsan_lsan_tests": "2/2 passed",
+    "sanitizer_peak_rss_kib": 65024,
+    "feature_off_build": "passed; K62 object absent",
+    "high_t8_vector_disabled_build": "passed; K62 object absent",
+    "gf16_only_build": "passed; K62 object absent",
+    "portable_isa_scan": "passed",
+    "benchmark_attestation_refresh": "passed",
+    "build_provenance_tests": "116/116 normal and 116/116 python-O passed",
+    "all_k_contract_tests": "80/80 normal and 80/80 python-O passed",
+    "project_graph_tests": "168/168 normal and 168/168 python-O passed"
+  },
+  "invalid_attempts": [
+    {
+      "reason": "CMAKE_CXX_COMPILER cache type was STRING rather than FILEPATH",
+      "timings_retained": false
+    },
+    {
+      "reason": "AVX-512 probe cache types were INTERNAL rather than the predeclared pure-AVX2 UNINITIALIZED FALSE entries",
+      "timings_retained": false
+    },
+    {
+      "reason": "runner process was not singleton-pinned to the benchmark CPU",
+      "timings_retained": false
+    }
+  ]
+}
