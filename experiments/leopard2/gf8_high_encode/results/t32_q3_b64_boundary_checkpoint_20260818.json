@@ -1,0 +1,214 @@
+{
+  "schema": "leopard2-gf8-t32-q3-b64-boundary-checkpoint/v1",
+  "status": "accepted",
+  "ratio_tuple": [
+    "geometric_mean_speedup",
+    "ci95_lower",
+    "ci95_upper"
+  ],
+  "candidate": {
+    "source_commit": "1ef58ad17fa8f30cd8868a323fd8374929bdcaf8",
+    "source_tree": "e409013e120798e02bb5e8c3e5dcec2f48ffa00d",
+    "executable_sha256": "4305ce3a1025f0e565d37fc3a16478eeaa10800125e187ac1a2222bb9d8190ca",
+    "archive_sha256": "60ef83eeb4fbba7bafea09c5256acf577abefa3a2889c541af1802d8eb3e89d5",
+    "executable_sections_sha256": "92f05239ad14e64169b7301e1b753f66ce74e7e0ca10ec7874bc51945de45249",
+    "build_configuration_schema": "leopard2-benchmark-build-configuration/v13",
+    "build_configuration_sha256": "4172a7bb940fccaf70994df229f0da0d813ef8d18e2b11977aa72f419872426b",
+    "backend": "avx2",
+    "profile": "legacy_high_v1",
+    "field": "gf8"
+  },
+  "exact_main": {
+    "source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93"
+  },
+  "campaign": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_t32_q3_b64_boundary_abba.py",
+    "runner_schema": "leopard2-gf8-t32-q3-b64-boundary-abba/v1",
+    "summary_schema": "leopard2-gf8-t32-q3-b64-boundary-summary/v1",
+    "rounds_per_cell": 25,
+    "iterations_per_process": 31,
+    "warmup_calls": 64,
+    "reuse": 8192,
+    "benchmark_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "cell_count": 14,
+    "process_count": 1850,
+    "discarded_process_count": 36,
+    "discarded_round_attempts": 6,
+    "all_workload_digests_matched": true,
+    "all_accepted_rounds_had_zero_sibling_nonidle_ticks": true,
+    "candidate_control_shared_one_frozen_path_and_inode": true,
+    "reproducible_build_proof_schema": "leopard2-reproducible-build-proof/v3",
+    "raw_sha256": "9b8ac5d89934868ed18b2a6d41aff2388a299e6b285ba5dbaeb4aa45c7268a65",
+    "summary_sha256": "7e082601154820f8bb635d78b6ac764f4d1d42dc58a4eb7872875afb8dfae83e"
+  },
+  "wire_profile": {
+    "K_range": [65, 96],
+    "R": 32,
+    "shard_bytes": 64,
+    "T": 32,
+    "N": 128,
+    "D": 96,
+    "parity_coordinates": [0, 31],
+    "message_coordinate_start": 32,
+    "shortened_coordinate_end": 127,
+    "compatibility": "parity matched the direct generator and legacy leo_encode for every K in the selected range"
+  },
+  "active_cells": [
+    {
+      "K": 77,
+      "one_item_batch_execution": {
+        "mature_control_over_candidate": [1.1309445712693802, 1.1233128657190008, 1.138628126069764],
+        "exact_main_over_candidate": [1.1256120627316633, 1.115552502301781, 1.1357623358405398]
+      },
+      "one_shot_encode": {
+        "mature_control_over_candidate": [1.1100952159564157, 1.103055986616765, 1.1171793666330587],
+        "exact_main_over_candidate": [1.0943452586814981, 1.0850431476741345, 1.1037271169960345]
+      }
+    },
+    {
+      "K": 78,
+      "one_item_batch_execution": {
+        "mature_control_over_candidate": [1.1280917512341935, 1.1208682630903113, 1.1353617914865464],
+        "exact_main_over_candidate": [1.1245564982938538, 1.1179374474317763, 1.1312147390358442]
+      },
+      "one_shot_encode": {
+        "mature_control_over_candidate": [1.1078763626540524, 1.0999940072555419, 1.1158152015663083],
+        "exact_main_over_candidate": [1.0946644985458032, 1.0874902640214774, 1.1018860618993727]
+      }
+    },
+    {
+      "K": 79,
+      "one_item_batch_execution": {
+        "mature_control_over_candidate": [1.1322080919630573, 1.1226608126716409, 1.141836562778075],
+        "exact_main_over_candidate": [1.1152556027443234, 1.1058165874483126, 1.1247751874681846]
+      },
+      "one_shot_encode": {
+        "mature_control_over_candidate": [1.1127134758804862, 1.1047806611217301, 1.1207032517648403],
+        "exact_main_over_candidate": [1.0842798715822004, 1.0752674889989013, 1.0933677916858455]
+      }
+    },
+    {
+      "K": 65,
+      "one_item_batch_execution": {
+        "mature_control_over_candidate": [1.1459110775799242, 1.1330725748546355, 1.1588950494974648],
+        "exact_main_over_candidate": [1.1422776119811053, 1.1330075127492196, 1.1516235577884129]
+      },
+      "one_shot_encode": {
+        "mature_control_over_candidate": [1.115091264411143, 1.103890430545776, 1.1264057496641913],
+        "exact_main_over_candidate": [1.103461461934958, 1.0951137645697717, 1.1118727910921602]
+      }
+    },
+    {
+      "K": 76,
+      "one_item_batch_execution": {
+        "mature_control_over_candidate": [1.1356509034843774, 1.1287180751810384, 1.1426263147048685],
+        "exact_main_over_candidate": [1.1374866680165467, 1.1287567883683136, 1.1462840651313042]
+      },
+      "one_shot_encode": {
+        "mature_control_over_candidate": [1.1118602399093183, 1.105569343963648, 1.1181869322272517],
+        "exact_main_over_candidate": [1.1063830908884427, 1.0983445936448226, 1.1144804197941016]
+      }
+    },
+    {
+      "K": 80,
+      "one_item_batch_execution": {
+        "mature_control_over_candidate": [1.1245467025866605, 1.1181765907105015, 1.1309531041916976],
+        "exact_main_over_candidate": [1.131648238004915, 1.1242127344806028, 1.1391329196882756]
+      },
+      "one_shot_encode": {
+        "mature_control_over_candidate": [1.1058777938641817, 1.1013922294487872, 1.1103816263294015],
+        "exact_main_over_candidate": [1.0983675685920586, 1.0910367084532069, 1.105747686019835]
+      }
+    },
+    {
+      "K": 81,
+      "one_item_batch_execution": {
+        "mature_control_over_candidate": [1.1258670933204735, 1.120673426373402, 1.1310848298811562],
+        "exact_main_over_candidate": [1.1264326922102648, 1.1180929386309424, 1.1348346512533376]
+      },
+      "one_shot_encode": {
+        "mature_control_over_candidate": [1.1052066109137486, 1.1003674545759372, 1.110067048718914],
+        "exact_main_over_candidate": [1.097283697095909, 1.0896777875723225, 1.104942695578765]
+      }
+    },
+    {
+      "K": 95,
+      "one_item_batch_execution": {
+        "mature_control_over_candidate": [1.1031856953404722, 1.0974972386176118, 1.1089036360007396],
+        "exact_main_over_candidate": [1.0976783969439896, 1.0916298842411492, 1.1037604233005367]
+      },
+      "one_shot_encode": {
+        "mature_control_over_candidate": [1.0844419356058939, 1.079199993967496, 1.0897093386530146],
+        "exact_main_over_candidate": [1.067030097055475, 1.0619101812042013, 1.0721746981756046]
+      }
+    },
+    {
+      "K": 96,
+      "one_item_batch_execution": {
+        "mature_control_over_candidate": [1.1044288749619646, 1.0980421547335142, 1.1108527433045388],
+        "exact_main_over_candidate": [1.1211735179556785, 1.1125144388840595, 1.1298999935911065]
+      },
+      "one_shot_encode": {
+        "mature_control_over_candidate": [1.0807065569000678, 1.075427126566724, 1.086011904735357],
+        "exact_main_over_candidate": [1.0915242081158656, 1.0831988817619211, 1.0999135218502134]
+      }
+    }
+  ],
+  "inactive_neighbor_equivalence": {
+    "required_band": [0.9803921568627451, 1.02],
+    "all_passed": true,
+    "cells": [
+      {
+        "id": "K79_R31_B64_Q3",
+        "one_item_batch_execution": [1.0008920186179344, 0.9956844502852145, 1.0061268232582337],
+        "one_shot_encode": [1.0014208620277552, 0.9954292491240521, 1.0074485391974215]
+      },
+      {
+        "id": "K79_R33_B64_Q2",
+        "one_item_batch_execution": [0.9963126647444376, 0.9900824822310801, 1.0025820512381163],
+        "one_shot_encode": [0.9973498737267948, 0.9914624319816305, 1.0032722759194603]
+      },
+      {
+        "id": "K79_R32_B63_Q3",
+        "one_item_batch_execution": [1.0001164291284605, 0.9976627880257108, 1.00257610468968],
+        "one_shot_encode": [0.9988944391631223, 0.9961787114691796, 1.001617570324759]
+      },
+      {
+        "id": "K79_R32_B65_Q3",
+        "one_item_batch_execution": [1.000078418952316, 0.9959418700805379, 1.004232148582412],
+        "one_shot_encode": [1.0014110305741537, 0.9975661099897216, 1.0052707706418789]
+      },
+      {
+        "id": "K97_R32_B64_Q4",
+        "one_item_batch_execution": [0.9983486026195448, 0.9934785548442211, 1.0032425234470026],
+        "one_shot_encode": [0.997763835682795, 0.9931685406353438, 1.0023803927172195]
+      }
+    ]
+  },
+  "correctness_and_safety": {
+    "direct_generator_and_legacy_parity": "passed for every K=65..96 at R=32/B=64, including an isolated final-live-source basis vector for every K",
+    "release_focused_tests": "2/2 passed in 105.09 seconds",
+    "gf8_only_focused_test": "1/1 passed in 91.43 seconds",
+    "gcc_13_strict_build": "diagnostic and production targets compiled cleanly",
+    "clang_18_strict_build": "diagnostic and production targets compiled cleanly",
+    "clang_18_asan_ubsan_lsan_tests": "2/2 passed in 141.00 seconds",
+    "operation_count_source_audit": "489/489 checks passed",
+    "project_graph_audit": "171/171 normal and 171/171 python-O checks passed",
+    "benchmark_runner_contract": "normal and python-O self-tests passed",
+    "profile_field_backend_and_layout_exclusions": "passed",
+    "scratch_alias_overflow_and_metadata_guards": "passed",
+    "production_terminal_attestation": "scratch metadata prefix remained untouched for K65, K79, and K96"
+  },
+  "invalid_attempts": [
+    {
+      "reason": "CMAKE_CXX_COMPILER cache type was STRING rather than the required FILEPATH after selecting the compiler with -D",
+      "timings_retained": false
+    },
+    {
+      "reason": "AVX-512 probe cache entries were INTERNAL rather than the canonical explicit UNINITIALIZED=FALSE pure-AVX2 tuple",
+      "timings_retained": false
+    }
+  ]
+}
