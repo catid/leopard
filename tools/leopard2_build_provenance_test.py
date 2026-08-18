@@ -3711,6 +3711,18 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"], "ON")
         self.assertEqual(
             v11_validated["LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"], "ON")
+        v12_cache = dict(cache)
+        v12_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V12
+        v12_validated = provenance._validate_candidate_required_cache(
+            v12_cache,
+            expected_configuration_schema=
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V12)
+        self.assertEqual(
+            v12_validated[
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"], "ON")
+        self.assertEqual(
+            v12_validated["LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"], "ON")
         selectors = {
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
@@ -3833,7 +3845,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                 }
                 with self.assertRaisesRegex(
                         provenance.BuildProvenanceError,
-                        "supports only v5 through v11 and current"):
+                        "supports only v5 through v12 and current"):
                     provenance.verify_reproducible_candidate_build(
                         candidate, jobs=1)
 
@@ -3966,6 +3978,10 @@ class ExactCommandValidationTests(unittest.TestCase):
         v11["validated_cache"][
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V11
+        v12 = copy.deepcopy(current)
+        v12["validated_cache"][
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V12
         v4 = {
             "schema": provenance.PRODUCTION_BUILD_CLOSURE_SCHEMA,
             "validated_cache": {
@@ -4042,6 +4058,12 @@ class ExactCommandValidationTests(unittest.TestCase):
                 provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
                     "configuration_schema"],
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V11)
+        self.assertEqual(
+            provenance._require_reproducible_replay_artifact_contract(
+                v12, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
+                    "configuration_schema"],
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V12)
         self.assertEqual(
             provenance._require_reproducible_replay_artifact_contract(
                 v5, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
@@ -4367,6 +4389,8 @@ class ExactCommandValidationTests(unittest.TestCase):
                 ("-mavx2", "-mno-avx512f"), "avx2-no-avx512"),
             "Leopard2BackendAVX2T16B64.cpp": (
                 ("-mavx2", "-mno-avx512f"), "avx2-no-avx512"),
+            "Leopard2BackendAVX2T16K66.cpp": (
+                ("-mavx2", "-mno-avx512f"), "avx2-no-avx512"),
             "Leopard2BackendAVX2T32B256.cpp": (
                 ("-mavx2", "-mno-avx512f"), "avx2-no-avx512"),
             "Leopard2LowP32B64AVX2.cpp": (
@@ -4612,6 +4636,10 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
                 "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
             },
+            "Leopard2BackendAVX2T16K66.cpp": {
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+                "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
+            },
             "Leopard2BackendAVX2T8K62.cpp": {
                 "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
                 "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
@@ -4715,6 +4743,26 @@ class ExactCommandValidationTests(unittest.TestCase):
                 source_root=SOURCE_ROOT, cache=historical_k62_cache,
                 library_sources=library_sources)
 
+        v12_k62_cache = dict(cache)
+        v12_k62_cache[
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V12
+        self.assertEqual(
+            provenance._validate_compile_flags(
+                canonical_tokens[k62_name], member_sources[k62_name],
+                source_root=SOURCE_ROOT, cache=v12_k62_cache,
+                library_sources=library_sources),
+            "avx2-no-avx512")
+
+        k66_name = "Leopard2BackendAVX2T16K66.cpp"
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "historical configuration schema"):
+            provenance._validate_compile_flags(
+                canonical_tokens[k66_name], member_sources[k66_name],
+                source_root=SOURCE_ROOT, cache=v12_k62_cache,
+                library_sources=library_sources)
+
         # The retained replay cache predates the T32 two-block selector.  Its
         # archive member proves the default-on path while generated T32 is
         # retained as explicitly off.
@@ -4789,6 +4837,9 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "OFF",
             },
             "Leopard2BackendAVX2T16Q2.cpp": {
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "OFF",
+            },
+            "Leopard2BackendAVX2T16K66.cpp": {
                 "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "OFF",
             },
             "Leopard2BackendAVX2T8K62.cpp": {
@@ -5037,6 +5088,7 @@ class ExactCommandValidationTests(unittest.TestCase):
         p32_name = "Leopard2LowP32B64AVX2.cpp"
         t16_name = "Leopard2BackendAVX2T16B64.cpp"
         t16_q2_name = "Leopard2BackendAVX2T16Q2.cpp"
+        t16_k66_name = "Leopard2BackendAVX2T16K66.cpp"
         t8_k62_name = "Leopard2BackendAVX2T8K62.cpp"
         t32_name = "Leopard2BackendAVX2T32B256.cpp"
         tracked_names = set(provenance.CORE_LIBRARY_SOURCES) | {
@@ -5048,6 +5100,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "Leopard2BackendAVX2T8K8B1024.cpp",
             t16_name,
             t16_q2_name,
+            t16_k66_name,
             t8_k62_name,
             t32_name,
             p32_name,
@@ -5087,6 +5140,8 @@ class ExactCommandValidationTests(unittest.TestCase):
         self.assertIn((SOURCE_ROOT / t16_name).resolve(strict=True), expected)
         self.assertIn(
             (SOURCE_ROOT / t16_q2_name).resolve(strict=True), expected)
+        t16_k66_path = (SOURCE_ROOT / t16_k66_name).resolve(strict=True)
+        self.assertIn(t16_k66_path, expected)
         t8_k62_path = (SOURCE_ROOT / t8_k62_name).resolve(strict=True)
         self.assertIn(t8_k62_path, expected)
         self.assertIn((SOURCE_ROOT / t32_name).resolve(strict=True), expected)
@@ -5105,12 +5160,21 @@ class ExactCommandValidationTests(unittest.TestCase):
             (SOURCE_ROOT / t32_name).resolve(strict=True),
             historical_expected)
         self.assertNotIn(t8_k62_path, historical_expected)
+        self.assertNotIn(t16_k66_path, historical_expected)
 
         v11_expected = provenance._expected_library_sources(
             SOURCE_ROOT, cache, tracked,
             expected_configuration_schema=
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V11)
         self.assertNotIn(t8_k62_path, v11_expected)
+        self.assertNotIn(t16_k66_path, v11_expected)
+
+        v12_expected = provenance._expected_library_sources(
+            SOURCE_ROOT, cache, tracked,
+            expected_configuration_schema=
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V12)
+        self.assertIn(t8_k62_path, v12_expected)
+        self.assertNotIn(t16_k66_path, v12_expected)
 
         v6_expected = provenance._expected_library_sources(
             SOURCE_ROOT, cache, tracked,
@@ -5143,6 +5207,7 @@ class ExactCommandValidationTests(unittest.TestCase):
         self.assertNotIn(
             (SOURCE_ROOT / t16_q2_name).resolve(strict=True),
             expected_without_p32)
+        self.assertNotIn(t16_k66_path, expected_without_p32)
         self.assertNotIn(t8_k62_path, expected_without_p32)
         self.assertNotIn(
             (SOURCE_ROOT / t32_name).resolve(strict=True),

@@ -4823,7 +4823,7 @@ void TestOnlyRecordT16Q4B64FusedCall(
         std::memory_order_relaxed);
     TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
     TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
-    if (original_count == 65)
+    if (original_count > 64)
         TestHighTailColumnCalls.fetch_add(1, std::memory_order_relaxed);
 }
 

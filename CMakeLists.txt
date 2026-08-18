@@ -92,7 +92,7 @@ option(LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
     "Enable the qualified 65..1024-byte AVX2 T=8 ragged binding selector"
     ON)
 option(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
-    "Enable the GF8/AVX2 T16 fused encoders, including K=17..65/R=9..16"
+    "Enable the GF8/AVX2 T16 fused encoders, including K=17..65/R=9..16 and K=66/R=16"
     ON)
 option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     "Enable promoted generalized GF8/AVX2 one-loss direct repair"
@@ -620,6 +620,33 @@ if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
         LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1)
 endif()
 
+if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
+   LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+    # Link the exact K66/R16 tail column after the shared AVX2 object, whose
+    # final member is the already-qualified K62 leaf.  This keeps every prior
+    # hot section and address unchanged while giving K66 its own circuit.
+    add_library(leopard2_backend_avx2_t16_k66 OBJECT
+        Leopard2BackendAVX2T16K66.cpp)
+    target_include_directories(leopard2_backend_avx2_t16_k66 PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(leopard2_backend_avx2_t16_k66 PRIVATE
+        LEO2_HAVE_AVX2_BACKEND=1
+        LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        target_compile_options(leopard2_backend_avx2_t16_k66 PRIVATE
+            -mavx2 -mno-avx512f)
+        if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+            target_compile_options(leopard2_backend_avx2_t16_k66 PRIVATE
+                -falign-functions=64)
+        endif()
+    elseif(MSVC)
+        target_compile_options(leopard2_backend_avx2_t16_k66 PRIVATE
+            /arch:AVX2)
+    endif()
+endif()
+
 if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8)
     # Keep the exact K=4/R=2 circuit out of the mature AVX2 translation unit.
     # An in-TU prototype changed existing T=2 code generation and made tiny
@@ -762,6 +789,11 @@ if(LEO2_HAVE_AVX2_BACKEND)
     endif()
     target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_avx2>)
+    if(LEOPARD_ENABLE_GF8 AND
+       LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+        target_sources(leopard PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx2_t16_k66>)
+    endif()
     if(LEOPARD_ENABLE_GF8 AND
        (LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED OR
         LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK))
@@ -1167,6 +1199,11 @@ if(LEO2_BUILD_TESTS)
         target_sources(leopard_test_hooks PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_test_hooks>)
         if(LEOPARD_ENABLE_GF8 AND
+           LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+            target_sources(leopard_test_hooks PRIVATE
+                $<TARGET_OBJECTS:leopard2_backend_avx2_t16_k66>)
+        endif()
+        if(LEOPARD_ENABLE_GF8 AND
            LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
             target_sources(leopard_test_hooks PRIVATE
                 $<TARGET_OBJECTS:leopard2_backend_avx2_t16_b64>)
@@ -1460,6 +1497,10 @@ if(LEO2_BUILD_TESTS)
                 if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
                         avx2_t16_q2)
+                    if(LEOPARD_ENABLE_GF8)
+                        list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
+                            avx2_t16_k66)
+                    endif()
                 endif()
                 if(LEOPARD_ENABLE_GF8 AND
                    LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING AND

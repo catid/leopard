@@ -882,8 +882,10 @@ bool TryAVX2FF8HighEncodeT32B256TwoBlockPacked(
     Fused legacy-high T=16 encoders.  The caller supplies packed source,
     recovery, and temporary slabs; public validation and pure-AVX2 runtime
     dispatch have already completed before either entry is reached.  The B64
-    Q4 entry covers K=33..64 directly and K=65 with one exact Lagrange-column
-    update.
+    Q4 entry covers K=33..64 directly and K=65 with one exact
+    Lagrange-column update.  The isolated K66/R16 entry reuses that result and
+    adds the second exact tail column without perturbing the qualified Q4
+    entry.
 */
 void AVX2FF8HighEncodeT16Q2B64Fused(
     const void* data_base,
@@ -897,6 +899,10 @@ void AVX2FF8HighEncodeT16Q4B64Fused(
     void* temporary_base,
     unsigned original_count,
     unsigned recovery_count);
+void AVX2FF8HighEncodeT16K66R16B64Fused(
+    const void* data_base,
+    void* recovery_base,
+    void* temporary_base);
 void AVX2FF8HighEncodeT16Q2B256Fused(
     const void* data_base,
     void* recovery_base,

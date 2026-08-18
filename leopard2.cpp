@@ -1192,6 +1192,10 @@ static volatile uint32_t g_k9r6r8_b256_terminal_mode =
 #endif
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
 static volatile uint32_t g_high_t16_q2_b64_fused_mode = 1U;
+/* Exact-target arithmetic selector for the second T16 Q4 tail column.  The
+   public packed validator stays selected in both modes, and K66/R15 remains
+   a selector-inert neighboring cell. */
+static volatile uint32_t g_k66r16_b64_tail_mode = 1U;
 #endif
 static volatile uint32_t g_high_t8_one_block_extended_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED;
@@ -15887,6 +15891,18 @@ bool SetK62R8B64FusedEnabledForDiagnostics(bool enabled)
 #endif
 }
 
+bool SetK66R16B64TailEnabledForDiagnostics(bool enabled)
+{
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED && defined(LEO_HAS_FF8) && \
+    defined(LEO2_HAVE_AVX2_BACKEND)
+    g_k66r16_b64_tail_mode = enabled ? 1U : 2U;
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
 bool SetHighT16PreparedTerminalEnabledForDiagnostics(bool enabled)
 {
 #if LEO2_HAVE_HIGH_T16_B64_GENERATED
@@ -18540,6 +18556,12 @@ static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
 #endif
 }
 
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+static bool IsGF8AVX2K66R16B64PackedTerminalEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes);
+#endif
+
 static LEO_FORCE_INLINE bool IsGF8AVX2K33PlusB64PackedTerminalEligible(
     const leo2_codec* codec,
     uint64_t shard_bytes)
@@ -18782,7 +18804,8 @@ TryEncodeGF8BalancedB64PackedTerminal(
    template definition and emits this instantiation in generic .text, where
    unrelated decoder changes can move it across cache sets. */
 #if defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
-template __attribute__((section(".leo2_balanced_b64_t32"), aligned(4096)))
+template __attribute__((section(".leo2_balanced_b64_t32"), aligned(4096),
+    no_reorder))
 bool TryEncodeGF8BalancedB64PackedTerminal<32, 0>(
     const leo2_codec*,
     const AddressRange*,
@@ -18935,14 +18958,24 @@ TryEncodeGF8K33R32B64PackedTerminal(
 #define LEO2_HIGH_B64_PACKED_TERMINAL_NOINLINE
 #endif
 
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+static void ExecuteGF8AVX2K66R16B64PackedTerminal(
+    const leo2_codec* codec,
+    const void* const* original,
+    void* const* recovery,
+    void** work,
+    void* work_storage);
+#endif
+
 /*
     The public B=64 high-rate bands cover two to four T=16 message blocks,
     one to two T=32 blocks, or one shortened T=64 block.  The fused T16 build
-    extends its exact packed band through K=65.  Their arithmetic is already
-    the mature high-rate transform.  This terminal changes only the public
-    boundary: a packed slab is proven with aggregate ranges, and temporary
-    rows are derived from the caller's existing scratch contract without
-    staging per-source metadata or compiling a dense sparse-plan descriptor.
+    extends its exact packed band through K=65 and exact K=66/R=16.  Their
+    arithmetic is already the mature high-rate transform.  This terminal
+    changes only the public boundary: a packed slab is proven with aggregate
+    ranges, and temporary rows are derived from the caller's existing scratch
+    contract without staging per-source metadata or compiling a dense
+    sparse-plan descriptor.
 */
 template<size_t FixedT, size_t ProtectedCount>
 static LEO2_HIGH_B64_PACKED_TERMINAL_NOINLINE bool
@@ -18959,8 +18992,14 @@ TryEncodeGF8HighB64PackedTerminal(
         FixedT == 16 || FixedT == 32 || FixedT == 64,
         "unsupported high B64 aggregate terminal");
     LEO_DEBUG_ASSERT(codec && codec->original_count >= 33);
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+    LEO_DEBUG_ASSERT(
+        IsGF8AVX2K33PlusB64PackedTerminalEligible(codec, 64) ||
+        IsGF8AVX2K66R16B64PackedTerminalEligible(codec, 64));
+#else
     LEO_DEBUG_ASSERT(
         IsGF8AVX2K33PlusB64PackedTerminalEligible(codec, 64));
+#endif
     LEO_DEBUG_ASSERT(
         (FixedT == 16 && codec->recovery_count >= 9 &&
             codec->recovery_count <= 16 && codec->padded_side == 16) ||
@@ -19071,14 +19110,22 @@ TryEncodeGF8HighB64PackedTerminal(
     if (FixedT == 16)
     {
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
-        leopard::backend::AVX2FF8HighEncodeT16Q4B64Fused(
-            original[0], recovery[0], work_storage,
-            static_cast<unsigned>(original_count),
-            static_cast<unsigned>(recovery_count));
+        if (original_count == 66)
+        {
+            ExecuteGF8AVX2K66R16B64PackedTerminal(
+                codec, original, recovery, work, work_storage);
+        }
+        else
+        {
+            leopard::backend::AVX2FF8HighEncodeT16Q4B64Fused(
+                original[0], recovery[0], work_storage,
+                static_cast<unsigned>(original_count),
+                static_cast<unsigned>(recovery_count));
 #ifdef LEO2_ENABLE_TEST_HOOKS
-        leopard::ff8::TestOnlyRecordT16Q4B64FusedCall(
-            static_cast<unsigned>(original_count));
+            leopard::ff8::TestOnlyRecordT16Q4B64FusedCall(
+                static_cast<unsigned>(original_count));
 #endif
+        }
 #else
         leopard::ff8::ReedSolomonEncodeK33To64R9To16T16B64Packed(
             *codec->context->ops, static_cast<unsigned>(original_count),
@@ -19111,36 +19158,110 @@ TryEncodeGF8HighB64PackedTerminal(
    public-boundary instantiations explicitly so unrelated codec work cannot
    move this tiny terminal across I-cache sets. */
 #if (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#if defined(__GNUC__) && !defined(__clang__)
+#define LEO2_EXPLICIT_TERMINAL_NO_REORDER , no_reorder
+#else
+#define LEO2_EXPLICIT_TERMINAL_NO_REORDER
+#endif
 template __attribute__((
-    section(".leo2_t32_b64_packed_terminal"), aligned(4096)))
-bool TryEncodeGF8HighB64PackedTerminal<32, 0>(
-    const leo2_codec*, const AddressRange*, const void* const*,
-    void* const*, void*, size_t, leo2_result&);
-template __attribute__((
-    section(".leo2_t32_b64_packed_terminal"), aligned(64)))
-bool TryEncodeGF8HighB64PackedTerminal<32, 1>(
-    const leo2_codec*, const AddressRange*, const void* const*,
-    void* const*, void*, size_t, leo2_result&);
-template __attribute__((
-    section(".leo2_t16_b64_packed_terminal"), aligned(64)))
+    section(".leo2_t16_b64_packed_terminal"), aligned(64)
+    LEO2_EXPLICIT_TERMINAL_NO_REORDER))
 bool TryEncodeGF8HighB64PackedTerminal<16, 0>(
     const leo2_codec*, const AddressRange*, const void* const*,
     void* const*, void*, size_t, leo2_result&);
 template __attribute__((
-    section(".leo2_t16_b64_packed_terminal"), aligned(64)))
+    section(".leo2_t16_b64_packed_terminal"), aligned(64)
+    LEO2_EXPLICIT_TERMINAL_NO_REORDER))
 bool TryEncodeGF8HighB64PackedTerminal<16, 1>(
     const leo2_codec*, const AddressRange*, const void* const*,
     void* const*, void*, size_t, leo2_result&);
 template __attribute__((
-    section(".leo2_t64_r33_b64_packed_terminal"), aligned(4096)))
+    section(".leo2_t64_r33_b64_packed_terminal"), aligned(4096)
+    LEO2_EXPLICIT_TERMINAL_NO_REORDER))
 bool TryEncodeGF8HighB64PackedTerminal<64, 0>(
     const leo2_codec*, const AddressRange*, const void* const*,
     void* const*, void*, size_t, leo2_result&);
 template __attribute__((
-    section(".leo2_t64_r33_b64_packed_terminal"), aligned(64)))
+    section(".leo2_t64_r33_b64_packed_terminal"), aligned(64)
+    LEO2_EXPLICIT_TERMINAL_NO_REORDER))
 bool TryEncodeGF8HighB64PackedTerminal<64, 1>(
     const leo2_codec*, const AddressRange*, const void* const*,
     void* const*, void*, size_t, leo2_result&);
+template __attribute__((
+    section(".leo2_t32_b64_packed_terminal"), aligned(4096)
+    LEO2_EXPLICIT_TERMINAL_NO_REORDER))
+bool TryEncodeGF8HighB64PackedTerminal<32, 0>(
+    const leo2_codec*, const AddressRange*, const void* const*,
+    void* const*, void*, size_t, leo2_result&);
+template __attribute__((
+    section(".leo2_t32_b64_packed_terminal"), aligned(64)
+    LEO2_EXPLICIT_TERMINAL_NO_REORDER))
+bool TryEncodeGF8HighB64PackedTerminal<32, 1>(
+    const leo2_codec*, const AddressRange*, const void* const*,
+    void* const*, void*, size_t, leo2_result&);
+#undef LEO2_EXPLICIT_TERMINAL_NO_REORDER
+#endif
+
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+#if defined(_MSC_VER)
+#define LEO2_K66R16_B64_ENTRY __declspec(noinline)
+#elif defined(__GNUC__) && !defined(__clang__)
+#define LEO2_K66R16_B64_ENTRY \
+    __attribute__((noinline, noipa, aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_K66R16_B64_ENTRY __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_K66R16_B64_ENTRY
+#endif
+
+static LEO2_K66R16_B64_ENTRY bool
+IsGF8AVX2K66R16B64PackedTerminalEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    if (!codec || shard_bytes != 64 || codec->original_count != 66 ||
+        codec->recovery_count != 16 || codec->padded_side != 16 ||
+        g_t32_b64_packed_terminal_mode != 1U ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 ||
+        codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
+        !codec->context || codec->context->backend != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2)
+        return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
+#else
+    return true;
+#endif
+}
+
+static LEO2_K66R16_B64_ENTRY void
+ExecuteGF8AVX2K66R16B64PackedTerminal(
+    const leo2_codec* codec,
+    const void* const* original,
+    void* const* recovery,
+    void** work,
+    void* work_storage)
+{
+    LEO_DEBUG_ASSERT(
+        IsGF8AVX2K66R16B64PackedTerminalEligible(codec, 64));
+    if (g_k66r16_b64_tail_mode != 1U)
+    {
+        leopard::ff8::ReedSolomonEncode(
+            *codec->context->ops, 64, 66, 16, 16, 16,
+            original, work, NULL, true, true, true);
+        return;
+    }
+
+    leopard::backend::AVX2FF8HighEncodeT16K66R16B64Fused(
+        original[0], recovery[0], work_storage);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    leopard::ff8::TestOnlyRecordT16Q4B64FusedCall(66);
+#endif
+}
+
+#undef LEO2_K66R16_B64_ENTRY
 #endif
 
 #undef LEO2_HIGH_B64_PACKED_TERMINAL_NOINLINE
@@ -21331,7 +21452,11 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
             if (handled)
                 return terminal_result;
         }
-        if (IsGF8AVX2K33PlusB64PackedTerminalEligible(codec, shard_bytes))
+        if (IsGF8AVX2K33PlusB64PackedTerminalEligible(codec, shard_bytes)
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+            || IsGF8AVX2K66R16B64PackedTerminalEligible(codec, shard_bytes)
+#endif
+            )
         {
             leo2_result terminal_result = LEO2_INTERNAL_ERROR;
             bool handled = false;
@@ -21667,7 +21792,12 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
                     return terminal_result;
             }
             if (IsGF8AVX2K33PlusB64PackedTerminalEligible(
-                    codec, items[0].shard_bytes))
+                    codec, items[0].shard_bytes)
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+                || IsGF8AVX2K66R16B64PackedTerminalEligible(
+                    codec, items[0].shard_bytes)
+#endif
+                )
             {
                 leo2_result terminal_result = LEO2_INTERNAL_ERROR;
                 bool handled = false;

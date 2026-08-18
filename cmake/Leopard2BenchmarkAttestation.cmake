@@ -134,7 +134,7 @@ function(leopard2_enable_benchmark_source_attestation target)
         LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256
         "${build_configuration_sha256}")
     set(LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA
-        "leopard2-benchmark-build-configuration/v12"
+        "leopard2-benchmark-build-configuration/v13"
         CACHE INTERNAL
         "Leopard2 benchmark effective-configuration schema"
         FORCE)

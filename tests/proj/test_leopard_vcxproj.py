@@ -28,7 +28,7 @@ BENCHMARK_ATTESTATION_MODULE = \
 BENCHMARK_ATTESTATION_GENERATOR = \
     ROOT / "cmake" / "GenerateBenchmarkSourceAttestation.cmake"
 BENCHMARK_ATTESTATION_MODULE_SHA256 = \
-    "c09359d9fcc36d59ec2a2773a77283deddc4e4126b4fd3bc0515efc68ef21de2"
+    "8776f4c9f8cdd6114326f4c5cd1fd672d068113bf0329e475217b1c9ca0f93bb"
 BENCHMARK_ATTESTATION_GENERATOR_SHA256 = \
     "21857083921f70d62f44f0d5327d88e375f845906ab97493dbbdecfe3e07a389"
 NS = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
@@ -48,6 +48,7 @@ AVX2_SOURCE_FILES = {
     "Leopard2BackendAVX2T2K4.cpp",
     "Leopard2BackendAVX2T8K8B1024.cpp",
     "Leopard2BackendAVX2T16B64.cpp",
+    "Leopard2BackendAVX2T16K66.cpp",
     "Leopard2BackendAVX2T16Q2.cpp",
     "Leopard2BackendAVX2T8K62.cpp",
     "Leopard2BackendAVX2T32B256.cpp",
@@ -794,6 +795,13 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1")),
         ("leopard2_backend_avx2_t16_b64", "target_compile_options", (
             "PRIVATE", "/arch:AVX2")),
+        ("leopard2_backend_avx2_t16_k66", "target_include_directories", (
+            "PRIVATE", "${CMAKE_CURRENT_SOURCE_DIR}")),
+        ("leopard2_backend_avx2_t16_k66", "target_compile_definitions", (
+            "PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1",
+            "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1")),
+        ("leopard2_backend_avx2_t16_k66", "target_compile_options", (
+            "PRIVATE", "/arch:AVX2")),
         ("leopard2_backend_avx2_t2_k4", "target_include_directories", (
             "PRIVATE", "${CMAKE_CURRENT_SOURCE_DIR}")),
         ("leopard2_backend_avx2_t2_k4", "target_compile_definitions", (
@@ -1041,7 +1049,7 @@ class CMakeProductionGraph(object):
         ("option", (
             "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
             "Enable the GF8/AVX2 T16 fused encoders, including "
-            "K=17..65/R=9..16", "ON")): 1,
+            "K=17..65/R=9..16 and K=66/R=16", "ON")): 1,
         ("option", (
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
             "Enable promoted generalized GF8/AVX2 one-loss direct repair",
@@ -1374,7 +1382,7 @@ class CMakeProductionGraph(object):
         ("trusted", ("option", (
             "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
             "Enable the GF8/AVX2 T16 fused encoders, including "
-            "K=17..65/R=9..16", "ON"))),
+            "K=17..65/R=9..16 and K=66/R=16", "ON"))),
         ("trusted", ("option", (
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
             "Enable promoted generalized GF8/AVX2 one-loss direct repair",
@@ -1525,6 +1533,19 @@ class CMakeProductionGraph(object):
         ("source-mutation", (
             "set_property", _t16_b64_source_property)),
         ("object-definition", (
+            "leopard2_backend_avx2_t16_k66", "OBJECT",
+            "Leopard2BackendAVX2T16K66.cpp")),
+        ("mutation", ("leopard2_backend_avx2_t16_k66",
+            "target_include_directories", (
+                "PRIVATE", "${CMAKE_CURRENT_SOURCE_DIR}"))),
+        ("mutation", ("leopard2_backend_avx2_t16_k66",
+            "target_compile_definitions", (
+                "PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1",
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1"))),
+        ("mutation", ("leopard2_backend_avx2_t16_k66",
+            "target_compile_options", (
+                "PRIVATE", "/arch:AVX2"))),
+        ("object-definition", (
             "leopard2_backend_avx2_t2_k4", "OBJECT",
             "Leopard2BackendAVX2T2K4.cpp")),
         ("mutation", ("leopard2_backend_avx2_t2_k4",
@@ -1594,6 +1615,9 @@ class CMakeProductionGraph(object):
         ("mutation", ("leopard2_backend_avx2",
             "target_compile_definitions", (
                 "PRIVATE", "NO_LEO_HAS_FF16=1"))),
+        ("optional-object-attachment", (
+            "leopard", "PRIVATE",
+            "$<TARGET_OBJECTS:leopard2_backend_avx2_t16_k66>")),
         ("optional-object-attachment", (
             "leopard", "PRIVATE",
             "$<TARGET_OBJECTS:leopard2_backend_avx2_t32_b256>")),
@@ -2516,6 +2540,13 @@ class CMakeProductionGraph(object):
             bool_atom("option:LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED"))
 
     @staticmethod
+    def _t16_k66_object_guard():
+        return bool_and(
+            bool_atom("probe:LEO2_FLAG_ARCH_AVX2"),
+            bool_atom("option:LEOPARD_ENABLE_GF8"),
+            bool_atom("option:LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"))
+
+    @staticmethod
     def _t2_k4_object_guard():
         return bool_and(
             bool_atom("probe:LEO2_FLAG_ARCH_AVX2"),
@@ -2550,6 +2581,8 @@ class CMakeProductionGraph(object):
             return cls._t32_b256_object_guard()
         if target == "leopard2_backend_avx2_t16_b64":
             return cls._t16_b64_object_guard()
+        if target == "leopard2_backend_avx2_t16_k66":
+            return cls._t16_k66_object_guard()
         if target == "leopard2_backend_avx2_t2_k4":
             return cls._t2_k4_object_guard()
         if target == "leopard2_backend_avx2_t8_k8_b1024":
@@ -4098,6 +4131,17 @@ class CMakeProductionGraph(object):
                         "T16/B64 OBJECT definition or guard drift")
                 self.contract_events.append(
                     ("object-definition", expected))
+            elif target == "leopard2_backend_avx2_t16_k66":
+                expected = (
+                    "leopard2_backend_avx2_t16_k66", "OBJECT",
+                    "Leopard2BackendAVX2T16K66.cpp")
+                if (kind != "OBJECT" or tuple(raw_tokens) != expected or
+                        reasons or not self._formula_equivalent(
+                            guard, self._t16_k66_object_guard())):
+                    raise ContractError(
+                        "T16/K66 OBJECT definition or guard drift")
+                self.contract_events.append(
+                    ("object-definition", expected))
             elif target == "leopard2_backend_avx2_t2_k4":
                 expected = (
                     "leopard2_backend_avx2_t2_k4", "OBJECT",
@@ -4162,6 +4206,16 @@ class CMakeProductionGraph(object):
                         "T32/B256 OBJECT attachment guard drift")
                 self.contract_events.append(
                     ("optional-object-attachment", t32_attachment))
+            t16_k66_attachment = (
+                "leopard", "PRIVATE",
+                "$<TARGET_OBJECTS:leopard2_backend_avx2_t16_k66>")
+            if tuple(raw_tokens) == t16_k66_attachment:
+                if reasons or not self._formula_equivalent(
+                        guard, self._t16_k66_object_guard()):
+                    raise ContractError(
+                        "T16/K66 OBJECT attachment guard drift")
+                self.contract_events.append(
+                    ("optional-object-attachment", t16_k66_attachment))
             t16_attachment = (
                 "leopard", "PRIVATE",
                 "$<TARGET_OBJECTS:leopard2_backend_avx2_t16_b64>")
@@ -5664,7 +5718,8 @@ class LeopardVisualStudioProjectTest(unittest.TestCase):
             "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX2Xor.cpp",
             "Leopard2BackendAVX2T2K4.cpp",
             "Leopard2BackendAVX2T8K8B1024.cpp",
-            "Leopard2BackendAVX2T16B64.cpp", "Leopard2BackendSSSE3.cpp"
+            "Leopard2BackendAVX2T16B64.cpp",
+            "Leopard2BackendAVX2T16K66.cpp", "Leopard2BackendSSSE3.cpp"
         }.issubset(set(self.object_sources)))
 
     def test_reachable_production_headers_are_visible(self):
@@ -8359,6 +8414,98 @@ target_sources(leopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
                 self.assertNotEqual(text, self.cmake)
                 with self.assertRaisesRegex(ContractError, error):
                     self.resolve_text(text, require_mutation_contract=True)
+
+    def test_t16_k66_object_is_modeled_and_default(self):
+        (sources, unused_headers, objects,
+         object_sources, unused_cmake) = self.resolve_text(
+            self.cmake, require_mutation_contract=True)
+        del unused_headers, unused_cmake
+        self.assertIn("Leopard2BackendAVX2T16K66.cpp", sources)
+        self.assertIn("leopard2_backend_avx2_t16_k66", objects)
+        self.assertIn("Leopard2BackendAVX2T16K66.cpp", object_sources)
+
+    def test_t16_k66_object_definition_and_guard_are_exact(self):
+        condition = (
+            "if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND\n"
+            "   LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)")
+        definition = (
+            "add_library(leopard2_backend_avx2_t16_k66 OBJECT\n"
+            "        Leopard2BackendAVX2T16K66.cpp)")
+        self.assertEqual(1, self.cmake.count(condition))
+        self.assertEqual(1, self.cmake.count(definition))
+        mutations = (
+            self.cmake.replace(
+                condition,
+                "if(LEO2_HAVE_AVX2_BACKEND AND "
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)", 1),
+            self.cmake.replace(
+                condition,
+                "if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8)", 1),
+            self.cmake.replace(
+                definition,
+                definition.replace(
+                    "Leopard2BackendAVX2T16K66.cpp",
+                    "Leopard2BackendAVX2T16K66Lookalike.cpp"), 1),
+        )
+        for text in mutations:
+            with self.subTest(size=len(text)):
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "T16/K66 OBJECT definition or guard drift"):
+                    self.resolve_text(text, require_mutation_contract=True)
+
+    def test_t16_k66_msvc_metadata_attachment_and_audit_are_exact(self):
+        compile_option = """        target_compile_options(leopard2_backend_avx2_t16_k66 PRIVATE
+            /arch:AVX2)"""
+        attachment = """    if(LEOPARD_ENABLE_GF8 AND
+       LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+        target_sources(leopard PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx2_t16_k66>)
+    endif()"""
+        audit_record = """                if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+                    list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
+                        avx2_t16_q2)
+                    if(LEOPARD_ENABLE_GF8)
+                        list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
+                            avx2_t16_k66)
+                    endif()
+                endif()"""
+        self.assertEqual(1, self.cmake.count(compile_option))
+        self.assertEqual(1, self.cmake.count(attachment))
+        self.assertEqual(1, self.cmake.count(audit_record))
+
+        def require_audit_record(text):
+            if text.count(audit_record) != 1:
+                raise ContractError(
+                    "missing or duplicate guarded K66 portable audit record")
+
+        mutations = (
+            (self.cmake.replace(
+                compile_option, compile_option.replace("AVX2", "AVX"), 1),
+             "unapproved production target compile/link mutation"),
+            (self.cmake.replace(
+                attachment, attachment.replace(
+                    "if(LEOPARD_ENABLE_GF8 AND\n"
+                    "       LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)",
+                    "if(TRUE)"), 1),
+             "T16/K66 OBJECT attachment guard drift"),
+            (self.cmake.replace(
+                audit_record,
+                audit_record.replace(
+                    "if(LEOPARD_ENABLE_GF8)", "if(TRUE)"), 1),
+             "missing or duplicate guarded K66 portable audit record"),
+        )
+        for text, error in mutations:
+            with self.subTest(error=error):
+                self.assertNotEqual(text, self.cmake)
+                if "portable audit" in error:
+                    with self.assertRaisesRegex(ContractError, error):
+                        require_audit_record(text)
+                else:
+                    with self.assertRaisesRegex(ContractError, error):
+                        self.resolve_text(
+                            text, require_mutation_contract=True)
 
     def test_t16_b64_option_and_router_definition_are_exact(self):
         option = (

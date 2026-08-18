@@ -106,6 +106,7 @@ class ProductionBuildFixture:
             "Leopard2BackendAVX2T8K8B1024.cpp",
             "Leopard2BackendAVX2T8K62.cpp",
             "Leopard2BackendAVX2T16B64.cpp",
+            "Leopard2BackendAVX2T16K66.cpp",
             "Leopard2BackendAVX2T16Q2.cpp",
             "Leopard2BackendAVX2T32B256.cpp",
             "Leopard2LowP32B64AVX2.cpp",
@@ -156,6 +157,11 @@ class ProductionBuildFixture:
             elif relative == "Leopard2BackendAVX2T16B64.cpp":
                 output = Path(
                     "CMakeFiles/leopard2_backend_avx2_t16_b64.dir") / \
+                    (Path(relative).name + ".o")
+                flags = ["-mavx2", "-mno-avx512f"]
+            elif relative == "Leopard2BackendAVX2T16K66.cpp":
+                output = Path(
+                    "CMakeFiles/leopard2_backend_avx2_t16_k66.dir") / \
                     (Path(relative).name + ".o")
                 flags = ["-mavx2", "-mno-avx512f"]
             elif relative == "Leopard2BackendAVX2T32B256.cpp":
@@ -274,6 +280,11 @@ class ProductionBuildFixture:
         elif source_name == "Leopard2BackendAVX2T16Q2.cpp":
             definitions.append(
                 "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1")
+        elif source_name == "Leopard2BackendAVX2T16K66.cpp":
+            definitions.extend((
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+                "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
+            ))
         elif source_name == "Leopard2BackendAVX2T32B256.cpp":
             definitions.extend((
                 "-DLEO2_HAVE_AVX2_BACKEND=1",
@@ -445,7 +456,9 @@ class AllKIdentityTests(unittest.TestCase):
             runner.RUN_CONTRACT_SCHEMA_V13:
                 runner.ALL_K_BUILD_CACHE_KEYS_V9,
             runner.RUN_CONTRACT_SCHEMA_V14:
-                runner.ALL_K_BUILD_CACHE_KEYS,
+                runner.ALL_K_BUILD_CACHE_KEYS_V9,
+            runner.RUN_CONTRACT_SCHEMA_V15:
+                runner.ALL_K_BUILD_CACHE_KEYS_V10,
             runner.RUN_CONTRACT_SCHEMA:
                 runner.ALL_K_BUILD_CACHE_KEYS,
         }[schema]
@@ -470,6 +483,7 @@ class AllKIdentityTests(unittest.TestCase):
                         runner.RUN_CONTRACT_SCHEMA_V12,
                         runner.RUN_CONTRACT_SCHEMA_V13,
                         runner.RUN_CONTRACT_SCHEMA_V14,
+                        runner.RUN_CONTRACT_SCHEMA_V15,
                         runner.RUN_CONTRACT_SCHEMA):
             cache.update({
                 "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
@@ -494,6 +508,7 @@ class AllKIdentityTests(unittest.TestCase):
                     runner.RUN_CONTRACT_SCHEMA_V12,
                     runner.RUN_CONTRACT_SCHEMA_V13,
                     runner.RUN_CONTRACT_SCHEMA_V14,
+                    runner.RUN_CONTRACT_SCHEMA_V15,
                     runner.RUN_CONTRACT_SCHEMA):
                 cache.update({
                     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED":
@@ -506,6 +521,7 @@ class AllKIdentityTests(unittest.TestCase):
                             runner.RUN_CONTRACT_SCHEMA_V12,
                             runner.RUN_CONTRACT_SCHEMA_V13,
                             runner.RUN_CONTRACT_SCHEMA_V14,
+                            runner.RUN_CONTRACT_SCHEMA_V15,
                             runner.RUN_CONTRACT_SCHEMA}
                          else "OFF"),
                     "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
@@ -516,23 +532,27 @@ class AllKIdentityTests(unittest.TestCase):
                               runner.RUN_CONTRACT_SCHEMA_V12,
                               runner.RUN_CONTRACT_SCHEMA_V13,
                               runner.RUN_CONTRACT_SCHEMA_V14,
+                              runner.RUN_CONTRACT_SCHEMA_V15,
                               runner.RUN_CONTRACT_SCHEMA):
                     cache["LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = "ON"
                 if schema in (runner.RUN_CONTRACT_SCHEMA_V11,
                               runner.RUN_CONTRACT_SCHEMA_V12,
                               runner.RUN_CONTRACT_SCHEMA_V13,
                               runner.RUN_CONTRACT_SCHEMA_V14,
+                              runner.RUN_CONTRACT_SCHEMA_V15,
                               runner.RUN_CONTRACT_SCHEMA):
                     cache.update({
                         "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
                         "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK":
                             ("ON" if schema in {
                                 runner.RUN_CONTRACT_SCHEMA_V14,
+                                runner.RUN_CONTRACT_SCHEMA_V15,
                                 runner.RUN_CONTRACT_SCHEMA}
                              else "OFF"),
                     })
                 if schema in (runner.RUN_CONTRACT_SCHEMA_V13,
                               runner.RUN_CONTRACT_SCHEMA_V14,
+                              runner.RUN_CONTRACT_SCHEMA_V15,
                               runner.RUN_CONTRACT_SCHEMA):
                     cache["LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"] = "ON"
         contract = {
@@ -590,6 +610,7 @@ class AllKIdentityTests(unittest.TestCase):
                 runner.RUN_CONTRACT_SCHEMA_V12,
                 runner.RUN_CONTRACT_SCHEMA_V13,
                 runner.RUN_CONTRACT_SCHEMA_V14,
+                runner.RUN_CONTRACT_SCHEMA_V15,
                 runner.RUN_CONTRACT_SCHEMA):
             contract["child_environment"] = copy.deepcopy(runner.CHILD_ENV)
         return contract
@@ -1472,6 +1493,7 @@ class AllKIdentityTests(unittest.TestCase):
         validated_proof = proof_validator.start()
         self.addCleanup(proof_validator.stop)
         current = self.run_contract()
+        v15 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V15)
         v14 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V14)
         v13 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V13)
         v12 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V12)
@@ -1485,6 +1507,8 @@ class AllKIdentityTests(unittest.TestCase):
         v4 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V4)
         self.assertIs(
             runner.validate_run_contract_evidence(current), current)
+        self.assertIs(
+            runner.validate_run_contract_evidence(v15), v15)
         self.assertIs(
             runner.validate_run_contract_evidence(v14), v14)
         self.assertIs(
@@ -1512,7 +1536,7 @@ class AllKIdentityTests(unittest.TestCase):
         # the outer contract cannot upgrade or downgrade its nested closure.
         bodies = (
             v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14,
-            current)
+            v15, current)
         schemas = tuple(body["schema"] for body in bodies)
         for body in bodies:
             for schema in schemas:
@@ -1557,6 +1581,10 @@ class AllKIdentityTests(unittest.TestCase):
             runner.CHILD_ENV)
         self.assertEqual(
             runner.child_environment_for_contract_schema(
+                runner.RUN_CONTRACT_SCHEMA_V15),
+            runner.CHILD_ENV)
+        self.assertEqual(
+            runner.child_environment_for_contract_schema(
                 runner.RUN_CONTRACT_SCHEMA_V7),
             runner.CHILD_ENV_V7)
         self.assertEqual(
@@ -1571,6 +1599,7 @@ class AllKIdentityTests(unittest.TestCase):
         self.assertEqual(v12["child_environment"], runner.CHILD_ENV)
         self.assertEqual(v13["child_environment"], runner.CHILD_ENV)
         self.assertEqual(v14["child_environment"], runner.CHILD_ENV)
+        self.assertEqual(v15["child_environment"], runner.CHILD_ENV)
         self.assertNotIn("OMP_PLACES", current["child_environment"])
         self.assertEqual(
             current["child_environment"]["OMP_THREAD_LIMIT"], "1")
@@ -1610,6 +1639,10 @@ class AllKIdentityTests(unittest.TestCase):
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"],
             runner.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V11)
         self.assertEqual(
+            v15["current_build_initial"]["validated_cache"][
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"],
+            runner.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V12)
+        self.assertEqual(
             current["current_build_initial"]["validated_cache"][
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"],
             runner.BENCHMARK_BUILD_CONFIGURATION_SCHEMA)
@@ -1644,6 +1677,9 @@ class AllKIdentityTests(unittest.TestCase):
             v14["current_build_initial"]["validated_cache"][
                 "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"], "ON")
         self.assertEqual(
+            v15["current_build_initial"]["validated_cache"][
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"], "ON")
+        self.assertEqual(
             current["current_build_initial"]["validated_cache"][
                 "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"], "ON")
         self.assertNotIn(
@@ -1654,6 +1690,9 @@ class AllKIdentityTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"], "ON")
         self.assertEqual(
             v14["current_build_initial"]["validated_cache"][
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"], "ON")
+        self.assertEqual(
+            v15["current_build_initial"]["validated_cache"][
                 "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"], "ON")
         self.assertEqual(
             current["current_build_initial"]["validated_cache"][
@@ -1942,6 +1981,30 @@ class AllKIdentityTests(unittest.TestCase):
             self.current_source, self.current_snapshot,
             attestation_identity)
 
+        v15_digest = runner.canonical_digest(v15)
+        v15_manifest = {
+            "schema": runner.MANIFEST_SCHEMA_V15,
+            "run_contract": v15,
+            "run_contract_sha256": v15_digest,
+            "cells": [runner.dataclasses.asdict(cell)],
+            "current_source_attestation_preflights": [preflight],
+            "completion": None,
+        }
+        runner.validate_manifest(
+            v15_manifest, v15, v15_digest, [cell],
+            self.current_source, self.current_snapshot,
+            attestation_identity)
+
+        relabeled_v15_manifest = copy.deepcopy(v15_manifest)
+        relabeled_v15_manifest["schema"] = runner.MANIFEST_SCHEMA
+        expect_rejected(
+            self,
+            lambda: runner.validate_manifest(
+                relabeled_v15_manifest, v15, v15_digest, [cell],
+                self.current_source, self.current_snapshot,
+                attestation_identity),
+            "schema tuple")
+
         relabeled_v14_manifest = copy.deepcopy(v14_manifest)
         relabeled_v14_manifest["schema"] = runner.MANIFEST_SCHEMA
         expect_rejected(
@@ -1971,7 +2034,7 @@ class AllKIdentityTests(unittest.TestCase):
                 self.current_source, self.current_snapshot,
                 attestation_identity),
             "schema tuple")
-        self.assertGreaterEqual(validated_proof.call_count, 9)
+        self.assertGreaterEqual(validated_proof.call_count, 11)
 
     def test_attestation_contract_identity_excludes_only_volatile_timing(
             self) -> None:
@@ -4253,6 +4316,13 @@ class ProductionBuildClosureTests(unittest.TestCase):
         ]
         self.assertEqual(len(k62_records), 1)
         self.assertEqual(k62_records[0]["flag_profile"], "avx2-no-avx512")
+        k66_records = [
+            record for record in result["source_object_compile_closure"]
+            if record["source"]["path"].endswith(
+                "/Leopard2BackendAVX2T16K66.cpp")
+        ]
+        self.assertEqual(len(k66_records), 1)
+        self.assertEqual(k66_records[0]["flag_profile"], "avx2-no-avx512")
 
     def test_current_closure_requires_the_k62_translation_unit(self) -> None:
         source_suffix = "/Leopard2BackendAVX2T8K62.cpp"
@@ -4262,6 +4332,27 @@ class ProductionBuildClosureTests(unittest.TestCase):
         object_path = next(
             path for path in self.fixture.archive_objects
             if path.name == "Leopard2BackendAVX2T8K62.cpp.o")
+        self.fixture.entries.remove(entry)
+        self.fixture.archive_objects.remove(object_path)
+        self.fixture._write_commands()
+        archive_recipe = self.fixture.build / "CMakeFiles/leopard.dir/link.txt"
+        archive_recipe.write_text(
+            "/usr/bin/ar qc libleopard.a " +
+            " ".join(path.as_posix()
+                     for path in self.fixture.archive_objects) +
+            "\n/usr/bin/ranlib libleopard.a\n",
+            encoding="utf-8")
+        self.fixture._relink()
+        expect_rejected(self, self.provenance, "source closure differs")
+
+    def test_current_closure_requires_the_k66_translation_unit(self) -> None:
+        source_suffix = "/Leopard2BackendAVX2T16K66.cpp"
+        entry = next(
+            item for item in self.fixture.entries
+            if item["file"].endswith(source_suffix))
+        object_path = next(
+            path for path in self.fixture.archive_objects
+            if path.name == "Leopard2BackendAVX2T16K66.cpp.o")
         self.fixture.entries.remove(entry)
         self.fixture.archive_objects.remove(object_path)
         self.fixture._write_commands()

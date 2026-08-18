@@ -297,7 +297,8 @@ bool SetHighT16Q2B64FusedEnabledForDiagnostics(bool enabled);
 /*
     Process-local benchmark control for the exact balanced 64-byte packed
     terminals and the packed K=33..64 high-rate families with T=16, T=32, or
-    T=64.  When the fused T16 option is enabled, K=65/R=9..16 is included.
+    T=64.  When the fused T16 option is enabled, K=65/R=9..16 and exact
+    K=66/R=16 are included.
     Change it only while no encode call is executing.  This remains outside
     the public API and changes no codec or wire identity.
 */
@@ -310,6 +311,15 @@ bool SetBalancedB64TerminalEnabledForDiagnostics(bool enabled);
     introspection is executing.  This is not public API or wire identity.
 */
 bool SetK62R8B64FusedEnabledForDiagnostics(bool enabled);
+
+/*
+    Arithmetic-only same-executable benchmark control for the exact
+    K=66/R=16/B=64 second T16 tail column.  The packed validator remains
+    selected in both modes, and adjacent K/R/byte cells do not read this
+    selector.  Change it only while no encode call or path introspection is
+    executing.  This is not public API or wire identity.
+*/
+bool SetK66R16B64TailEnabledForDiagnostics(bool enabled);
 
 bool SetHighT16PreparedTerminalEnabledForDiagnostics(bool enabled);
 

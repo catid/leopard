@@ -245,6 +245,7 @@ require_expected_members()
             ssse3) expected_member=Leopard2BackendSSSE3.cpp.o ;;
             avx2) expected_member=Leopard2BackendAVX2.cpp.o ;;
             avx2_t16_q2) expected_member=Leopard2BackendAVX2T16Q2.cpp.o ;;
+            avx2_t16_k66) expected_member=Leopard2BackendAVX2T16K66.cpp.o ;;
             avx2_t8_k62) expected_member=Leopard2BackendAVX2T8K62.cpp.o ;;
             avx2_xor) expected_member=Leopard2BackendAVX2Xor.cpp.o ;;
             avx2_t2_k4) expected_member=Leopard2BackendAVX2T2K4.cpp.o ;;
@@ -326,6 +327,7 @@ scan_archive()
                 object_class=ssse3 ;;
             Leopard2BackendAVX2.cpp.o|Leopard2BackendAVX2.cpp.obj|\
             Leopard2BackendAVX2T16Q2.cpp.o|Leopard2BackendAVX2T16Q2.cpp.obj|\
+            Leopard2BackendAVX2T16K66.cpp.o|Leopard2BackendAVX2T16K66.cpp.obj|\
             Leopard2BackendAVX2T8K62.cpp.o|Leopard2BackendAVX2T8K62.cpp.obj|\
             Leopard2BackendAVX2Xor.cpp.o|Leopard2BackendAVX2Xor.cpp.obj|\
             Leopard2BackendAVX2T2K4.cpp.o|Leopard2BackendAVX2T2K4.cpp.obj|\
@@ -450,7 +452,7 @@ scan_build_metadata()
         violating_lines="$scratch_root/metadata-violations"
         candidate_lines="$scratch_root/metadata-candidates"
         LC_ALL=C grep -Ein -- "$forbidden_metadata" "$compile_commands" |
-            grep -Ev '(^|[/[:space:]"])(Leopard2Backend(SSSE3|AVX2|AVX2T16Q2|AVX2T8K62|AVX2Xor|AVX2T2K4|AVX2T8K8B1024|AVX2T16B64|AVX2T32B256|AVX512|GFNI)|Leopard2LowP32B64AVX2)[.]cpp([[:space:]",]|$)' > \
+            grep -Ev '(^|[/[:space:]"])(Leopard2Backend(SSSE3|AVX2|AVX2T16Q2|AVX2T16K66|AVX2T8K62|AVX2Xor|AVX2T2K4|AVX2T8K8B1024|AVX2T16B64|AVX2T32B256|AVX512|GFNI)|Leopard2LowP32B64AVX2)[.]cpp([[:space:]",]|$)' > \
                 "$candidate_lines" || true
         : > "$violating_lines"
         while IFS= read -r candidate_line
@@ -484,6 +486,7 @@ scan_build_metadata()
         for avx2_source in \
             Leopard2BackendAVX2.cpp \
             Leopard2BackendAVX2T16Q2.cpp \
+            Leopard2BackendAVX2T16K66.cpp \
             Leopard2BackendAVX2T8K62.cpp \
             Leopard2BackendAVX2Xor.cpp \
             Leopard2LowP32B64AVX2.cpp
@@ -623,6 +626,45 @@ scan_build_metadata()
                     return 1
                 fi
             done < "$t16_lines"
+        fi
+        t16_k66_source=Leopard2BackendAVX2T16K66.cpp
+        t16_k66_stem=${t16_k66_source%.cpp}
+        t16_k66_source_pattern="(^|[/[:space:]\"])$t16_k66_stem[.]cpp([[:space:]\",]|$)"
+        if grep -Eq "$t16_k66_source_pattern" "$compile_commands"; then
+            t16_k66_lines="$scratch_root/t16-k66-lines"
+            grep -E "$t16_k66_source_pattern" "$compile_commands" |
+                grep -F ' -c ' > "$t16_k66_lines" || true
+            if [ ! -s "$t16_k66_lines" ]; then
+                echo "portable ISA check: $t16_k66_source has no compile command" >&2
+                return 1
+            fi
+            t16_k66_object_pattern='(^|[/[:space:]"])CMakeFiles/leopard2_backend_avx2_t16_k66[.]dir/Leopard2BackendAVX2T16K66[.]cpp[.](o|obj)([[:space:]",]|$)'
+            while IFS= read -r t16_k66_line
+            do
+                if ! printf '%s\n' "$t16_k66_line" |
+                    grep -Eq "$t16_k66_object_pattern"
+                then
+                    echo "portable ISA check: invalid $t16_k66_source object mapping" >&2
+                    return 1
+                fi
+                for required_flag in -mavx2 -mno-avx512f
+                do
+                    required_flag_pattern="(^|[[:space:]\"=,:])$required_flag([[:space:]\",]|$)"
+                    if ! printf '%s\n' "$t16_k66_line" |
+                        grep -Eq -- "$required_flag_pattern"
+                    then
+                        echo "portable ISA check: $t16_k66_source lacks $required_flag" >&2
+                        return 1
+                    fi
+                done
+                t16_k66_command="$scratch_root/t16-k66-command"
+                printf '%s\n' "$t16_k66_line" |
+                    sed 's/-mavx2//g' > "$t16_k66_command"
+                if grep -Ein -- "$forbidden_metadata" "$t16_k66_command"; then
+                    echo "portable ISA check: $t16_k66_source has an unrelated ISA/LTO flag" >&2
+                    return 1
+                fi
+            done < "$t16_k66_lines"
         fi
         t32_source=Leopard2BackendAVX2T32B256.cpp
         t32_stem=${t32_source%.cpp}
@@ -891,6 +933,26 @@ expect_missing_avx2_t16_b64_member_rejected()
     then
         cat "$fixture_log" >&2
         echo "portable ISA checker self-test: missing AVX2 T16/B64 rejection reason missing" >&2
+        return 1
+    fi
+}
+
+expect_missing_avx2_t16_k66_member_rejected()
+{
+    fixture_archive=$(write_classified_archive missing_expected_avx2_t16_k66 \
+        'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0')
+    fixture_log="$scratch_root/missing-avx2-t16-k66-member.log"
+    if scan_archive "$fixture_archive" "$ar_bin" \
+        'avx2,avx2_t16_k66' > "$fixture_log" 2>&1
+    then
+        echo "portable ISA checker self-test: missing AVX2 T16/K66 member was accepted" >&2
+        return 1
+    fi
+    if ! grep -q 'expected exactly one avx2_t16_k66 member, found 0' \
+        "$fixture_log"
+    then
+        cat "$fixture_log" >&2
+        echo "portable ISA checker self-test: missing AVX2 T16/K66 rejection reason missing" >&2
         return 1
     fi
 }
@@ -1164,6 +1226,9 @@ run_negative_controls()
     expect_classified_archive_accepted good_avx2_t16_b64 \
         'Leopard2BackendAVX2T16B64.cpp.o' \
         'vpxor %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_accepted good_avx2_t16_k66 \
+        'Leopard2BackendAVX2T16K66.cpp.o' \
+        'vpxor %ymm0, %ymm0, %ymm0'
     expect_classified_archive_accepted good_avx2_t32_b256 \
         'Leopard2BackendAVX2T32B256.cpp.o' \
         'vpxor %ymm0, %ymm0, %ymm0'
@@ -1287,6 +1352,17 @@ run_negative_controls()
         'vpxord %zmm0, %zmm0, %zmm0'
     expect_classified_archive_rejected avx2_t16_b64_leaks_probe \
         'Leopard2BackendAVX2T16B64.cpp.o' 'xgetbv'
+    expect_classified_archive_rejected avx2_t16_k66_leaks_fma \
+        'Leopard2BackendAVX2T16K66.cpp.o' \
+        'vfmadd132ps %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx2_t16_k66_leaks_evex \
+        'Leopard2BackendAVX2T16K66.cpp.o' \
+        'vpternlogd $0, %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx2_t16_k66_leaks_zmm \
+        'Leopard2BackendAVX2T16K66.cpp.o' \
+        'vpxord %zmm0, %zmm0, %zmm0'
+    expect_classified_archive_rejected avx2_t16_k66_leaks_probe \
+        'Leopard2BackendAVX2T16K66.cpp.o' 'xgetbv'
     expect_classified_archive_rejected avx2_t32_b256_leaks_fma \
         'Leopard2BackendAVX2T32B256.cpp.o' \
         'vfmadd132ps %ymm0, %ymm0, %ymm0'
@@ -1382,6 +1458,12 @@ run_negative_controls()
     expect_classified_archive_rejected lookalike_avx2_t16_b64_suffix \
         'Leopard2BackendAVX2T16B64Extra.cpp.o' \
         'vpxor %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected lookalike_avx2_t16_k66_prefix \
+        'NotLeopard2BackendAVX2T16K66.cpp.o' \
+        'vpxor %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected lookalike_avx2_t16_k66_suffix \
+        'Leopard2BackendAVX2T16K66Extra.cpp.o' \
+        'vpxor %ymm0, %ymm0, %ymm0'
     expect_classified_archive_rejected lookalike_avx2_t32_b256_prefix \
         'NotLeopard2BackendAVX2T32B256.cpp.o' \
         'vpxor %ymm0, %ymm0, %ymm0'
@@ -1403,6 +1485,7 @@ run_negative_controls()
     expect_missing_avx2_t8_k8_b1024_member_rejected
     expect_missing_avx2_t8_k62_member_rejected
     expect_missing_avx2_t16_b64_member_rejected
+    expect_missing_avx2_t16_k66_member_rejected
     expect_missing_avx2_t32_b256_member_rejected
     expect_missing_gfni_member_rejected
     expect_listing_failure_rejected
@@ -1530,6 +1613,39 @@ run_negative_controls()
         'c++ -mavx2 -mno-avx512f -o CMakeFiles/leopard2_backend_avx2_t16_b64.dir/Leopard2BackendAVX2T16B64Extra.cpp.o -c /src/Leopard2BackendAVX2T16B64Extra.cpp' \
         /src/Leopard2BackendAVX2T16B64Extra.cpp \
         CMakeFiles/leopard2_backend_avx2_t16_b64.dir/Leopard2BackendAVX2T16B64Extra.cpp.o
+
+    t16_k66_source=/src/Leopard2BackendAVX2T16K66.cpp
+    t16_k66_output=CMakeFiles/leopard2_backend_avx2_t16_k66.dir/Leopard2BackendAVX2T16K66.cpp.o
+    expect_fixture_metadata_accepted exact_avx2_t16_k66_source \
+        "c++ -mavx2 -mno-avx512f -o $t16_k66_output -c $t16_k66_source" \
+        "$t16_k66_source" "$t16_k66_output"
+    expect_fixture_metadata_rejected avx2_t16_k66_missing_avx2 \
+        "c++ -mno-avx512f -o $t16_k66_output -c $t16_k66_source" \
+        "$t16_k66_source" "$t16_k66_output"
+    expect_fixture_metadata_rejected avx2_t16_k66_missing_no_avx512f \
+        "c++ -mavx2 -o $t16_k66_output -c $t16_k66_source" \
+        "$t16_k66_source" "$t16_k66_output"
+    expect_fixture_metadata_rejected avx2_t16_k66_avx2_flag_lookalike \
+        "c++ -mavx2extra -mno-avx512f -o $t16_k66_output -c $t16_k66_source" \
+        "$t16_k66_source" "$t16_k66_output"
+    expect_fixture_metadata_rejected avx2_t16_k66_no_avx512f_flag_lookalike \
+        "c++ -mavx2 -mno-avx512fextra -o $t16_k66_output -c $t16_k66_source" \
+        "$t16_k66_source" "$t16_k66_output"
+    expect_fixture_metadata_rejected avx2_t16_k66_unrelated_fma \
+        "c++ -mavx2 -mno-avx512f -mfma -o $t16_k66_output -c $t16_k66_source" \
+        "$t16_k66_source" "$t16_k66_output"
+    expect_fixture_metadata_rejected avx2_t16_k66_wrong_target \
+        "c++ -mavx2 -mno-avx512f -o CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2T16K66.cpp.o -c $t16_k66_source" \
+        "$t16_k66_source" \
+        CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2T16K66.cpp.o
+    expect_fixture_metadata_rejected avx2_t16_k66_lookalike_prefix \
+        'c++ -mavx2 -mno-avx512f -o CMakeFiles/leopard2_backend_avx2_t16_k66.dir/NotLeopard2BackendAVX2T16K66.cpp.o -c /src/NotLeopard2BackendAVX2T16K66.cpp' \
+        /src/NotLeopard2BackendAVX2T16K66.cpp \
+        CMakeFiles/leopard2_backend_avx2_t16_k66.dir/NotLeopard2BackendAVX2T16K66.cpp.o
+    expect_fixture_metadata_rejected avx2_t16_k66_lookalike_suffix \
+        'c++ -mavx2 -mno-avx512f -o CMakeFiles/leopard2_backend_avx2_t16_k66.dir/Leopard2BackendAVX2T16K66Extra.cpp.o -c /src/Leopard2BackendAVX2T16K66Extra.cpp' \
+        /src/Leopard2BackendAVX2T16K66Extra.cpp \
+        CMakeFiles/leopard2_backend_avx2_t16_k66.dir/Leopard2BackendAVX2T16K66Extra.cpp.o
 
     t32_source=/src/Leopard2BackendAVX2T32B256.cpp
     t32_output=CMakeFiles/leopard2_backend_avx2_t32_b256.dir/Leopard2BackendAVX2T32B256.cpp.o

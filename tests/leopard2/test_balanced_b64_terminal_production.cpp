@@ -447,6 +447,7 @@ void ExerciseProductionPackedSide(
         (original_count == 62 && side == 8)
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
         || (original_count == 65 && side == 9)
+        || (original_count == 66 && side == 16)
 #endif
         ;
     if (aggregate_overlap_shape)
@@ -920,6 +921,7 @@ int main()
         ExerciseProductionPackedSide(context, 64, 16);
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
         ExerciseProductionPackedSide(context, 65, 16);
+        ExerciseProductionPackedSide(context, 66, 16);
 #endif
         ExerciseProductionPackedSide(context, 33, 17);
         ExerciseProductionPackedSide(context, 62, 17);
