@@ -3108,6 +3108,100 @@ skip_body:
     }
 }
 
+#if defined(_MSC_VER)
+#define LEO2_T64R33_B64_CORE_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_T64R33_B64_CORE_NOINLINE \
+    __attribute__((noinline, \
+        section(".leo2_t64_r33_b64_packed_terminal"), aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_T64R33_B64_CORE_NOINLINE \
+    __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_T64R33_B64_CORE_NOINLINE
+#endif
+
+void LEO2_T64R33_B64_CORE_NOINLINE
+ReedSolomonEncodeK33To64R33To64T64B64Packed(
+    const backend::Ops& ops,
+    unsigned original_count,
+    unsigned recovery_count,
+    const void* const* data,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+    LEO_DEBUG_ASSERT(original_count >= 33 && original_count <= 64);
+    LEO_DEBUG_ASSERT(recovery_count >= 33 && recovery_count <= 64);
+
+    /*
+        This exact public geometry is one shortened T=64 systematic block.
+        Bypass the general encoder's small-transform, tail-column, and
+        multi-block selectors: none can be selected for K<=T/R=33/B=64.
+        The transform calls and their arithmetic order are unchanged.
+    */
+    IFFT_DIT_Encoder(
+        ops, 64, data, original_count, work, nullptr, 64,
+        FFTSkewStorage + 64, false, EncoderIFFTHigh, true);
+    FFT_DIT(ops, 64, work, recovery_count, 64, FFTSkewStorage, false);
+}
+
+#undef LEO2_T64R33_B64_CORE_NOINLINE
+
+#if defined(_MSC_VER)
+#define LEO2_T16_B64_CORE_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_T16_B64_CORE_NOINLINE \
+    __attribute__((noinline, \
+        section(".leo2_t16_b64_packed_terminal"), aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_T16_B64_CORE_NOINLINE \
+    __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_T16_B64_CORE_NOINLINE
+#endif
+
+void LEO2_T16_B64_CORE_NOINLINE
+ReedSolomonEncodeK33To64R9To16T16B64Packed(
+    const backend::Ops& ops,
+    unsigned original_count,
+    unsigned recovery_count,
+    const void* const* data,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+    LEO_DEBUG_ASSERT(original_count >= 33 && original_count <= 64);
+    LEO_DEBUG_ASSERT(recovery_count >= 9 && recovery_count <= 16);
+
+    const void* const* block_data = data;
+    const ffe_t* skew = FFTSkewStorage + 16;
+    IFFT_DIT_Encoder(
+        ops, 64, block_data, 16, work, nullptr, 16, skew,
+        false, EncoderIFFTHigh, true);
+
+    const unsigned full_block_count = original_count / 16U;
+    for (unsigned block = 1; block < full_block_count; ++block)
+    {
+        block_data += 16;
+        skew += 16;
+        IFFT_DIT_Encoder(
+            ops, 64, block_data, 16, work + 16, work, 16, skew,
+            false, EncoderIFFTHigh, true);
+    }
+
+    const unsigned final_count = original_count & 15U;
+    if (final_count != 0)
+    {
+        block_data += 16;
+        skew += 16;
+        IFFT_DIT_Encoder(
+            ops, 64, block_data, final_count, work + 16, work, 16, skew,
+            true, EncoderIFFTHigh, true);
+    }
+
+    FFT_DIT(ops, 64, work, recovery_count, 16, FFTSkewStorage, false);
+}
+
+#undef LEO2_T16_B64_CORE_NOINLINE
 
 void ReedSolomonEncodeK33R32B64Packed(
     const backend::Ops& ops,
@@ -4644,6 +4738,18 @@ void TestOnlyRecordT8TwoBlockB1024PackedCall()
 void TestOnlyRecordBalancedB64PackedCall()
 {
     TestHighBalancedB64PackedCalls.fetch_add(1, std::memory_order_relaxed);
+}
+
+void TestOnlyRecordT16Q4B64FusedCall(
+    unsigned original_count)
+{
+    TestHighIFFTButterfly4OutCalls.fetch_add(
+        original_count <= 48 ? 12U : 16U,
+        std::memory_order_relaxed);
+    TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
+    if (original_count == 65)
+        TestHighTailColumnCalls.fetch_add(1, std::memory_order_relaxed);
 }
 
 void TestOnlyRecordT16PreparedCall()

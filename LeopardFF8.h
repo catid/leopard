@@ -189,6 +189,26 @@ void ReedSolomonEncodeK33R32B64Packed(
     const void* const* data,
     void** work);
 
+// Exact packed K=33..64/R=33..64/T=64/B=64 terminal core selected by
+// Leopard2 after public validation.  Only work[0..63] is consumed; the first
+// recovery_count rows contain the transmitted parity on return.
+void ReedSolomonEncodeK33To64R33To64T64B64Packed(
+    const backend::Ops& ops,
+    unsigned original_count,
+    unsigned recovery_count,
+    const void* const* data,
+    void** work);
+
+// Exact packed K=33..64/R=9..16/T=16/B=64 terminal core selected by
+// Leopard2 after public validation.  work[0..15] is the coefficient
+// accumulator and work[16..31] is reused by every later message block.
+void ReedSolomonEncodeK33To64R9To16T16B64Packed(
+    const backend::Ops& ops,
+    unsigned original_count,
+    unsigned recovery_count,
+    const void* const* data,
+    void** work);
+
 /*
     Execute the already-qualified register-light AVX2 T=8 one-block callback
     after reusable public validation has established a dense eight-output
@@ -319,9 +339,9 @@ void ReedSolomonEncodeTwoBlocksT8Tiny(
 
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
 /*
-    Execute the exact default-off AVX2 K=32/R=T=16/B=256 two-block tile.
-    Public validation has already established packed, disjoint 32-row input,
-    16-row output, and 16-row temporary slabs with 256 bytes per row.
+    Execute the exact AVX2 K=17..32/R=9..16 two-block tiles.  Public
+    validation has already established packed, disjoint source, output, and
+    temporary slabs with the named fixed byte count per row.
 */
 void ReedSolomonEncodeTwoBlocksT16B64(
     const backend::Ops& ops,
@@ -604,6 +624,7 @@ void TestOnlyRecordT8TwoBlockB64PackedCall();
 void TestOnlyRecordT8TwoBlockB256PackedCall();
 void TestOnlyRecordT8TwoBlockB1024PackedCall();
 void TestOnlyRecordBalancedB64PackedCall();
+void TestOnlyRecordT16Q4B64FusedCall(unsigned original_count);
 void TestOnlyRecordT16PreparedCall();
 // Attribution-only selector.  Production archives contain neither this state
 // nor the load in the high encoder's final inverse layer.

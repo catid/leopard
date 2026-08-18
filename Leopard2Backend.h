@@ -870,11 +870,19 @@ bool TryAVX2FF8HighEncodeT32B256TwoBlockPacked(
 #endif
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
 /*
-    Fused legacy-high T=16 two-block encoders.  The caller supplies packed
-    source, recovery, and temporary slabs; public validation and pure-AVX2
-    runtime dispatch have already completed before either entry is reached.
+    Fused legacy-high T=16 encoders.  The caller supplies packed source,
+    recovery, and temporary slabs; public validation and pure-AVX2 runtime
+    dispatch have already completed before either entry is reached.  The B64
+    Q4 entry covers K=33..64 directly and K=65 with one exact Lagrange-column
+    update.
 */
 void AVX2FF8HighEncodeT16Q2B64Fused(
+    const void* data_base,
+    void* recovery_base,
+    void* temporary_base,
+    unsigned original_count,
+    unsigned recovery_count);
+void AVX2FF8HighEncodeT16Q4B64Fused(
     const void* data_base,
     void* recovery_base,
     void* temporary_base,

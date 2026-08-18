@@ -296,9 +296,10 @@ bool SetHighT16Q2B64FusedEnabledForDiagnostics(bool enabled);
 
 /*
     Process-local benchmark control for the exact balanced 64-byte packed
-    terminals and the adjacent packed T=32/R=32/B=64 family.  Change it only
-    while no encode call is executing.  This remains outside the public API
-    and changes no codec or wire identity.
+    terminals and the packed K=33..64 high-rate families with T=16, T=32, or
+    T=64.  When the fused T16 option is enabled, K=65/R=9..16 is included.
+    Change it only while no encode call is executing.  This remains outside
+    the public API and changes no codec or wire identity.
 */
 bool SetBalancedB64TerminalEnabledForDiagnostics(bool enabled);
 

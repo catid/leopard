@@ -1037,8 +1037,8 @@ class CMakeProductionGraph(object):
             "selector", "ON")): 1,
         ("option", (
             "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
-            "Enable the GF8/AVX2 K=17..32,R=9..16,B=1..64/256 fused "
-            "encoder", "ON")): 1,
+            "Enable the GF8/AVX2 T16 fused encoders, including "
+            "K=17..65/R=9..16", "ON")): 1,
         ("option", (
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
             "Enable promoted generalized GF8/AVX2 one-loss direct repair",
@@ -1265,9 +1265,10 @@ class CMakeProductionGraph(object):
     # command appears once is not enough when moving a package discovery,
     # compiler probe, or cache assignment changes what later commands see.
     # Keep one exact data-flow order for every trusted command, protected
-    # assignment, and production-target mutation.  Membership and guard checks
-    # below remain responsible for useful missing/duplicate diagnostics; this
-    # sequence closes reorder-only attacks.
+    # assignment, production-target mutation, and explicitly attested test
+    # definition.  Membership and guard checks below remain responsible for
+    # useful missing/duplicate diagnostics; this sequence closes reorder-only
+    # attacks.
     _required_contract_event_order = (
         ("trusted", ("cmake_minimum_required", ("VERSION", "3.7"))),
         ("trusted", ("project", ("leopard",))),
@@ -1369,8 +1370,8 @@ class CMakeProductionGraph(object):
             "selector", "ON"))),
         ("trusted", ("option", (
             "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
-            "Enable the GF8/AVX2 K=17..32,R=9..16,B=1..64/256 fused "
-            "encoder", "ON"))),
+            "Enable the GF8/AVX2 T16 fused encoders, including "
+            "K=17..65/R=9..16", "ON"))),
         ("trusted", ("option", (
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
             "Enable promoted generalized GF8/AVX2 one-loss direct repair",
@@ -1663,6 +1664,14 @@ class CMakeProductionGraph(object):
         ("sparse-sidecar", (
             "add_custom_command", _sparse_sidecar_post_build)),
         ("test-enablement", ()),
+        ("balanced-test-definition", (
+            "leopard2_balanced_b64_terminal_test",
+            "target_compile_definitions", (
+                "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1"))),
+        ("balanced-test-definition", (
+            "leopard2_balanced_b64_terminal_production_test",
+            "target_compile_definitions", (
+                "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1"))),
         ("guarded", (
             "leopard2_enable_benchmark_source_attestation",
             ("bench_leopard2_direct_encode",))),
@@ -1721,6 +1730,14 @@ class CMakeProductionGraph(object):
         "leopard2_backend_avx2_fuzz", "target_compile_definitions", (
             "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1",
             "LEO2_HAVE_AVX2_BACKEND=1"))
+    _required_balanced_q2_test_definitions = Counter({
+        ("leopard2_balanced_b64_terminal_test",
+         "target_compile_definitions", (
+             "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1")): 1,
+        ("leopard2_balanced_b64_terminal_production_test",
+         "target_compile_definitions", (
+             "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1")): 1,
+    })
 
     def __init__(self, text, processor="AMD64", pointer_size="8",
                  platform_name="x64", require_mutation_contract=False):
@@ -1766,6 +1783,7 @@ class CMakeProductionGraph(object):
         self.attachments = {}
         self.target_build_mutations = []
         self.avx2_fuzz_backend_definition_count = 0
+        self.balanced_q2_test_definition_counts = Counter()
         self.directory_build_mutation_counts = Counter()
         self.trusted_command_counts = Counter()
         self.python_package_counts = Counter()
@@ -1916,6 +1934,29 @@ class CMakeProductionGraph(object):
                 raise ContractError(
                     "AVX2 fuzzer backend compile-definition guard drift")
             self.avx2_fuzz_backend_definition_count += 1
+        balanced_q2_targets = {
+            required_key[0]
+            for required_key in self._required_balanced_q2_test_definitions
+        }
+        is_balanced_q2_definition = (
+            target in balanced_q2_targets and
+            command == "target_compile_definitions" and
+            any(token.split("=", 1)[0] ==
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"
+                for token in specification))
+        if is_balanced_q2_definition:
+            if key not in self._required_balanced_q2_test_definitions:
+                raise ContractError(
+                    "unapproved balanced T16/Q2 test compile definition")
+            expected_guard = bool_and(
+                bool_atom("option:LEO2_BUILD_TESTS"),
+                bool_atom("option:LEOPARD_ENABLE_GF8"),
+                bool_atom("option:LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"))
+            if reasons or not self._formula_equivalent(guard, expected_guard):
+                raise ContractError(
+                    "balanced T16/Q2 test compile-definition guard drift")
+            self.balanced_q2_test_definition_counts[key] += 1
+            self.contract_events.append(("balanced-test-definition", key))
         if key in self._approved_production_mutations:
             self.contract_events.append(("mutation", key))
 
@@ -3791,6 +3832,18 @@ class CMakeProductionGraph(object):
             raise ContractError(
                 "missing or duplicate exact AVX2 fuzzer backend "
                 "compile definition")
+        if (self.require_mutation_contract and
+                self.balanced_q2_test_definition_counts !=
+                self._required_balanced_q2_test_definitions):
+            missing = (self._required_balanced_q2_test_definitions -
+                       self.balanced_q2_test_definition_counts)
+            extra = (self.balanced_q2_test_definition_counts -
+                     self._required_balanced_q2_test_definitions)
+            raise ContractError(
+                "missing or duplicate balanced T16/Q2 test compile "
+                "definition: missing=" +
+                repr(sorted(missing.elements(), key=repr)) + " extra=" +
+                repr(sorted(extra.elements(), key=repr)))
         if (self.require_mutation_contract and
                 self.trusted_command_counts != self._required_trusted_commands):
             missing = self._required_trusted_commands - self.trusted_command_counts
@@ -7288,6 +7341,58 @@ endif()'''
                 "missing or duplicate production target mutation"):
             self.resolve(
                 "target_link_libraries(leopard PUBLIC Threads::Threads)")
+
+    def test_balanced_q2_test_definitions_are_exact_guarded_and_required(self):
+        commands = (
+            """target_compile_definitions(
+                leopard2_balanced_b64_terminal_test PRIVATE
+                LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1)""",
+            """target_compile_definitions(
+                leopard2_balanced_b64_terminal_production_test PRIVATE
+                LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1)""",
+        )
+        for command in commands:
+            self.assertEqual(1, self.cmake.count(command))
+            mutations = (
+                (self.cmake.replace(command, "", 1),
+                 "missing or duplicate balanced T16/Q2 test compile "
+                 "definition"),
+                (self.cmake.replace(command, command + "\n" + command, 1),
+                 "missing or duplicate balanced T16/Q2 test compile "
+                 "definition"),
+                (self.cmake.replace(
+                    command,
+                    command.replace(
+                        "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
+                        "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=0"), 1),
+                 "unapproved balanced T16/Q2 test compile definition"),
+            )
+            for text, error in mutations:
+                with self.subTest(target=command.splitlines()[1].strip(),
+                                  error=error):
+                    self.assertNotEqual(text, self.cmake)
+                    with self.assertRaisesRegex(ContractError, error):
+                        self.resolve_text(
+                            text, require_mutation_contract=True)
+
+        guarded_blocks = tuple(
+            "if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)\n"
+            "            " + command + "\n"
+            "        endif()"
+            for command in commands)
+        for block in guarded_blocks:
+            self.assertEqual(1, self.cmake.count(block))
+            wrong_guard = block.replace(
+                "if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)",
+                "if(TRUE)", 1)
+            text = self.cmake.replace(block, wrong_guard, 1)
+            with self.subTest(target=block.splitlines()[2].strip()):
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "balanced T16/Q2 test compile-definition guard drift"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
 
     def test_required_trusted_cmake_commands_cannot_be_removed_or_duplicated(self):
         commands = (
