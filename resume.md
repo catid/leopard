@@ -6,6 +6,39 @@ Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
 
+## 2026-08-18 GF8/AVX2 T16 Q3/Q4 B64 checkpoint
+
+Commit `81c8fef` lands the legacy-wire-compatible packed 64-byte encoder for
+`K=33..65`, `R=9..16`.  A generated AVX2 Q3/Q4 circuit fuses the outer inverse
+layer, XOR accumulation, and first parity-transform layer.  `K=65` adds the
+independently verified coordinate-80 Lagrange column for the same `[128,112]`
+parent.  The public scratch contract remains 32 T16 shard rows and no public
+API, field representation, coordinate map, or parity ordering changed.
+
+The frozen 25-round confirmation reports exact-Leopard1/candidate ratios of
+1.598x at K62/R16, 1.859x at K65/R9, and 1.760x at K65/R16.  Same-binary mature
+controls are 1.875x, 2.022x, and 1.918x respectively.  The adjacent T64
+K62/R33 repair is 1.089x versus exact main and 1.156x versus its mature control.
+Every predeclared inactive predecessor comparison retained a lower CI95 above
+0.98.  Evidence is in
+`build/regression-high-b64-v23-k65-layout-neutral-confirm25-raw/summary.json`
+and optimization-log report 36.
+
+Final gates: Release focused 7/7; CMake/Visual Studio graph audit 165/165 in
+normal and Python `-O`; strict Clang 18; feature-disabled Release; and Clang 18
+ASan+UBSan+LSan.  The expanded sanitizer matrix passed in 305.12 seconds at
+71,680 KiB peak RSS with no swap, and the production-archive sanitizer test
+passed separately.  Direct-oracle coverage includes every K33..65 at R16,
+every K33..64 at R32 and R33, R9 boundaries, packed/unaligned/batch/fallback,
+alias and scratch errors, and a K65/R9 tail-basis regression against Leopard1.
+
+Beads remains the task source.  The next largest measured exact-Leopard1 GF8
+encode deficit is K62/R8/B64 (about 0.833x), followed by K66/R16/B64 (about
+0.91x).  Keep builds/tests/timings serialized through
+`/tmp/leopard-gf8-authoritative.lock`; use Release `-j2` under a 512 MiB VA cap,
+runtime tests under 256 MiB, and sanitizer builds `-j1`.  Do not apply an
+address-space cap to ASan runtime.
+
 ## 2026-08-02 GF8/AVX2 transient-plan and active Walsh checkpoint
 
 Commit `949afe3` makes public one-shot transform plans byte-aware, retains only
