@@ -1015,11 +1015,12 @@ def main() -> int:
         "canonical exact-main executable identity changed")
     require(
         BASE.RUNNER_DEPENDENCIES[0] == Path(RUNNER.__file__).resolve() and
+        BASE.RUNNER_DEPENDENCIES[0].stat().st_mode & 0o111 and
         BASE.RUNNER_DEPENDENCIES[1:] ==
             RUNNER._INHERITED_RUNNER_DEPENDENCIES and
         len(BASE.RUNNER_DEPENDENCIES) ==
             len(set(BASE.RUNNER_DEPENDENCIES)),
-        "runner/source support attestation closure changed")
+        "runner executable mode or source support attestation closure changed")
 
     exercise_arguments_and_commands(cells)
     exercise_workload_sized_child_timeout(cells)
