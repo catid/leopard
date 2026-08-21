@@ -92,6 +92,48 @@ The retained v33 runner performs 25-round ABBA confirmation at every target,
 checks at inactive byte and K/R neighbors.  Neighbor timing is descriptive and
 cannot reject an otherwise exact no-op route.
 
+### Frozen larger-shard confirmation
+
+The authoritative v4 campaign at source commit
+`1e5de49cde826f461ccefa035e5781dd6c0d8918` completed on the same
+Threadripper 9980X class host, pinned to CPU 52 with SMT sibling 116 reserved.
+It compared the enabled and disabled leaves in one frozen binary.  Each target
+used 25 ABBA/BAAB rounds, 31 retained samples per launch, and both ordinary
+one-item batch encode and one-shot encode as co-primary metrics.
+
+| Bytes | One-item batch speedup (95% CI) | One-shot speedup (95% CI) |
+|---:|---:|---:|
+| 128 | 2.542x [2.523, 2.560] | 2.540x [2.525, 2.555] |
+| 256 | 2.298x [2.270, 2.327] | 2.259x [2.230, 2.289] |
+| 512 | 2.131x [2.118, 2.145] | 2.129x [2.110, 2.147] |
+| 1024 | 1.958x [1.937, 1.979] | 1.957x [1.936, 1.979] |
+| 2048 | 1.917x [1.893, 1.941] | 1.915x [1.889, 1.941] |
+| 4096 | 1.587x [1.572, 1.601] | 1.569x [1.553, 1.586] |
+
+The 16-times-work endpoints also passed: B128 measured 2.519x
+[2.498, 2.540] and 2.517x [2.494, 2.542], while B4096 measured 1.580x
+[1.551, 1.609] and 1.574x [1.544, 1.604] for batch and one-shot respectively.
+Both all-or-none promotion regions therefore passed their predeclared 1.05
+lower-confidence-bound gate.  All 16 inactive byte and K/R neighbors reported
+selector false, zero candidate calls, zero vector tiles, and matching workload
+digests.  The controller accepted 1,248 launches and retained but excluded 56
+launches from 14 SMT-contaminated attempts.
+
+The sealed local evidence is
+`.research/leopard-8bd/1e5de49c-final-v4`.  Its principal hashes are:
+
+- campaign report: `3f858cc1777100a48a073e2a916c4a621ce65274a6fee5489b04895b7845b11d`;
+- event journal: `549c153e917597d1856bbce5e46bfaf2c07722ee689a499b95c28f91a4c1054d`;
+- frozen benchmark: `83208fb63c0461faa385e36ccaa4a82ff2af69c467594bd8037ca06a434504ba`;
+- canonical source archive: `d9c3506d1a2fa7eaab395b6ed36dd33cff1a8e3fb1ca601d325325ab060f6f00`;
+- complete checksum index: `10603847fe8ec49cd3e56b6cb7f74e423a545cd2314638b4348da59239975cd2`.
+
+Earlier v1 and v2 attempts failed before collecting timings.  V3 retained 20
+launches, rejected every one for SMT-sibling activity, and accepted no round;
+none contributes to this claim.  The confirmation is a host-local warm-cache
+result against the current mature same-binary operation leaf, not an
+exact-main, other-CPU, decode, multi-item, or neighboring-size claim.
+
 ## Production scope and gates
 
 `Leopard2BackendAVX512GFNIT128.cpp` contains the selected row-major affine leaf
