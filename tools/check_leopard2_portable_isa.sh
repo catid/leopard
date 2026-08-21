@@ -237,6 +237,60 @@ scan_object()
                 echo "portable ISA check: AVX-512/GFNI T128 member is not ZMM/EVEX: $object_name" >&2
                 return 1
             fi
+            # The operation kernels live in a dedicated section so their
+            # lowering can be checked independently from startup KAT code,
+            # which intentionally calls the scalar multiplication oracle.
+            # Hot bodies must remain leaf functions and must never materialize
+            # vector state on the stack.  Scalar vmovd/vmovq transfers used as
+            # integer-register shuttles are not vector spills.  Synthetic
+            # self-test objects omit this
+            # production-only section and continue through the mnemonic gate.
+            if LC_ALL=C "$objdump_bin" -h "$object_file" |
+               grep -Fq '.text.leo2_avx512_gfni_t128'
+            then
+                t128_hot_file="$scratch_root/t128-hot.$scan_index"
+                LC_ALL=C "$objdump_bin" -d \
+                    -j .text.leo2_avx512_gfni_t128 "$object_file" > \
+                    "$t128_hot_file"
+                if grep -Eq '[[:space:]]call[q]?[[:space:]]' \
+                    "$t128_hot_file"
+                then
+                    echo "portable ISA check: AVX-512/GFNI T128 hot section contains a call: $object_name" >&2
+                    return 1
+                fi
+                if grep -Eq '(%(zmm|ymm)[0-9]+.*[(]%(rsp|rbp)|[(]%(rsp|rbp).*%(zmm|ymm)[0-9]+)' \
+                    "$t128_hot_file" ||
+                   grep -Eq '[[:space:]]v?mov(dqa|dqu|aps|ups|apd|upd)[[:alnum:]]*[[:space:]].*(%xmm[0-9]+.*[(]%(rsp|rbp)|[(]%(rsp|rbp).*%xmm[0-9]+)' \
+                    "$t128_hot_file"
+                then
+                    echo "portable ISA check: AVX-512/GFNI T128 hot section spills vector state: $object_name" >&2
+                    return 1
+                fi
+                t128_body_count=$(grep -Ec \
+                    '<[^>]*EncodeK65R65(B64|Multiples64)[^>]*>:' \
+                    "$t128_hot_file" || true)
+                if [ "$t128_body_count" -ne 2 ]; then
+                    echo "portable ISA check: AVX-512/GFNI T128 hot section does not contain both reviewed bodies: $object_name" >&2
+                    return 1
+                fi
+                for t128_body in B64 Multiples64
+                do
+                    t128_body_file="$scratch_root/t128-hot-$t128_body.$scan_index"
+                    awk -v body="EncodeK65R65$t128_body" '
+                        /^[[:space:]]*[0-9a-f]+ <[^>]+>:/ {
+                            active = index($0, body) != 0
+                        }
+                        active { print }
+                    ' "$t128_hot_file" > "$t128_body_file"
+                    if [ ! -s "$t128_body_file" ] ||
+                       ! grep -Eq 'vgf2p8affineqb.*%zmm[0-9]+' \
+                           "$t128_body_file"
+                    then
+                        echo "portable ISA check: AVX-512/GFNI T128 $t128_body body is not independently ZMM affine: $object_name" >&2
+                        return 1
+                    fi
+                done
+            fi
             ;;
         *)
             echo "portable ISA check: unknown object class: $object_class" >&2
@@ -839,6 +893,37 @@ write_classified_archive()
     echo "$fixture_archive"
 }
 
+write_t128_hot_archive()
+{
+    fixture_name=$1
+    fixture_instruction=$2
+    fixture_larger_instruction=${3:-}
+    if [ -z "$fixture_larger_instruction" ]; then
+        fixture_larger_instruction='vgf2p8affineqb $0, %zmm0, %zmm0, %zmm0'
+    fi
+    fixture_source="$scratch_root/$fixture_name.s"
+    fixture_member=Leopard2BackendAVX512GFNIT128.cpp.o
+    fixture_object="$scratch_root/$fixture_member"
+    fixture_archive="$scratch_root/lib$fixture_name.a"
+
+    printf '%s\n' \
+        '.section .text.leo2_avx512_gfni_t128,"ax",@progbits' \
+        '.globl FixtureEncodeK65R65B64' \
+        'FixtureEncodeK65R65B64:' \
+        '    vgf2p8affineqb $0, %zmm0, %zmm0, %zmm0' \
+        "    $fixture_instruction" \
+        '    ret' \
+        '.globl FixtureEncodeK65R65Multiples64' \
+        'FixtureEncodeK65R65Multiples64:' \
+        "    $fixture_larger_instruction" \
+        '    ret' \
+        '.Lfixture_target:' \
+        '    ret' > "$fixture_source"
+    "$cc_bin" -c "$fixture_source" -o "$fixture_object"
+    "$ar_bin" rcs "$fixture_archive" "$fixture_object"
+    echo "$fixture_archive"
+}
+
 write_duplicate_classified_archive()
 {
     fixture_name=$1
@@ -892,6 +977,35 @@ expect_classified_archive_rejected()
         "$fixture_name" "$fixture_member" "$fixture_instruction")
     if scan_archive "$fixture_archive" > "$scratch_root/$fixture_name.log" 2>&1; then
         echo "portable ISA checker self-test: classified $fixture_name was accepted" >&2
+        return 1
+    fi
+}
+
+expect_t128_hot_archive_accepted()
+{
+    fixture_name=$1
+    fixture_instruction=$2
+    fixture_archive=$(write_t128_hot_archive \
+        "$fixture_name" "$fixture_instruction")
+    if ! scan_archive "$fixture_archive" > \
+        "$scratch_root/$fixture_name.log" 2>&1
+    then
+        cat "$scratch_root/$fixture_name.log" >&2
+        echo "portable ISA checker self-test: T128 hot $fixture_name was rejected" >&2
+        return 1
+    fi
+}
+
+expect_t128_hot_archive_rejected()
+{
+    fixture_name=$1
+    fixture_instruction=$2
+    fixture_archive=$(write_t128_hot_archive \
+        "$fixture_name" "$fixture_instruction" "${3:-}")
+    if scan_archive "$fixture_archive" > \
+        "$scratch_root/$fixture_name.log" 2>&1
+    then
+        echo "portable ISA checker self-test: T128 hot $fixture_name was accepted" >&2
         return 1
     fi
 }
@@ -1345,6 +1459,17 @@ run_negative_controls()
     expect_classified_archive_accepted good_avx512_gfni_t128 \
         'Leopard2BackendAVX512GFNIT128.cpp.o' \
         'vgf2p8affineqb $0, %zmm0, %zmm0, %zmm0; vpternlogd $0, %zmm0, %zmm0, %zmm0'
+    expect_t128_hot_archive_accepted good_avx512_gfni_t128_hot \
+        'vpxord %zmm0, %zmm0, %zmm0'
+    expect_t128_hot_archive_rejected avx512_gfni_t128_hot_call \
+        'call .Lfixture_target'
+    expect_t128_hot_archive_rejected avx512_gfni_t128_hot_spill \
+        'vmovdqa64 %zmm0, (%rsp)'
+    expect_t128_hot_archive_rejected avx512_gfni_t128_hot_rbp_spill \
+        'vmovdqa %xmm0, (%rbp)'
+    expect_t128_hot_archive_rejected avx512_gfni_t128_hot_mixed_width \
+        'vpxord %zmm0, %zmm0, %zmm0' \
+        'vgf2p8affineqb $0, %ymm0, %ymm0, %ymm0'
     expect_classified_archive_rejected avx512_gfni_t128_leaks_fma \
         'Leopard2BackendAVX512GFNIT128.cpp.o' \
         'vfmadd132ps %zmm0, %zmm0, %zmm0'

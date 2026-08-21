@@ -2386,6 +2386,9 @@ void ExerciseBackendRoute(leo2_backend requested_backend)
         Require(!leopard2_internal::
                 K65R65B64AVX512GFNISelectedForDiagnostics(probe, 64),
             "explicit backend request widened to AVX-512/GFNI T128");
+        Require(!leopard2_internal::
+                K65R65T128AVX512GFNILargerSelectedForDiagnostics(probe, 512),
+            "explicit backend request widened to larger AVX-512/GFNI T128");
         leo2_codec_destroy(probe);
     }
     ExerciseBackendShape(context, 32, 32);
@@ -2519,6 +2522,391 @@ void ExerciseK65R65AVX512GFNIAutoRoute()
     leo2_context_destroy(context);
 }
 
+void ExerciseK65R65AVX512GFNILargerAutoRoute()
+{
+    static const unsigned original_count = 65;
+    static const unsigned recovery_count = 65;
+    static const size_t target_bytes[] = {
+        128, 256, 512, 1024, 2048, 4096
+    };
+    static const size_t neighbor_bytes[] = {
+        127, 129, 192, 768, 4095, 4097, 8192
+    };
+
+    leo2_context_options options = {};
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AUTO;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    RequireResult(leo2_context_create(&options, &context), LEO2_SUCCESS,
+        "create AUTO K65/R65 larger AVX-512/GFNI context");
+    leo2_codec* codec = NULL;
+    RequireResult(leo2_codec_create(context, original_count, recovery_count,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+        LEO2_SUCCESS, "create AUTO K65/R65 larger AVX-512/GFNI codec");
+
+    if (!leopard2_internal::
+            K65R65T128AVX512GFNILargerAvailableForDiagnostics(codec))
+    {
+        leo2_codec_destroy(codec);
+        leo2_context_destroy(context);
+        return;
+    }
+
+    for (size_t i = 0;
+        i < sizeof(neighbor_bytes) / sizeof(neighbor_bytes[0]); ++i)
+    {
+        Require(!leopard2_internal::
+                K65R65T128AVX512GFNILargerSelectedForDiagnostics(
+                    codec, neighbor_bytes[i]),
+            "inactive K65/R65 larger byte neighbor selected GFNI leaf");
+    }
+
+    const leopard2_test::BinaryField field =
+        leopard2_test::make_legacy_gf8();
+    const leopard2_test::ProfileLayout layout =
+        leopard2_test::make_profile_layout(leopard2_test::kLegacyHigh,
+            original_count, recovery_count);
+    const leopard2_test::Matrix generator =
+        leopard2_test::direct_systematic_generator(field, layout);
+
+    for (size_t byte_index = 0;
+        byte_index < sizeof(target_bytes) / sizeof(target_bytes[0]);
+        ++byte_index)
+    {
+        const size_t shard_bytes = target_bytes[byte_index];
+        Require(leopard2_internal::
+                K65R65T128AVX512GFNILargerSelectedForDiagnostics(
+                    codec, shard_bytes),
+            "target K65/R65 larger byte cell missed GFNI leaf");
+
+        size_t scratch_bytes = 0;
+        RequireResult(leo2_encode_scratch_size(codec, shard_bytes,
+            &scratch_bytes), LEO2_SUCCESS,
+            "query larger K65/R65 AVX-512/GFNI scratch");
+        AlignedBuffer scratch(scratch_bytes);
+        AlignedBuffer control_scratch(scratch_bytes);
+        AlignedBuffer input_allocation(
+            original_count * shard_bytes + 8U);
+        AlignedBuffer output_allocation(
+            recovery_count * shard_bytes + 8U);
+        AlignedBuffer control_allocation(
+            recovery_count * shard_bytes + 8U);
+        uint8_t* const input = input_allocation.bytes() + 1U;
+        uint8_t* const output = output_allocation.bytes() + 3U;
+        uint8_t* const control = control_allocation.bytes() + 5U;
+        std::vector<const void*> original;
+        std::vector<void*> recovery;
+        std::vector<void*> control_recovery;
+        SetVariablePackedPointers(input, output,
+            original_count, recovery_count, shard_bytes,
+            original, recovery);
+        std::vector<const void*> unused_original;
+        SetVariablePackedPointers(input, control,
+            original_count, recovery_count, shard_bytes,
+            unused_original, control_recovery);
+
+        FillVariableInput(input, original_count, shard_bytes,
+            UINT64_C(0x4c41524745523634) + shard_bytes);
+        Require(leopard2_internal::
+                SetK65R65T128AVX512GFNIEnabledForDiagnostics(false),
+            "disable larger K65/R65 AVX-512/GFNI leaf");
+        RequireResult(leo2_encode(codec, shard_bytes, &original[0],
+            &control_recovery[0], control_scratch.data(),
+            control_scratch.size()), LEO2_SUCCESS,
+            "execute larger K65/R65 mature control");
+        Require(leopard2_internal::
+                K65R65T128AVX512GFNICallCountForDiagnostics() == 0U &&
+                leopard2_internal::
+                    K65R65T128AVX512GFNITileCountForDiagnostics() == 0U,
+            "disabled larger K65/R65 GFNI route recorded a call");
+        Require(leopard2_internal::
+                FinishK65R65T128AVX512GFNIRouteProbeForDiagnostics(),
+            "finish disabled larger K65/R65 GFNI route probe");
+
+        Require(leopard2_internal::
+                SetK65R65T128AVX512GFNIEnabledForDiagnostics(true),
+            "enable larger K65/R65 AVX-512/GFNI leaf");
+        RequireResult(leo2_encode(codec, shard_bytes, &original[0],
+            &recovery[0], scratch.data(), scratch.size()), LEO2_SUCCESS,
+            "execute larger K65/R65 AVX-512/GFNI leaf");
+        Require(leopard2_internal::
+                K65R65T128AVX512GFNICallCountForDiagnostics() == 1U &&
+                leopard2_internal::
+                    K65R65T128AVX512GFNITileCountForDiagnostics() ==
+                        shard_bytes / 64U,
+            "larger K65/R65 GFNI route counts differ");
+        Require(std::memcmp(output, control,
+                recovery_count * shard_bytes) == 0,
+            "larger K65/R65 GFNI parity differs from mature control");
+        CheckVariableParity(field, generator,
+            original_count, recovery_count, original, recovery, shard_bytes,
+            "larger K65/R65 GFNI parity differs from direct oracle");
+        Require(leopard2_internal::
+                FinishK65R65T128AVX512GFNIRouteProbeForDiagnostics(),
+            "finish enabled larger K65/R65 GFNI route probe");
+
+        FillVariableInput(input, original_count, shard_bytes,
+            UINT64_C(0x4c41524745424154) + shard_bytes);
+        leo2_encode_batch_item item = {
+            shard_bytes, &original[0], &recovery[0],
+            scratch.data(), scratch.size()
+        };
+        Require(leopard2_internal::
+                SetK65R65T128AVX512GFNIEnabledForDiagnostics(true),
+            "enable larger K65/R65 GFNI one-item batch probe");
+        RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
+            "execute larger K65/R65 GFNI one-item batch");
+        Require(leopard2_internal::
+                K65R65T128AVX512GFNICallCountForDiagnostics() == 1U &&
+                leopard2_internal::
+                    K65R65T128AVX512GFNITileCountForDiagnostics() ==
+                        shard_bytes / 64U,
+            "larger K65/R65 GFNI batch route counts differ");
+        CheckVariableParity(field, generator,
+            original_count, recovery_count, original, recovery, shard_bytes,
+            "larger K65/R65 GFNI batch differs from direct oracle");
+        Require(leopard2_internal::
+                FinishK65R65T128AVX512GFNIRouteProbeForDiagnostics(),
+            "finish larger K65/R65 GFNI batch route probe");
+
+        if (shard_bytes == 128)
+        {
+            for (unsigned source = 0; source < original_count; ++source)
+            {
+                std::memset(input, 0, original_count * shard_bytes);
+                for (size_t offset = 0; offset < shard_bytes; ++offset)
+                {
+                    input[static_cast<size_t>(source) * shard_bytes +
+                        offset] = static_cast<uint8_t>(
+                            offset * 29U + source * 17U + 1U);
+                }
+                std::memset(output, 0xa5,
+                    recovery_count * shard_bytes);
+                RequireResult(leo2_encode(codec, shard_bytes,
+                    &original[0], &recovery[0],
+                    scratch.data(), scratch.size()), LEO2_SUCCESS,
+                    "execute larger K65/R65 GFNI systematic basis");
+                CheckVariableBasisParity(field, generator,
+                    original_count, recovery_count, source,
+                    original, recovery, shard_bytes,
+                    "larger K65/R65 GFNI basis differs from direct oracle");
+            }
+        }
+    }
+
+    /*
+        The larger leaf is intentionally limited to ordinary dense-packed
+        one-item execution.  Exercise the nearby public shapes that must keep
+        using the mature implementation while a route probe is armed.
+    */
+    {
+        static const size_t shard_bytes = 512;
+        size_t scratch_bytes = 0;
+        RequireResult(leo2_encode_scratch_size(codec, shard_bytes,
+            &scratch_bytes), LEO2_SUCCESS,
+            "query larger GFNI fallback scratch");
+        AlignedBuffer scratch(scratch_bytes);
+        AlignedBuffer second_scratch(scratch_bytes);
+        AlignedBuffer input(original_count * shard_bytes);
+        AlignedBuffer output(recovery_count * shard_bytes);
+        AlignedBuffer second_input(original_count * shard_bytes);
+        AlignedBuffer second_output(recovery_count * shard_bytes);
+        std::vector<const void*> original;
+        std::vector<void*> recovery;
+        std::vector<const void*> second_original;
+        std::vector<void*> second_recovery;
+        SetVariablePackedPointers(input.bytes(), output.bytes(),
+            original_count, recovery_count, shard_bytes, original, recovery);
+        SetVariablePackedPointers(second_input.bytes(), second_output.bytes(),
+            original_count, recovery_count, shard_bytes,
+            second_original, second_recovery);
+        FillVariableInput(input.bytes(), original_count, shard_bytes,
+            UINT64_C(0x4c4152474546414c));
+        FillVariableInput(second_input.bytes(), original_count, shard_bytes,
+            UINT64_C(0x4c4152474546414d));
+
+        std::vector<void*> overlap_recovery(recovery_count);
+        for (unsigned row = 0; row < recovery_count; ++row)
+        {
+            overlap_recovery[row] = input.bytes() +
+                static_cast<size_t>(row) * shard_bytes;
+        }
+        Require(leopard2_internal::
+                SetK65R65T128AVX512GFNIEnabledForDiagnostics(true),
+            "arm larger GFNI overlap probe");
+        RequireResult(leo2_encode(codec, shard_bytes,
+            &original[0], &overlap_recovery[0],
+            scratch.data(), scratch.size()), LEO2_OVERLAP,
+            "reject larger GFNI input/output overlap");
+        Require(leopard2_internal::
+                K65R65T128AVX512GFNICallCountForDiagnostics() == 0U &&
+                leopard2_internal::
+                    K65R65T128AVX512GFNITileCountForDiagnostics() == 0U,
+            "larger GFNI overlap entered candidate leaf");
+        Require(leopard2_internal::
+                FinishK65R65T128AVX512GFNIRouteProbeForDiagnostics(),
+            "finish larger GFNI overlap probe");
+
+        void* const saved_recovery0 = recovery[0];
+        recovery[0] = NULL;
+        std::memset(output.bytes(), 0xa5, output.size());
+        Require(leopard2_internal::
+                SetK65R65T128AVX512GFNIEnabledForDiagnostics(true),
+            "arm larger GFNI partial-output probe");
+        RequireResult(leo2_encode(codec, shard_bytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size()),
+            LEO2_SUCCESS, "execute larger GFNI partial-output fallback");
+        Require(leopard2_internal::
+                K65R65T128AVX512GFNICallCountForDiagnostics() == 0U &&
+                leopard2_internal::
+                    K65R65T128AVX512GFNITileCountForDiagnostics() == 0U,
+            "larger GFNI partial output entered candidate leaf");
+        CheckVariableParity(field, generator,
+            original_count, recovery_count, original, recovery, shard_bytes,
+            "larger GFNI partial-output fallback differs from oracle");
+        for (size_t offset = 0; offset < shard_bytes; ++offset)
+        {
+            Require(output.bytes()[offset] == 0xa5,
+                "larger GFNI partial-output fallback wrote omitted parity");
+        }
+        Require(leopard2_internal::
+                FinishK65R65T128AVX512GFNIRouteProbeForDiagnostics(),
+            "finish larger GFNI partial-output probe");
+        recovery[0] = saved_recovery0;
+
+        leo2_encode_batch_item items[2] = {
+            { shard_bytes, &original[0], &recovery[0],
+                scratch.data(), scratch.size() },
+            { shard_bytes, &second_original[0], &second_recovery[0],
+                second_scratch.data(), second_scratch.size() }
+        };
+        Require(leopard2_internal::
+                SetK65R65T128AVX512GFNIEnabledForDiagnostics(true),
+            "arm larger GFNI multi-item probe");
+        RequireResult(leo2_encode_batch(codec, items, 2), LEO2_SUCCESS,
+            "execute larger GFNI multi-item mature batch");
+        Require(leopard2_internal::
+                K65R65T128AVX512GFNICallCountForDiagnostics() == 0U &&
+                leopard2_internal::
+                    K65R65T128AVX512GFNITileCountForDiagnostics() == 0U,
+            "larger GFNI multi-item batch entered candidate leaf");
+        CheckVariableParity(field, generator,
+            original_count, recovery_count, original, recovery, shard_bytes,
+            "first larger GFNI multi-item parity differs from oracle");
+        CheckVariableParity(field, generator,
+            original_count, recovery_count,
+            second_original, second_recovery, shard_bytes,
+            "second larger GFNI multi-item parity differs from oracle");
+        Require(leopard2_internal::
+                FinishK65R65T128AVX512GFNIRouteProbeForDiagnostics(),
+            "finish larger GFNI multi-item probe");
+
+        leo2_encode_batch_item binding_item = {
+            shard_bytes, &original[0], &recovery[0],
+            scratch.data(), scratch.size()
+        };
+        leo2_encode_batch_binding* binding = NULL;
+        RequireResult(leo2_encode_batch_binding_create(
+            codec, &binding_item, 1, &binding), LEO2_SUCCESS,
+            "create larger GFNI reusable binding fallback");
+        Require(leopard2_internal::
+                SetK65R65T128AVX512GFNIEnabledForDiagnostics(true),
+            "arm larger GFNI reusable-binding probe");
+        RequireResult(leo2_encode_batch_binding_execute(binding),
+            LEO2_SUCCESS,
+            "execute larger GFNI reusable-binding mature fallback");
+        Require(leopard2_internal::
+                K65R65T128AVX512GFNICallCountForDiagnostics() == 0U &&
+                leopard2_internal::
+                    K65R65T128AVX512GFNITileCountForDiagnostics() == 0U,
+            "larger GFNI reusable binding entered candidate leaf");
+        CheckVariableParity(field, generator,
+            original_count, recovery_count, original, recovery, shard_bytes,
+            "larger GFNI reusable-binding parity differs from oracle");
+        Require(leopard2_internal::
+                FinishK65R65T128AVX512GFNIRouteProbeForDiagnostics(),
+            "finish larger GFNI reusable-binding probe");
+        leo2_encode_batch_binding_destroy(binding);
+
+        const size_t row_stride = shard_bytes + 64U;
+        AlignedBuffer strided_input(original_count * row_stride);
+        AlignedBuffer strided_output(recovery_count * row_stride);
+        std::vector<const void*> strided_original(original_count);
+        std::vector<void*> strided_recovery(recovery_count);
+        FillVariableInput(strided_input.bytes(), original_count, row_stride,
+            UINT64_C(0x4c41524745535452));
+        for (unsigned row = 0; row < original_count; ++row)
+        {
+            strided_original[row] = strided_input.bytes() +
+                static_cast<size_t>(row) * row_stride;
+        }
+        for (unsigned row = 0; row < recovery_count; ++row)
+        {
+            strided_recovery[row] = strided_output.bytes() +
+                static_cast<size_t>(row) * row_stride;
+        }
+        Require(leopard2_internal::
+                SetK65R65T128AVX512GFNIEnabledForDiagnostics(true),
+            "arm larger GFNI strided-layout probe");
+        RequireResult(leo2_encode(codec, shard_bytes,
+            &strided_original[0], &strided_recovery[0],
+            scratch.data(), scratch.size()), LEO2_SUCCESS,
+            "execute larger GFNI strided-layout mature fallback");
+        Require(leopard2_internal::
+                K65R65T128AVX512GFNICallCountForDiagnostics() == 0U &&
+                leopard2_internal::
+                    K65R65T128AVX512GFNITileCountForDiagnostics() == 0U,
+            "larger GFNI strided layout entered candidate leaf");
+        CheckVariableParity(field, generator,
+            original_count, recovery_count,
+            strided_original, strided_recovery, shard_bytes,
+            "larger GFNI strided-layout fallback differs from oracle");
+        Require(leopard2_internal::
+                FinishK65R65T128AVX512GFNIRouteProbeForDiagnostics(),
+            "finish larger GFNI strided-layout probe");
+
+        std::memset(output.bytes(), 0xa5, output.size());
+        Require(leopard2_internal::
+                SetK65R65T128AVX512GFNIEnabledForDiagnostics(true),
+            "arm larger GFNI undersized-scratch probe");
+        RequireResult(leo2_encode(codec, shard_bytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size() - 1U),
+            LEO2_SCRATCH_TOO_SMALL,
+            "reject larger GFNI undersized scratch");
+        Require(leopard2_internal::
+                K65R65T128AVX512GFNICallCountForDiagnostics() == 0U &&
+                leopard2_internal::
+                    K65R65T128AVX512GFNITileCountForDiagnostics() == 0U,
+            "larger GFNI invalid scratch entered candidate leaf");
+        Require(leopard2_internal::
+                FinishK65R65T128AVX512GFNIRouteProbeForDiagnostics(),
+            "finish larger GFNI undersized-scratch probe");
+    }
+
+    static const unsigned shape_neighbors[][2] = {
+        { 64, 65 }, { 66, 65 }, { 65, 64 }, { 65, 66 }
+    };
+    for (size_t i = 0;
+        i < sizeof(shape_neighbors) / sizeof(shape_neighbors[0]); ++i)
+    {
+        leo2_codec* neighbor = NULL;
+        RequireResult(leo2_codec_create(context,
+            shape_neighbors[i][0], shape_neighbors[i][1],
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            NULL, &neighbor), LEO2_SUCCESS,
+            "create larger GFNI shape neighbor");
+        Require(!leopard2_internal::
+                K65R65T128AVX512GFNILargerSelectedForDiagnostics(
+                    neighbor, 512),
+            "larger GFNI shape neighbor selected candidate leaf");
+        leo2_codec_destroy(neighbor);
+    }
+
+    leo2_codec_destroy(codec);
+    leo2_context_destroy(context);
+}
+
 } // namespace
 
 int main()
@@ -2610,6 +2998,7 @@ int main()
         ExerciseSelectedPackedShape(context, 64, 64);
         ExerciseK65R65PackedTerminal(context);
         ExerciseK65R65AVX512GFNIAutoRoute();
+        ExerciseK65R65AVX512GFNILargerAutoRoute();
         ExerciseSelectedPackedShape(context, 128, 128);
 
         // The selector is deliberately exact.  Exercise both immediate count

@@ -144,13 +144,14 @@ void SetPackedPointers(
         recovery[i] = output + static_cast<size_t>(i) * kShardBytes;
 }
 
-void CheckPackedParity(
+void CheckPackedParityBytes(
     const leopard2_test::BinaryField& field,
     const leopard2_test::Matrix& generator,
     unsigned original_count,
     unsigned recovery_count,
     const void* const* original,
-    void* const* recovery)
+    void* const* recovery,
+    size_t shard_bytes)
 {
     for (unsigned parity = 0; parity < recovery_count; ++parity)
     {
@@ -158,7 +159,7 @@ void CheckPackedParity(
             generator[original_count + parity];
         const uint8_t* const output =
             static_cast<const uint8_t*>(recovery[parity]);
-        for (size_t offset = 0; offset < kShardBytes; ++offset)
+        for (size_t offset = 0; offset < shard_bytes; ++offset)
         {
             leopard2_test::Element expected = 0;
             for (unsigned source = 0; source < original_count; ++source)
@@ -172,6 +173,18 @@ void CheckPackedParity(
                 "production parity differs from the independent oracle");
         }
     }
+}
+
+void CheckPackedParity(
+    const leopard2_test::BinaryField& field,
+    const leopard2_test::Matrix& generator,
+    unsigned original_count,
+    unsigned recovery_count,
+    const void* const* original,
+    void* const* recovery)
+{
+    CheckPackedParityBytes(field, generator,
+        original_count, recovery_count, original, recovery, kShardBytes);
 }
 
 void CheckParity(
@@ -628,6 +641,128 @@ void ExerciseProductionPackedSide(
         Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
             "aggregate batch overlap modified output");
     }
+    leo2_codec_destroy(codec);
+}
+
+void ExerciseProductionK65R65LargerGFNI(
+    leo2_context* context,
+    size_t shard_bytes)
+{
+    static const unsigned original_count = 65;
+    static const unsigned recovery_count = 65;
+    static const unsigned transform_side = 128;
+    static const size_t live_state_bytes = 4U * 128U * 64U;
+
+    leo2_codec* codec = NULL;
+    RequireResult(leo2_codec_create(context,
+        original_count, recovery_count,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+        NULL, &codec), LEO2_SUCCESS,
+        "create production larger GFNI codec");
+    size_t scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(codec, shard_bytes,
+        &scratch_bytes), LEO2_SUCCESS,
+        "query production larger GFNI scratch");
+    const size_t work_data_offset = ExpectedProductionWorkDataOffset(
+        original_count, recovery_count, transform_side);
+    Require(scratch_bytes >= work_data_offset + live_state_bytes,
+        "production larger GFNI scratch cannot hold four-plane state");
+    AlignedBuffer scratch(scratch_bytes);
+    std::memset(scratch.bytes(), 0x5c, scratch.size());
+    const std::vector<uint8_t> scratch_before(
+        scratch.bytes(), scratch.bytes() + scratch.size());
+
+    const size_t input_bytes =
+        static_cast<size_t>(original_count) * shard_bytes;
+    const size_t output_bytes =
+        static_cast<size_t>(recovery_count) * shard_bytes;
+    AlignedBuffer input(input_bytes + 2U * kGuardBytes + 8U);
+    AlignedBuffer output(output_bytes + 2U * kGuardBytes + 8U);
+    std::memset(input.bytes(), kGuardValue, input.size());
+    std::memset(output.bytes(), kGuardValue, output.size());
+    const size_t input_offset = kGuardBytes + 1U;
+    const size_t output_offset = kGuardBytes + 3U;
+    uint8_t* const input_base = input.bytes() + input_offset;
+    uint8_t* const output_base = output.bytes() + output_offset;
+    uint64_t random = UINT64_C(0x50524f444c415247) ^ shard_bytes;
+    for (size_t i = 0; i < input_bytes; ++i)
+    {
+        random ^= random << 13;
+        random ^= random >> 7;
+        random ^= random << 17;
+        input_base[i] = static_cast<uint8_t>(random >> 24);
+    }
+    const std::vector<uint8_t> input_before(
+        input.bytes(), input.bytes() + input.size());
+    std::vector<const void*> original(original_count);
+    std::vector<void*> recovery(recovery_count);
+    for (unsigned row = 0; row < original_count; ++row)
+    {
+        original[row] = input_base +
+            static_cast<size_t>(row) * shard_bytes;
+    }
+    for (unsigned row = 0; row < recovery_count; ++row)
+    {
+        recovery[row] = output_base +
+            static_cast<size_t>(row) * shard_bytes;
+    }
+
+    const leopard2_test::BinaryField field =
+        leopard2_test::make_legacy_gf8();
+    const leopard2_test::ProfileLayout layout =
+        leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh, original_count, recovery_count);
+    const leopard2_test::Matrix generator =
+        leopard2_test::direct_systematic_generator(field, layout);
+    const bool selected = leopard2_internal::
+        K65R65T128AVX512GFNILargerSelectedForDiagnostics(codec, shard_bytes);
+
+    RequireResult(leo2_encode(codec, shard_bytes,
+        &original[0], &recovery[0], scratch.data(), scratch.size()),
+        LEO2_SUCCESS, "execute production larger GFNI one-shot");
+    Require(std::memcmp(input.bytes(), &input_before[0], input.size()) == 0,
+        "production larger GFNI encode modified source or guards");
+    CheckGuards(output, output_offset, output_bytes,
+        "production larger GFNI encode modified output guard");
+    CheckPackedParityBytes(field, generator,
+        original_count, recovery_count, &original[0], &recovery[0],
+        shard_bytes);
+    if (selected)
+    {
+        Require(std::memcmp(scratch.bytes(), &scratch_before[0],
+                work_data_offset) == 0,
+            "production larger GFNI leaf modified scratch metadata");
+        Require(std::memcmp(
+                scratch.bytes() + work_data_offset + live_state_bytes,
+                &scratch_before[work_data_offset + live_state_bytes],
+                scratch.size() - work_data_offset - live_state_bytes) == 0,
+            "production larger GFNI leaf exceeded four-plane state");
+    }
+
+    std::memset(output.bytes(), kGuardValue, output.size());
+    leo2_encode_batch_item item = {
+        shard_bytes, &original[0], &recovery[0],
+        scratch.data(), scratch.size()
+    };
+    RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
+        "execute production larger GFNI one-item batch");
+    CheckGuards(output, output_offset, output_bytes,
+        "production larger GFNI batch modified output guard");
+    CheckPackedParityBytes(field, generator,
+        original_count, recovery_count, &original[0], &recovery[0],
+        shard_bytes);
+    if (selected)
+    {
+        Require(std::memcmp(scratch.bytes(), &scratch_before[0],
+                work_data_offset) == 0,
+            "production larger GFNI batch modified scratch metadata");
+        Require(std::memcmp(
+                scratch.bytes() + work_data_offset + live_state_bytes,
+                &scratch_before[work_data_offset + live_state_bytes],
+                scratch.size() - work_data_offset - live_state_bytes) == 0,
+            "production larger GFNI batch exceeded four-plane state");
+    }
+
     leo2_codec_destroy(codec);
 }
 
@@ -1092,6 +1227,8 @@ int main()
             RequireResult(leo2_context_create(&options, &context),
                 LEO2_SUCCESS, "create production AUTO T128 context");
             ExerciseProductionPackedSide(context, 65, 65);
+            ExerciseProductionK65R65LargerGFNI(context, 128);
+            ExerciseProductionK65R65LargerGFNI(context, 4096);
             leo2_context_destroy(context);
         }
 #if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)

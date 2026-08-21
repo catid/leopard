@@ -557,6 +557,8 @@ struct leo2_context
     bool auto_avx512_encode_host;
     leopard::backend::FF8K65R65B64PackedKernel
         auto_k65r65_b64_avx512_gfni_kernel;
+    leopard::backend::FF8K65R65Multiples64PackedKernel
+        auto_k65r65_multiples64_avx512_gfni_kernel;
     bool calibrated_k1_avx2_copy_host;
     bool high_t4_batch_binding_enabled;
     bool gf8_avx2_walsh_locator_enabled;
@@ -1181,6 +1183,12 @@ static volatile uint32_t g_k65r65_b64_packed_terminal_mode = 1U;
 // attribute only the AVX-512/GFNI arithmetic leaf.
 static volatile uint32_t g_k65r65_b64_avx512_gfni_mode = 1U;
 static thread_local unsigned g_k65r65_b64_avx512_gfni_call_count = 0U;
+// Keep the larger-shard leaf on an independent diagnostic word.  The older
+// B64 attribution option accepts byte-count neighbors, which must not arm or
+// account this separately promoted operation leaf.
+static volatile uint32_t g_k65r65_t128_avx512_gfni_mode = 1U;
+static thread_local unsigned g_k65r65_t128_avx512_gfni_call_count = 0U;
+static thread_local size_t g_k65r65_t128_avx512_gfni_tile_count = 0U;
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && \
     !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
 /* Arithmetic-only attribution selector for the exact K=62/R=8/B=64 fused
@@ -14731,6 +14739,11 @@ LEO2_EXPORT leo2_result leo2_context_create(
         leopard::backend::IsCalibratedK65R65B64AVX512GFNIHost()
             ? leopard::backend::GetQualifiedAVX512GFNIT128()
             : NULL;
+    context->auto_k65r65_multiples64_avx512_gfni_kernel =
+        context->auto_requested &&
+        leopard::backend::IsCalibratedK65R65B64AVX512GFNIHost()
+            ? leopard::backend::GetQualifiedAVX512GFNIT128Multiples64()
+            : NULL;
     context->calibrated_k1_avx2_copy_host =
         leopard::backend::IsCalibratedK1AVX2CopyHost();
 #ifdef LEO_HAS_FF8
@@ -15936,6 +15949,47 @@ unsigned K65R65B64AVX512GFNICallCountForDiagnostics()
 #endif
 }
 
+bool SetK65R65T128AVX512GFNIEnabledForDiagnostics(bool enabled)
+{
+#ifdef LEO_HAS_FF8
+    g_k65r65_t128_avx512_gfni_call_count = 0U;
+    g_k65r65_t128_avx512_gfni_tile_count = 0U;
+    g_k65r65_t128_avx512_gfni_mode = enabled ? 3U : 4U;
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
+unsigned K65R65T128AVX512GFNIModeForDiagnostics()
+{
+#ifdef LEO_HAS_FF8
+    const unsigned mode = g_k65r65_t128_avx512_gfni_mode;
+    return mode == 3U ? 1U : mode == 4U ? 2U : mode;
+#else
+    return 0;
+#endif
+}
+
+unsigned K65R65T128AVX512GFNICallCountForDiagnostics()
+{
+#ifdef LEO_HAS_FF8
+    return g_k65r65_t128_avx512_gfni_call_count;
+#else
+    return 0U;
+#endif
+}
+
+size_t K65R65T128AVX512GFNITileCountForDiagnostics()
+{
+#ifdef LEO_HAS_FF8
+    return g_k65r65_t128_avx512_gfni_tile_count;
+#else
+    return 0U;
+#endif
+}
+
 bool FinishK65R65B64AVX512GFNIRouteProbeForDiagnostics()
 {
 #ifdef LEO_HAS_FF8
@@ -15943,6 +15997,19 @@ bool FinishK65R65B64AVX512GFNIRouteProbeForDiagnostics()
     if (mode != 3U && mode != 4U)
         return false;
     g_k65r65_b64_avx512_gfni_mode = mode == 3U ? 1U : 2U;
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool FinishK65R65T128AVX512GFNIRouteProbeForDiagnostics()
+{
+#ifdef LEO_HAS_FF8
+    const unsigned mode = g_k65r65_t128_avx512_gfni_mode;
+    if (mode != 3U && mode != 4U)
+        return false;
+    g_k65r65_t128_avx512_gfni_mode = mode == 3U ? 1U : 2U;
     return true;
 #else
     return false;
@@ -15978,6 +16045,22 @@ bool K65R65B64AVX512GFNISelectedForDiagnostics(
 }
 
 bool K65R65B64AVX512GFNIAvailableForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    (void)codec;
+    (void)shard_bytes;
+    return false;
+}
+
+bool K65R65T128AVX512GFNILargerAvailableForDiagnostics(
+    const leo2_codec* codec)
+{
+    (void)codec;
+    return false;
+}
+
+bool K65R65T128AVX512GFNILargerSelectedForDiagnostics(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
@@ -18686,6 +18769,48 @@ static LEO_FORCE_INLINE bool IsGF8AVX2K65R65B64PackedTerminalEligible(
 #endif
 }
 
+static LEO_FORCE_INLINE bool IsK65R65T128AVX512GFNILargerByteCount(
+    uint64_t shard_bytes)
+{
+    switch (shard_bytes)
+    {
+    case 128:
+    case 256:
+    case 512:
+    case 1024:
+    case 2048:
+    case 4096:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static LEO_FORCE_INLINE bool
+IsGF8AVX2K65R65T128AVX512GFNILargerEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    if (!codec ||
+        !IsK65R65T128AVX512GFNILargerByteCount(shard_bytes) ||
+        codec->original_count != 65 || codec->recovery_count != 65 ||
+        codec->padded_side != 128 ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 ||
+        codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
+        !codec->context || !codec->context->auto_requested ||
+        codec->context->backend != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        !codec->context->auto_k65r65_multiples64_avx512_gfni_kernel)
+        return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
+#else
+    return true;
+#endif
+}
+
 namespace leopard2_internal {
 
 bool K65R65B64PackedTerminalSelectedForDiagnostics(
@@ -18712,6 +18837,23 @@ bool K65R65B64AVX512GFNIAvailableForDiagnostics(
     (void)shard_bytes;
     return codec && codec->context &&
         codec->context->auto_k65r65_b64_avx512_gfni_kernel != NULL;
+}
+
+bool K65R65T128AVX512GFNILargerAvailableForDiagnostics(
+    const leo2_codec* codec)
+{
+    return codec && codec->context &&
+        codec->context->auto_k65r65_multiples64_avx512_gfni_kernel != NULL;
+}
+
+bool K65R65T128AVX512GFNILargerSelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    return IsGF8AVX2K65R65T128AVX512GFNILargerEligible(
+            codec, shard_bytes) &&
+        (g_k65r65_t128_avx512_gfni_mode == 1U ||
+         g_k65r65_t128_avx512_gfni_mode == 3U);
 }
 
 } // namespace leopard2_internal
@@ -19581,7 +19723,9 @@ TryEncodeGF8K65R65B64PackedTerminal(
         codec->context->auto_k65r65_b64_avx512_gfni_kernel(
             original[0], recovery[0], work_storage);
         if (g_k65r65_b64_avx512_gfni_mode == 3U)
+        {
             ++g_k65r65_b64_avx512_gfni_call_count;
+        }
 #ifdef LEO2_ENABLE_TEST_HOOKS
         leopard::ff8::TestOnlyRecordBalancedB64PackedCall();
 #endif
@@ -21089,6 +21233,44 @@ static leo2_result EncodeInternal(
         return ExecuteDirectEncode(codec, static_cast<size_t>(shard_bytes),
             original, recovery);
     }
+
+#ifdef LEO_HAS_FF8
+    /*
+        The shared validator above has proved dense, complete, disjoint
+        packed slabs and aligned scratch before this operation-specific leaf
+        sees any address.  The four-plane microtile uses 4 * 128 * 64 bytes
+        of contiguous aligned state.  Keep that capacity check explicit even
+        though every promoted byte cell's public geometry currently reserves
+        at least that much.  Prevalidated multi-item execution remains on its
+        established path until thread-pool/AVX-512 residency is qualified
+        separately.
+    */
+    static const size_t kK65R65GFNIMicrotileStateBytes =
+        4U * 128U * 64U;
+    const bool larger_gfni_state_fits =
+        geometry.layout.total_bytes >= geometry.work_data_offset &&
+        geometry.layout.total_bytes - geometry.work_data_offset >=
+            kK65R65GFNIMicrotileStateBytes;
+    if (!prevalidated && dense_packed_full &&
+        larger_gfni_state_fits &&
+        IsGF8AVX2K65R65T128AVX512GFNILargerEligible(codec, shard_bytes) &&
+        (g_k65r65_t128_avx512_gfni_mode == 1U ||
+         g_k65r65_t128_avx512_gfni_mode == 3U))
+    {
+        uint8_t* const state = static_cast<uint8_t*>(scratch) +
+            geometry.work_data_offset;
+        codec->context->auto_k65r65_multiples64_avx512_gfni_kernel(
+            original[0], recovery[0], state,
+            static_cast<size_t>(shard_bytes));
+        if (g_k65r65_t128_avx512_gfni_mode == 3U)
+        {
+            ++g_k65r65_t128_avx512_gfni_call_count;
+            g_k65r65_t128_avx512_gfni_tile_count +=
+                static_cast<size_t>(shard_bytes) / 64U;
+        }
+        return LEO2_SUCCESS;
+    }
+#endif
 
     // Choose once for the complete call so aligned and ragged passes cannot
     // observe different arithmetic tables.  The choice is deterministic and

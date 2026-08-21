@@ -667,9 +667,14 @@ int main()
             const leopard::backend::X86Features detected =
                 leopard::backend::DetectX86Features();
             if (expected_forced_variant())
+            {
                 require(
                     leopard::backend::GetQualifiedAVX512GFNIT128() == NULL,
                     "forced variant published independent AVX-512/GFNI leaf");
+                require(leopard::backend::
+                        GetQualifiedAVX512GFNIT128Multiples64() == NULL,
+                    "forced variant published larger AVX-512/GFNI leaf");
+            }
             else
             {
                 const bool expected_qualified = detected.avx512 &&
@@ -679,11 +684,18 @@ int main()
                     (leopard::backend::GetQualifiedAVX512GFNIT128() != NULL) ==
                         expected_qualified,
                     "AVX-512/GFNI T128 KAT publication disagrees with ISA gate");
+                require((leopard::backend::
+                            GetQualifiedAVX512GFNIT128Multiples64() != NULL) ==
+                        expected_qualified,
+                    "larger AVX-512/GFNI T128 KAT publication disagrees with ISA gate");
             }
         }
 #else
         require(leopard::backend::GetQualifiedAVX512GFNIT128() == NULL,
             "uncompiled AVX-512/GFNI T128 kernel was published");
+        require(leopard::backend::
+                GetQualifiedAVX512GFNIT128Multiples64() == NULL,
+            "uncompiled larger AVX-512/GFNI T128 kernel was published");
 #endif
         const char* baseline_xor_only =
             std::getenv("LEO2_TEST_BASELINE_XOR_ONLY");

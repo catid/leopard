@@ -49,10 +49,15 @@ static const unsigned kOriginalCount = 65;
 static const unsigned kRecoveryCount = 65;
 static const unsigned kSide = 128;
 static const unsigned kShardBytes = 64;
+static const unsigned kLargerTileVectors = 4;
+static const size_t kStateBytes =
+    static_cast<size_t>(kSide) * kShardBytes;
+static const unsigned kLargerKATBytes = 320;
 static const uint8_t kZeroSkewLog = 255;
 
 alignas(64) static uint64_t MultiplierMatrixByLog[256];
 alignas(64) static uint8_t SkewLogStorage[256];
+static bool BaseKernelQualified = false;
 
 #if defined(__GNUC__) || defined(__clang__)
 #define LEO2_T128_INLINE inline __attribute__((always_inline))
@@ -247,6 +252,144 @@ static void LEO2_T128_KERNEL EncodeK65R65B64(
     }
 }
 
+/*
+    Keep this body separate from the already-qualified B=64 entry.  Payload
+    columns are independent GF(256) transforms.  Group up to four adjacent
+    vectors so every skew/matrix lookup is reused across a 256-byte row
+    microtile while each transform retains its own aligned 8 KiB state.
+*/
+static void LEO2_T128_KERNEL EncodeK65R65Multiples64(
+    const void* input_pointer,
+    void* output_pointer,
+    void* state_pointer,
+    size_t shard_bytes)
+{
+    LEO_DEBUG_ASSERT(shard_bytes > kShardBytes);
+    LEO_DEBUG_ASSERT((shard_bytes & (kShardBytes - 1U)) == 0);
+    if (shard_bytes <= kShardBytes ||
+        (shard_bytes & (kShardBytes - 1U)) != 0)
+        return;
+
+    const uint8_t* const input = static_cast<const uint8_t*>(input_pointer);
+    uint8_t* const output = static_cast<uint8_t*>(output_pointer);
+    uint8_t* const state = static_cast<uint8_t*>(state_pointer);
+
+    for (size_t offset = 0; offset < shard_bytes; )
+    {
+        const size_t remaining_vectors =
+            (shard_bytes - offset) / kShardBytes;
+        const unsigned vector_count = static_cast<unsigned>(
+            remaining_vectors < kLargerTileVectors
+                ? remaining_vectors : kLargerTileVectors);
+
+        for (unsigned row = 0; row < kOriginalCount; ++row)
+        {
+            for (unsigned vector = 0; vector < vector_count; ++vector)
+            {
+                uint8_t* const vector_state =
+                    state + static_cast<size_t>(vector) * kStateBytes;
+                StoreRow(vector_state, row, _mm512_loadu_si512(
+                    input + static_cast<size_t>(row) * shard_bytes + offset +
+                    static_cast<size_t>(vector) * kShardBytes));
+            }
+        }
+        const __m512i zero = _mm512_setzero_si512();
+        for (unsigned vector = 0; vector < vector_count; ++vector)
+        {
+            uint8_t* const vector_state =
+                state + static_cast<size_t>(vector) * kStateBytes;
+            for (unsigned row = kOriginalCount; row < kSide; ++row)
+                StoreRow(vector_state, row, zero);
+        }
+
+        for (unsigned distance = 1; distance <= 16; distance *= 4)
+        {
+            const unsigned width = distance * 4U;
+            for (unsigned row = 0; row < kOriginalCount; row += width)
+            {
+                const uint8_t* const skew = SkewLogStorage + 128U + row;
+                const uint64_t matrix01 =
+                    MultiplierMatrixByLog[skew[distance]];
+                const uint64_t matrix23 =
+                    MultiplierMatrixByLog[skew[distance * 3U]];
+                const uint64_t matrix02 =
+                    MultiplierMatrixByLog[skew[distance * 2U]];
+                for (unsigned lane = 0; lane < distance; ++lane)
+                {
+                    for (unsigned vector = 0; vector < vector_count; ++vector)
+                    {
+                        Inverse4(
+                            state + static_cast<size_t>(vector) * kStateBytes,
+                            row + lane, distance,
+                            matrix01, matrix23, matrix02);
+                    }
+                }
+            }
+        }
+        const uint64_t inverse_final =
+            MultiplierMatrixByLog[SkewLogStorage[128U + 64U]];
+        for (unsigned row = 0; row < 64; ++row)
+        {
+            for (unsigned vector = 0; vector < vector_count; ++vector)
+            {
+                Inverse2(
+                    state + static_cast<size_t>(vector) * kStateBytes,
+                    row, 64, inverse_final);
+            }
+        }
+
+        for (unsigned distance = 32; distance >= 2; distance /= 4)
+        {
+            const unsigned width = distance * 4U;
+            for (unsigned row = 0; row < kRecoveryCount; row += width)
+            {
+                const uint8_t* const skew = SkewLogStorage + row;
+                const uint64_t matrix01 =
+                    MultiplierMatrixByLog[skew[distance]];
+                const uint64_t matrix23 =
+                    MultiplierMatrixByLog[skew[distance * 3U]];
+                const uint64_t matrix02 =
+                    MultiplierMatrixByLog[skew[distance * 2U]];
+                for (unsigned lane = 0; lane < distance; ++lane)
+                {
+                    for (unsigned vector = 0; vector < vector_count; ++vector)
+                    {
+                        Forward4(
+                            state + static_cast<size_t>(vector) * kStateBytes,
+                            row + lane, distance,
+                            matrix01, matrix23, matrix02);
+                    }
+                }
+            }
+        }
+        for (unsigned row = 0; row < kRecoveryCount; row += 2)
+        {
+            const uint64_t matrix =
+                MultiplierMatrixByLog[SkewLogStorage[row + 1U]];
+            for (unsigned vector = 0; vector < vector_count; ++vector)
+            {
+                Forward2(
+                    state + static_cast<size_t>(vector) * kStateBytes,
+                    row, 1, matrix);
+            }
+        }
+
+        for (unsigned row = 0; row < kRecoveryCount; ++row)
+        {
+            for (unsigned vector = 0; vector < vector_count; ++vector)
+            {
+                const uint8_t* const vector_state =
+                    state + static_cast<size_t>(vector) * kStateBytes;
+                _mm512_storeu_si512(
+                    output + static_cast<size_t>(row) * shard_bytes + offset +
+                        static_cast<size_t>(vector) * kShardBytes,
+                    LoadRow(vector_state, row));
+            }
+        }
+        offset += static_cast<size_t>(vector_count) * kShardBytes;
+    }
+}
+
 static uint8_t ApplyMatrix(uint8_t value, uint64_t matrix)
 {
     static const uint8_t kNibbleParity[16] = {
@@ -357,6 +500,69 @@ static void ScalarTransform(
     std::memcpy(output, state, kRecoveryCount * kShardBytes);
 }
 
+static void ScalarTransformMultiples64(
+    FF8MultiplyLog multiply_log,
+    const uint8_t* input,
+    uint8_t* output,
+    uint8_t state[kSide][kLargerKATBytes],
+    size_t shard_bytes)
+{
+    for (unsigned row = 0; row < kOriginalCount; ++row)
+    {
+        std::memcpy(state[row],
+            input + static_cast<size_t>(row) * shard_bytes, shard_bytes);
+    }
+    for (unsigned row = kOriginalCount; row < kSide; ++row)
+        std::memset(state[row], 0, shard_bytes);
+
+    for (unsigned level = 0; level < 7; ++level)
+    {
+        const unsigned distance = 1U << level;
+        const unsigned width = distance * 2U;
+        for (unsigned row = 0; row < kSide; row += width)
+        {
+            const uint8_t log =
+                SkewLogStorage[128U + row + distance];
+            for (unsigned lane = 0; lane < distance; ++lane)
+            {
+                uint8_t* const x = state[row + lane];
+                uint8_t* const y = state[row + lane + distance];
+                for (size_t column = 0; column < shard_bytes; ++column)
+                {
+                    y[column] ^= x[column];
+                    if (log != kZeroSkewLog)
+                        x[column] ^= multiply_log(y[column], log);
+                }
+            }
+        }
+    }
+    for (unsigned level = 7; level-- > 0; )
+    {
+        const unsigned distance = 1U << level;
+        const unsigned width = distance * 2U;
+        for (unsigned row = 0; row < kSide; row += width)
+        {
+            const uint8_t log = SkewLogStorage[row + distance];
+            for (unsigned lane = 0; lane < distance; ++lane)
+            {
+                uint8_t* const x = state[row + lane];
+                uint8_t* const y = state[row + lane + distance];
+                for (size_t column = 0; column < shard_bytes; ++column)
+                {
+                    if (log != kZeroSkewLog)
+                        x[column] ^= multiply_log(y[column], log);
+                    y[column] ^= x[column];
+                }
+            }
+        }
+    }
+    for (unsigned row = 0; row < kRecoveryCount; ++row)
+    {
+        std::memcpy(output + static_cast<size_t>(row) * shard_bytes,
+            state[row], shard_bytes);
+    }
+}
+
 static bool KnownAnswerTest(FF8MultiplyLog multiply_log)
 {
     alignas(64) static uint8_t input[kOriginalCount * kShardBytes];
@@ -389,19 +595,80 @@ static bool KnownAnswerTest(FF8MultiplyLog multiply_log)
     return true;
 }
 
+static bool KnownAnswerTestMultiples64(FF8MultiplyLog multiply_log)
+{
+    alignas(64) static uint8_t
+        input[kOriginalCount * kLargerKATBytes];
+    alignas(64) static uint8_t
+        expected[kRecoveryCount * kLargerKATBytes];
+    alignas(64) static uint8_t
+        actual[kRecoveryCount * kLargerKATBytes];
+    alignas(64) static uint8_t
+        scalar_state[kSide][kLargerKATBytes];
+    alignas(64) static uint8_t
+        vector_state[kLargerTileVectors * kSide * kShardBytes];
+    static const size_t kTestBytes[] = { 128, kLargerKATBytes };
+
+    for (size_t byte_index = 0;
+        byte_index < sizeof(kTestBytes) / sizeof(kTestBytes[0]);
+        ++byte_index)
+    {
+        const size_t shard_bytes = kTestBytes[byte_index];
+        for (unsigned pattern = 0; pattern < 2; ++pattern)
+        {
+            uint64_t random = UINT64_C(0x6c61726765723634) +
+                pattern + shard_bytes;
+            const size_t input_bytes = kOriginalCount * shard_bytes;
+            for (size_t i = 0; i < input_bytes; ++i)
+            {
+                random += UINT64_C(0x9e3779b97f4a7c15);
+                uint64_t value = random;
+                value = (value ^ (value >> 30)) *
+                    UINT64_C(0xbf58476d1ce4e5b9);
+                value = (value ^ (value >> 27)) *
+                    UINT64_C(0x94d049bb133111eb);
+                value ^= value >> 31;
+                input[i] = pattern == 0
+                    ? static_cast<uint8_t>(value)
+                    : static_cast<uint8_t>(
+                        i * 29U + (i / shard_bytes) * 17U + 1U);
+            }
+            ScalarTransformMultiples64(
+                multiply_log, input, expected, scalar_state, shard_bytes);
+            EncodeK65R65Multiples64(
+                input, actual, vector_state, shard_bytes);
+            if (std::memcmp(expected, actual,
+                    kRecoveryCount * shard_bytes) != 0)
+                return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 FF8K65R65B64PackedKernel InitializeAVX512GFNIT128(
     FF8MultiplyLog multiply_log,
     const uint8_t* skew_log_storage)
 {
+    BaseKernelQualified = false;
     if (!multiply_log || !skew_log_storage)
         return NULL;
     std::memcpy(SkewLogStorage, skew_log_storage,
         sizeof(SkewLogStorage));
     if (!BuildMatrices(multiply_log) || !KnownAnswerTest(multiply_log))
         return NULL;
+    BaseKernelQualified = true;
     return &EncodeK65R65B64;
+}
+
+FF8K65R65Multiples64PackedKernel InitializeAVX512GFNIT128Multiples64(
+    FF8MultiplyLog multiply_log)
+{
+    if (!BaseKernelQualified || !multiply_log ||
+        !KnownAnswerTestMultiples64(multiply_log))
+        return NULL;
+    return &EncodeK65R65Multiples64;
 }
 
 #undef LEO2_T128_KERNEL

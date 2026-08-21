@@ -66,6 +66,32 @@ random cases.  These prototype timings select the implementation; the
 production claim uses the ordinary benchmark's same-binary whole-call route
 control, including public validation and copies.
 
+## Larger-shard follow-up
+
+`larger_shards_screen.cpp` extends the selected native-Cantor affine schedule
+without changing the B64 body.  A first candidate transformed one 64-byte
+payload vector at a time.  It remained faster through B2048 but fell to about
+`0.88x` at B4096, so it was rejected.  The selected candidate transforms up to
+four independent vectors together, reusing each skew and affine-matrix load
+across a maximum 256-byte row microtile.
+
+The post-hardening, selection-only screen on CPU 13 reported:
+
+| Bytes | One-item batch | One-shot |
+|---:|---:|---:|
+| 128 | 2.556x | 2.544x |
+| 256 | 2.231x | 2.233x |
+| 512 | 2.185x | 2.150x |
+| 1024 | 2.077x | 1.971x |
+| 2048 | 1.944x | 2.004x |
+| 4096 | 1.637x | 1.531x |
+
+These numbers select the 256-byte microtile; they are not promotion evidence.
+The retained v33 runner performs 25-round ABBA confirmation at every target,
+16-times-work checks at B128 and B4096, and exact selector/call/tile/digest
+checks at inactive byte and K/R neighbors.  Neighbor timing is descriptive and
+cannot reject an otherwise exact no-op route.
+
 ## Production scope and gates
 
 `Leopard2BackendAVX512GFNIT128.cpp` contains the selected row-major affine leaf
@@ -78,7 +104,7 @@ tables, exhaustively checks all 65,536 fixed-multiplier byte results, and runs
 two complete scalar-versus-vector transform KATs.  Failure leaves the pointer
 null and preserves the established path.
 
-Selection additionally requires:
+The original B64 leaf additionally requires:
 
 - an AUTO context on the calibrated AMD family `0x1a`, model `0x08` host;
 - legacy-high GF8, native layout, exactly `K=65, R=65, B=64`;
@@ -87,6 +113,13 @@ Selection additionally requires:
 
 Unknown CPUs, neighboring sizes, explicit backends, forced builds, decode, and
 all non-packed calls use their previous implementation.
+
+The larger-shard callback is independently KAT-qualified at B128 and the
+non-promoted B320 tail shape.  It uses four aligned 8 KiB states and is selected
+only for ordinary one-shot or one-item batch calls with dense packed full
+output at B128, B256, B512, B1024, B2048, or B4096.  Its diagnostic mode and
+route counters are independent from the older B64 schema, so either campaign
+cannot accidentally activate the other leaf.
 
 ## Reproduction
 
@@ -104,3 +137,12 @@ The production benchmark route is schema v32 in `bench_leopard2`, selected by
 `--k65r65-b64-avx512-gfni-mode 0|1`.  Its untimed route probe verifies that both
 one-item batch and one-shot encode actually enter the candidate when expected;
 the probe is normalized away before timing.
+
+The larger route is schema v33 and uses
+`--k65r65-t128-avx512-gfni-mode 0|1`.  The frozen confirmation controller is
+`run_larger_shards_abba.py`; it refuses writable or hard-linked benchmark
+artifacts, holds the canonical benchmark lock, verifies singleton CPU/SMT
+isolation, exact-compares a canonical Git archive with the declared clean
+commit and tree, executes the frozen JSON validator directly from its hashed
+source bytes, journals every raw launch before applying gates, and writes an
+exclusive atomic checkpoint report after every cell.

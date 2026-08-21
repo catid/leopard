@@ -74,6 +74,8 @@ static uint32_t QualifiableBackendMask = 0;
 static bool SelfTestPassed = false;
 static QualificationStatus StartupFailure = QualificationAvailable;
 static FF8K65R65B64PackedKernel QualifiedAVX512GFNIT128 = NULL;
+static FF8K65R65Multiples64PackedKernel
+    QualifiedAVX512GFNIT128Multiples64 = NULL;
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
 static std::atomic<unsigned> TestFault(TestSetupFaultNone);
@@ -3743,6 +3745,8 @@ bool Initialize(const InitializeArgs& args)
     }
 
     FF8K65R65B64PackedKernel avx512_gfni_t128 = NULL;
+    FF8K65R65Multiples64PackedKernel
+        avx512_gfni_t128_multiples64 = NULL;
 #if defined(LEO2_HAVE_AVX512_GFNI_T128) && defined(LEO_HAS_FF8) && \
     !defined(LEO2_BACKEND_FORCE_SCALAR) && \
     !defined(LEO2_BACKEND_FORCE_SSSE3) && \
@@ -3759,6 +3763,12 @@ bool Initialize(const InitializeArgs& args)
     {
         avx512_gfni_t128 = InitializeAVX512GFNIT128(
             args.ff8_multiply_log, args.ff8_skew_log_storage);
+        if (avx512_gfni_t128)
+        {
+            avx512_gfni_t128_multiples64 =
+                InitializeAVX512GFNIT128Multiples64(
+                    args.ff8_multiply_log);
+        }
     }
 #endif
 
@@ -3773,6 +3783,8 @@ bool Initialize(const InitializeArgs& args)
         StartupFailure = QualificationAvailable;
         SelfTestPassed = true;
         QualifiedAVX512GFNIT128 = avx512_gfni_t128;
+        QualifiedAVX512GFNIT128Multiples64 =
+            avx512_gfni_t128_multiples64;
         SelectedOps = QualifiedOps[selected_kind];
     }
     return true;
@@ -3781,6 +3793,12 @@ bool Initialize(const InitializeArgs& args)
 FF8K65R65B64PackedKernel GetQualifiedAVX512GFNIT128()
 {
     return QualifiedAVX512GFNIT128;
+}
+
+FF8K65R65Multiples64PackedKernel
+GetQualifiedAVX512GFNIT128Multiples64()
+{
+    return QualifiedAVX512GFNIT128Multiples64;
 }
 
 const Ops& GetOps()

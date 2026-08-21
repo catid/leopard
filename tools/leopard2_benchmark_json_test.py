@@ -62,6 +62,16 @@ K65R65_B64_AVX512_GFNI_SELECTOR_CONTRACT = (
     "LEGACY_HIGH_V1,GF8,AUTO,K=65,R=65,T=128,B=64,native_layout,"
     "packed_terminal,runtime_AVX512F_BW_VL_GFNI,startup_KAT,"
     "calibrated_AMD_1A_08,one_shot_and_one_item_batch")
+K65R65_T128_AVX512_GFNI_TARGET_BYTES = frozenset({
+    128, 256, 512, 1024, 2048, 4096,
+})
+K65R65_T128_AVX512_GFNI_SELECTOR_CONTRACT = (
+    "LEGACY_HIGH_V1,GF8,AUTO,K=65,R=65,T=128,"
+    "B=128|256|512|1024|2048|4096,native_layout,"
+    "native_cantor_affine,dense_packed_full,64_byte_vector_tiles,"
+    "max_microtile_bytes=256,runtime_AVX512F_BW_VL_GFNI,"
+    "startup_KAT_B128_B320,calibrated_AMD_1A_08,"
+    "one_shot_and_one_item_batch")
 ONE_SHOT_SCHEMAS = frozenset({
     "leopard2-benchmark-v8", "leopard2-benchmark-v9",
     "leopard2-benchmark-v12", "leopard2-benchmark-v15",
@@ -374,6 +384,7 @@ def run(
     gf8_avx2_walsh_locator_mode: int | None = None,
     k65r65_b64_packed_terminal_mode: int | None = None,
     k65r65_b64_avx512_gfni_mode: int | None = None,
+    k65r65_t128_avx512_gfni_mode: int | None = None,
     measure_one_shot_encode: bool = False,
     *,
     k: int = 3,
@@ -411,16 +422,26 @@ def run(
             (type(k65r65_b64_avx512_gfni_mode) is int and
              k65r65_b64_avx512_gfni_mode in {0, 1}),
             "K65/R65/B64 AVX-512/GFNI mode must be absent, zero, or one")
+    require(k65r65_t128_avx512_gfni_mode is None or
+            (type(k65r65_t128_avx512_gfni_mode) is int and
+             k65r65_t128_avx512_gfni_mode in {0, 1}),
+            "K65/R65/T128 AVX-512/GFNI mode must be absent, zero, or one")
     require(k65r65_b64_packed_terminal_mode is None or
             k65r65_b64_avx512_gfni_mode is None,
             "K65/R65/B64 diagnostic modes must be mutually exclusive")
+    require(k65r65_t128_avx512_gfni_mode is None or
+            (k65r65_b64_packed_terminal_mode is None and
+             k65r65_b64_avx512_gfni_mode is None),
+            "K65/R65/T128 mode must be exclusive with B64 modes")
     require(type(measure_one_shot_encode) is bool,
             "one-shot encode measurement mode must be Boolean")
     require(type(shard_bytes) is int and shard_bytes > 0,
             "benchmark shard byte count must be a positive integer")
     with tempfile.TemporaryDirectory(prefix="leo2-benchmark-json-") as temporary:
         output = Path(temporary) / "result.json"
-        diagnostic_auto_gfni = k65r65_b64_avx512_gfni_mode is not None
+        diagnostic_auto_gfni = (
+            k65r65_b64_avx512_gfni_mode is not None or
+            k65r65_t128_avx512_gfni_mode is not None)
         diagnostic_avx2 = (
             r1_small_reduction_mode is not None or
             r1_fixed_avx2_mode is not None or
@@ -483,6 +504,10 @@ def run(
             command.extend((
                 "--k65r65-b64-avx512-gfni-mode",
                 str(k65r65_b64_avx512_gfni_mode)))
+        if k65r65_t128_avx512_gfni_mode is not None:
+            command.extend((
+                "--k65r65-t128-avx512-gfni-mode",
+                str(k65r65_t128_avx512_gfni_mode)))
         command.extend(("--json", str(output)))
         completed = run_process(command)
         require(completed.returncode == 0,
@@ -508,6 +533,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 "leopard2-benchmark-v12", "leopard2-benchmark-v15",
                 "leopard2-benchmark-v16", "leopard2-benchmark-v23",
                 "leopard2-benchmark-v31", "leopard2-benchmark-v32",
+                "leopard2-benchmark-v33",
             }, "benchmark schema is unsupported")
     expected_top = {
         "schema", "build", "parameters", "resolved", "correctness",
@@ -520,7 +546,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "leopard2-benchmark-v11", "leopard2-benchmark-v12",
         "leopard2-benchmark-v15", "leopard2-benchmark-v16",
         "leopard2-benchmark-v23", "leopard2-benchmark-v31",
-        "leopard2-benchmark-v32",
+        "leopard2-benchmark-v32", "leopard2-benchmark-v33",
     }:
         expected_top.add("workload_digests")
     require(set(document) == expected_top, "top-level JSON keys changed")
@@ -539,6 +565,10 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     is_k65r65_v32 = document["schema"] == "leopard2-benchmark-v32"
     k65r65_v32_attested = (
         is_k65r65_v32 and
+        document["parameters"].get("attest_source") is True)
+    is_k65r65_v33 = document["schema"] == "leopard2-benchmark-v33"
+    k65r65_v33_attested = (
+        is_k65r65_v33 and
         document["parameters"].get("attest_source") is True)
     expected_build = {
         "compiler", "compiler_version", "cplusplus",
@@ -602,6 +632,20 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             "k65r65_b64_avx512_gfni_timed_ordinary_encode_api",
             "k65r65_b64_avx512_gfni_timed_one_shot_encode_api",
         })
+    if is_k65r65_v33:
+        expected_build.update({
+            "k65r65_t128_avx512_gfni_diagnostic_mode",
+            "k65r65_t128_avx512_gfni_diagnostic_disabled",
+            "k65r65_t128_avx512_gfni_mode_latched",
+            "k65r65_t128_avx512_gfni_kernel_qualified",
+            "k65r65_t128_avx512_gfni_selector_expected_selected",
+            "k65r65_t128_avx512_gfni_selector_selected",
+            "k65r65_t128_avx512_gfni_observed_call_count",
+            "k65r65_t128_avx512_gfni_observed_vector_tile_count",
+            "k65r65_t128_avx512_gfni_selector_contract",
+            "k65r65_t128_avx512_gfni_timed_ordinary_encode_api",
+            "k65r65_t128_avx512_gfni_timed_one_shot_encode_api",
+        })
     if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
         expected_build.update({
             "one_shot_plan_setup_diagnostic_mode",
@@ -618,7 +662,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         })
     if document["schema"] in {
             "leopard2-benchmark-v5", "leopard2-benchmark-v7"} or \
-            k65r65_v31_attested or k65r65_v32_attested:
+            k65r65_v31_attested or k65r65_v32_attested or \
+            k65r65_v33_attested:
         expected_build.update({
             "source_commit", "source_tree", "source_tracked_dirty"})
     if document["schema"] in {
@@ -749,6 +794,56 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                     "k65r65_b64_avx512_gfni_timed_one_shot_encode_api"] ==
                     K65R65_B64_TIMED_ONE_SHOT_ENCODE_API,
                 "K65/R65/B64 AVX-512/GFNI mode metadata is invalid")
+    if is_k65r65_v33:
+        build = document["build"]
+        mode = build["k65r65_t128_avx512_gfni_diagnostic_mode"]
+        qualified = build["k65r65_t128_avx512_gfni_kernel_qualified"]
+        shard_bytes = document["parameters"]["shard_bytes"]
+        selector_expected = (
+            mode == 1 and qualified and
+            document["parameters"]["K"] == 65 and
+            document["parameters"]["R"] == 65 and
+            shard_bytes in K65R65_T128_AVX512_GFNI_TARGET_BYTES and
+            document["resolved"]["backend"] == "avx2")
+        require(type(mode) is int and mode in {0, 1} and
+                type(build[
+                    "k65r65_t128_avx512_gfni_diagnostic_disabled"]) is bool and
+                build[
+                    "k65r65_t128_avx512_gfni_diagnostic_disabled"] is
+                    (mode == 0) and
+                type(build[
+                    "k65r65_t128_avx512_gfni_mode_latched"]) is int and
+                build["k65r65_t128_avx512_gfni_mode_latched"] == mode and
+                type(qualified) is bool and
+                type(build[
+                    "k65r65_t128_avx512_gfni_selector_expected_selected"])
+                    is bool and
+                type(build[
+                    "k65r65_t128_avx512_gfni_selector_selected"]) is bool and
+                build[
+                    "k65r65_t128_avx512_gfni_selector_expected_selected"] is
+                    selector_expected and
+                build["k65r65_t128_avx512_gfni_selector_selected"] is
+                    selector_expected and
+                type(build[
+                    "k65r65_t128_avx512_gfni_observed_call_count"]) is int and
+                build["k65r65_t128_avx512_gfni_observed_call_count"] ==
+                    (2 if selector_expected else 0) and
+                type(build[
+                    "k65r65_t128_avx512_gfni_observed_vector_tile_count"])
+                    is int and
+                build[
+                    "k65r65_t128_avx512_gfni_observed_vector_tile_count"] ==
+                    (2 * (shard_bytes // 64) if selector_expected else 0) and
+                build["k65r65_t128_avx512_gfni_selector_contract"] ==
+                    K65R65_T128_AVX512_GFNI_SELECTOR_CONTRACT and
+                build[
+                    "k65r65_t128_avx512_gfni_timed_ordinary_encode_api"] ==
+                    K65R65_B64_TIMED_ORDINARY_ENCODE_API and
+                build[
+                    "k65r65_t128_avx512_gfni_timed_one_shot_encode_api"] ==
+                    K65R65_B64_TIMED_ONE_SHOT_ENCODE_API,
+                "K65/R65/T128 AVX-512/GFNI mode metadata is invalid")
     if document["schema"] in R1_SCHEMAS:
         build = document["build"]
         for name in (
@@ -808,7 +903,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 "Cauchy-log-reuse build selector is not Boolean")
     if document["schema"] in {
             "leopard2-benchmark-v5", "leopard2-benchmark-v7"} or \
-            k65r65_v31_attested or k65r65_v32_attested:
+            k65r65_v31_attested or k65r65_v32_attested or \
+            k65r65_v33_attested:
         for name in ("source_commit", "source_tree"):
             value = document["build"][name]
             require(value == "unknown" or
@@ -946,6 +1042,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 parameters["requested_profile"] == "legacy_high_v1" and
                 parameters["requested_field"] == "gf8" and
                 parameters["requested_backend"] == "auto" and
+                parameters["shard_bytes"] not in
+                    K65R65_T128_AVX512_GFNI_TARGET_BYTES and
                 parameters["batch"] == 1 and
                 parameters["thread_count"] == 1 and
                 parameters["skip_legacy"] is True and
@@ -965,6 +1063,48 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 (not k65r65_v32_attested or
                  parameters["attest_source"] is True),
                 "K65/R65/B64 AVX-512/GFNI parameters are invalid or "
+                "ambiguous")
+    if is_k65r65_v33:
+        expected_parameters = {
+            "K", "R", "requested_profile", "requested_field",
+            "requested_backend", "force_generic_decode",
+            "force_specialized_decode", "force_tiled_decode",
+            "force_materialized_decode", "skip_legacy", "retain_samples",
+            "measure_one_shot_encode",
+            "k65r65_t128_avx512_gfni_mode", "shard_bytes", "loss_count",
+            "missing_original_indices", "batch", "reuse", "iterations",
+            "warmup", "thread_count", "seed",
+        }
+        if k65r65_v33_attested:
+            expected_parameters.add("attest_source")
+        mode = parameters.get("k65r65_t128_avx512_gfni_mode")
+        require(set(parameters) == expected_parameters and
+                type(mode) is int and mode in {0, 1} and
+                mode == document["build"][
+                    "k65r65_t128_avx512_gfni_diagnostic_mode"] and
+                parameters["requested_profile"] == "legacy_high_v1" and
+                parameters["requested_field"] == "gf8" and
+                parameters["requested_backend"] == "auto" and
+                parameters["shard_bytes"] != 64 and
+                parameters["batch"] == 1 and
+                parameters["thread_count"] == 1 and
+                parameters["skip_legacy"] is True and
+                parameters["retain_samples"] is True and
+                parameters["measure_one_shot_encode"] is True and
+                all(parameters[name] is False for name in (
+                    "force_generic_decode", "force_specialized_decode",
+                    "force_tiled_decode", "force_materialized_decode")) and
+                type(parameters["warmup"]) is int and
+                parameters["warmup"] >= 0 and
+                type(parameters["reuse"]) is int and
+                parameters["reuse"] > 0 and
+                type(parameters["iterations"]) is int and
+                parameters["iterations"] > 0 and
+                type(parameters["seed"]) is int and
+                0 <= parameters["seed"] <= (1 << 64) - 1 and
+                (not k65r65_v33_attested or
+                 parameters["attest_source"] is True),
+                "K65/R65/T128 AVX-512/GFNI parameters are invalid or "
                 "ambiguous")
     require(type(document["resolved"]["thread_count"]) is int and
             document["resolved"]["thread_count"] > 0 and
@@ -991,6 +1131,17 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 type(resolved["thread_count"]) is int and
                 resolved["thread_count"] == 1,
                 "K65/R65/B64 AVX-512/GFNI resolved codec identity is "
+                "invalid")
+    if is_k65r65_v33:
+        resolved = document["resolved"]
+        require(resolved["profile"] == "legacy_high_v1" and
+                resolved["field"] == "gf8" and
+                resolved["backend"] in {
+                    "scalar", "ssse3", "avx2", "neon", "avx512",
+                    "avx2-gfni"} and
+                type(resolved["thread_count"]) is int and
+                resolved["thread_count"] == 1,
+                "K65/R65/T128 AVX-512/GFNI resolved codec identity is "
                 "invalid")
     if document["schema"] in {
         "leopard2-benchmark-v3", "leopard2-benchmark-v6",
@@ -1079,7 +1230,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         expected_metrics.add("one_shot_decode_including_setup")
     if document["schema"] in R1_SCHEMAS:
         expected_metrics.add("one_shot_encode")
-    if k65r65_v31_one_shot or is_k65r65_v32:
+    if k65r65_v31_one_shot or is_k65r65_v32 or is_k65r65_v33:
         expected_metrics.add("one_shot_encode")
     if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
         expected_metrics.update({
@@ -1117,7 +1268,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         output_rate_name="parity_output_GB_per_s",
         input_bytes=encode_input_bytes, output_bytes=encode_output_bytes)
     if (document["schema"] in R1_SCHEMAS or k65r65_v31_one_shot or
-            is_k65r65_v32):
+            is_k65r65_v32 or is_k65r65_v33):
         validate_timing_summary(
             document["metrics"]["one_shot_encode"], "one_shot_encode",
             retain_samples=retain_samples, iterations=iterations,
@@ -1729,6 +1880,11 @@ def main() -> int:
             "k65r65_b64_avx512_gfni_mode" not in default["parameters"],
             "default benchmark exposed the opt-in K65/R65/B64 AVX-512/"
             "GFNI diagnostic")
+    require(all(not name.startswith("k65r65_t128_avx512_gfni_")
+                for name in default["build"]) and
+            "k65r65_t128_avx512_gfni_mode" not in default["parameters"],
+            "default benchmark exposed the opt-in K65/R65/T128 AVX-512/"
+            "GFNI diagnostic")
     require(set(default["parameters"]) == {
         "K", "R", "requested_profile", "requested_field",
         "requested_backend", "force_generic_decode",
@@ -2183,6 +2339,11 @@ def main() -> int:
     require_common_rejected(
         malformed_gfni_one_shot,
         "false K65/R65/B64 AVX-512/GFNI one-shot parameter")
+    malformed_gfni_larger_bytes = copy.deepcopy(k65r65_gfni_mode_zero)
+    malformed_gfni_larger_bytes["parameters"]["shard_bytes"] = 128
+    require_common_rejected(
+        malformed_gfni_larger_bytes,
+        "promoted larger bytes in K65/R65/B64 AVX-512/GFNI schema")
 
     require_schema_modes_rejected(
         executable, ("--k65r65-b64-avx512-gfni-mode", "2"),
@@ -2204,6 +2365,207 @@ def main() -> int:
         executable, k65r65_gfni_contract_arguments + (
             "--k65r65-b64-packed-terminal-mode", "0"),
         "K65/R65/B64 diagnostic modes are mutually exclusive")
+    require_schema_modes_rejected(
+        executable, (
+            "--k", "65", "--r", "65", "--profile", "high",
+            "--field", "gf8", "--backend", "auto", "--bytes", "128",
+            "--loss", "1", "--batch", "1", "--reuse", "1",
+            "--iterations", "1", "--warmup", "0", "--threads", "1",
+            "--skip-legacy", "--retain-samples",
+            "--measure-one-shot-encode",
+            "--k65r65-b64-avx512-gfni-mode", "0"),
+        "--k65r65-b64-avx512-gfni-mode excludes promoted larger T128 byte "
+        "counts; use the T128 diagnostic mode")
+
+    k65r65_t128_targets = (128, 256, 512, 1024, 2048, 4096)
+    k65r65_t128_mode_documents: dict[
+        int, tuple[dict[str, Any], ...]] = {}
+    for target_bytes in k65r65_t128_targets:
+        documents = tuple(
+            run(executable, True, measure_one_shot_encode=True,
+                k65r65_t128_avx512_gfni_mode=mode,
+                k=65, r=65, losses=1, shard_bytes=target_bytes)
+            for mode in (0, 1))
+        require(len(documents) == 2,
+                "K65/R65/T128 target mode pair is incomplete")
+        for mode, document in enumerate(documents):
+            require(document["schema"] == "leopard2-benchmark-v33",
+                    "K65/R65/T128 AVX-512/GFNI diagnostic schema changed")
+            validate_common(document, True)
+            validate_workload_digests(document)
+            build = document["build"]
+            selected = build[
+                "k65r65_t128_avx512_gfni_selector_selected"]
+            require(build[
+                        "k65r65_t128_avx512_gfni_diagnostic_mode"] == mode and
+                    build[
+                        "k65r65_t128_avx512_gfni_mode_latched"] == mode and
+                    build[
+                        "k65r65_t128_avx512_gfni_observed_call_count"] ==
+                        (2 if selected else 0) and
+                    build[
+                        "k65r65_t128_avx512_gfni_observed_vector_tile_count"] ==
+                        (2 * (target_bytes // 64) if selected else 0) and
+                    document["parameters"][
+                        "k65r65_t128_avx512_gfni_mode"] == mode,
+                    "K65/R65/T128 AVX-512/GFNI target selector was not "
+                    "recorded exactly")
+        require(documents[0]["workload_digests"] ==
+                    documents[1]["workload_digests"] and
+                documents[0]["resolved"] == documents[1]["resolved"],
+                "K65/R65/T128 AVX-512/GFNI mode changed the target "
+                "workload or resolved codec")
+        k65r65_t128_mode_documents[target_bytes] = documents
+
+    k65r65_t128_mode_zero = k65r65_t128_mode_documents[512][0]
+    k65r65_t128_mode_one = k65r65_t128_mode_documents[512][1]
+    k65r65_t128_attested = run(
+        executable, True, attest_source=True,
+        measure_one_shot_encode=True,
+        k65r65_t128_avx512_gfni_mode=1,
+        k=65, r=65, losses=1, shard_bytes=512)
+    validate_common(k65r65_t128_attested, True)
+    validate_workload_digests(k65r65_t128_attested)
+    require(k65r65_t128_attested["workload_digests"] ==
+                k65r65_t128_mode_one["workload_digests"] and
+            set(k65r65_t128_attested["build"]) ==
+                set(k65r65_t128_mode_one["build"]) |
+                {"source_commit", "source_tree", "source_tracked_dirty"} and
+            set(k65r65_t128_attested["parameters"]) ==
+                set(k65r65_t128_mode_one["parameters"]) | {"attest_source"},
+            "K65/R65/T128 AVX-512/GFNI source attestation is ambiguous")
+
+    k65r65_t128_inactive_shapes = tuple(
+        (65, 65, byte_count)
+        for byte_count in (127, 129, 192, 320, 768, 4095, 4097, 8192)) + (
+        (64, 65, 512), (66, 65, 512),
+        (65, 64, 512), (65, 66, 512),
+        (64, 65, 4096), (66, 65, 4096),
+        (65, 64, 4096), (65, 66, 4096),
+    )
+    for neighbor_k, neighbor_r, neighbor_bytes in \
+            k65r65_t128_inactive_shapes:
+        neighbor_documents = tuple(
+            run(executable, True, measure_one_shot_encode=True,
+                k65r65_t128_avx512_gfni_mode=mode,
+                k=neighbor_k, r=neighbor_r, losses=1,
+                shard_bytes=neighbor_bytes)
+            for mode in (0, 1))
+        for mode, document in enumerate(neighbor_documents):
+            validate_common(document, True)
+            validate_workload_digests(document)
+            build = document["build"]
+            require(build[
+                        "k65r65_t128_avx512_gfni_mode_latched"] == mode and
+                    build[
+                        "k65r65_t128_avx512_gfni_selector_expected_selected"]
+                        is False and
+                    build[
+                        "k65r65_t128_avx512_gfni_selector_selected"] is
+                        False and
+                    build[
+                        "k65r65_t128_avx512_gfni_observed_call_count"] == 0 and
+                    build[
+                        "k65r65_t128_avx512_gfni_observed_vector_tile_count"]
+                        == 0,
+                    "K65/R65/T128 AVX-512/GFNI inactive neighbor selected "
+                    "the larger leaf")
+        require(neighbor_documents[0]["workload_digests"] ==
+                    neighbor_documents[1]["workload_digests"] and
+                neighbor_documents[0]["resolved"] ==
+                    neighbor_documents[1]["resolved"],
+                "K65/R65/T128 AVX-512/GFNI inactive mode changed the "
+                "workload or resolved codec")
+
+    for field_name, bad_value, label in (
+            ("k65r65_t128_avx512_gfni_diagnostic_mode", False,
+             "Boolean mode"),
+            ("k65r65_t128_avx512_gfni_mode_latched", True,
+             "Boolean latched mode"),
+            ("k65r65_t128_avx512_gfni_kernel_qualified", 1,
+             "numeric qualification"),
+            ("k65r65_t128_avx512_gfni_selector_expected_selected", True,
+             "incorrect expected selection"),
+            ("k65r65_t128_avx512_gfni_selector_selected", True,
+             "incorrect actual selection"),
+            ("k65r65_t128_avx512_gfni_observed_call_count", True,
+             "Boolean call count"),
+            ("k65r65_t128_avx512_gfni_observed_vector_tile_count", True,
+             "Boolean vector-tile count"),
+            ("k65r65_t128_avx512_gfni_selector_contract", "ambiguous",
+             "ambiguous contract"),
+            ("k65r65_t128_avx512_gfni_timed_ordinary_encode_api",
+             "leo2_encode", "incorrect ordinary API"),
+            ("k65r65_t128_avx512_gfni_timed_one_shot_encode_api",
+             "leo2_encode_batch", "incorrect one-shot API")):
+        malformed = copy.deepcopy(k65r65_t128_mode_zero)
+        malformed["build"][field_name] = bad_value
+        require_common_rejected(
+            malformed, f"K65/R65/T128 AVX-512/GFNI {label}")
+    malformed_t128_parameter = copy.deepcopy(k65r65_t128_mode_zero)
+    malformed_t128_parameter["parameters"][
+        "k65r65_t128_avx512_gfni_mode"] = 1
+    require_common_rejected(
+        malformed_t128_parameter,
+        "inconsistent K65/R65/T128 AVX-512/GFNI parameter")
+    malformed_t128_one_shot = copy.deepcopy(k65r65_t128_mode_zero)
+    malformed_t128_one_shot["parameters"][
+        "measure_one_shot_encode"] = False
+    require_common_rejected(
+        malformed_t128_one_shot,
+        "false K65/R65/T128 AVX-512/GFNI one-shot parameter")
+    malformed_t128_b64 = copy.deepcopy(k65r65_t128_mode_zero)
+    malformed_t128_b64["parameters"]["shard_bytes"] = 64
+    require_common_rejected(
+        malformed_t128_b64,
+        "B64 in K65/R65/T128 AVX-512/GFNI schema")
+
+    require_schema_modes_rejected(
+        executable, ("--k65r65-t128-avx512-gfni-mode", "2"),
+        "--k65r65-t128-avx512-gfni-mode must be exactly 0 or 1")
+    require_schema_modes_rejected(
+        executable, ("--k65r65-t128-avx512-gfni-mode", "0"),
+        "--k65r65-t128-avx512-gfni-mode requires explicit high/GF8/AUTO, "
+        "batch=1, one thread, --skip-legacy, --retain-samples, and "
+        "--measure-one-shot-encode")
+    k65r65_t128_contract_arguments = (
+        "--k", "65", "--r", "65", "--profile", "high",
+        "--field", "gf8", "--backend", "auto", "--bytes", "512",
+        "--loss", "1", "--batch", "1", "--reuse", "1",
+        "--iterations", "1", "--warmup", "0", "--threads", "1",
+        "--skip-legacy", "--retain-samples", "--measure-one-shot-encode",
+        "--k65r65-t128-avx512-gfni-mode", "0",
+    )
+    require_schema_modes_rejected(
+        executable, k65r65_t128_contract_arguments + (
+            "--k65r65-b64-avx512-gfni-mode", "0"),
+        "K65/R65/T128 diagnostic mode is mutually exclusive with the B64 "
+        "diagnostic modes")
+    require_schema_modes_rejected(
+        executable, k65r65_t128_contract_arguments + (
+            "--k65r65-b64-packed-terminal-mode", "0"),
+        "K65/R65/T128 diagnostic mode is mutually exclusive with the B64 "
+        "diagnostic modes")
+    require_schema_modes_rejected(
+        executable, k65r65_t128_contract_arguments + ("--force-generic",),
+        "--k65r65-t128-avx512-gfni-mode cannot be combined with another "
+        "diagnostic mode, terminal-disable control, or decode-path override")
+    require_schema_modes_rejected(
+        executable, k65r65_t128_contract_arguments + (
+            "--disable-k16r8-b256-terminal",),
+        "--k65r65-t128-avx512-gfni-mode cannot be combined with another "
+        "diagnostic mode, terminal-disable control, or decode-path override")
+    require_schema_modes_rejected(
+        executable, (
+            "--k", "65", "--r", "65", "--profile", "high",
+            "--field", "gf8", "--backend", "auto", "--bytes", "64",
+            "--loss", "1", "--batch", "1", "--reuse", "1",
+            "--iterations", "1", "--warmup", "0", "--threads", "1",
+            "--skip-legacy", "--retain-samples",
+            "--measure-one-shot-encode",
+            "--k65r65-t128-avx512-gfni-mode", "0"),
+        "--k65r65-t128-avx512-gfni-mode excludes B=64; use the B64 "
+        "diagnostic mode")
 
     disabled_k16_terminal = run(
         executable, True, disable_k16r8_b256_terminal=True)
@@ -2262,6 +2624,9 @@ def main() -> int:
     require_schema_modes_rejected(
         prevalidated_executable, k65r65_gfni_contract_arguments,
         "--k65r65-b64-avx512-gfni-mode requires the ordinary benchmark")
+    require_schema_modes_rejected(
+        prevalidated_executable, k65r65_t128_contract_arguments,
+        "--k65r65-t128-avx512-gfni-mode requires the ordinary benchmark")
     prevalidated = run(
         prevalidated_executable, True, k=1, r=1, losses=1)
     require(prevalidated["schema"] == "leopard2-benchmark-v2",

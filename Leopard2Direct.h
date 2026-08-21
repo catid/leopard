@@ -337,8 +337,19 @@ bool K65R65B64AVX512GFNIAvailableForDiagnostics(
 bool K65R65B64AVX512GFNISelectedForDiagnostics(
     const leo2_codec* codec,
     uint64_t shard_bytes);
+bool K65R65T128AVX512GFNILargerAvailableForDiagnostics(
+    const leo2_codec* codec);
+bool K65R65T128AVX512GFNILargerSelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes);
 unsigned K65R65B64AVX512GFNICallCountForDiagnostics();
 bool FinishK65R65B64AVX512GFNIRouteProbeForDiagnostics();
+// Independent control and accounting for the promoted B=128..4096 leaf.
+bool SetK65R65T128AVX512GFNIEnabledForDiagnostics(bool enabled);
+unsigned K65R65T128AVX512GFNIModeForDiagnostics();
+unsigned K65R65T128AVX512GFNICallCountForDiagnostics();
+size_t K65R65T128AVX512GFNITileCountForDiagnostics();
+bool FinishK65R65T128AVX512GFNIRouteProbeForDiagnostics();
 
 /*
     Arithmetic-only same-executable benchmark control for the exact

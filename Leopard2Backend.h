@@ -101,6 +101,14 @@ typedef void (*FF8K65R65B64PackedKernel)(
     void* packed_output,
     void* aligned_state);
 
+// The caller supplies 32 KiB of 64-byte-aligned state.  shard_bytes is a
+// promoted positive multiple of 64 greater than 64.
+typedef void (*FF8K65R65Multiples64PackedKernel)(
+    const void* packed_input,
+    void* packed_output,
+    void* aligned_state,
+    size_t shard_bytes);
+
 typedef void (*FixedMultiply)(
     void* destination,
     const void* source,
@@ -946,6 +954,8 @@ const Ops* InitializeGFNI(const InitializeArgs& args);
 FF8K65R65B64PackedKernel InitializeAVX512GFNIT128(
     FF8MultiplyLog multiply_log,
     const uint8_t* skew_log_storage);
+FF8K65R65Multiples64PackedKernel InitializeAVX512GFNIT128Multiples64(
+    FF8MultiplyLog multiply_log);
 #endif
 
 // Called once after both legacy fields have initialized their logarithm tables.
@@ -973,6 +983,8 @@ const Ops* GetQualifiedOps(
 // Null unless startup proved the exact AVX-512/GFNI feature contract and the
 // raised-ISA kernel passed its independent scalar known-answer test.
 FF8K65R65B64PackedKernel GetQualifiedAVX512GFNIT128();
+FF8K65R65Multiples64PackedKernel
+GetQualifiedAVX512GFNIT128Multiples64();
 leo2_backend SelectedBackend();
 // Reports the effective public execution backend.  This can differ from the
 // fixed-ops table on the existing ARM paths, where legacy native NEON or
