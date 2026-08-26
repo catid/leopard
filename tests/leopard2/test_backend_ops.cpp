@@ -147,6 +147,9 @@ void test_processor_classifier()
     require(!leopard::backend::
             IsCalibratedK65R65B64AVX512GFNIProcessor(zen5),
         "Granite Ridge entered the Threadripper-only T128 selector");
+    require(!leopard::backend::
+            IsCalibratedK16R16B64AVX512GFNIProcessor(zen5),
+        "Granite Ridge entered the Threadripper-only T16 selector");
 
     const uint32_t family_1a_model_08 =
         (0xfU << 8) | (0xbU << 20) | (8U << 4);
@@ -159,6 +162,24 @@ void test_processor_classifier()
     require(leopard::backend::
             IsCalibratedK65R65B64AVX512GFNIProcessor(threadripper),
         "calibrated Threadripper T128 processor classification");
+    require(leopard::backend::
+            IsCalibratedK16R16B64AVX512GFNIProcessor(threadripper),
+        "calibrated Threadripper T16 processor classification");
+    const uint32_t family_1a_model_07 =
+        (0xfU << 8) | (0xbU << 20) | (7U << 4);
+    const uint32_t family_1a_model_09 =
+        (0xfU << 8) | (0xbU << 20) | (9U << 4);
+    const leopard::backend::X86ProcessorIdentity adjacent_before =
+        leopard::backend::ClassifyX86Processor(
+            amd_ebx, amd_edx, amd_ecx, family_1a_model_07);
+    const leopard::backend::X86ProcessorIdentity adjacent_after =
+        leopard::backend::ClassifyX86Processor(
+            amd_ebx, amd_edx, amd_ecx, family_1a_model_09);
+    require(!leopard::backend::
+                IsCalibratedK16R16B64AVX512GFNIProcessor(adjacent_before) &&
+            !leopard::backend::
+                IsCalibratedK16R16B64AVX512GFNIProcessor(adjacent_after),
+        "adjacent AMD models entered the exact T16 selector");
 
     const leopard::backend::X86ProcessorIdentity wrong_vendor =
         leopard::backend::ClassifyX86Processor(
@@ -179,6 +200,10 @@ void test_processor_classifier()
             IsCalibratedK65R65B64AVX512GFNIProcessor(
                 wrong_t128_vendor),
         "non-AMD processor entered the calibrated T128 selector");
+    require(!leopard::backend::
+            IsCalibratedK16R16B64AVX512GFNIProcessor(
+                wrong_t128_vendor),
+        "non-AMD processor entered the calibrated T16 selector");
 
     const uint32_t family_6_model_9e =
         (6U << 8) | (0xeU << 4) | (9U << 16);
@@ -191,6 +216,9 @@ void test_processor_classifier()
         "uncalibrated family/model entered the calibrated selector");
     require(!leopard::backend::IsCalibratedK1AVX2CopyProcessor(family6),
         "uncalibrated family/model entered the calibrated K1 copy selector");
+    require(!leopard::backend::
+            IsCalibratedK16R16B64AVX512GFNIProcessor(family6),
+        "uncalibrated family/model entered the calibrated T16 selector");
 }
 
 #ifdef LEO_HAS_FF8
@@ -696,6 +724,29 @@ int main()
         require(leopard::backend::
                 GetQualifiedAVX512GFNIT128Multiples64() == NULL,
             "uncompiled larger AVX-512/GFNI T128 kernel was published");
+#endif
+#if defined(LEO2_HAVE_AVX512_GFNI_T16) && defined(LEO_HAS_FF8)
+        {
+            const leopard::backend::X86Features detected =
+                leopard::backend::DetectX86Features();
+            if (expected_forced_variant())
+            {
+                require(leopard::backend::GetQualifiedAVX512GFNIT16() == NULL,
+                    "forced variant published independent T16 AVX-512/GFNI leaf");
+            }
+            else
+            {
+                const bool expected_qualified = detected.avx512 &&
+                    detected.gfni && leopard::backend::
+                        IsCalibratedK16R16B64AVX512GFNIHost();
+                require((leopard::backend::GetQualifiedAVX512GFNIT16() != NULL) ==
+                        expected_qualified,
+                    "AVX-512/GFNI T16 KAT publication disagrees with ISA gate");
+            }
+        }
+#else
+        require(leopard::backend::GetQualifiedAVX512GFNIT16() == NULL,
+            "uncompiled AVX-512/GFNI T16 kernel was published");
 #endif
         const char* baseline_xor_only =
             std::getenv("LEO2_TEST_BASELINE_XOR_ONLY");

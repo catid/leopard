@@ -2379,6 +2379,18 @@ void ExerciseBackendRoute(leo2_backend requested_backend)
         "create backend-route K32/R32 context");
     if (requested_backend != LEO2_BACKEND_AUTO)
     {
+        leo2_codec* t16_probe = NULL;
+        RequireResult(leo2_codec_create(context, 16, 16,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &t16_probe),
+            LEO2_SUCCESS, "create explicit-backend K16/R16 probe");
+        Require(!leopard2_internal::
+                K16R16B64AVX512GFNIAvailableForDiagnostics(t16_probe),
+            "explicit backend retained AVX-512/GFNI T16 callback");
+        Require(!leopard2_internal::
+                K16R16B64AVX512GFNISelectedForDiagnostics(t16_probe, 64),
+            "explicit backend request widened to AVX-512/GFNI T16");
+        leo2_codec_destroy(t16_probe);
+
         leo2_codec* probe = NULL;
         RequireResult(leo2_codec_create(context, 65, 65,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &probe),
@@ -2401,6 +2413,470 @@ void ExerciseBackendRoute(leo2_backend requested_backend)
     ExerciseBackendShape(context, 79, 32);
     ExerciseBackendShape(context, 62, 33);
     ExerciseBackendShape(context, 65, 65);
+    leo2_context_destroy(context);
+}
+
+void FinishIdleK16GFNIProbe(const char* call_message,
+    const char* finish_message)
+{
+    Require(leopard2_internal::
+            K16R16B64AVX512GFNICallCountForDiagnostics() == 0U,
+        call_message);
+    Require(leopard2_internal::
+            FinishK16R16B64AVX512GFNIRouteProbeForDiagnostics(),
+        finish_message);
+}
+
+void ExerciseK16R16AVX512GFNIAutoRoute()
+{
+    static const unsigned original_count = 16;
+    static const unsigned recovery_count = 16;
+    static const size_t shard_bytes = 64;
+
+    leo2_context_options options = {};
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AUTO;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    RequireResult(leo2_context_create(&options, &context), LEO2_SUCCESS,
+        "create AUTO K16/R16 AVX-512/GFNI context");
+    leo2_codec* codec = NULL;
+    RequireResult(leo2_codec_create(context, original_count, recovery_count,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+        LEO2_SUCCESS, "create AUTO K16/R16 AVX-512/GFNI codec");
+
+    const bool available = leopard2_internal::
+        K16R16B64AVX512GFNIAvailableForDiagnostics(codec);
+    Require(leopard2_internal::K16R16B64AVX512GFNIModeForDiagnostics() == 1U,
+        "K16/R16 AVX-512/GFNI leaf did not start default-on");
+    Require(leopard2_internal::K16R16B64AVX512GFNISelectedForDiagnostics(
+            codec, shard_bytes) == available,
+        "default K16/R16 AVX-512/GFNI selection disagrees with qualification");
+    if (!available)
+    {
+        leo2_codec_destroy(codec);
+        leo2_context_destroy(context);
+        return;
+    }
+
+    size_t scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(codec, shard_bytes,
+        &scratch_bytes), LEO2_SUCCESS,
+        "query AUTO K16/R16 AVX-512/GFNI scratch");
+    AlignedBuffer scratch(scratch_bytes);
+    AlignedBuffer control_scratch(scratch_bytes);
+    AlignedBuffer input_allocation(original_count * shard_bytes + 8U);
+    AlignedBuffer output_allocation(recovery_count * shard_bytes + 8U);
+    AlignedBuffer control_allocation(recovery_count * shard_bytes + 8U);
+    uint8_t* const input = input_allocation.bytes() + 1U;
+    uint8_t* const output = output_allocation.bytes() + 3U;
+    uint8_t* const control = control_allocation.bytes() + 5U;
+    std::vector<const void*> original;
+    std::vector<void*> recovery;
+    std::vector<void*> control_recovery;
+    SetVariablePackedPointers(input, output, original_count, recovery_count,
+        shard_bytes, original, recovery);
+    std::vector<const void*> unused_original;
+    SetVariablePackedPointers(input, control, original_count, recovery_count,
+        shard_bytes, unused_original, control_recovery);
+
+    FillVariableInput(input, original_count, shard_bytes,
+        UINT64_C(0x4b31365231365431));
+    Require(leopard2_internal::
+            SetK16R16B64AVX512GFNIEnabledForDiagnostics(false),
+        "disable K16/R16 AVX-512/GFNI leaf");
+    RequireResult(leo2_encode(codec, shard_bytes, &original[0],
+        &control_recovery[0], control_scratch.data(), control_scratch.size()),
+        LEO2_SUCCESS, "execute mature K16/R16 same-binary control");
+    Require(leopard2_internal::
+            K16R16B64AVX512GFNICallCountForDiagnostics() == 0U,
+        "disabled K16/R16 route entered candidate leaf");
+    Require(leopard2_internal::
+            FinishK16R16B64AVX512GFNIRouteProbeForDiagnostics(),
+        "finish disabled K16/R16 route probe");
+    Require(leopard2_internal::K16R16B64AVX512GFNIModeForDiagnostics() == 2U,
+        "disabled K16/R16 probe did not normalize off");
+
+    Require(leopard2_internal::
+            SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+        "enable K16/R16 AVX-512/GFNI leaf");
+    Require(leopard2_internal::K16R16B64AVX512GFNISelectedForDiagnostics(
+            codec, shard_bytes),
+        "enabled K16/R16 AVX-512/GFNI leaf was not selected");
+    RequireResult(leo2_encode(codec, shard_bytes, &original[0], &recovery[0],
+        scratch.data(), scratch.size()), LEO2_SUCCESS,
+        "execute K16/R16 AVX-512/GFNI ordinary route");
+    Require(std::memcmp(output, control, recovery_count * shard_bytes) == 0,
+        "K16/R16 AVX-512/GFNI parity differs from mature control");
+
+    leo2_encode_batch_item item = {
+        shard_bytes, &original[0], &recovery[0],
+        scratch.data(), scratch.size()
+    };
+    RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
+        "execute K16/R16 AVX-512/GFNI one-item batch route");
+    Require(leopard2_internal::
+            K16R16B64AVX512GFNICallCountForDiagnostics() == 2U,
+        "K16/R16 route probe did not observe both public APIs");
+    Require(leopard2_internal::
+            FinishK16R16B64AVX512GFNIRouteProbeForDiagnostics(),
+        "finish enabled K16/R16 route probe");
+    Require(leopard2_internal::K16R16B64AVX512GFNIModeForDiagnostics() == 1U,
+        "enabled K16/R16 probe did not normalize on");
+
+    const leopard2_test::BinaryField field =
+        leopard2_test::make_legacy_gf8();
+    const leopard2_test::ProfileLayout layout =
+        leopard2_test::make_profile_layout(leopard2_test::kLegacyHigh,
+            original_count, recovery_count);
+    const leopard2_test::Matrix generator =
+        leopard2_test::direct_systematic_generator(field, layout);
+    CheckVariableParity(field, generator, original_count, recovery_count,
+        original, recovery, shard_bytes,
+        "K16/R16 AVX-512/GFNI parity differs from direct oracle");
+
+    /* Keep the candidate accounting armed while exercising failures and
+       valid fallback layouts.  Every check below occurs before the optional
+       leaf's first store and must therefore report zero candidate calls. */
+    SetVariablePackedPointers(input, output, original_count, recovery_count,
+        shard_bytes, original, recovery);
+    std::memset(output, 0xa5, recovery_count * shard_bytes);
+    const std::vector<uint8_t> output_before(
+        output, output + recovery_count * shard_bytes);
+    Require(leopard2_internal::
+            SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+        "arm K16/R16 undersized-scratch probe");
+    RequireResult(leo2_encode(codec, shard_bytes, &original[0], &recovery[0],
+        scratch.data(), scratch.size() - 1U), LEO2_SCRATCH_TOO_SMALL,
+        "reject K16/R16 undersized scratch");
+    FinishIdleK16GFNIProbe(
+        "undersized K16/R16 scratch entered candidate leaf",
+        "finish K16/R16 undersized-scratch probe");
+    Require(std::memcmp(output, &output_before[0], output_before.size()) == 0,
+        "undersized K16/R16 scratch modified output");
+
+    Require(leopard2_internal::
+            SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+        "arm K16/R16 misaligned-scratch probe");
+    RequireResult(leo2_encode(codec, shard_bytes, &original[0], &recovery[0],
+        scratch.bytes() + 1U, scratch.size()), LEO2_BAD_ALIGNMENT,
+        "reject K16/R16 misaligned scratch");
+    FinishIdleK16GFNIProbe(
+        "misaligned K16/R16 scratch entered candidate leaf",
+        "finish K16/R16 misaligned-scratch probe");
+    Require(std::memcmp(output, &output_before[0], output_before.size()) == 0,
+        "misaligned K16/R16 scratch modified output");
+
+    for (unsigned row = 0; row < recovery_count; ++row)
+        recovery[row] = input + static_cast<size_t>(row) * shard_bytes;
+    const std::vector<uint8_t> input_before(
+        input, input + original_count * shard_bytes);
+    Require(leopard2_internal::
+            SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+        "arm K16/R16 slab-overlap probe");
+    RequireResult(leo2_encode(codec, shard_bytes, &original[0], &recovery[0],
+        scratch.data(), scratch.size()), LEO2_OVERLAP,
+        "reject overlapping K16/R16 slabs");
+    FinishIdleK16GFNIProbe(
+        "overlapping K16/R16 slabs entered candidate leaf",
+        "finish K16/R16 slab-overlap probe");
+    Require(std::memcmp(input, &input_before[0], input_before.size()) == 0,
+        "K16/R16 overlap rejection modified input");
+
+    SetVariablePackedPointers(input, output, original_count, recovery_count,
+        shard_bytes, original, recovery);
+    alignas(64) uint8_t protected_storage[
+        recovery_count * shard_bytes] = {};
+    leo2_encode_batch_item* const protected_item =
+        new (protected_storage) leo2_encode_batch_item;
+    protected_item->shard_bytes = shard_bytes;
+    protected_item->original = &original[0];
+    protected_item->recovery = &recovery[0];
+    protected_item->scratch = scratch.data();
+    protected_item->scratch_bytes = scratch.size();
+    for (unsigned row = 0; row < recovery_count; ++row)
+    {
+        recovery[row] = protected_storage +
+            static_cast<size_t>(row) * shard_bytes;
+    }
+    const leo2_encode_batch_item protected_before = *protected_item;
+    Require(leopard2_internal::
+            SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+        "arm K16/R16 batch-metadata-overlap probe");
+    RequireResult(leo2_encode_batch(codec, protected_item, 1), LEO2_OVERLAP,
+        "reject K16/R16 output/batch-metadata overlap");
+    FinishIdleK16GFNIProbe(
+        "K16/R16 metadata overlap entered candidate leaf",
+        "finish K16/R16 batch-metadata-overlap probe");
+    Require(std::memcmp(protected_item, &protected_before,
+            sizeof(*protected_item)) == 0,
+        "K16/R16 metadata rejection modified batch descriptor");
+
+    SetVariablePackedPointers(input, output, original_count, recovery_count,
+        shard_bytes, original, recovery);
+    std::vector<uint8_t> detached_input(shard_bytes);
+    std::memcpy(&detached_input[0], original[6], shard_bytes);
+    original[6] = &detached_input[0];
+    std::memset(output, 0xa5, recovery_count * shard_bytes);
+    Require(leopard2_internal::
+            SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+        "arm K16/R16 detached-input probe");
+    RequireResult(leo2_encode(codec, shard_bytes, &original[0], &recovery[0],
+        scratch.data(), scratch.size()), LEO2_SUCCESS,
+        "execute K16/R16 detached-input fallback");
+    FinishIdleK16GFNIProbe(
+        "detached K16/R16 input entered candidate leaf",
+        "finish K16/R16 detached-input probe");
+    CheckVariableParity(field, generator, original_count, recovery_count,
+        original, recovery, shard_bytes,
+        "detached K16/R16 parity differs from direct oracle");
+
+    SetVariablePackedPointers(input, output, original_count, recovery_count,
+        shard_bytes, original, recovery);
+    std::memset(output, 0xa5, recovery_count * shard_bytes);
+    recovery[7] = NULL;
+    Require(leopard2_internal::
+            SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+        "arm K16/R16 sparse-output probe");
+    RequireResult(leo2_encode(codec, shard_bytes, &original[0], &recovery[0],
+        scratch.data(), scratch.size()), LEO2_SUCCESS,
+        "execute K16/R16 sparse-output fallback");
+    FinishIdleK16GFNIProbe(
+        "sparse K16/R16 output entered candidate leaf",
+        "finish K16/R16 sparse-output probe");
+    CheckVariableParity(field, generator, original_count, recovery_count,
+        original, recovery, shard_bytes,
+        "sparse K16/R16 parity differs from direct oracle");
+    for (size_t column = 0; column < shard_bytes; ++column)
+    {
+        Require(output[7U * shard_bytes + column] == 0xa5,
+            "sparse K16/R16 fallback modified omitted output");
+    }
+
+    SetVariablePackedPointers(input, output, original_count, recovery_count,
+        shard_bytes, original, recovery);
+    std::memset(output, 0xa5, recovery_count * shard_bytes);
+    RequireResult(leo2_test_codec_set_encode_mode(
+        codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM), LEO2_SUCCESS,
+        "force mature K16/R16 transform");
+    Require(leopard2_internal::
+            SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+        "arm forced-transform K16/R16 probe");
+    RequireResult(leo2_encode(codec, shard_bytes, &original[0], &recovery[0],
+        scratch.data(), scratch.size()), LEO2_SUCCESS,
+        "execute forced mature K16/R16 transform");
+    FinishIdleK16GFNIProbe(
+        "forced K16/R16 transform entered candidate leaf",
+        "finish forced-transform K16/R16 probe");
+    CheckVariableParity(field, generator, original_count, recovery_count,
+        original, recovery, shard_bytes,
+        "forced K16/R16 parity differs from direct oracle");
+    RequireResult(leo2_test_codec_set_encode_mode(
+        codec, LEO2_TEST_ENCODE_AUTO), LEO2_SUCCESS,
+        "restore K16/R16 AUTO encode mode");
+
+    AlignedBuffer second_input_allocation(original_count * shard_bytes + 8U);
+    AlignedBuffer second_output_allocation(recovery_count * shard_bytes + 8U);
+    AlignedBuffer second_scratch(scratch_bytes);
+    uint8_t* const second_input = second_input_allocation.bytes() + 2U;
+    uint8_t* const second_output = second_output_allocation.bytes() + 4U;
+    std::vector<const void*> second_original;
+    std::vector<void*> second_recovery;
+    SetVariablePackedPointers(second_input, second_output,
+        original_count, recovery_count, shard_bytes,
+        second_original, second_recovery);
+    FillVariableInput(second_input, original_count, shard_bytes,
+        UINT64_C(0x4b313654574f4954));
+    std::memset(second_output, 0xa5, recovery_count * shard_bytes);
+    leo2_encode_batch_item two_items[2] = {
+        { shard_bytes, &original[0], &recovery[0],
+          scratch.data(), scratch.size() },
+        { shard_bytes, &second_original[0], &second_recovery[0],
+          second_scratch.data(), second_scratch.size() }
+    };
+    Require(leopard2_internal::
+            SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+        "arm K16/R16 two-item batch probe");
+    RequireResult(leo2_encode_batch(codec, two_items, 2), LEO2_SUCCESS,
+        "execute K16/R16 two-item mature batch");
+    FinishIdleK16GFNIProbe(
+        "K16/R16 two-item batch entered candidate leaf",
+        "finish K16/R16 two-item batch probe");
+    CheckVariableParity(field, generator, original_count, recovery_count,
+        original, recovery, shard_bytes,
+        "first K16/R16 batch item differs from direct oracle");
+    CheckVariableParity(field, generator, original_count, recovery_count,
+        second_original, second_recovery, shard_bytes,
+        "second K16/R16 batch item differs from direct oracle");
+
+    static const size_t byte_neighbors[] = { 63, 65, 128 };
+    for (size_t i = 0;
+        i < sizeof(byte_neighbors) / sizeof(byte_neighbors[0]); ++i)
+    {
+        Require(!leopard2_internal::
+                K16R16B64AVX512GFNISelectedForDiagnostics(
+                    codec, byte_neighbors[i]),
+            "K16/R16 byte neighbor selected AVX-512/GFNI leaf");
+        size_t neighbor_scratch_bytes = 0;
+        RequireResult(leo2_encode_scratch_size(codec, byte_neighbors[i],
+            &neighbor_scratch_bytes), LEO2_SUCCESS,
+            "query K16/R16 byte-neighbor scratch");
+        AlignedBuffer neighbor_scratch(neighbor_scratch_bytes);
+        AlignedBuffer neighbor_input_allocation(
+            original_count * byte_neighbors[i] + 8U);
+        AlignedBuffer neighbor_output_allocation(
+            recovery_count * byte_neighbors[i] + 8U);
+        uint8_t* const neighbor_input =
+            neighbor_input_allocation.bytes() + 1U;
+        uint8_t* const neighbor_output =
+            neighbor_output_allocation.bytes() + 3U;
+        std::vector<const void*> neighbor_original;
+        std::vector<void*> neighbor_recovery;
+        SetVariablePackedPointers(neighbor_input, neighbor_output,
+            original_count, recovery_count, byte_neighbors[i],
+            neighbor_original, neighbor_recovery);
+        FillVariableInput(neighbor_input, original_count, byte_neighbors[i],
+            UINT64_C(0x4b31364259544500) + byte_neighbors[i]);
+        Require(leopard2_internal::
+                SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+            "arm K16/R16 byte-neighbor probe");
+        RequireResult(leo2_encode(codec, byte_neighbors[i],
+            &neighbor_original[0], &neighbor_recovery[0],
+            neighbor_scratch.data(), neighbor_scratch.size()),
+            LEO2_SUCCESS, "execute K16/R16 byte-neighbor fallback");
+        FinishIdleK16GFNIProbe(
+            "K16/R16 byte neighbor entered candidate leaf",
+            "finish K16/R16 byte-neighbor probe");
+        CheckVariableParity(field, generator, original_count, recovery_count,
+            neighbor_original, neighbor_recovery, byte_neighbors[i],
+            "K16/R16 byte-neighbor parity differs from direct oracle");
+    }
+    static const unsigned shape_neighbors[][2] = {
+        { 15, 16 }, { 16, 15 }, { 8, 8 }, { 32, 32 }
+    };
+    for (size_t i = 0;
+        i < sizeof(shape_neighbors) / sizeof(shape_neighbors[0]); ++i)
+    {
+        leo2_codec* neighbor = NULL;
+        RequireResult(leo2_codec_create(context,
+            shape_neighbors[i][0], shape_neighbors[i][1],
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &neighbor),
+            LEO2_SUCCESS, "create K16/R16 AVX-512/GFNI shape neighbor");
+        Require(!leopard2_internal::
+                K16R16B64AVX512GFNISelectedForDiagnostics(
+                    neighbor, shard_bytes),
+            "K16/R16 shape neighbor selected AVX-512/GFNI leaf");
+        size_t neighbor_scratch_bytes = 0;
+        RequireResult(leo2_encode_scratch_size(neighbor, shard_bytes,
+            &neighbor_scratch_bytes), LEO2_SUCCESS,
+            "query K16/R16 shape-neighbor scratch");
+        AlignedBuffer neighbor_scratch(neighbor_scratch_bytes);
+        AlignedBuffer neighbor_input(
+            shape_neighbors[i][0] * shard_bytes + 8U);
+        AlignedBuffer neighbor_output(
+            shape_neighbors[i][1] * shard_bytes + 8U);
+        std::vector<const void*> neighbor_original;
+        std::vector<void*> neighbor_recovery;
+        SetVariablePackedPointers(neighbor_input.bytes() + 1U,
+            neighbor_output.bytes() + 3U, shape_neighbors[i][0],
+            shape_neighbors[i][1], shard_bytes,
+            neighbor_original, neighbor_recovery);
+        FillVariableInput(neighbor_input.bytes() + 1U,
+            shape_neighbors[i][0], shard_bytes,
+            UINT64_C(0x4b31365348415000) + i);
+        const leopard2_test::ProfileLayout neighbor_layout =
+            leopard2_test::make_profile_layout(leopard2_test::kLegacyHigh,
+                shape_neighbors[i][0], shape_neighbors[i][1]);
+        const leopard2_test::Matrix neighbor_generator =
+            leopard2_test::direct_systematic_generator(
+                field, neighbor_layout);
+        Require(leopard2_internal::
+                SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+            "arm K16/R16 shape-neighbor probe");
+        RequireResult(leo2_encode(neighbor, shard_bytes,
+            &neighbor_original[0], &neighbor_recovery[0],
+            neighbor_scratch.data(), neighbor_scratch.size()),
+            LEO2_SUCCESS, "execute K16/R16 shape-neighbor fallback");
+        FinishIdleK16GFNIProbe(
+            "K16/R16 shape neighbor entered candidate leaf",
+            "finish K16/R16 shape-neighbor probe");
+        CheckVariableParity(field, neighbor_generator,
+            shape_neighbors[i][0], shape_neighbors[i][1],
+            neighbor_original, neighbor_recovery, shard_bytes,
+            "K16/R16 shape-neighbor parity differs from direct oracle");
+        leo2_codec_destroy(neighbor);
+    }
+
+    SetVariablePackedPointers(input, output, original_count, recovery_count,
+        shard_bytes, original, recovery);
+    leo2_codec* low_codec = NULL;
+    RequireResult(leo2_codec_create(context, original_count, recovery_count,
+        LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, NULL, &low_codec),
+        LEO2_SUCCESS, "create low-profile K16/R16 GFNI exclusion codec");
+    size_t low_scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(low_codec, shard_bytes,
+        &low_scratch_bytes), LEO2_SUCCESS,
+        "query low-profile K16/R16 GFNI exclusion scratch");
+    AlignedBuffer low_scratch(low_scratch_bytes);
+    const leopard2_test::ProfileLayout low_layout =
+        leopard2_test::make_profile_layout(leopard2_test::kLow,
+            original_count, recovery_count);
+    const leopard2_test::Matrix low_generator =
+        leopard2_test::direct_systematic_generator(field, low_layout);
+    FillVariableInput(input, original_count, shard_bytes,
+        UINT64_C(0x4b31364c4f574746));
+    Require(leopard2_internal::
+            SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+        "arm low-profile K16/R16 GFNI exclusion probe");
+    RequireResult(leo2_encode(low_codec, shard_bytes,
+        &original[0], &recovery[0], low_scratch.data(), low_scratch.size()),
+        LEO2_SUCCESS, "execute low-profile K16/R16 GFNI exclusion");
+    FinishIdleK16GFNIProbe(
+        "low-profile K16/R16 entered candidate leaf",
+        "finish low-profile K16/R16 GFNI exclusion probe");
+    CheckVariableParity(field, low_generator, original_count, recovery_count,
+        original, recovery, shard_bytes,
+        "low-profile K16/R16 parity differs from direct oracle");
+    leo2_codec_destroy(low_codec);
+
+    leo2_codec* gf16_codec = NULL;
+    if (CreateOptionalGF16Codec(context, original_count, recovery_count,
+            &gf16_codec, "create GF16 K16/R16 GFNI exclusion codec"))
+    {
+        size_t gf16_scratch_bytes = 0;
+        RequireResult(leo2_encode_scratch_size(gf16_codec, shard_bytes,
+            &gf16_scratch_bytes), LEO2_SUCCESS,
+            "query GF16 K16/R16 GFNI exclusion scratch");
+        AlignedBuffer gf16_scratch(gf16_scratch_bytes);
+        const leopard2_test::BinaryField gf16 =
+            leopard2_test::make_legacy_gf16();
+        const leopard2_test::Matrix gf16_generator =
+            leopard2_test::direct_systematic_generator(gf16, layout);
+        FillVariableInput(input, original_count, shard_bytes,
+            UINT64_C(0x4b31364746313658));
+        Require(leopard2_internal::
+                SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+            "arm GF16 K16/R16 exclusion probe");
+        RequireResult(leo2_encode(gf16_codec, shard_bytes,
+            &original[0], &recovery[0], gf16_scratch.data(),
+            gf16_scratch.size()), LEO2_SUCCESS,
+            "execute GF16 K16/R16 GFNI exclusion");
+        FinishIdleK16GFNIProbe(
+            "GF16 K16/R16 entered GF8 candidate leaf",
+            "finish GF16 K16/R16 GFNI exclusion probe");
+        CheckVariableParityGF16(gf16, gf16_generator,
+            original_count, recovery_count, original, recovery, shard_bytes,
+            "GF16 K16/R16 parity differs from direct oracle");
+        leo2_codec_destroy(gf16_codec);
+    }
+
+    Require(leopard2_internal::
+            SetK16R16B64AVX512GFNIEnabledForDiagnostics(true),
+        "restore default-on K16/R16 AVX-512/GFNI leaf");
+    Require(leopard2_internal::
+            FinishK16R16B64AVX512GFNIRouteProbeForDiagnostics(),
+        "finish K16/R16 default-on restoration");
+    leo2_codec_destroy(codec);
     leo2_context_destroy(context);
 }
 
@@ -2997,6 +3473,7 @@ int main()
         ExerciseSelectedPackedShape(context, 64, 63);
         ExerciseSelectedPackedShape(context, 64, 64);
         ExerciseK65R65PackedTerminal(context);
+        ExerciseK16R16AVX512GFNIAutoRoute();
         ExerciseK65R65AVX512GFNIAutoRoute();
         ExerciseK65R65AVX512GFNILargerAutoRoute();
         ExerciseSelectedPackedShape(context, 128, 128);

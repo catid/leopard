@@ -130,6 +130,7 @@ struct Options
     int k65r65_b64_packed_terminal_mode;
     int k65r65_b64_avx512_gfni_mode;
     int k65r65_t128_avx512_gfni_mode;
+    int k16r16_b64_avx512_gfni_mode;
     int k62r8_b64_fused_mode;
     int k66r16_b64_tail_mode;
     int high_t16_prepared_terminal_mode;
@@ -200,6 +201,7 @@ struct Options
         , k65r65_b64_packed_terminal_mode(-1)
         , k65r65_b64_avx512_gfni_mode(-1)
         , k65r65_t128_avx512_gfni_mode(-1)
+        , k16r16_b64_avx512_gfni_mode(-1)
         , k62r8_b64_fused_mode(-1)
         , k66r16_b64_tail_mode(-1)
         , high_t16_prepared_terminal_mode(-1)
@@ -528,6 +530,9 @@ static void Usage(std::ostream& output, const char* program)
         << "  --k65r65-t128-avx512-gfni-mode 0|1\n"
         << "                         Attribution-only: mature execution or the exact\n"
         << "                         larger-shard T128 GFNI leaf using schema v33\n"
+        << "  --k16r16-b64-avx512-gfni-mode 0|1\n"
+        << "                         Attribution-only: mature packed execution or the\n"
+        << "                         exact K16/R16/B64 GFNI leaf using schema v34\n"
         << "  --k62r8-b64-fused-mode 0|1\n"
         << "                         Attribution-only: mature or fused exact K62/R8/B64\n"
         << "                         arithmetic in identical text using schema v29\n"
@@ -769,6 +774,19 @@ static Options ParseOptions(int argc, char** argv)
                      "0 or 1");
             }
         }
+        else if (argument == "--k16r16-b64-avx512-gfni-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.k16r16_b64_avx512_gfni_mode = 0;
+            else if (mode == "1")
+                options.k16r16_b64_avx512_gfni_mode = 1;
+            else
+            {
+                Fail("--k16r16-b64-avx512-gfni-mode must be exactly "
+                     "0 or 1");
+            }
+        }
         else if (argument == "--k62r8-b64-fused-mode")
         {
             const std::string mode = NeedValue(argc, argv, i);
@@ -925,6 +943,65 @@ static Options ParseOptions(int argc, char** argv)
     {
         Fail("K65/R65/T128 diagnostic mode is mutually exclusive with "
              "the B64 diagnostic modes");
+    }
+    if (options.k16r16_b64_avx512_gfni_mode >= 0 &&
+        (options.force_generic_decode || options.force_specialized_decode ||
+         options.force_tiled_decode || options.force_materialized_decode ||
+         options.report_decode_path || options.report_direct_executor ||
+         options.measure_one_shot_decode ||
+         options.one_shot_plan_setup_mode >= 0 ||
+         options.low_p32_b64_terminal_mode >= 0 ||
+         options.low_p128_b64_terminal_mode >= 0 ||
+         options.low_p16_partial_direct_output_mode >= 0 ||
+         options.gf8_avx2_walsh_locator_mode >= 0 ||
+         options.small_dual_regular_fallback_mode >= 0 ||
+         options.r1_small_reduction_mode >= 0 ||
+         options.r1_fixed_avx2_mode >= 0 ||
+         options.k8r3r4_t4_terminal_mode >= 0 ||
+         options.balanced_b64_terminal_mode >= 0 ||
+         options.k65r65_b64_packed_terminal_mode >= 0 ||
+         options.k65r65_b64_avx512_gfni_mode >= 0 ||
+         options.k65r65_t128_avx512_gfni_mode >= 0 ||
+         options.k62r8_b64_fused_mode >= 0 ||
+         options.k66r16_b64_tail_mode >= 0 ||
+         options.high_t16_prepared_terminal_mode >= 0 ||
+         options.high_t8_two_block_b64_terminal_mode >= 0 ||
+         options.high_t8_two_block_b256_terminal_mode >= 0 ||
+         options.high_t8_two_block_b1024_terminal_mode >= 0 ||
+         options.disable_t8_full_parity_terminal ||
+         options.disable_k16r8_b256_terminal ||
+         options.disable_k9r5_b256_terminal ||
+         options.disable_k9r5_b1024_terminal ||
+         options.disable_k9r6r8_b256_terminal
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+         || options.disable_high_t16_q2_b64_fused
+#endif
+         ))
+    {
+        Fail("--k16r16-b64-avx512-gfni-mode cannot be combined with "
+             "another diagnostic mode, terminal-disable control, or decode-"
+             "path override");
+    }
+    const bool k16r16_b64_avx512_gfni_identity_admitted =
+        (options.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+         options.field == LEO2_FIELD_GF8 &&
+         (options.backend == LEO2_BACKEND_AUTO ||
+          options.backend == LEO2_BACKEND_AVX2)) ||
+        (options.profile == LEO2_PROFILE_LOW_V1 &&
+         options.field == LEO2_FIELD_GF8 &&
+         options.backend == LEO2_BACKEND_AUTO) ||
+        (options.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+         options.field == LEO2_FIELD_GF16 &&
+         options.backend == LEO2_BACKEND_AUTO);
+    if (options.k16r16_b64_avx512_gfni_mode >= 0 &&
+        (options.batch != 1 || options.threads != 1 ||
+         !k16r16_b64_avx512_gfni_identity_admitted ||
+         !options.skip_legacy || !options.retain_samples ||
+         !options.measure_one_shot_encode))
+    {
+        Fail("--k16r16-b64-avx512-gfni-mode requires an admitted target or "
+             "inert identity, batch=1, one thread, --skip-legacy, "
+             "--retain-samples, and --measure-one-shot-encode");
     }
     if (options.k65r65_b64_packed_terminal_mode >= 0 &&
         (options.batch != 1 || options.threads != 1 ||
@@ -1278,6 +1355,11 @@ static Options ParseOptions(int argc, char** argv)
              "--retain-samples, and --measure-one-shot-encode");
     }
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+    if (options.k16r16_b64_avx512_gfni_mode >= 0)
+    {
+        Fail("--k16r16-b64-avx512-gfni-mode requires the ordinary "
+             "benchmark");
+    }
     if (options.k65r65_t128_avx512_gfni_mode >= 0)
     {
         Fail("--k65r65-t128-avx512-gfni-mode requires the ordinary "
@@ -1316,6 +1398,11 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--low-p16-partial-direct-output-mode requires the ordinary benchmark");
 #elif defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
     defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+    if (options.k16r16_b64_avx512_gfni_mode >= 0)
+    {
+        Fail("--k16r16-b64-avx512-gfni-mode requires the ordinary "
+             "benchmark");
+    }
     if (options.k65r65_t128_avx512_gfni_mode >= 0)
     {
         Fail("--k65r65-t128-avx512-gfni-mode requires the ordinary "
@@ -2061,6 +2148,13 @@ static int Run(const Options& options)
     {
         Fail("cannot set the K65/R65/T128 AVX-512/GFNI attribution mode");
     }
+    if (options.k16r16_b64_avx512_gfni_mode >= 0 &&
+        !leopard2_internal::
+            SetK16R16B64AVX512GFNIEnabledForDiagnostics(
+                options.k16r16_b64_avx512_gfni_mode == 1))
+    {
+        Fail("cannot set the K16/R16/B64 AVX-512/GFNI attribution mode");
+    }
     if (options.k62r8_b64_fused_mode >= 0 &&
         !leopard2_internal::SetK62R8B64FusedEnabledForDiagnostics(
             options.k62r8_b64_fused_mode == 1))
@@ -2282,6 +2376,51 @@ static int Run(const Options& options)
                  "from the requested diagnostic mode and runtime gate");
         }
     }
+    unsigned k16r16_b64_avx512_gfni_mode_latched = 0;
+    bool k16r16_b64_avx512_gfni_kernel_available = false;
+    bool k16r16_b64_avx512_gfni_kernel_qualified = false;
+    bool k16r16_b64_avx512_gfni_selector_expected_selected = false;
+    bool k16r16_b64_avx512_gfni_selector_selected = false;
+    unsigned k16r16_b64_avx512_gfni_observed_call_count = 0;
+    if (options.k16r16_b64_avx512_gfni_mode >= 0)
+    {
+        const unsigned mode_word = leopard2_internal::
+            K16R16B64AVX512GFNIModeForDiagnostics();
+        if (mode_word != 1U && mode_word != 2U)
+        {
+            Fail("K16/R16/B64 AVX-512/GFNI selector did not latch a "
+                 "normalized mode");
+        }
+        k16r16_b64_avx512_gfni_mode_latched =
+            mode_word == 1U ? 1U : 0U;
+        if (k16r16_b64_avx512_gfni_mode_latched !=
+            static_cast<unsigned>(options.k16r16_b64_avx512_gfni_mode))
+        {
+            Fail("K16/R16/B64 AVX-512/GFNI selector did not latch the "
+                 "requested mode");
+        }
+        k16r16_b64_avx512_gfni_kernel_available = leopard2_internal::
+            K16R16B64AVX512GFNIAvailableForDiagnostics(codec);
+        k16r16_b64_avx512_gfni_kernel_qualified =
+            k16r16_b64_avx512_gfni_kernel_available;
+        k16r16_b64_avx512_gfni_selector_expected_selected =
+            options.k16r16_b64_avx512_gfni_mode == 1 &&
+            k16r16_b64_avx512_gfni_kernel_qualified &&
+            options.k == 16 && options.r == 16 && options.bytes == 64 &&
+            leo2_codec_profile(codec) == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+            leo2_codec_field(codec) == LEO2_FIELD_GF8 &&
+            leo2_codec_padded_side(codec) == 16 &&
+            leo2_context_backend(context) == LEO2_BACKEND_AVX2;
+        k16r16_b64_avx512_gfni_selector_selected = leopard2_internal::
+            K16R16B64AVX512GFNISelectedForDiagnostics(
+                codec, options.bytes);
+        if (k16r16_b64_avx512_gfni_selector_selected !=
+            k16r16_b64_avx512_gfni_selector_expected_selected)
+        {
+            Fail("K16/R16/B64 AVX-512/GFNI production selector differs "
+                 "from the requested diagnostic mode and runtime gate");
+        }
+    }
     leopard2_internal::CodecR1ReductionPathInfo r1_reduction_path_info = {};
     if ((options.r1_small_reduction_mode >= 0 ||
          options.r1_fixed_avx2_mode >= 0) &&
@@ -2441,6 +2580,12 @@ static int Run(const Options& options)
         Fail("K65/R65/T128 attribution requires the ordinary one-item "
              "encode batch API without batch-preflight scratch");
     }
+    if (options.k16r16_b64_avx512_gfni_mode >= 0 &&
+        encode_batch_preflight_bytes != 0)
+    {
+        Fail("K16/R16/B64 attribution requires the ordinary one-item "
+             "encode batch API without batch-preflight scratch");
+    }
     AlignedBuffer encode_batch_preflight(encode_batch_preflight_bytes);
     AlignedBuffer decode_batch_preflight(decode_batch_preflight_bytes);
     leo2_encode_batch_binding* encode_batch_binding = NULL;
@@ -2558,6 +2703,7 @@ static int Run(const Options& options)
         options.k65r65_b64_packed_terminal_mode >= 0 ||
         options.k65r65_b64_avx512_gfni_mode >= 0 ||
         options.k65r65_t128_avx512_gfni_mode >= 0 ||
+        options.k16r16_b64_avx512_gfni_mode >= 0 ||
         options.k62r8_b64_fused_mode >= 0 ||
         options.k66r16_b64_tail_mode >= 0 ||
         options.high_t16_prepared_terminal_mode >= 0 ||
@@ -2570,6 +2716,7 @@ static int Run(const Options& options)
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.k16r16_b64_avx512_gfni_mode >= 0 ? 34 :
         options.k65r65_t128_avx512_gfni_mode >= 0 ? 33 :
         options.k65r65_b64_avx512_gfni_mode >= 0 ? 32 :
         options.k65r65_b64_packed_terminal_mode >= 0 ? 31 :
@@ -2688,6 +2835,24 @@ static int Run(const Options& options)
                 expected_vector_tile_count)
         {
             Fail("K65/R65/T128 AVX-512/GFNI actual call/tile counts differ "
+                 "from the selector contract");
+        }
+    }
+    if (options.k16r16_b64_avx512_gfni_mode >= 0)
+    {
+        k16r16_b64_avx512_gfni_observed_call_count = leopard2_internal::
+            K16R16B64AVX512GFNICallCountForDiagnostics();
+        if (!leopard2_internal::
+                FinishK16R16B64AVX512GFNIRouteProbeForDiagnostics())
+        {
+            Fail("K16/R16/B64 AVX-512/GFNI route probe did not finish");
+        }
+        const unsigned expected_call_count =
+            k16r16_b64_avx512_gfni_selector_selected ? 2U : 0U;
+        if (k16r16_b64_avx512_gfni_observed_call_count !=
+            expected_call_count)
+        {
+            Fail("K16/R16/B64 AVX-512/GFNI actual call count differs "
                  "from the selector contract");
         }
     }
@@ -3147,6 +3312,40 @@ static int Run(const Options& options)
              << "    \"k65r65_t128_avx512_gfni_timed_one_shot_encode_api\": "
                 "\"leo2_encode\"";
     }
+    if (options.k16r16_b64_avx512_gfni_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"k16r16_b64_avx512_gfni_diagnostic_mode\": "
+             << options.k16r16_b64_avx512_gfni_mode << ",\n"
+             << "    \"k16r16_b64_avx512_gfni_diagnostic_disabled\": "
+             << (options.k16r16_b64_avx512_gfni_mode == 0
+                    ? "true" : "false") << ",\n"
+             << "    \"k16r16_b64_avx512_gfni_mode_latched\": "
+             << k16r16_b64_avx512_gfni_mode_latched << ",\n"
+             << "    \"k16r16_b64_avx512_gfni_kernel_available\": "
+             << (k16r16_b64_avx512_gfni_kernel_available
+                    ? "true" : "false") << ",\n"
+             << "    \"k16r16_b64_avx512_gfni_kernel_qualified\": "
+             << (k16r16_b64_avx512_gfni_kernel_qualified
+                    ? "true" : "false") << ",\n"
+             << "    \"k16r16_b64_avx512_gfni_selector_expected_selected\": "
+             << (k16r16_b64_avx512_gfni_selector_expected_selected
+                    ? "true" : "false") << ",\n"
+             << "    \"k16r16_b64_avx512_gfni_selector_selected\": "
+             << (k16r16_b64_avx512_gfni_selector_selected
+                    ? "true" : "false") << ",\n"
+             << "    \"k16r16_b64_avx512_gfni_observed_call_count\": "
+             << k16r16_b64_avx512_gfni_observed_call_count << ",\n"
+             << "    \"k16r16_b64_avx512_gfni_selector_contract\": "
+                "\"LEGACY_HIGH_V1,GF8,AUTO,K=16,R=16,T=16,B=64,"
+                "native_layout,balanced_packed_terminal,"
+                "runtime_AVX512F_BW_VL_GFNI,startup_KAT,"
+                "calibrated_AMD_1A_08,one_shot_and_one_item_batch\",\n"
+             << "    \"k16r16_b64_avx512_gfni_timed_ordinary_encode_api\": "
+                "\"leo2_encode_batch:item_count=1:no_preflight_scratch\",\n"
+             << "    \"k16r16_b64_avx512_gfni_timed_one_shot_encode_api\": "
+                "\"leo2_encode\"";
+    }
     if (options.k62r8_b64_fused_mode >= 0)
     {
         json << ",\n"
@@ -3489,6 +3688,11 @@ static int Run(const Options& options)
         {
             json << "    \"k65r65_t128_avx512_gfni_mode\": "
                  << options.k65r65_t128_avx512_gfni_mode << ",\n";
+        }
+        if (options.k16r16_b64_avx512_gfni_mode >= 0)
+        {
+            json << "    \"k16r16_b64_avx512_gfni_mode\": "
+                 << options.k16r16_b64_avx512_gfni_mode << ",\n";
         }
         if (options.low_p32_b64_terminal_mode >= 0)
             json << "    \"low_p32_b64_terminal_mode\": "

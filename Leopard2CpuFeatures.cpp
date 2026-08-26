@@ -664,6 +664,25 @@ bool IsCalibratedK65R65B64AVX512GFNIHost()
         DetectX86Processor());
 }
 
+bool IsCalibratedK16R16B64AVX512GFNIProcessor(
+    const X86ProcessorIdentity& identity)
+{
+    /*
+        Operation-specific host identity for the register-resident exact T=16
+        candidate.  CPUID/XCR0 checks establish instruction safety separately;
+        this narrow allowlist prevents AUTO from exporting an unmeasured
+        performance choice to another microarchitecture.
+    */
+    return identity.authentic_amd && identity.family == 0x1aU &&
+        identity.model == 0x08U;
+}
+
+bool IsCalibratedK16R16B64AVX512GFNIHost()
+{
+    return IsCalibratedK16R16B64AVX512GFNIProcessor(
+        DetectX86Processor());
+}
+
 bool IsCalibratedK1AVX2CopyProcessor(
     const X86ProcessorIdentity& identity)
 {

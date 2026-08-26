@@ -442,6 +442,7 @@ set(LEO2_HAVE_AVX2_BACKEND OFF)
 set(LEO2_HAVE_AVX512_BACKEND OFF)
 set(LEO2_HAVE_GFNI_BACKEND OFF)
 set(LEO2_HAVE_AVX512_GFNI_T128 OFF)
+set(LEO2_HAVE_AVX512_GFNI_T16 OFF)
 if(LEO2_X86_TARGET)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
        CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
@@ -554,6 +555,31 @@ if(LEO2_X86_TARGET)
                     -falign-functions=64)
             endif()
             set(LEO2_HAVE_AVX512_GFNI_T128 ON)
+
+            if(LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
+                # Register-resident exact K=R=T=16/B=64 operation leaf.  It
+                # depends on the generated AVX2 terminal that supplies its
+                # same-binary fallback and route.  Keep the raised ISA in a
+                # separately audited object; runtime publication remains
+                # fail-closed behind feature, OS-state, host, and KAT gates.
+                add_library(leopard2_backend_avx512_gfni_t16 OBJECT
+                    Leopard2BackendAVX512GFNIT16.cpp)
+                target_include_directories(
+                    leopard2_backend_avx512_gfni_t16 PRIVATE
+                    ${CMAKE_CURRENT_SOURCE_DIR})
+                target_compile_definitions(
+                    leopard2_backend_avx512_gfni_t16 PRIVATE
+                    LEO2_HAVE_AVX512_GFNI_T16=1)
+                target_compile_options(
+                    leopard2_backend_avx512_gfni_t16 PRIVATE
+                    -mavx2 -mavx512f -mavx512bw -mavx512vl -mgfni)
+                if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+                    target_compile_options(
+                        leopard2_backend_avx512_gfni_t16 PRIVATE
+                        -falign-functions=64)
+                endif()
+                set(LEO2_HAVE_AVX512_GFNI_T16 ON)
+            endif()
         endif()
     elseif(MSVC)
         # x64 MSVC accepts SSSE3 intrinsics without raising other translation
@@ -880,6 +906,12 @@ if(LEO2_HAVE_AVX512_GFNI_T128)
         $<TARGET_OBJECTS:leopard2_backend_avx512_gfni_t128>)
     target_compile_definitions(leopard PRIVATE
         LEO2_HAVE_AVX512_GFNI_T128=1)
+endif()
+if(LEO2_HAVE_AVX512_GFNI_T16)
+    target_sources(leopard PRIVATE
+        $<TARGET_OBJECTS:leopard2_backend_avx512_gfni_t16>)
+    target_compile_definitions(leopard PRIVATE
+        LEO2_HAVE_AVX512_GFNI_T16=1)
 endif()
 if(ENABLE_OPENMP)
     if(TARGET OpenMP::OpenMP_CXX)
@@ -1323,6 +1355,14 @@ if(LEO2_BUILD_TESTS)
         target_compile_definitions(leopard_test_hooks PRIVATE
             LEO2_HAVE_AVX512_GFNI_T128=1)
     endif()
+    if(LEO2_HAVE_AVX512_GFNI_T16)
+        # The operation leaf has no conditional test instrumentation, so the
+        # same isolated object is safe to reuse in the hook archive.
+        target_sources(leopard_test_hooks PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx512_gfni_t16>)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_HAVE_AVX512_GFNI_T16=1)
+    endif()
     if(ENABLE_OPENMP)
         if(TARGET OpenMP::OpenMP_CXX)
             target_link_libraries(leopard_test_hooks PUBLIC OpenMP::OpenMP_CXX)
@@ -1581,6 +1621,10 @@ if(LEO2_BUILD_TESTS)
             if(LEO2_HAVE_AVX512_GFNI_T128)
                 list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
                     avx512_gfni_t128)
+            endif()
+            if(LEO2_HAVE_AVX512_GFNI_T16)
+                list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
+                    avx512_gfni_t16)
             endif()
             string(REPLACE ";" "," LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG
                 "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES}")
@@ -2205,10 +2249,41 @@ if(LEO2_BUILD_TESTS)
         target_compile_definitions(leopard2_backend_ops_test PRIVATE
             LEO2_HAVE_AVX512_GFNI_T128=1)
     endif()
+    if(LEO2_HAVE_AVX512_GFNI_T16)
+        target_compile_definitions(leopard2_backend_ops_test PRIVATE
+            LEO2_HAVE_AVX512_GFNI_T16=1)
+    endif()
     target_link_libraries(leopard2_backend_ops_test leopard)
     add_test(NAME leopard2_backend_ops COMMAND leopard2_backend_ops_test)
     set_tests_properties(leopard2_backend_ops PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
+
+    if(LEO2_HAVE_AVX512_GFNI_T16)
+        add_executable(leopard2_avx512_gfni_t16_prototype_test
+            tests/leopard2/test_avx512_gfni_t16_prototype.cpp)
+        target_compile_definitions(
+            leopard2_avx512_gfni_t16_prototype_test PRIVATE
+            LEO2_HAVE_AVX512_GFNI_T16=1)
+        target_link_libraries(
+            leopard2_avx512_gfni_t16_prototype_test leopard)
+        add_test(NAME leopard2_avx512_gfni_t16_prototype
+            COMMAND leopard2_avx512_gfni_t16_prototype_test)
+        set_tests_properties(leopard2_avx512_gfni_t16_prototype PROPERTIES
+            ENVIRONMENT "OMP_NUM_THREADS=1")
+
+        add_executable(leopard2_avx512_gfni_t16_screen EXCLUDE_FROM_ALL
+            experiments/leopard2/gfni_t16/screen.cpp)
+        target_compile_definitions(leopard2_avx512_gfni_t16_screen PRIVATE
+            LEO2_HAVE_AVX2_BACKEND=1
+            LEO2_HAVE_AVX512_GFNI_T16=1
+            LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1)
+        target_link_libraries(leopard2_avx512_gfni_t16_screen leopard)
+
+        add_executable(leopard2_avx512_gfni_t16_public_screen EXCLUDE_FROM_ALL
+            experiments/leopard2/gfni_t16/public_screen.cpp)
+        target_link_libraries(
+            leopard2_avx512_gfni_t16_public_screen leopard)
+    endif()
 
     add_executable(leopard2_backend_failures_test
         tests/leopard2/test_backend_failures.cpp)

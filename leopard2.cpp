@@ -559,6 +559,8 @@ struct leo2_context
         auto_k65r65_b64_avx512_gfni_kernel;
     leopard::backend::FF8K65R65Multiples64PackedKernel
         auto_k65r65_multiples64_avx512_gfni_kernel;
+    leopard::backend::FF8K16R16B64PackedKernel
+        auto_k16r16_b64_avx512_gfni_kernel;
     bool calibrated_k1_avx2_copy_host;
     bool high_t4_batch_binding_enabled;
     bool gf8_avx2_walsh_locator_enabled;
@@ -1189,6 +1191,10 @@ static thread_local unsigned g_k65r65_b64_avx512_gfni_call_count = 0U;
 static volatile uint32_t g_k65r65_t128_avx512_gfni_mode = 1U;
 static thread_local unsigned g_k65r65_t128_avx512_gfni_call_count = 0U;
 static thread_local size_t g_k65r65_t128_avx512_gfni_tile_count = 0U;
+// Enabled by default only on the independently qualified AUTO host/shape.
+// Probe modes three/four count untimed route checks, then normalize to one/two.
+static volatile uint32_t g_k16r16_b64_avx512_gfni_mode = 1U;
+static thread_local unsigned g_k16r16_b64_avx512_gfni_call_count = 0U;
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && \
     !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
 /* Arithmetic-only attribution selector for the exact K=62/R=8/B=64 fused
@@ -14744,6 +14750,11 @@ LEO2_EXPORT leo2_result leo2_context_create(
         leopard::backend::IsCalibratedK65R65B64AVX512GFNIHost()
             ? leopard::backend::GetQualifiedAVX512GFNIT128Multiples64()
             : NULL;
+    context->auto_k16r16_b64_avx512_gfni_kernel =
+        context->auto_requested &&
+        leopard::backend::IsCalibratedK16R16B64AVX512GFNIHost()
+            ? leopard::backend::GetQualifiedAVX512GFNIT16()
+            : NULL;
     context->calibrated_k1_avx2_copy_host =
         leopard::backend::IsCalibratedK1AVX2CopyHost();
 #ifdef LEO_HAS_FF8
@@ -15990,6 +16001,37 @@ size_t K65R65T128AVX512GFNITileCountForDiagnostics()
 #endif
 }
 
+bool SetK16R16B64AVX512GFNIEnabledForDiagnostics(bool enabled)
+{
+#ifdef LEO_HAS_FF8
+    g_k16r16_b64_avx512_gfni_call_count = 0U;
+    g_k16r16_b64_avx512_gfni_mode = enabled ? 3U : 4U;
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
+unsigned K16R16B64AVX512GFNIModeForDiagnostics()
+{
+#ifdef LEO_HAS_FF8
+    const unsigned mode = g_k16r16_b64_avx512_gfni_mode;
+    return mode == 3U ? 1U : mode == 4U ? 2U : mode;
+#else
+    return 0U;
+#endif
+}
+
+unsigned K16R16B64AVX512GFNICallCountForDiagnostics()
+{
+#ifdef LEO_HAS_FF8
+    return g_k16r16_b64_avx512_gfni_call_count;
+#else
+    return 0U;
+#endif
+}
+
 bool FinishK65R65B64AVX512GFNIRouteProbeForDiagnostics()
 {
 #ifdef LEO_HAS_FF8
@@ -16010,6 +16052,19 @@ bool FinishK65R65T128AVX512GFNIRouteProbeForDiagnostics()
     if (mode != 3U && mode != 4U)
         return false;
     g_k65r65_t128_avx512_gfni_mode = mode == 3U ? 1U : 2U;
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool FinishK16R16B64AVX512GFNIRouteProbeForDiagnostics()
+{
+#ifdef LEO_HAS_FF8
+    const unsigned mode = g_k16r16_b64_avx512_gfni_mode;
+    if (mode != 3U && mode != 4U)
+        return false;
+    g_k16r16_b64_avx512_gfni_mode = mode == 3U ? 1U : 2U;
     return true;
 #else
     return false;
@@ -16061,6 +16116,22 @@ bool K65R65T128AVX512GFNILargerAvailableForDiagnostics(
 }
 
 bool K65R65T128AVX512GFNILargerSelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    (void)codec;
+    (void)shard_bytes;
+    return false;
+}
+
+bool K16R16B64AVX512GFNIAvailableForDiagnostics(
+    const leo2_codec* codec)
+{
+    (void)codec;
+    return false;
+}
+
+bool K16R16B64AVX512GFNISelectedForDiagnostics(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
@@ -18811,6 +18882,17 @@ IsGF8AVX2K65R65T128AVX512GFNILargerEligible(
 #endif
 }
 
+static LEO_FORCE_INLINE bool IsGF8AVX2K16R16B64AVX512GFNIEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    return IsGF8AVX2BalancedB64PackedTerminalEligible(codec, shard_bytes) &&
+        codec->original_count == 16 && codec->recovery_count == 16 &&
+        codec->padded_side == 16 && codec->context &&
+        codec->context->auto_requested &&
+        codec->context->auto_k16r16_b64_avx512_gfni_kernel != NULL;
+}
+
 namespace leopard2_internal {
 
 bool K65R65B64PackedTerminalSelectedForDiagnostics(
@@ -18854,6 +18936,22 @@ bool K65R65T128AVX512GFNILargerSelectedForDiagnostics(
             codec, shard_bytes) &&
         (g_k65r65_t128_avx512_gfni_mode == 1U ||
          g_k65r65_t128_avx512_gfni_mode == 3U);
+}
+
+bool K16R16B64AVX512GFNIAvailableForDiagnostics(
+    const leo2_codec* codec)
+{
+    return codec && codec->context &&
+        codec->context->auto_k16r16_b64_avx512_gfni_kernel != NULL;
+}
+
+bool K16R16B64AVX512GFNISelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    return IsGF8AVX2K16R16B64AVX512GFNIEligible(codec, shard_bytes) &&
+        (g_k16r16_b64_avx512_gfni_mode == 1U ||
+         g_k16r16_b64_avx512_gfni_mode == 3U);
 }
 
 } // namespace leopard2_internal
@@ -19093,9 +19191,20 @@ TryEncodeGF8BalancedB64PackedTerminal(
 #if LEO2_HAVE_HIGH_T16_B64_GENERATED
     if (FixedSide == 16)
     {
-        if (!leopard::backend::TryAVX2FF8HighEncodeT16B64(
-                original, recovery))
+        if (IsGF8AVX2K16R16B64AVX512GFNIEligible(codec, 64) &&
+            (g_k16r16_b64_avx512_gfni_mode == 1U ||
+             g_k16r16_b64_avx512_gfni_mode == 3U))
+        {
+            if (g_k16r16_b64_avx512_gfni_mode == 3U)
+                ++g_k16r16_b64_avx512_gfni_call_count;
+            codec->context->auto_k16r16_b64_avx512_gfni_kernel(
+                original[0], recovery[0]);
+        }
+        else if (!leopard::backend::TryAVX2FF8HighEncodeT16B64(
+                     original, recovery))
+        {
             return false;
+        }
     }
     else
 #endif

@@ -3785,7 +3785,9 @@ class CMakeProductionGraph(object):
                         "leopard", "PRIVATE",
                         "$<TARGET_OBJECTS:leopard2_backend_gfni>"], [
                         "leopard", "PRIVATE",
-                        "$<TARGET_OBJECTS:leopard2_backend_avx512_gfni_t128>"]):
+                        "$<TARGET_OBJECTS:leopard2_backend_avx512_gfni_t128>"], [
+                        "leopard", "PRIVATE",
+                        "$<TARGET_OBJECTS:leopard2_backend_avx512_gfni_t16>"]):
                     raise ContractError(
                         "leopard TARGET_OBJECTS has no MSVC-reachable "
                         "definition or attachment configuration")

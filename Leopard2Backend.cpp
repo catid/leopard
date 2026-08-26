@@ -76,6 +76,7 @@ static QualificationStatus StartupFailure = QualificationAvailable;
 static FF8K65R65B64PackedKernel QualifiedAVX512GFNIT128 = NULL;
 static FF8K65R65Multiples64PackedKernel
     QualifiedAVX512GFNIT128Multiples64 = NULL;
+static FF8K16R16B64PackedKernel QualifiedAVX512GFNIT16 = NULL;
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
 static std::atomic<unsigned> TestFault(TestSetupFaultNone);
@@ -3747,13 +3748,15 @@ bool Initialize(const InitializeArgs& args)
     FF8K65R65B64PackedKernel avx512_gfni_t128 = NULL;
     FF8K65R65Multiples64PackedKernel
         avx512_gfni_t128_multiples64 = NULL;
+    FF8K16R16B64PackedKernel avx512_gfni_t16 = NULL;
 #if defined(LEO2_HAVE_AVX512_GFNI_T128) && defined(LEO_HAS_FF8) && \
     !defined(LEO2_BACKEND_FORCE_SCALAR) && \
     !defined(LEO2_BACKEND_FORCE_SSSE3) && \
     !defined(LEO2_BACKEND_FORCE_AVX2) && \
     !defined(LEO2_BACKEND_FORCE_AVX512)
-    // This is the sole baseline-to-raised-ISA call site.  The object may use
-    // ZMM GFNI instructions from its first instruction, so prove both the CPU
+    // This is one of the operation-specific baseline-to-raised-ISA call sites.
+    // The object may use ZMM GFNI instructions from its first instruction, so
+    // prove both the CPU
     // bits and OS-managed ZMM state before entering it.  A failed private KAT
     // merely withholds the optional operation; the established backend stays
     // available.  Forced diagnostic builds retain their exact selected
@@ -3772,6 +3775,22 @@ bool Initialize(const InitializeArgs& args)
     }
 #endif
 
+#if defined(LEO2_HAVE_AVX512_GFNI_T16) && defined(LEO_HAS_FF8) && \
+    !defined(LEO2_BACKEND_FORCE_SCALAR) && \
+    !defined(LEO2_BACKEND_FORCE_SSSE3) && \
+    !defined(LEO2_BACKEND_FORCE_AVX2) && \
+    !defined(LEO2_BACKEND_FORCE_AVX512)
+    // Keep the raised-ISA boundary fail-closed.  The optional leaf's private
+    // KAT can withhold only this operation; it never invalidates the selected
+    // portable backend or widens a forced diagnostic variant.
+    if (features.avx512 && features.gfni &&
+        IsCalibratedK16R16B64AVX512GFNIHost())
+    {
+        avx512_gfni_t16 = InitializeAVX512GFNIT16(
+            args.ff8_multiply_log, args.ff8_skew_log_storage);
+    }
+#endif
+
     const uint32_t qualifiable_mask =
         QualifiableBackendMaskFor(features, selected_kind);
 
@@ -3785,6 +3804,7 @@ bool Initialize(const InitializeArgs& args)
         QualifiedAVX512GFNIT128 = avx512_gfni_t128;
         QualifiedAVX512GFNIT128Multiples64 =
             avx512_gfni_t128_multiples64;
+        QualifiedAVX512GFNIT16 = avx512_gfni_t16;
         SelectedOps = QualifiedOps[selected_kind];
     }
     return true;
@@ -3799,6 +3819,11 @@ FF8K65R65Multiples64PackedKernel
 GetQualifiedAVX512GFNIT128Multiples64()
 {
     return QualifiedAVX512GFNIT128Multiples64;
+}
+
+FF8K16R16B64PackedKernel GetQualifiedAVX512GFNIT16()
+{
+    return QualifiedAVX512GFNIT16;
 }
 
 const Ops& GetOps()

@@ -351,6 +351,20 @@ unsigned K65R65T128AVX512GFNICallCountForDiagnostics();
 size_t K65R65T128AVX512GFNITileCountForDiagnostics();
 bool FinishK65R65T128AVX512GFNIRouteProbeForDiagnostics();
 
+// Independent control for the exact balanced K=R=T=16/B=64 register-resident
+// AVX-512/GFNI leaf.  The qualified AUTO route is enabled by default.  Probe
+// accounting is armed only for the two untimed public-route checks and is
+// normalized before measurement.
+bool SetK16R16B64AVX512GFNIEnabledForDiagnostics(bool enabled);
+unsigned K16R16B64AVX512GFNIModeForDiagnostics();
+bool K16R16B64AVX512GFNIAvailableForDiagnostics(
+    const leo2_codec* codec);
+bool K16R16B64AVX512GFNISelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes);
+unsigned K16R16B64AVX512GFNICallCountForDiagnostics();
+bool FinishK16R16B64AVX512GFNIRouteProbeForDiagnostics();
+
 /*
     Arithmetic-only same-executable benchmark control for the exact
     K=62/R=8/B=64 fused AVX2 leaf.  It deliberately does not affect adjacent

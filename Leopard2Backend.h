@@ -101,6 +101,12 @@ typedef void (*FF8K65R65B64PackedKernel)(
     void* packed_output,
     void* aligned_state);
 
+// Exact legacy-high K=R=T=16, B=64 operation leaf.  The caller has already
+// proved that both 16-row slabs are contiguous, disjoint, and fully writable.
+typedef void (*FF8K16R16B64PackedKernel)(
+    const void* packed_input,
+    void* packed_output);
+
 // The caller supplies 32 KiB of 64-byte-aligned state.  shard_bytes is a
 // promoted positive multiple of 64 greater than 64.
 typedef void (*FF8K65R65Multiples64PackedKernel)(
@@ -705,6 +711,9 @@ bool IsCalibratedAutoGFNIHost();
 bool IsCalibratedK65R65B64AVX512GFNIProcessor(
     const X86ProcessorIdentity& identity);
 bool IsCalibratedK65R65B64AVX512GFNIHost();
+bool IsCalibratedK16R16B64AVX512GFNIProcessor(
+    const X86ProcessorIdentity& identity);
+bool IsCalibratedK16R16B64AVX512GFNIHost();
 bool IsCalibratedK1AVX2CopyProcessor(
     const X86ProcessorIdentity& identity);
 bool IsCalibratedK1AVX2CopyHost();
@@ -958,6 +967,12 @@ FF8K65R65Multiples64PackedKernel InitializeAVX512GFNIT128Multiples64(
     FF8MultiplyLog multiply_log);
 #endif
 
+#if defined(LEO2_HAVE_AVX512_GFNI_T16)
+FF8K16R16B64PackedKernel InitializeAVX512GFNIT16(
+    FF8MultiplyLog multiply_log,
+    const uint8_t* skew_log_storage);
+#endif
+
 // Called once after both legacy fields have initialized their logarithm tables.
 // Returns false on allocation or known-answer-test failure.
 bool Initialize(const InitializeArgs& args);
@@ -985,6 +1000,7 @@ const Ops* GetQualifiedOps(
 FF8K65R65B64PackedKernel GetQualifiedAVX512GFNIT128();
 FF8K65R65Multiples64PackedKernel
 GetQualifiedAVX512GFNIT128Multiples64();
+FF8K16R16B64PackedKernel GetQualifiedAVX512GFNIT16();
 leo2_backend SelectedBackend();
 // Reports the effective public execution backend.  This can differ from the
 // fixed-ops table on the existing ARM paths, where legacy native NEON or
