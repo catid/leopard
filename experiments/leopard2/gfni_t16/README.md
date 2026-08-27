@@ -30,9 +30,12 @@ Files:
   and after the measured run.
 - `run_authoritative_k16r16_b64_avx512_gfni.sh` creates fresh live and detached
   replay builds in an allowlisted environment, proves byte-identical build
-  closure, runs the frozen campaign, and publishes a sealed completion envelope
-  only after the independent post-seal replay succeeds.  Its `--verify` mode
-  rechecks the sealed envelope without collecting timing.
+  closure, requires the exact seven-test Release census, runs the frozen
+  campaign, and publishes a sealed completion envelope only after the
+  independent post-seal replay succeeds.  The completion record is written
+  through a pre-opened descriptor only after every file and directory is
+  read-only, and its precomputed digest is already in the envelope manifest.
+  Its `--verify` mode rechecks the sealed envelope without collecting timing.
 
 The short screens are diagnostic selection evidence, not promotion evidence.
 Production default-on status is conditional on a completed, immutable
