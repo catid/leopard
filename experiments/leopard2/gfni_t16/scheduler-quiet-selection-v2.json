@@ -1,0 +1,1128 @@
+{
+  "candidate_pairs": [
+    {
+      "cpu": 0,
+      "cpu_counts": {
+        "idle_ticks": 5788,
+        "max_nonidle_ticks": 5,
+        "nonidle_ticks": 285,
+        "nonidle_windows": 179,
+        "total_ticks": 6073
+      },
+      "sibling": 64,
+      "sibling_counts": {
+        "idle_ticks": 5830,
+        "max_nonidle_ticks": 5,
+        "nonidle_ticks": 327,
+        "nonidle_windows": 190,
+        "total_ticks": 6157
+      }
+    },
+    {
+      "cpu": 1,
+      "cpu_counts": {
+        "idle_ticks": 5615,
+        "max_nonidle_ticks": 8,
+        "nonidle_ticks": 522,
+        "nonidle_windows": 219,
+        "total_ticks": 6137
+      },
+      "sibling": 65,
+      "sibling_counts": {
+        "idle_ticks": 5791,
+        "max_nonidle_ticks": 5,
+        "nonidle_ticks": 362,
+        "nonidle_windows": 204,
+        "total_ticks": 6153
+      }
+    },
+    {
+      "cpu": 2,
+      "cpu_counts": {
+        "idle_ticks": 5071,
+        "max_nonidle_ticks": 10,
+        "nonidle_ticks": 1034,
+        "nonidle_windows": 238,
+        "total_ticks": 6105
+      },
+      "sibling": 66,
+      "sibling_counts": {
+        "idle_ticks": 5676,
+        "max_nonidle_ticks": 7,
+        "nonidle_ticks": 469,
+        "nonidle_windows": 224,
+        "total_ticks": 6145
+      }
+    },
+    {
+      "cpu": 3,
+      "cpu_counts": {
+        "idle_ticks": 5079,
+        "max_nonidle_ticks": 9,
+        "nonidle_ticks": 1010,
+        "nonidle_windows": 239,
+        "total_ticks": 6089
+      },
+      "sibling": 67,
+      "sibling_counts": {
+        "idle_ticks": 5722,
+        "max_nonidle_ticks": 6,
+        "nonidle_ticks": 421,
+        "nonidle_windows": 229,
+        "total_ticks": 6143
+      }
+    },
+    {
+      "cpu": 4,
+      "cpu_counts": {
+        "idle_ticks": 5753,
+        "max_nonidle_ticks": 5,
+        "nonidle_ticks": 421,
+        "nonidle_windows": 215,
+        "total_ticks": 6174
+      },
+      "sibling": 68,
+      "sibling_counts": {
+        "idle_ticks": 5903,
+        "max_nonidle_ticks": 4,
+        "nonidle_ticks": 237,
+        "nonidle_windows": 170,
+        "total_ticks": 6140
+      }
+    },
+    {
+      "cpu": 5,
+      "cpu_counts": {
+        "idle_ticks": 5784,
+        "max_nonidle_ticks": 5,
+        "nonidle_ticks": 356,
+        "nonidle_windows": 202,
+        "total_ticks": 6140
+      },
+      "sibling": 69,
+      "sibling_counts": {
+        "idle_ticks": 5929,
+        "max_nonidle_ticks": 4,
+        "nonidle_ticks": 217,
+        "nonidle_windows": 158,
+        "total_ticks": 6146
+      }
+    },
+    {
+      "cpu": 6,
+      "cpu_counts": {
+        "idle_ticks": 5969,
+        "max_nonidle_ticks": 5,
+        "nonidle_ticks": 182,
+        "nonidle_windows": 142,
+        "total_ticks": 6151
+      },
+      "sibling": 70,
+      "sibling_counts": {
+        "idle_ticks": 6063,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 100,
+        "nonidle_windows": 88,
+        "total_ticks": 6163
+      }
+    },
+    {
+      "cpu": 7,
+      "cpu_counts": {
+        "idle_ticks": 5983,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 179,
+        "nonidle_windows": 127,
+        "total_ticks": 6162
+      },
+      "sibling": 71,
+      "sibling_counts": {
+        "idle_ticks": 6061,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 95,
+        "nonidle_windows": 77,
+        "total_ticks": 6156
+      }
+    },
+    {
+      "cpu": 8,
+      "cpu_counts": {
+        "idle_ticks": 6136,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 16,
+        "nonidle_windows": 15,
+        "total_ticks": 6152
+      },
+      "sibling": 72,
+      "sibling_counts": {
+        "idle_ticks": 6154,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 5,
+        "nonidle_windows": 5,
+        "total_ticks": 6159
+      }
+    },
+    {
+      "cpu": 11,
+      "cpu_counts": {
+        "idle_ticks": 6148,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 12,
+        "nonidle_windows": 12,
+        "total_ticks": 6160
+      },
+      "sibling": 75,
+      "sibling_counts": {
+        "idle_ticks": 6151,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 6,
+        "nonidle_windows": 6,
+        "total_ticks": 6157
+      }
+    },
+    {
+      "cpu": 12,
+      "cpu_counts": {
+        "idle_ticks": 6145,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 12,
+        "nonidle_windows": 12,
+        "total_ticks": 6157
+      },
+      "sibling": 76,
+      "sibling_counts": {
+        "idle_ticks": 6149,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 9,
+        "nonidle_windows": 8,
+        "total_ticks": 6158
+      }
+    },
+    {
+      "cpu": 14,
+      "cpu_counts": {
+        "idle_ticks": 6149,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 10,
+        "nonidle_windows": 8,
+        "total_ticks": 6159
+      },
+      "sibling": 78,
+      "sibling_counts": {
+        "idle_ticks": 6145,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 13,
+        "nonidle_windows": 12,
+        "total_ticks": 6158
+      }
+    },
+    {
+      "cpu": 15,
+      "cpu_counts": {
+        "idle_ticks": 6146,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 13,
+        "nonidle_windows": 13,
+        "total_ticks": 6159
+      },
+      "sibling": 79,
+      "sibling_counts": {
+        "idle_ticks": 6150,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 8,
+        "nonidle_windows": 8,
+        "total_ticks": 6158
+      }
+    },
+    {
+      "cpu": 16,
+      "cpu_counts": {
+        "idle_ticks": 6113,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 48,
+        "nonidle_windows": 37,
+        "total_ticks": 6161
+      },
+      "sibling": 80,
+      "sibling_counts": {
+        "idle_ticks": 6111,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 37,
+        "nonidle_windows": 33,
+        "total_ticks": 6148
+      }
+    },
+    {
+      "cpu": 17,
+      "cpu_counts": {
+        "idle_ticks": 6123,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 29,
+        "nonidle_windows": 23,
+        "total_ticks": 6152
+      },
+      "sibling": 81,
+      "sibling_counts": {
+        "idle_ticks": 6106,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 44,
+        "nonidle_windows": 34,
+        "total_ticks": 6150
+      }
+    },
+    {
+      "cpu": 18,
+      "cpu_counts": {
+        "idle_ticks": 6138,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 20,
+        "nonidle_windows": 18,
+        "total_ticks": 6158
+      },
+      "sibling": 82,
+      "sibling_counts": {
+        "idle_ticks": 6109,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 34,
+        "nonidle_windows": 28,
+        "total_ticks": 6143
+      }
+    },
+    {
+      "cpu": 19,
+      "cpu_counts": {
+        "idle_ticks": 6140,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 13,
+        "nonidle_windows": 10,
+        "total_ticks": 6153
+      },
+      "sibling": 83,
+      "sibling_counts": {
+        "idle_ticks": 6129,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 29,
+        "nonidle_windows": 26,
+        "total_ticks": 6158
+      }
+    },
+    {
+      "cpu": 20,
+      "cpu_counts": {
+        "idle_ticks": 6145,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 15,
+        "nonidle_windows": 13,
+        "total_ticks": 6160
+      },
+      "sibling": 84,
+      "sibling_counts": {
+        "idle_ticks": 6133,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 17,
+        "nonidle_windows": 17,
+        "total_ticks": 6150
+      }
+    },
+    {
+      "cpu": 21,
+      "cpu_counts": {
+        "idle_ticks": 6149,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 5,
+        "nonidle_windows": 5,
+        "total_ticks": 6154
+      },
+      "sibling": 85,
+      "sibling_counts": {
+        "idle_ticks": 6137,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 15,
+        "nonidle_windows": 14,
+        "total_ticks": 6152
+      }
+    },
+    {
+      "cpu": 22,
+      "cpu_counts": {
+        "idle_ticks": 6151,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 7,
+        "nonidle_windows": 7,
+        "total_ticks": 6158
+      },
+      "sibling": 86,
+      "sibling_counts": {
+        "idle_ticks": 6137,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 14,
+        "nonidle_windows": 14,
+        "total_ticks": 6151
+      }
+    },
+    {
+      "cpu": 23,
+      "cpu_counts": {
+        "idle_ticks": 6102,
+        "max_nonidle_ticks": 4,
+        "nonidle_ticks": 49,
+        "nonidle_windows": 35,
+        "total_ticks": 6151
+      },
+      "sibling": 87,
+      "sibling_counts": {
+        "idle_ticks": 6145,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 9,
+        "nonidle_windows": 9,
+        "total_ticks": 6154
+      }
+    },
+    {
+      "cpu": 24,
+      "cpu_counts": {
+        "idle_ticks": 6141,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 12,
+        "nonidle_windows": 12,
+        "total_ticks": 6153
+      },
+      "sibling": 88,
+      "sibling_counts": {
+        "idle_ticks": 6159,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 7,
+        "nonidle_windows": 7,
+        "total_ticks": 6166
+      }
+    },
+    {
+      "cpu": 25,
+      "cpu_counts": {
+        "idle_ticks": 6157,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 3,
+        "nonidle_windows": 3,
+        "total_ticks": 6160
+      },
+      "sibling": 89,
+      "sibling_counts": {
+        "idle_ticks": 6153,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 2,
+        "nonidle_windows": 2,
+        "total_ticks": 6155
+      }
+    },
+    {
+      "cpu": 26,
+      "cpu_counts": {
+        "idle_ticks": 6152,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 3,
+        "nonidle_windows": 3,
+        "total_ticks": 6155
+      },
+      "sibling": 90,
+      "sibling_counts": {
+        "idle_ticks": 6152,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 7,
+        "nonidle_windows": 7,
+        "total_ticks": 6159
+      }
+    },
+    {
+      "cpu": 27,
+      "cpu_counts": {
+        "idle_ticks": 6153,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 7,
+        "nonidle_windows": 7,
+        "total_ticks": 6160
+      },
+      "sibling": 91,
+      "sibling_counts": {
+        "idle_ticks": 6148,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 6,
+        "nonidle_windows": 4,
+        "total_ticks": 6154
+      }
+    },
+    {
+      "cpu": 28,
+      "cpu_counts": {
+        "idle_ticks": 6151,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 3,
+        "nonidle_windows": 3,
+        "total_ticks": 6154
+      },
+      "sibling": 92,
+      "sibling_counts": {
+        "idle_ticks": 6154,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 8,
+        "nonidle_windows": 8,
+        "total_ticks": 6162
+      }
+    },
+    {
+      "cpu": 29,
+      "cpu_counts": {
+        "idle_ticks": 6147,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 9,
+        "nonidle_windows": 9,
+        "total_ticks": 6156
+      },
+      "sibling": 93,
+      "sibling_counts": {
+        "idle_ticks": 6158,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 3,
+        "nonidle_windows": 3,
+        "total_ticks": 6161
+      }
+    },
+    {
+      "cpu": 30,
+      "cpu_counts": {
+        "idle_ticks": 6153,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 6,
+        "nonidle_windows": 4,
+        "total_ticks": 6159
+      },
+      "sibling": 94,
+      "sibling_counts": {
+        "idle_ticks": 6151,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 6,
+        "nonidle_windows": 6,
+        "total_ticks": 6157
+      }
+    },
+    {
+      "cpu": 31,
+      "cpu_counts": {
+        "idle_ticks": 6150,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 4,
+        "nonidle_windows": 4,
+        "total_ticks": 6154
+      },
+      "sibling": 95,
+      "sibling_counts": {
+        "idle_ticks": 6164,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 1,
+        "nonidle_windows": 1,
+        "total_ticks": 6165
+      }
+    },
+    {
+      "cpu": 32,
+      "cpu_counts": {
+        "idle_ticks": 6139,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 14,
+        "nonidle_windows": 12,
+        "total_ticks": 6153
+      },
+      "sibling": 96,
+      "sibling_counts": {
+        "idle_ticks": 6137,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 17,
+        "nonidle_windows": 15,
+        "total_ticks": 6154
+      }
+    },
+    {
+      "cpu": 33,
+      "cpu_counts": {
+        "idle_ticks": 6149,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 8,
+        "nonidle_windows": 6,
+        "total_ticks": 6157
+      },
+      "sibling": 97,
+      "sibling_counts": {
+        "idle_ticks": 6152,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 9,
+        "nonidle_windows": 8,
+        "total_ticks": 6161
+      }
+    },
+    {
+      "cpu": 34,
+      "cpu_counts": {
+        "idle_ticks": 6157,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 3,
+        "nonidle_windows": 3,
+        "total_ticks": 6160
+      },
+      "sibling": 98,
+      "sibling_counts": {
+        "idle_ticks": 6162,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 4,
+        "nonidle_windows": 4,
+        "total_ticks": 6166
+      }
+    },
+    {
+      "cpu": 35,
+      "cpu_counts": {
+        "idle_ticks": 6156,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 3,
+        "nonidle_windows": 3,
+        "total_ticks": 6159
+      },
+      "sibling": 99,
+      "sibling_counts": {
+        "idle_ticks": 6161,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 2,
+        "nonidle_windows": 2,
+        "total_ticks": 6163
+      }
+    },
+    {
+      "cpu": 36,
+      "cpu_counts": {
+        "idle_ticks": 6164,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 3,
+        "nonidle_windows": 3,
+        "total_ticks": 6167
+      },
+      "sibling": 100,
+      "sibling_counts": {
+        "idle_ticks": 6156,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 3,
+        "nonidle_windows": 3,
+        "total_ticks": 6159
+      }
+    },
+    {
+      "cpu": 37,
+      "cpu_counts": {
+        "idle_ticks": 6154,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 5,
+        "nonidle_windows": 4,
+        "total_ticks": 6159
+      },
+      "sibling": 101,
+      "sibling_counts": {
+        "idle_ticks": 6153,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 7,
+        "nonidle_windows": 7,
+        "total_ticks": 6160
+      }
+    },
+    {
+      "cpu": 38,
+      "cpu_counts": {
+        "idle_ticks": 6153,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 2,
+        "nonidle_windows": 2,
+        "total_ticks": 6155
+      },
+      "sibling": 102,
+      "sibling_counts": {
+        "idle_ticks": 6155,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 7,
+        "nonidle_windows": 6,
+        "total_ticks": 6162
+      }
+    },
+    {
+      "cpu": 39,
+      "cpu_counts": {
+        "idle_ticks": 6142,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 21,
+        "nonidle_windows": 17,
+        "total_ticks": 6163
+      },
+      "sibling": 103,
+      "sibling_counts": {
+        "idle_ticks": 6155,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 3,
+        "nonidle_windows": 3,
+        "total_ticks": 6158
+      }
+    },
+    {
+      "cpu": 40,
+      "cpu_counts": {
+        "idle_ticks": 6139,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 19,
+        "nonidle_windows": 17,
+        "total_ticks": 6158
+      },
+      "sibling": 104,
+      "sibling_counts": {
+        "idle_ticks": 6162,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 2,
+        "nonidle_windows": 2,
+        "total_ticks": 6164
+      }
+    },
+    {
+      "cpu": 41,
+      "cpu_counts": {
+        "idle_ticks": 6151,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 12,
+        "nonidle_windows": 11,
+        "total_ticks": 6163
+      },
+      "sibling": 105,
+      "sibling_counts": {
+        "idle_ticks": 6163,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 2,
+        "nonidle_windows": 2,
+        "total_ticks": 6165
+      }
+    },
+    {
+      "cpu": 42,
+      "cpu_counts": {
+        "idle_ticks": 6153,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 10,
+        "nonidle_windows": 10,
+        "total_ticks": 6163
+      },
+      "sibling": 106,
+      "sibling_counts": {
+        "idle_ticks": 6157,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 2,
+        "nonidle_windows": 1,
+        "total_ticks": 6159
+      }
+    },
+    {
+      "cpu": 43,
+      "cpu_counts": {
+        "idle_ticks": 6145,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 18,
+        "nonidle_windows": 16,
+        "total_ticks": 6163
+      },
+      "sibling": 107,
+      "sibling_counts": {
+        "idle_ticks": 6168,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 3,
+        "nonidle_windows": 2,
+        "total_ticks": 6171
+      }
+    },
+    {
+      "cpu": 44,
+      "cpu_counts": {
+        "idle_ticks": 6149,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 10,
+        "nonidle_windows": 10,
+        "total_ticks": 6159
+      },
+      "sibling": 108,
+      "sibling_counts": {
+        "idle_ticks": 6158,
+        "max_nonidle_ticks": 0,
+        "nonidle_ticks": 0,
+        "nonidle_windows": 0,
+        "total_ticks": 6158
+      }
+    },
+    {
+      "cpu": 45,
+      "cpu_counts": {
+        "idle_ticks": 6153,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 6,
+        "nonidle_windows": 6,
+        "total_ticks": 6159
+      },
+      "sibling": 109,
+      "sibling_counts": {
+        "idle_ticks": 6160,
+        "max_nonidle_ticks": 0,
+        "nonidle_ticks": 0,
+        "nonidle_windows": 0,
+        "total_ticks": 6160
+      }
+    },
+    {
+      "cpu": 46,
+      "cpu_counts": {
+        "idle_ticks": 6148,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 8,
+        "nonidle_windows": 5,
+        "total_ticks": 6156
+      },
+      "sibling": 110,
+      "sibling_counts": {
+        "idle_ticks": 6152,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 4,
+        "nonidle_windows": 4,
+        "total_ticks": 6156
+      }
+    },
+    {
+      "cpu": 47,
+      "cpu_counts": {
+        "idle_ticks": 6156,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 4,
+        "nonidle_windows": 4,
+        "total_ticks": 6160
+      },
+      "sibling": 111,
+      "sibling_counts": {
+        "idle_ticks": 6148,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 4,
+        "nonidle_windows": 3,
+        "total_ticks": 6152
+      }
+    },
+    {
+      "cpu": 48,
+      "cpu_counts": {
+        "idle_ticks": 6157,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 11,
+        "nonidle_windows": 10,
+        "total_ticks": 6168
+      },
+      "sibling": 112,
+      "sibling_counts": {
+        "idle_ticks": 6153,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 11,
+        "nonidle_windows": 9,
+        "total_ticks": 6164
+      }
+    },
+    {
+      "cpu": 49,
+      "cpu_counts": {
+        "idle_ticks": 6155,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 8,
+        "nonidle_windows": 8,
+        "total_ticks": 6163
+      },
+      "sibling": 113,
+      "sibling_counts": {
+        "idle_ticks": 6154,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 7,
+        "nonidle_windows": 7,
+        "total_ticks": 6161
+      }
+    },
+    {
+      "cpu": 50,
+      "cpu_counts": {
+        "idle_ticks": 6164,
+        "max_nonidle_ticks": 0,
+        "nonidle_ticks": 0,
+        "nonidle_windows": 0,
+        "total_ticks": 6164
+      },
+      "sibling": 114,
+      "sibling_counts": {
+        "idle_ticks": 6151,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 2,
+        "nonidle_windows": 2,
+        "total_ticks": 6153
+      }
+    },
+    {
+      "cpu": 51,
+      "cpu_counts": {
+        "idle_ticks": 6164,
+        "max_nonidle_ticks": 0,
+        "nonidle_ticks": 0,
+        "nonidle_windows": 0,
+        "total_ticks": 6164
+      },
+      "sibling": 115,
+      "sibling_counts": {
+        "idle_ticks": 6159,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 2,
+        "nonidle_windows": 1,
+        "total_ticks": 6161
+      }
+    },
+    {
+      "cpu": 52,
+      "cpu_counts": {
+        "idle_ticks": 6168,
+        "max_nonidle_ticks": 0,
+        "nonidle_ticks": 0,
+        "nonidle_windows": 0,
+        "total_ticks": 6168
+      },
+      "sibling": 116,
+      "sibling_counts": {
+        "idle_ticks": 6167,
+        "max_nonidle_ticks": 0,
+        "nonidle_ticks": 0,
+        "nonidle_windows": 0,
+        "total_ticks": 6167
+      }
+    },
+    {
+      "cpu": 53,
+      "cpu_counts": {
+        "idle_ticks": 6168,
+        "max_nonidle_ticks": 0,
+        "nonidle_ticks": 0,
+        "nonidle_windows": 0,
+        "total_ticks": 6168
+      },
+      "sibling": 117,
+      "sibling_counts": {
+        "idle_ticks": 6159,
+        "max_nonidle_ticks": 1,
+        "nonidle_ticks": 1,
+        "nonidle_windows": 1,
+        "total_ticks": 6160
+      }
+    },
+    {
+      "cpu": 54,
+      "cpu_counts": {
+        "idle_ticks": 6161,
+        "max_nonidle_ticks": 0,
+        "nonidle_ticks": 0,
+        "nonidle_windows": 0,
+        "total_ticks": 6161
+      },
+      "sibling": 118,
+      "sibling_counts": {
+        "idle_ticks": 6157,
+        "max_nonidle_ticks": 0,
+        "nonidle_ticks": 0,
+        "nonidle_windows": 0,
+        "total_ticks": 6157
+      }
+    },
+    {
+      "cpu": 55,
+      "cpu_counts": {
+        "idle_ticks": 6123,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 10,
+        "nonidle_windows": 9,
+        "total_ticks": 6133
+      },
+      "sibling": 119,
+      "sibling_counts": {
+        "idle_ticks": 6167,
+        "max_nonidle_ticks": 0,
+        "nonidle_ticks": 0,
+        "nonidle_windows": 0,
+        "total_ticks": 6167
+      }
+    },
+    {
+      "cpu": 56,
+      "cpu_counts": {
+        "idle_ticks": 5850,
+        "max_nonidle_ticks": 7,
+        "nonidle_ticks": 287,
+        "nonidle_windows": 157,
+        "total_ticks": 6137
+      },
+      "sibling": 120,
+      "sibling_counts": {
+        "idle_ticks": 5956,
+        "max_nonidle_ticks": 5,
+        "nonidle_ticks": 183,
+        "nonidle_windows": 127,
+        "total_ticks": 6139
+      }
+    },
+    {
+      "cpu": 57,
+      "cpu_counts": {
+        "idle_ticks": 5905,
+        "max_nonidle_ticks": 5,
+        "nonidle_ticks": 240,
+        "nonidle_windows": 143,
+        "total_ticks": 6145
+      },
+      "sibling": 121,
+      "sibling_counts": {
+        "idle_ticks": 6022,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 135,
+        "nonidle_windows": 112,
+        "total_ticks": 6157
+      }
+    },
+    {
+      "cpu": 58,
+      "cpu_counts": {
+        "idle_ticks": 6048,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 103,
+        "nonidle_windows": 85,
+        "total_ticks": 6151
+      },
+      "sibling": 122,
+      "sibling_counts": {
+        "idle_ticks": 6046,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 111,
+        "nonidle_windows": 84,
+        "total_ticks": 6157
+      }
+    },
+    {
+      "cpu": 59,
+      "cpu_counts": {
+        "idle_ticks": 5886,
+        "max_nonidle_ticks": 7,
+        "nonidle_ticks": 250,
+        "nonidle_windows": 148,
+        "total_ticks": 6136
+      },
+      "sibling": 123,
+      "sibling_counts": {
+        "idle_ticks": 6043,
+        "max_nonidle_ticks": 4,
+        "nonidle_ticks": 119,
+        "nonidle_windows": 91,
+        "total_ticks": 6162
+      }
+    },
+    {
+      "cpu": 60,
+      "cpu_counts": {
+        "idle_ticks": 5992,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 155,
+        "nonidle_windows": 121,
+        "total_ticks": 6147
+      },
+      "sibling": 124,
+      "sibling_counts": {
+        "idle_ticks": 6070,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 85,
+        "nonidle_windows": 68,
+        "total_ticks": 6155
+      }
+    },
+    {
+      "cpu": 61,
+      "cpu_counts": {
+        "idle_ticks": 5898,
+        "max_nonidle_ticks": 5,
+        "nonidle_ticks": 240,
+        "nonidle_windows": 158,
+        "total_ticks": 6138
+      },
+      "sibling": 125,
+      "sibling_counts": {
+        "idle_ticks": 5973,
+        "max_nonidle_ticks": 5,
+        "nonidle_ticks": 192,
+        "nonidle_windows": 122,
+        "total_ticks": 6165
+      }
+    },
+    {
+      "cpu": 62,
+      "cpu_counts": {
+        "idle_ticks": 6073,
+        "max_nonidle_ticks": 2,
+        "nonidle_ticks": 80,
+        "nonidle_windows": 69,
+        "total_ticks": 6153
+      },
+      "sibling": 126,
+      "sibling_counts": {
+        "idle_ticks": 6082,
+        "max_nonidle_ticks": 3,
+        "nonidle_ticks": 72,
+        "nonidle_windows": 56,
+        "total_ticks": 6154
+      }
+    }
+  ],
+  "candidate_timing_performed": false,
+  "controller_cpu": 63,
+  "counter_source": "/proc/stat",
+  "eligible_pairs": [
+    {
+      "cpu": 52,
+      "sibling": 116
+    },
+    {
+      "cpu": 54,
+      "sibling": 118
+    }
+  ],
+  "excluded_pairs": [
+    {
+      "cpu": 9,
+      "reason": "rejected by prior 80-window presample",
+      "sibling": 73
+    },
+    {
+      "cpu": 10,
+      "reason": "V5 exhausted the five-attempt sibling-contamination budget",
+      "sibling": 74
+    },
+    {
+      "cpu": 13,
+      "reason": "V3 exhausted the five-attempt sibling-contamination budget",
+      "sibling": 77
+    },
+    {
+      "cpu": 63,
+      "reason": "scanner controller pinned to primary CPU 63",
+      "sibling": 127
+    }
+  ],
+  "interval_seconds": 0.25,
+  "nonidle_definition": "user + nice + system + irq + softirq + steal",
+  "schema": "leopard2-t16-scheduler-quiet-selection/v2",
+  "selected": {
+    "cpu": 52,
+    "sibling": 116
+  },
+  "selection_rule": "lowest primary CPU among pairs with zero nonidle ticks on both logical CPUs",
+  "windows_per_pair": 240
+}

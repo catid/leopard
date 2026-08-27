@@ -36,18 +36,27 @@ Files:
   through a pre-opened descriptor only after every file and directory is
   read-only, and its precomputed digest is already in the envelope manifest.
   Its `--verify` mode rechecks the sealed envelope without collecting timing.
-- `scheduler-quiet-selection.json` retains the scheduler-only counters and
-  deterministic CPU-pair selection used before the authoritative acquisition.
+- `scheduler-quiet-selection.json` retains the first scheduler-only CPU-pair
+  selection, while `scheduler-quiet-selection-v2.json` retains the final
+  full-node selection after pair 10/74 later failed its contamination gate.
 
 The short screens are diagnostic selection evidence, not promotion evidence.
 Production default-on status is conditional on a completed, immutable
 live-versus-replay campaign and a successful independent replay audit.
 
-The authoritative campaign is pinned to CPU 10 with SMT sibling 74.  CPU
-13/sibling 77 exhausted the frozen contamination budget, and a longer
-prereacquisition check then rejected CPU 9/sibling 73.  Pair 10/74 was selected
-solely from 80-by-250-ms `/proc/stat` scans of every other same-L3 pair by
-the deterministic ordering `(sibling nonidle windows, sibling nonidle ticks,
-primary CPU)`: sibling 74 had two nonidle windows and two ticks, the minimum.
-The complete counters are retained in `scheduler-quiet-selection.json`.  No
-candidate timing was collected while selecting either replacement pair.
+The final authoritative campaign is pinned to CPU 52 with SMT sibling 116.
+CPU 13/sibling 77 first exhausted the frozen contamination budget, a longer
+prereacquisition check rejected CPU 9/sibling 73, and the first retained scan
+selected CPU 10/sibling 74.  A complete campaign on 10/74 passed its measured
+gates but stopped at a subsequently repaired archive-auditor defect; the next
+fresh campaign then exhausted the unchanged contamination budget on that pair.
+
+The final selection used a 240-by-250-ms `/proc/stat` scan of every remaining
+online sibling pair.  Because the first scan's relative-minimum pair later
+failed the contamination gate, the final rule was deliberately tightened to
+require zero nonidle ticks on both logical CPUs.  Prior failed/rejected pairs
+and the scanner's own 63/127 pair were excluded before the scan.  The fixed
+rule selected the lowest primary CPU among eligible pairs: 52/116 and 54/118
+qualified, so 52/116 was selected.  Full counters are retained in
+`scheduler-quiet-selection-v2.json`.  No candidate timing was collected during
+either CPU-selection scan, and no retry, timing, or statistical gate changed.
