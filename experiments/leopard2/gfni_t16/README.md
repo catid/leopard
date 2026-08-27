@@ -40,3 +40,8 @@ Files:
 The short screens are diagnostic selection evidence, not promotion evidence.
 Production default-on status is conditional on a completed, immutable
 live-versus-replay campaign and a successful independent replay audit.
+
+The authoritative campaign is pinned to CPU 9 with SMT sibling 73.  This pair
+was selected solely from a prereacquisition 40-by-250-ms `/proc/stat` quietness
+scan after CPU 13/sibling 77 exhausted the frozen contamination budget; no
+candidate timing was collected while selecting the replacement pair.
