@@ -25,6 +25,9 @@ Files:
   auditor.  It does not import the acquisition controller and reconstructs the
   complete journal, raw launch identities, route evidence, statistics, gates,
   and source closure.
+- `run_authoritative_k16r16_b64_avx512_gfni.sh` creates fresh live and detached
+  replay builds, proves byte-identical build closure, runs the frozen campaign,
+  and seals the independently audited evidence lane.
 
 The short screens are diagnostic selection evidence, not promotion evidence.
 Production default-on status is conditional on a completed, immutable
