@@ -446,6 +446,32 @@ def parse_controller_command(report: dict[str, Any], report_path: Path,
     return parsed
 
 
+def validate_canonical_lock(value: Any,
+                            controller: dict[str, str]) -> dict[str, Any]:
+    lock = exact_keys(
+        value,
+        {"path", "mode", "scope", "descriptor", "device", "inode"},
+        "canonical lock")
+    require(lock["path"] == "/tmp/leopard-gf8-authoritative.lock" and
+            lock["mode"] in {
+                "runner-acquired", "inherited-across-build-copy-campaign"} and
+            lock["scope"] in {
+                "campaign-only", "wrapper-build-copy-campaign"} and
+            all(type(lock[key]) is int and lock[key] >= 0
+                for key in ("descriptor", "device", "inode")),
+            "canonical lock contract changed")
+    if "--lock-fd" in controller:
+        require(controller["--lock-fd"] == str(lock["descriptor"]) and
+                lock["mode"] == "inherited-across-build-copy-campaign" and
+                lock["scope"] == "wrapper-build-copy-campaign",
+                "inherited lock descriptor or scope changed")
+    else:
+        require(lock["mode"] == "runner-acquired" and
+                lock["scope"] == "campaign-only",
+                "runner-acquired lock metadata changed")
+    return lock
+
+
 def expected_benchmark_command(binary: Path, output: Path,
                                cell: tuple[Any, ...], mode: int,
                                seed: int) -> list[str]:
@@ -613,7 +639,9 @@ def validate_launch(launch: Any, *, cell: tuple[Any, ...], mode: int,
 
 
 def validate_source_closure(report: dict[str, Any], controller: dict[str, str],
-                            artifact_root: Path) -> dict[str, Any]:
+                            artifact_root: Path,
+                            archive_only_source_closure: bool) \
+        -> dict[str, Any]:
     pre = report["provenance"]
     post = report["post_identities"]
     exact_keys(pre, {
@@ -750,14 +778,16 @@ def validate_source_closure(report: dict[str, Any], controller: dict[str, str],
                 len(data) == metadata["size"] == identity["size"],
                 f"source archive does not bind frozen {relative}")
 
-    # Re-run the same read-only Git closure independently when the retained
-    # repository is still present.  The archive checks above remain meaningful
-    # even if a later handoff intentionally omits the live worktree.
+    # Acquisition already binds and rechecks the live repository before and
+    # after timing.  Archive-only replay deliberately avoids making durable
+    # verification depend on the later state of that mutable checkout; the
+    # canonical source archive and committed controller/validator bytes remain
+    # fully checked above.
     repository = Path(binding["repository"])
     require(controller["--repository"] == str(repository),
             "controller repository path changed")
     live_checked = False
-    if repository.exists():
+    if repository.exists() and not archive_only_source_closure:
         canonical_path(repository / ".git", must_exist=True)
         git_identity = reopen_identity(
             binding["git"], "Git executable", 64 * 1024 * 1024)
@@ -796,10 +826,14 @@ def validate_source_closure(report: dict[str, Any], controller: dict[str, str],
         "runner_sha256": pre["runner_pre"]["sha256"],
         "validator_sha256": pre["validator_pre"]["sha256"],
         "live_repository_checked": live_checked,
+        "source_closure_mode": (
+            "archive-only" if archive_only_source_closure else
+            "archive-plus-live-when-present"),
     }
 
 
-def replay(report_path: Path, journal_path: Path) -> dict[str, Any]:
+def replay(report_path: Path, journal_path: Path,
+           *, archive_only_source_closure: bool = False) -> dict[str, Any]:
     auditor_identity = stable_file(
         Path(__file__).resolve(), maximum_bytes=MAX_VALIDATOR_BYTES,
         single_link=True)
@@ -891,22 +925,7 @@ def replay(report_path: Path, journal_path: Path) -> dict[str, Any]:
     require(journal_path.parent == artifact_root,
             "journal escaped the report artifact root")
     controller = parse_controller_command(report, report_path, journal_path)
-    lock = exact_keys(report["canonical_lock"],
-                      {"path", "mode", "descriptor", "device", "inode"},
-                      "canonical lock")
-    require(lock["path"] == "/tmp/leopard-gf8-authoritative.lock" and
-            lock["mode"] in {
-                "runner-acquired", "inherited-across-build-copy-campaign"} and
-            all(type(lock[key]) is int and lock[key] >= 0
-                for key in ("descriptor", "device", "inode")),
-            "canonical lock contract changed")
-    if "--lock-fd" in controller:
-        require(controller["--lock-fd"] == str(lock["descriptor"]) and
-                lock["mode"] == "inherited-across-build-copy-campaign",
-                "inherited lock descriptor changed")
-    else:
-        require(lock["mode"] == "runner-acquired",
-                "runner-acquired lock metadata changed")
+    lock = validate_canonical_lock(report["canonical_lock"], controller)
     require(controller["--cpu"] == str(EXPECTED_CPU) and
             controller["--sibling"] == str(EXPECTED_SIBLING),
             "controller CPU topology changed")
@@ -919,7 +938,8 @@ def replay(report_path: Path, journal_path: Path) -> dict[str, Any]:
     require(stat.S_IMODE(invocations.lstat().st_mode) in {0o700, 0o500},
             "invocation root permissions changed")
     binary = Path(report["binary"])
-    source_closure = validate_source_closure(report, controller, artifact_root)
+    source_closure = validate_source_closure(
+        report, controller, artifact_root, archive_only_source_closure)
     validator_identity = report["provenance"]["validator_pre"]
     validator = load_validator(Path(validator_identity["path"]),
                                validator_identity)
@@ -1301,6 +1321,31 @@ def self_test() -> None:
     require(result["rounds"] == TARGET_ROUNDS and
             result["ci95"][0] < result["geometric_mean_speedup"] <
             result["ci95"][1], "Student-t self-test failed")
+    inherited_lock = {
+        "path": "/tmp/leopard-gf8-authoritative.lock",
+        "mode": "inherited-across-build-copy-campaign",
+        "scope": "wrapper-build-copy-campaign",
+        "descriptor": 9,
+        "device": 1,
+        "inode": 2,
+    }
+    validate_canonical_lock(inherited_lock, {"--lock-fd": "9"})
+    validate_canonical_lock({
+        **inherited_lock,
+        "mode": "runner-acquired",
+        "scope": "campaign-only",
+    }, {})
+    for adversarial_lock in (
+            {key: value for key, value in inherited_lock.items()
+             if key != "scope"},
+            {**inherited_lock, "scope": "campaign-only"},
+            {**inherited_lock, "mode": "runner-acquired"}):
+        try:
+            validate_canonical_lock(adversarial_lock, {"--lock-fd": "9"})
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("canonical lock self-test accepted a mismatch")
     with tempfile.TemporaryDirectory(prefix="leopard-t16-audit-self-test.") \
             as directory:
         root = Path(directory).resolve()
@@ -1355,10 +1400,12 @@ def main() -> int:
     parser.add_argument("--journal", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--archive-only-source-closure", action="store_true")
     options = parser.parse_args()
     if options.self_test:
         require(options.report is None and options.journal is None and
-                options.output is None,
+                options.output is None and
+                not options.archive_only_source_closure,
                 "--self-test cannot be combined with replay paths")
         self_test()
         return 0
@@ -1371,7 +1418,9 @@ def main() -> int:
             "report and journal must share one artifact directory")
     require(options.output != options.report and options.output != options.journal,
             "audit output aliases an input artifact")
-    result = replay(options.report, options.journal)
+    result = replay(
+        options.report, options.journal,
+        archive_only_source_closure=options.archive_only_source_closure)
     write_canonical(options.output, result)
     print(json.dumps({
         "audit_passed": True,

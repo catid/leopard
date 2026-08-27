@@ -24,10 +24,15 @@ Files:
 - `audit_k16r16_b64_avx512_gfni_abba.py` is an independent, no-timing replay
   auditor.  It does not import the acquisition controller and reconstructs the
   complete journal, raw launch identities, route evidence, statistics, gates,
-  and source closure.
+  and source closure.  The authoritative wrapper uses its archive-only source
+  mode so durable replay remains valid after the live branch advances; the
+  acquisition controller and wrapper still check the live repository before
+  and after the measured run.
 - `run_authoritative_k16r16_b64_avx512_gfni.sh` creates fresh live and detached
-  replay builds, proves byte-identical build closure, runs the frozen campaign,
-  and seals the independently audited evidence lane.
+  replay builds in an allowlisted environment, proves byte-identical build
+  closure, runs the frozen campaign, and publishes a sealed completion envelope
+  only after the independent post-seal replay succeeds.  Its `--verify` mode
+  rechecks the sealed envelope without collecting timing.
 
 The short screens are diagnostic selection evidence, not promotion evidence.
 Production default-on status is conditional on a completed, immutable

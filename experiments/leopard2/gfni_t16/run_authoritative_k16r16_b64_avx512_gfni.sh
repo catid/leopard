@@ -1,6 +1,64 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -Eeuo pipefail
 umask 077
+
+if [[ ${1:-} != --leopard-t16-clean-env-internal ]]; then
+    authoritative_script="$(/usr/bin/readlink -f "$0")"
+    exec /usr/bin/env -i \
+        PATH=/usr/bin:/bin \
+        LANG=C \
+        LC_ALL=C \
+        TZ=UTC \
+        TMPDIR=/tmp \
+        OMP_DYNAMIC=FALSE \
+        OMP_NUM_THREADS=1 \
+        OMP_THREAD_LIMIT=1 \
+        PYTHONNOUSERSITE=1 \
+        PYTHONDONTWRITEBYTECODE=1 \
+        CC=/usr/bin/cc \
+        CXX=/usr/bin/c++ \
+        CFLAGS= \
+        CXXFLAGS= \
+        CPPFLAGS= \
+        LDFLAGS= \
+        /usr/bin/bash "$authoritative_script" \
+        --leopard-t16-clean-env-internal "$@"
+fi
+shift
+
+for required_pair in \
+    'PATH=/usr/bin:/bin' \
+    'LANG=C' \
+    'LC_ALL=C' \
+    'TZ=UTC' \
+    'TMPDIR=/tmp' \
+    'OMP_DYNAMIC=FALSE' \
+    'OMP_NUM_THREADS=1' \
+    'OMP_THREAD_LIMIT=1' \
+    'PYTHONNOUSERSITE=1' \
+    'PYTHONDONTWRITEBYTECODE=1' \
+    'CC=/usr/bin/cc' \
+    'CXX=/usr/bin/c++' \
+    'CFLAGS=' \
+    'CXXFLAGS=' \
+    'CPPFLAGS=' \
+    'LDFLAGS='; do
+    required_name=${required_pair%%=*}
+    required_value=${required_pair#*=}
+    test "${!required_name-}" = "$required_value"
+done
+while IFS= read -r -d '' environment_entry; do
+    environment_name=${environment_entry%%=*}
+    case "$environment_name" in
+        PATH|LANG|LC_ALL|TZ|TMPDIR|OMP_DYNAMIC|OMP_NUM_THREADS|OMP_THREAD_LIMIT|PYTHONNOUSERSITE|PYTHONDONTWRITEBYTECODE|CC|CXX|CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS|PWD|SHLVL|_)
+            ;;
+        *)
+            /usr/bin/printf 'unexpected authoritative environment key: %s\n' \
+                "$environment_name" >&2
+            exit 2
+            ;;
+    esac
+done < <(/usr/bin/env -0)
 
 repo=/home/catid/leopard
 relative_wrapper=experiments/leopard2/gfni_t16/run_authoritative_k16r16_b64_avx512_gfni.sh
@@ -9,12 +67,122 @@ relative_auditor=experiments/leopard2/gfni_t16/audit_k16r16_b64_avx512_gfni_abba
 relative_validator=tools/leopard2_benchmark_json_test.py
 lock=/tmp/leopard-gf8-authoritative.lock
 
+require_empty_output()
+{
+    local observed_output
+    observed_output="$("$@")"
+    test -z "$observed_output"
+}
+
+verify_envelope()
+{
+    verified_envelope=$1
+    verified_core="$verified_envelope/core"
+    test -d "$verified_envelope"
+    test ! -L "$verified_envelope"
+    test -d "$verified_core"
+    test ! -L "$verified_core"
+    test -f "$verified_envelope/COMPLETED.json"
+    test -f "$verified_envelope/SHA256SUMS"
+    test -f "$verified_core/SHA256SUMS"
+    test -f "$verified_core/campaign.json"
+    test -f "$verified_core/campaign.jsonl"
+    test -f "$verified_core/audit.json"
+    test -f "$verified_envelope/postseal-audit.json"
+    require_empty_output /usr/bin/find "$verified_envelope" \
+        -type l -print -quit
+    require_empty_output /usr/bin/find "$verified_envelope" \
+        -type f -links +1 -print -quit
+    require_empty_output /usr/bin/find "$verified_envelope" \
+        -type f -perm /222 -print -quit
+    require_empty_output /usr/bin/find "$verified_envelope" \
+        -type d -perm /222 -print -quit
+    (
+        cd "$verified_core"
+        /usr/bin/sha256sum -c SHA256SUMS
+    ) >/dev/null
+    (
+        cd "$verified_envelope"
+        /usr/bin/sha256sum -c SHA256SUMS
+    ) >/dev/null
+    /usr/bin/cmp "$verified_core/audit.json" \
+        "$verified_envelope/postseal-audit.json"
+    completed_status="$(/usr/bin/jq -er '.status | strings' \
+        "$verified_envelope/COMPLETED.json")"
+    completed_schema="$(/usr/bin/jq -er '.schema | strings' \
+        "$verified_envelope/COMPLETED.json")"
+    completed_promotion="$(/usr/bin/jq -er '.promotion_passed | booleans' \
+        "$verified_envelope/COMPLETED.json")"
+    completed_exit="$(/usr/bin/jq -er '.campaign_exit_status | numbers' \
+        "$verified_envelope/COMPLETED.json")"
+    completed_claim="$(/usr/bin/jq -er '.claim_passed | booleans' \
+        "$verified_envelope/COMPLETED.json")"
+    test "$completed_schema" = \
+        leopard2-k16r16-b64-avx512-gfni-completion-envelope/v1
+    test "$completed_status" = complete
+    test "$completed_promotion" = true
+    test "$completed_exit" = 0
+    test "$completed_claim" = true
+    test "$(/usr/bin/jq -r '.promotion_requires_completion_envelope' \
+        "$verified_core/manifest.json")" = true
+    test "$(/usr/bin/jq -r '.promotion_passed' \
+        "$verified_core/manifest.json")" = false
+    test "$(/usr/bin/sha256sum "$verified_core/manifest.json" | \
+        /usr/bin/cut -d' ' -f1)" = \
+        "$(/usr/bin/jq -r '.core_manifest_sha256' \
+            "$verified_envelope/COMPLETED.json")"
+    test "$(/usr/bin/sha256sum "$verified_core/SHA256SUMS" | \
+        /usr/bin/cut -d' ' -f1)" = \
+        "$(/usr/bin/jq -r '.core_sha256sums_sha256' \
+            "$verified_envelope/COMPLETED.json")"
+    test "$(/usr/bin/sha256sum "$verified_core/audit.json" | \
+        /usr/bin/cut -d' ' -f1)" = \
+        "$(/usr/bin/jq -r '.audit_sha256' \
+            "$verified_envelope/COMPLETED.json")"
+    test "$(/usr/bin/sha256sum "$verified_core/run-authoritative.sh" | \
+        /usr/bin/cut -d' ' -f1)" = \
+        "$(/usr/bin/jq -r '.wrapper_sha256' \
+            "$verified_core/manifest.json")"
+    test "$(/usr/bin/sha256sum \
+        "$verified_core/audit_k16r16_b64_avx512_gfni_abba.py" | \
+        /usr/bin/cut -d' ' -f1)" = \
+        "$(/usr/bin/jq -r '.auditor_sha256' \
+            "$verified_core/manifest.json")"
+    /usr/bin/cmp "$verified_core/run-authoritative.sh" \
+        "$verified_core/build-closure/committed-wrapper.sh"
+    /usr/bin/cmp \
+        "$verified_core/audit_k16r16_b64_avx512_gfni_abba.py" \
+        "$verified_core/build-closure/committed-auditor.py"
+    test "$(/usr/bin/sha256sum "$verified_envelope/postseal-audit.json" | \
+        /usr/bin/cut -d' ' -f1)" = \
+        "$(/usr/bin/jq -r '.postseal_audit_sha256' \
+            "$verified_envelope/COMPLETED.json")"
+    verifier_tmp="$(/usr/bin/mktemp -d /tmp/leopard-t16-envelope-verify.XXXXXX)"
+    /usr/bin/python3 -I -S -B \
+        "$verified_core/audit_k16r16_b64_avx512_gfni_abba.py" \
+        --archive-only-source-closure \
+        --report "$verified_core/campaign.json" \
+        --journal "$verified_core/campaign.jsonl" \
+        --output "$verifier_tmp/audit.json" \
+        > "$verifier_tmp/audit-summary.json" \
+        2> "$verifier_tmp/audit-stderr.log"
+    /usr/bin/cmp "$verified_core/audit.json" "$verifier_tmp/audit.json"
+    /usr/bin/printf 'authoritative envelope verified: %s\n' \
+        "$verified_envelope"
+}
+
+if [[ $# -eq 2 && $1 == --verify && $2 == /* ]]; then
+    verify_envelope "$2"
+    exit 0
+fi
+
 if [[ $# -ne 1 || $1 != /* ]]; then
-    /usr/bin/printf 'usage: %s /absolute/repository/.research/lane\n' "$0" >&2
+    /usr/bin/printf 'usage: %s /absolute/repository/.research/envelope\n' "$0" >&2
+    /usr/bin/printf '       %s --verify /absolute/repository/.research/envelope\n' "$0" >&2
     exit 2
 fi
-lane=$1
-case "$lane" in
+envelope=$1
+case "$envelope" in
     "$repo"/.research/*) ;;
     *)
         /usr/bin/printf 'artifact lane must be below %s/.research\n' "$repo" >&2
@@ -73,11 +241,13 @@ failure_record()
     exit "$status"
 }
 
-if [[ -e "$lane" ]]; then
-    /usr/bin/printf 'refusing to reuse artifact lane: %s\n' "$lane" >&2
+if [[ -e "$envelope" ]]; then
+    /usr/bin/printf 'refusing to reuse artifact envelope: %s\n' "$envelope" >&2
     exit 2
 fi
-/usr/bin/mkdir -p "$(/usr/bin/dirname "$lane")"
+/usr/bin/mkdir -p "$(/usr/bin/dirname "$envelope")"
+/usr/bin/mkdir -m 0700 "$envelope"
+lane="$envelope/core"
 /usr/bin/mkdir -m 0700 "$lane"
 trap failure_record ERR
 
@@ -88,13 +258,31 @@ test -f "$lock"
 test ! -L "$lock"
 test "$(/usr/bin/stat -c %h "$lock")" = 1
 
+next_stage pre_tool_closure
+/usr/bin/sha256sum \
+    /usr/bin/bash /usr/bin/env /usr/bin/c++ /usr/bin/cc /usr/bin/ld \
+    /usr/bin/ar /usr/bin/ranlib /usr/bin/cmake /usr/bin/ninja /usr/bin/git \
+    /usr/bin/objdump /usr/bin/readelf /usr/bin/nm /usr/bin/python3 \
+    /usr/bin/taskset /usr/bin/flock /usr/bin/jq /usr/bin/sha256sum \
+    /usr/bin/find /usr/bin/grep /usr/bin/cmp /usr/bin/cp /usr/bin/stat \
+    /usr/bin/chmod /usr/bin/sort /usr/bin/xargs /usr/bin/cut /usr/bin/tee \
+    /usr/bin/ctest /usr/bin/cat /usr/bin/dirname /usr/bin/lscpu \
+    /usr/bin/mkdir /usr/bin/mktemp /usr/bin/printf /usr/bin/readlink \
+    /usr/bin/uname \
+    > "$lane/pre-tool-SHA256SUMS"
+/usr/bin/python3 -I -S -B -c \
+    'import json,sys; assert sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.flags.ignore_environment == 1; print(json.dumps({"executable":sys.executable,"flags":{"ignore_environment":sys.flags.ignore_environment,"isolated":sys.flags.isolated,"no_site":sys.flags.no_site,"no_user_site":sys.flags.no_user_site}},sort_keys=True,separators=(",",":")))' \
+    > "$lane/python-isolation.json"
+
 next_stage clean_source_preflight
 commit="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 tree="$(/usr/bin/git -C "$repo" rev-parse 'HEAD^{tree}')"
 test "${#commit}" = 40
 test "${#tree}" = 40
-test -z "$(/usr/bin/git -C "$repo" status --porcelain=v1 --untracked-files=normal)"
-test -z "$(/usr/bin/git -C "$repo" status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)"
+require_empty_output /usr/bin/git -C "$repo" status \
+    --porcelain=v1 --untracked-files=normal
+require_empty_output /usr/bin/git -C "$repo" status \
+    --porcelain=v1 --untracked-files=normal --ignore-submodules=none
 test "$(/usr/bin/git -C "$repo" rev-parse --show-toplevel)" = "$repo"
 test "$(/usr/bin/readlink -f "$repo/$relative_wrapper")" = \
     "$(/usr/bin/readlink -f "$0")"
@@ -129,8 +317,10 @@ next_stage replay_clone
     > "$lane/replay-checkout.log" 2>&1
 test "$(/usr/bin/git -C "$replay_source" rev-parse HEAD)" = "$commit"
 test "$(/usr/bin/git -C "$replay_source" rev-parse 'HEAD^{tree}')" = "$tree"
-test -z "$(/usr/bin/git -C "$replay_source" status --porcelain=v1 --untracked-files=normal)"
-test -z "$(/usr/bin/git -C "$replay_source" status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)"
+require_empty_output /usr/bin/git -C "$replay_source" status \
+    --porcelain=v1 --untracked-files=normal
+require_empty_output /usr/bin/git -C "$replay_source" status \
+    --porcelain=v1 --untracked-files=normal --ignore-submodules=none
 /usr/bin/git -C "$replay_source" ls-tree HEAD sse2neon > "$lane/replay-sse2neon-gitlink.txt"
 /usr/bin/cmp "$lane/live-sse2neon-gitlink.txt" "$lane/replay-sse2neon-gitlink.txt"
 
@@ -138,6 +328,15 @@ configure_common=(
     -G Ninja
     -DCMAKE_BUILD_TYPE=Release
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    -DCMAKE_C_COMPILER=/usr/bin/cc
+    -DCMAKE_CXX_COMPILER=/usr/bin/c++
+    -DCMAKE_AR=/usr/bin/ar
+    -DCMAKE_RANLIB=/usr/bin/ranlib
+    -DPython3_EXECUTABLE=/usr/bin/python3
+    -DCMAKE_C_FLAGS=
+    -DCMAKE_CXX_FLAGS=
+    -DCMAKE_EXE_LINKER_FLAGS=
+    -DCMAKE_SHARED_LINKER_FLAGS=
     -DLEO2_BUILD_TESTS=ON
     -DLEO2_BUILD_BENCHMARKS=ON
     -DLEO2_ENABLE_CUDA=OFF
@@ -156,9 +355,24 @@ build_targets=(
 )
 focused_regex='^leopard2_(portable_isa|portable_isa_registration|portable_isa_checker_self_test|balanced_b64_terminal|balanced_b64_terminal_production|backend_ops|avx512_gfni_t16_prototype|benchmark_json_regression)$'
 
+assert_pinned_cache()
+{
+    cache=$1/CMakeCache.txt
+    /usr/bin/grep -Fx 'CMAKE_C_COMPILER:FILEPATH=/usr/bin/cc' "$cache"
+    /usr/bin/grep -Fx 'CMAKE_CXX_COMPILER:FILEPATH=/usr/bin/c++' "$cache"
+    /usr/bin/grep -Fx 'CMAKE_AR:FILEPATH=/usr/bin/ar' "$cache"
+    /usr/bin/grep -Fx 'CMAKE_RANLIB:FILEPATH=/usr/bin/ranlib' "$cache"
+    /usr/bin/grep -Eq '^Python3_EXECUTABLE(:[^=]+)?=/usr/bin/python3$' "$cache"
+    /usr/bin/grep -Fx 'CMAKE_C_FLAGS:STRING=' "$cache"
+    /usr/bin/grep -Fx 'CMAKE_CXX_FLAGS:STRING=' "$cache"
+    /usr/bin/grep -Fx 'CMAKE_EXE_LINKER_FLAGS:STRING=' "$cache"
+    /usr/bin/grep -Fx 'CMAKE_SHARED_LINKER_FLAGS:STRING=' "$cache"
+}
+
 next_stage live_configure
 /usr/bin/cmake -S "$repo" -B "$live_build" "${configure_common[@]}" \
     > "$lane/live-configure.log" 2>&1
+assert_pinned_cache "$live_build" >> "$lane/live-configure.log"
 
 next_stage live_build
 /usr/bin/cmake --build "$live_build" --parallel 2 --target "${build_targets[@]}" \
@@ -172,6 +386,7 @@ next_stage live_focused_tests
 next_stage replay_configure
 /usr/bin/cmake -S "$replay_source" -B "$replay_build" "${configure_common[@]}" \
     > "$lane/replay-configure.log" 2>&1
+assert_pinned_cache "$replay_build" >> "$lane/replay-configure.log"
 
 next_stage replay_build
 /usr/bin/cmake --build "$replay_build" --parallel 2 --target "${build_targets[@]}" \
@@ -272,6 +487,66 @@ copy_build_closure "$replay_build" "$lane/build-closure/replay" \
     "$replay_t16_object" "$replay_benchmark_object" \
     "$replay_attestation" "$replay_configuration"
 
+validate_retained_build_closure()
+{
+    /usr/bin/cmp "$lane/build-closure/live/CMakeCache.txt" \
+        "$live_build/CMakeCache.txt"
+    /usr/bin/cmp "$lane/build-closure/live/compile_commands.json" \
+        "$live_build/compile_commands.json"
+    /usr/bin/cmp "$lane/build-closure/live/build.ninja" \
+        "$live_build/build.ninja"
+    /usr/bin/cmp "$lane/build-closure/live/libleopard.a" \
+        "$live_build/libleopard.a"
+    /usr/bin/cmp "$lane/build-closure/live/bench_leopard2" \
+        "$live_build/bench_leopard2"
+    /usr/bin/cmp "$lane/build-closure/live/bench_leopard2_prevalidated_batch" \
+        "$live_build/bench_leopard2_prevalidated_batch"
+    /usr/bin/cmp "$lane/build-closure/live/Leopard2BackendAVX512GFNIT16.cpp.o" \
+        "$live_t16_object"
+    /usr/bin/cmp "$lane/build-closure/live/benchmark.cpp.o" \
+        "$live_benchmark_object"
+    /usr/bin/cmp "$lane/build-closure/live/leopard2_benchmark_source_attestation.h" \
+        "$live_attestation"
+    /usr/bin/cmp "$lane/build-closure/live/leopard2_benchmark_build_configuration.txt" \
+        "$live_configuration"
+    /usr/bin/cmp "$lane/build-closure/replay/CMakeCache.txt" \
+        "$replay_build/CMakeCache.txt"
+    /usr/bin/cmp "$lane/build-closure/replay/compile_commands.json" \
+        "$replay_build/compile_commands.json"
+    /usr/bin/cmp "$lane/build-closure/replay/build.ninja" \
+        "$replay_build/build.ninja"
+    /usr/bin/cmp "$lane/build-closure/replay/libleopard.a" \
+        "$replay_build/libleopard.a"
+    /usr/bin/cmp "$lane/build-closure/replay/bench_leopard2" \
+        "$replay_build/bench_leopard2"
+    /usr/bin/cmp "$lane/build-closure/replay/bench_leopard2_prevalidated_batch" \
+        "$replay_build/bench_leopard2_prevalidated_batch"
+    /usr/bin/cmp "$lane/build-closure/replay/Leopard2BackendAVX512GFNIT16.cpp.o" \
+        "$replay_t16_object"
+    /usr/bin/cmp "$lane/build-closure/replay/benchmark.cpp.o" \
+        "$replay_benchmark_object"
+    /usr/bin/cmp "$lane/build-closure/replay/leopard2_benchmark_source_attestation.h" \
+        "$replay_attestation"
+    /usr/bin/cmp "$lane/build-closure/replay/leopard2_benchmark_build_configuration.txt" \
+        "$replay_configuration"
+    /usr/bin/cmp "$lane/build-closure/live/libleopard.a" \
+        "$lane/build-closure/replay/libleopard.a"
+    /usr/bin/cmp "$lane/build-closure/live/bench_leopard2" \
+        "$lane/build-closure/replay/bench_leopard2"
+    /usr/bin/cmp "$lane/build-closure/live/bench_leopard2_prevalidated_batch" \
+        "$lane/build-closure/replay/bench_leopard2_prevalidated_batch"
+    /usr/bin/cmp "$lane/build-closure/live/Leopard2BackendAVX512GFNIT16.cpp.o" \
+        "$lane/build-closure/replay/Leopard2BackendAVX512GFNIT16.cpp.o"
+    /usr/bin/cmp "$lane/build-closure/live/benchmark.cpp.o" \
+        "$lane/build-closure/replay/benchmark.cpp.o"
+    /usr/bin/cmp "$lane/build-closure/live/leopard2_benchmark_source_attestation.h" \
+        "$lane/build-closure/replay/leopard2_benchmark_source_attestation.h"
+    /usr/bin/cmp "$lane/build-closure/live/leopard2_benchmark_build_configuration.txt" \
+        "$lane/build-closure/replay/leopard2_benchmark_build_configuration.txt"
+}
+
+validate_retained_build_closure
+
 /usr/bin/ninja -C "$live_build" -t commands bench_leopard2 \
     > "$lane/build-closure/live-ninja-commands.txt"
 /usr/bin/ninja -C "$replay_build" -t commands bench_leopard2 \
@@ -289,9 +564,15 @@ copy_build_closure "$replay_build" "$lane/build-closure/replay" \
 /usr/bin/nm -S --size-sort "$replay_t16_object" \
     > "$lane/build-closure/t16-object-nm-sizes.txt"
 /usr/bin/sha256sum \
-    /usr/bin/c++ /usr/bin/cc /usr/bin/ld /usr/bin/ar /usr/bin/cmake \
-    /usr/bin/ninja /usr/bin/git /usr/bin/objdump /usr/bin/readelf \
-    /usr/bin/nm /usr/bin/python3 /usr/bin/taskset /usr/bin/flock \
+    /usr/bin/bash /usr/bin/env /usr/bin/c++ /usr/bin/cc /usr/bin/ld \
+    /usr/bin/ar /usr/bin/ranlib /usr/bin/cmake /usr/bin/ninja /usr/bin/git \
+    /usr/bin/objdump /usr/bin/readelf /usr/bin/nm /usr/bin/python3 \
+    /usr/bin/taskset /usr/bin/flock /usr/bin/jq /usr/bin/sha256sum \
+    /usr/bin/find /usr/bin/grep /usr/bin/cmp /usr/bin/cp /usr/bin/stat \
+    /usr/bin/chmod /usr/bin/sort /usr/bin/xargs /usr/bin/cut /usr/bin/tee \
+    /usr/bin/ctest /usr/bin/cat /usr/bin/dirname /usr/bin/lscpu \
+    /usr/bin/mkdir /usr/bin/mktemp /usr/bin/printf /usr/bin/readlink \
+    /usr/bin/uname \
     > "$lane/build-closure/tool-SHA256SUMS"
 /usr/bin/c++ --version > "$lane/build-closure/compiler-version.txt"
 /usr/bin/cc --version > "$lane/build-closure/c-compiler-version.txt"
@@ -325,11 +606,11 @@ auditor_hash="$(/usr/bin/sha256sum "$lane/audit_k16r16_b64_avx512_gfni_abba.py" 
 validator_hash="$(/usr/bin/sha256sum "$lane/leopard2_benchmark_json_test.py" | /usr/bin/cut -d' ' -f1)"
 wrapper_hash="$(/usr/bin/sha256sum "$lane/run-authoritative.sh" | /usr/bin/cut -d' ' -f1)"
 archive_hash="$(/usr/bin/sha256sum "$lane/source.tar" | /usr/bin/cut -d' ' -f1)"
-library_hash="$(/usr/bin/sha256sum "$replay_build/libleopard.a" | /usr/bin/cut -d' ' -f1)"
-t16_object_hash="$(/usr/bin/sha256sum "$replay_t16_object" | /usr/bin/cut -d' ' -f1)"
-benchmark_object_hash="$(/usr/bin/sha256sum "$replay_benchmark_object" | /usr/bin/cut -d' ' -f1)"
-attestation_hash="$(/usr/bin/sha256sum "$replay_attestation" | /usr/bin/cut -d' ' -f1)"
-configuration_hash="$(/usr/bin/sha256sum "$replay_configuration" | /usr/bin/cut -d' ' -f1)"
+library_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/libleopard.a" | /usr/bin/cut -d' ' -f1)"
+t16_object_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/Leopard2BackendAVX512GFNIT16.cpp.o" | /usr/bin/cut -d' ' -f1)"
+benchmark_object_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/benchmark.cpp.o" | /usr/bin/cut -d' ' -f1)"
+attestation_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/leopard2_benchmark_source_attestation.h" | /usr/bin/cut -d' ' -f1)"
+configuration_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/leopard2_benchmark_build_configuration.txt" | /usr/bin/cut -d' ' -f1)"
 
 /usr/bin/jq -n \
     --arg repository "$repo" \
@@ -351,13 +632,21 @@ configuration_hash="$(/usr/bin/sha256sum "$replay_configuration" | /usr/bin/cut 
     --arg validator_sha256 "$validator_hash" \
     --arg wrapper_sha256 "$wrapper_hash" \
     --arg archive_sha256 "$archive_hash" \
-    '{schema:"leopard2-k16r16-b64-avx512-gfni-build-closure/v1",repository:$repository,live_root:$live_root,live_build:$live_build,replay_root:$replay_root,replay_source:$replay_source,replay_build:$replay_build,source_commit:$commit,source_tree:$tree,byte_identical:{live_replay_binary:true,live_replay_prevalidated_binary:true,live_replay_library:true,live_replay_t16_object:true,live_replay_benchmark_object:true,live_replay_attestation:true,live_replay_configuration:true,live_replay_archive:true},frozen:{binary_sha256:$binary_sha256,library_sha256:$library_sha256,t16_object_sha256:$t16_object_sha256,benchmark_object_sha256:$benchmark_object_sha256,attestation_sha256:$attestation_sha256,configuration_sha256:$configuration_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,validator_sha256:$validator_sha256,wrapper_sha256:$wrapper_sha256,source_archive_sha256:$archive_sha256},configure:["/usr/bin/cmake","-G","Ninja","-DCMAKE_BUILD_TYPE=Release","-DCMAKE_EXPORT_COMPILE_COMMANDS=ON","-DLEO2_BUILD_TESTS=ON","-DLEO2_BUILD_BENCHMARKS=ON","-DLEO2_ENABLE_CUDA=OFF","-DLEO2_BACKEND_VARIANT=auto","-DLEOPARD_ENABLE_GF8=ON","-DLEOPARD_ENABLE_GF16=ON","-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=ON"],build:["/usr/bin/cmake","--build","<build>","--parallel","2","--target","bench_leopard2","bench_leopard2_prevalidated_batch","leopard2_balanced_b64_terminal_test","leopard2_balanced_b64_terminal_production_test","leopard2_backend_ops_test","leopard2_avx512_gfni_t16_prototype_test"],focused_test_regex:"^leopard2_(portable_isa|portable_isa_registration|portable_isa_checker_self_test|balanced_b64_terminal|balanced_b64_terminal_production|backend_ops|avx512_gfni_t16_prototype|benchmark_json_regression)$"}' \
+    '{schema:"leopard2-k16r16-b64-avx512-gfni-build-closure/v1",repository:$repository,live_root:$live_root,live_build:$live_build,replay_root:$replay_root,replay_source:$replay_source,replay_build:$replay_build,source_commit:$commit,source_tree:$tree,byte_identical:{live_replay_binary:true,live_replay_prevalidated_binary:true,live_replay_library:true,live_replay_t16_object:true,live_replay_benchmark_object:true,live_replay_attestation:true,live_replay_configuration:true,live_replay_archive:true},frozen:{binary_sha256:$binary_sha256,library_sha256:$library_sha256,t16_object_sha256:$t16_object_sha256,benchmark_object_sha256:$benchmark_object_sha256,attestation_sha256:$attestation_sha256,configuration_sha256:$configuration_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,validator_sha256:$validator_sha256,wrapper_sha256:$wrapper_sha256,source_archive_sha256:$archive_sha256},configure:["/usr/bin/cmake","-G","Ninja","-DCMAKE_BUILD_TYPE=Release","-DCMAKE_EXPORT_COMPILE_COMMANDS=ON","-DCMAKE_C_COMPILER=/usr/bin/cc","-DCMAKE_CXX_COMPILER=/usr/bin/c++","-DCMAKE_AR=/usr/bin/ar","-DCMAKE_RANLIB=/usr/bin/ranlib","-DPython3_EXECUTABLE=/usr/bin/python3","-DCMAKE_C_FLAGS=","-DCMAKE_CXX_FLAGS=","-DCMAKE_EXE_LINKER_FLAGS=","-DCMAKE_SHARED_LINKER_FLAGS=","-DLEO2_BUILD_TESTS=ON","-DLEO2_BUILD_BENCHMARKS=ON","-DLEO2_ENABLE_CUDA=OFF","-DLEO2_BACKEND_VARIANT=auto","-DLEOPARD_ENABLE_GF8=ON","-DLEOPARD_ENABLE_GF16=ON","-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=ON"],build:["/usr/bin/cmake","--build","<build>","--parallel","2","--target","bench_leopard2","bench_leopard2_prevalidated_batch","leopard2_balanced_b64_terminal_test","leopard2_balanced_b64_terminal_production_test","leopard2_backend_ops_test","leopard2_avx512_gfni_t16_prototype_test"],focused_test_regex:"^leopard2_(portable_isa|portable_isa_registration|portable_isa_checker_self_test|balanced_b64_terminal|balanced_b64_terminal_production|backend_ops|avx512_gfni_t16_prototype|benchmark_json_regression)$",python_controller:["/usr/bin/python3","-I","-S","-B"],environment_policy:"env -i allowlist with pinned compiler paths, empty compile/link flags, no Python user site, and pre/post tool hashes"}' \
     > "$lane/build-closure.json"
+/usr/bin/cmp "$lane/pre-tool-SHA256SUMS" \
+    "$lane/build-closure/tool-SHA256SUMS"
+/usr/bin/find "$lane/build-closure" -type f -perm /222 \
+    -exec /usr/bin/chmod a-w {} +
+/usr/bin/find "$lane/build-closure" -type d -perm /222 \
+    -exec /usr/bin/chmod a-w {} +
+/usr/bin/chmod a-w "$lane/build-closure.json"
 
 next_stage campaign
 campaign_command=(
     /usr/bin/taskset -c 13
-    /usr/bin/python3 "$lane/run_k16r16_b64_avx512_gfni_abba.py"
+    /usr/bin/python3 -I -S -B
+    "$lane/run_k16r16_b64_avx512_gfni_abba.py"
     --binary "$lane/bench_leopard2"
     --build-binary "$replay_build/bench_leopard2"
     --binary-sha256 "$binary_hash"
@@ -394,15 +683,38 @@ next_stage post_campaign_closure
 /usr/bin/cmp "$live_benchmark_object" "$replay_benchmark_object"
 /usr/bin/cmp "$live_attestation" "$replay_attestation"
 /usr/bin/cmp "$live_configuration" "$replay_configuration"
+validate_retained_build_closure
+require_empty_output /usr/bin/find "$lane/build-closure" \
+    -type f -perm /222 -print -quit
+require_empty_output /usr/bin/find "$lane/build-closure" \
+    -type d -perm /222 -print -quit
+test ! -w "$lane/build-closure.json"
+/usr/bin/sha256sum \
+    /usr/bin/bash /usr/bin/env /usr/bin/c++ /usr/bin/cc /usr/bin/ld \
+    /usr/bin/ar /usr/bin/ranlib /usr/bin/cmake /usr/bin/ninja /usr/bin/git \
+    /usr/bin/objdump /usr/bin/readelf /usr/bin/nm /usr/bin/python3 \
+    /usr/bin/taskset /usr/bin/flock /usr/bin/jq /usr/bin/sha256sum \
+    /usr/bin/find /usr/bin/grep /usr/bin/cmp /usr/bin/cp /usr/bin/stat \
+    /usr/bin/chmod /usr/bin/sort /usr/bin/xargs /usr/bin/cut /usr/bin/tee \
+    /usr/bin/ctest /usr/bin/cat /usr/bin/dirname /usr/bin/lscpu \
+    /usr/bin/mkdir /usr/bin/mktemp /usr/bin/printf /usr/bin/readlink \
+    /usr/bin/uname \
+    > "$lane/post-tool-SHA256SUMS"
+/usr/bin/cmp "$lane/pre-tool-SHA256SUMS" "$lane/post-tool-SHA256SUMS"
 test "$(/usr/bin/sha256sum "$lane/bench_leopard2" | /usr/bin/cut -d' ' -f1)" = "$binary_hash"
 test "$(/usr/bin/sha256sum "$lane/run_k16r16_b64_avx512_gfni_abba.py" | /usr/bin/cut -d' ' -f1)" = "$runner_hash"
 test "$(/usr/bin/sha256sum "$lane/audit_k16r16_b64_avx512_gfni_abba.py" | /usr/bin/cut -d' ' -f1)" = "$auditor_hash"
 test "$(/usr/bin/sha256sum "$lane/leopard2_benchmark_json_test.py" | /usr/bin/cut -d' ' -f1)" = "$validator_hash"
+test "$(/usr/bin/sha256sum "$lane/run-authoritative.sh" | /usr/bin/cut -d' ' -f1)" = "$wrapper_hash"
+/usr/bin/cmp "$lane/run-authoritative.sh" \
+    "$lane/build-closure/committed-wrapper.sh"
 test "$(/usr/bin/sha256sum "$lane/source.tar" | /usr/bin/cut -d' ' -f1)" = "$archive_hash"
 test "$(/usr/bin/git -C "$repo" rev-parse HEAD)" = "$commit"
 test "$(/usr/bin/git -C "$repo" rev-parse 'HEAD^{tree}')" = "$tree"
-test -z "$(/usr/bin/git -C "$repo" status --porcelain=v1 --untracked-files=normal)"
-test -z "$(/usr/bin/git -C "$repo" status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)"
+require_empty_output /usr/bin/git -C "$repo" status \
+    --porcelain=v1 --untracked-files=normal
+require_empty_output /usr/bin/git -C "$repo" status \
+    --porcelain=v1 --untracked-files=normal --ignore-submodules=none
 /usr/bin/git -C "$repo" archive --format=tar --prefix=source/ \
     --output="$replay_root/post-source.tar" "$commit"
 /usr/bin/cmp "$lane/source.tar" "$replay_root/post-source.tar"
@@ -444,21 +756,56 @@ if [[ "$report_status" == failed ]]; then
         cd "$lane"
         /usr/bin/sha256sum -c SHA256SUMS
     ) > "$failed_verification/sha256-check.txt"
-    test -z "$(/usr/bin/find "$lane" -type l -print -quit)"
-    test -z "$(/usr/bin/find "$lane" -type f -links +1 -print -quit)"
-    test -z "$(/usr/bin/find "$lane" -type f -perm /222 -print -quit)"
-    test -z "$(/usr/bin/find "$lane" -type d -perm /222 -print -quit)"
-    /usr/bin/printf 'sealed_failed_lane=%s\nverification=%s\n' \
-        "$lane" "$failed_verification"
+    require_empty_output /usr/bin/find "$lane" -type l -print -quit
+    require_empty_output /usr/bin/find "$lane" \
+        -type f -links +1 -print -quit
+    require_empty_output /usr/bin/find "$lane" \
+        -type f -perm /222 -print -quit
+    require_empty_output /usr/bin/find "$lane" \
+        -type d -perm /222 -print -quit
+    failed_core_sha="$(/usr/bin/sha256sum "$lane/SHA256SUMS" | /usr/bin/cut -d' ' -f1)"
+    /usr/bin/jq -n \
+        --argjson campaign_exit_status "$campaign_status" \
+        --arg commit "$commit" \
+        --arg tree "$tree" \
+        --arg core_sha256sums_sha256 "$failed_core_sha" \
+        '{schema:"leopard2-k16r16-b64-avx512-gfni-failed-envelope/v1",status:"failed",promotion_passed:false,campaign_exit_status:$campaign_exit_status,source_commit:$commit,source_tree:$tree,core_sha256sums_sha256:$core_sha256sums_sha256}' \
+        > "$envelope/FAILED.json"
+    (
+        cd "$envelope"
+        /usr/bin/find . -type f ! -path './SHA256SUMS' -print0 | \
+            /usr/bin/sort -z | /usr/bin/xargs -0 /usr/bin/sha256sum \
+            > SHA256SUMS
+    )
+    /usr/bin/find "$envelope" -type f -perm /222 \
+        -exec /usr/bin/chmod a-w {} +
+    /usr/bin/find "$envelope" -type d -perm /222 \
+        -exec /usr/bin/chmod a-w {} +
+    (
+        cd "$envelope"
+        /usr/bin/sha256sum -c SHA256SUMS
+    ) > "$failed_verification/envelope-sha256-check.txt"
+    /usr/bin/printf 'sealed_failed_envelope=%s\nverification=%s\n' \
+        "$envelope" "$failed_verification"
     if [[ "$campaign_status" -eq 0 ]]; then
         exit 1
     fi
     exit "$campaign_status"
 fi
 test "$report_status" = complete
+reported_claim="$(/usr/bin/jq -er \
+    '.claim_passed as $value | if ($value | type) == "boolean" then ($value | tostring) else error("claim_passed is not boolean") end' \
+    "$lane/campaign.json")"
+if [[ "$reported_claim" == true ]]; then
+    test "$campaign_status" -eq 0
+else
+    test "$campaign_status" -ne 0
+fi
 
 next_stage independent_preseal_audit
-/usr/bin/python3 "$lane/audit_k16r16_b64_avx512_gfni_abba.py" \
+/usr/bin/python3 -I -S -B \
+    "$lane/audit_k16r16_b64_avx512_gfni_abba.py" \
+    --archive-only-source-closure \
     --report "$lane/campaign.json" \
     --journal "$lane/campaign.jsonl" \
     --output "$lane/audit.json" \
@@ -487,10 +834,10 @@ audit_sha="$(/usr/bin/sha256sum "$lane/audit.json" | /usr/bin/cut -d' ' -f1)"
     --arg journal_sha256 "$journal_sha" \
     --arg audit_sha256 "$audit_sha" \
     --arg replay_root "$replay_root" \
-    '{schema:"leopard2-k16r16-b64-avx512-gfni-final-manifest/v1",campaign_exit_status:$campaign_exit_status,claim_passed:$claim_passed,audit_passed:true,source_commit:$commit,source_tree:$tree,binary_sha256_pre_post:$binary_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,validator_sha256:$validator_sha256,wrapper_sha256:$wrapper_sha256,source_archive_sha256:$archive_sha256,campaign_sha256:$campaign_sha256,journal_sha256:$journal_sha256,audit_sha256:$audit_sha256,replay_root:$replay_root,canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:13,sibling:77,postseal_policy:"rerun the independent auditor outside the sealed lane, require byte-identical audit output, and verify SHA256SUMS while the live repository remains exact and clean"}' \
+    '{schema:"leopard2-k16r16-b64-avx512-gfni-core-manifest/v1",campaign_exit_status:$campaign_exit_status,claim_passed:$claim_passed,preseal_audit_passed:true,promotion_passed:false,promotion_requires_completion_envelope:true,source_commit:$commit,source_tree:$tree,binary_sha256_pre_post:$binary_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,validator_sha256:$validator_sha256,wrapper_sha256:$wrapper_sha256,source_archive_sha256:$archive_sha256,campaign_sha256:$campaign_sha256,journal_sha256:$journal_sha256,audit_sha256:$audit_sha256,replay_root:$replay_root,canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:13,sibling:77,postseal_policy:"promotion requires the enclosing COMPLETED.json written only after a byte-identical postseal independent audit, core SHA verification, clean-source recheck, and zero controller exit"}' \
     > "$lane/manifest.json"
 
-next_stage seal
+next_stage seal_core
 trap - ERR
 (
     cd "$lane"
@@ -501,29 +848,107 @@ trap - ERR
 /usr/bin/find "$lane" -type d -perm /222 -exec /usr/bin/chmod a-w {} +
 
 /usr/bin/printf 'AUTHORITATIVE_STAGE independent_postseal_audit\n'
-postseal_root="$(/usr/bin/mktemp -d /tmp/leopard-t16-postseal.XXXXXX)"
-/usr/bin/python3 "$lane/audit_k16r16_b64_avx512_gfni_abba.py" \
+/usr/bin/python3 -I -S -B \
+    "$lane/audit_k16r16_b64_avx512_gfni_abba.py" \
+    --archive-only-source-closure \
     --report "$lane/campaign.json" \
     --journal "$lane/campaign.jsonl" \
-    --output "$postseal_root/audit.json" \
-    > "$postseal_root/audit-summary.json" 2> "$postseal_root/audit-stderr.log"
-/usr/bin/cmp "$lane/audit.json" "$postseal_root/audit.json"
+    --output "$envelope/postseal-audit.json" \
+    > "$envelope/postseal-audit-summary.json" \
+    2> "$envelope/postseal-audit-stderr.log"
+/usr/bin/cmp "$lane/audit.json" "$envelope/postseal-audit.json"
 (
     cd "$lane"
     /usr/bin/sha256sum -c SHA256SUMS
-) > "$postseal_root/sha256-check.txt"
-test -z "$(/usr/bin/find "$lane" -type l -print -quit)"
-test -z "$(/usr/bin/find "$lane" -type f -links +1 -print -quit)"
-test -z "$(/usr/bin/find "$lane" -type f -perm /222 -print -quit)"
-test -z "$(/usr/bin/find "$lane" -type d -perm /222 -print -quit)"
+) > "$envelope/core-sha256-check.txt"
+require_empty_output /usr/bin/find "$lane" -type l -print -quit
+require_empty_output /usr/bin/find "$lane" \
+    -type f -links +1 -print -quit
+require_empty_output /usr/bin/find "$lane" \
+    -type f -perm /222 -print -quit
+require_empty_output /usr/bin/find "$lane" \
+    -type d -perm /222 -print -quit
 test "$(/usr/bin/git -C "$repo" rev-parse HEAD)" = "$commit"
 test "$(/usr/bin/git -C "$repo" rev-parse 'HEAD^{tree}')" = "$tree"
-test -z "$(/usr/bin/git -C "$repo" status --porcelain=v1 --untracked-files=normal)"
-test -z "$(/usr/bin/git -C "$repo" status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)"
+require_empty_output /usr/bin/git -C "$repo" status \
+    --porcelain=v1 --untracked-files=normal
+require_empty_output /usr/bin/git -C "$repo" status \
+    --porcelain=v1 --untracked-files=normal --ignore-submodules=none
+test "$(/usr/bin/sha256sum \
+    "$lane/audit_k16r16_b64_avx512_gfni_abba.py" | \
+    /usr/bin/cut -d' ' -f1)" = "$auditor_hash"
+/usr/bin/cmp "$lane/audit_k16r16_b64_avx512_gfni_abba.py" \
+    "$lane/build-closure/committed-auditor.py"
+
+if [[ "$claim_passed" != true ]]; then
+    /usr/bin/printf 'AUTHORITATIVE_STAGE publish_not_promoted_envelope\n'
+    negative_core_sha="$(/usr/bin/sha256sum "$lane/SHA256SUMS" | /usr/bin/cut -d' ' -f1)"
+    negative_audit_sha="$(/usr/bin/sha256sum "$envelope/postseal-audit.json" | /usr/bin/cut -d' ' -f1)"
+    /usr/bin/jq -n \
+        --argjson campaign_exit_status "$campaign_status" \
+        --arg commit "$commit" \
+        --arg tree "$tree" \
+        --arg core_sha256sums_sha256 "$negative_core_sha" \
+        --arg postseal_audit_sha256 "$negative_audit_sha" \
+        '{schema:"leopard2-k16r16-b64-avx512-gfni-not-promoted-envelope/v1",status:"complete",promotion_passed:false,claim_passed:false,campaign_exit_status:$campaign_exit_status,postseal_audit_passed:true,source_commit:$commit,source_tree:$tree,core_sha256sums_sha256:$core_sha256sums_sha256,postseal_audit_sha256:$postseal_audit_sha256}' \
+        > "$envelope/NOT_PROMOTED.json"
+    (
+        cd "$envelope"
+        /usr/bin/find . -type f ! -path './SHA256SUMS' -print0 | \
+            /usr/bin/sort -z | /usr/bin/xargs -0 /usr/bin/sha256sum \
+            > SHA256SUMS
+    )
+    /usr/bin/find "$envelope" -type f -perm /222 \
+        -exec /usr/bin/chmod a-w {} +
+    /usr/bin/find "$envelope" -type d -perm /222 \
+        -exec /usr/bin/chmod a-w {} +
+    negative_verification="$(/usr/bin/mktemp -d /tmp/leopard-t16-negative.XXXXXX)"
+    (
+        cd "$envelope"
+        /usr/bin/sha256sum -c SHA256SUMS
+    ) > "$negative_verification/sha256-check.txt"
+    /usr/bin/printf 'sealed_not_promoted_envelope=%s\nverification=%s\n' \
+        "$envelope" "$negative_verification"
+    exit "$campaign_status"
+fi
+
+/usr/bin/printf 'AUTHORITATIVE_STAGE publish_completion_envelope\n'
+core_manifest_sha="$(/usr/bin/sha256sum "$lane/manifest.json" | /usr/bin/cut -d' ' -f1)"
+core_sha256sums_sha="$(/usr/bin/sha256sum "$lane/SHA256SUMS" | /usr/bin/cut -d' ' -f1)"
+postseal_audit_sha="$(/usr/bin/sha256sum "$envelope/postseal-audit.json" | /usr/bin/cut -d' ' -f1)"
+test "$campaign_status" -eq 0
+test "$claim_passed" = true
+/usr/bin/jq -n \
+    --argjson campaign_exit_status "$campaign_status" \
+    --argjson claim_passed "$claim_passed" \
+    --arg commit "$commit" \
+    --arg tree "$tree" \
+    --arg binary_sha256 "$binary_hash" \
+    --arg campaign_sha256 "$campaign_sha" \
+    --arg audit_sha256 "$audit_sha" \
+    --arg postseal_audit_sha256 "$postseal_audit_sha" \
+    --arg core_manifest_sha256 "$core_manifest_sha" \
+    --arg core_sha256sums_sha256 "$core_sha256sums_sha" \
+    '{schema:"leopard2-k16r16-b64-avx512-gfni-completion-envelope/v1",status:"complete",promotion_passed:true,campaign_exit_status:$campaign_exit_status,claim_passed:$claim_passed,preseal_audit_passed:true,postseal_audit_passed:true,postseal_audit_byte_identical:true,core_sha256sums_verified:true,source_commit:$commit,source_tree:$tree,binary_sha256:$binary_sha256,campaign_sha256:$campaign_sha256,audit_sha256:$audit_sha256,postseal_audit_sha256:$postseal_audit_sha256,core_manifest_sha256:$core_manifest_sha256,core_sha256sums_sha256:$core_sha256sums_sha256,verification_command:["core/run-authoritative.sh","--verify","<absolute-envelope-path>"]}' \
+    > "$envelope/COMPLETED.json"
+(
+    cd "$envelope"
+    /usr/bin/find . -type f ! -path './SHA256SUMS' -print0 | \
+        /usr/bin/sort -z | /usr/bin/xargs -0 /usr/bin/sha256sum \
+        > SHA256SUMS
+)
+/usr/bin/find "$envelope" -type f -perm /222 -exec /usr/bin/chmod a-w {} +
+/usr/bin/find "$envelope" -type d -perm /222 -exec /usr/bin/chmod a-w {} +
+
+/usr/bin/printf 'AUTHORITATIVE_STAGE verify_completion_envelope\n'
+verification_root="$(/usr/bin/mktemp -d /tmp/leopard-t16-envelope-verification.XXXXXX)"
+"$lane/run-authoritative.sh" --verify "$envelope" \
+    > "$verification_root/verification.txt" \
+    2> "$verification_root/verification-stderr.log"
 
 /usr/bin/printf 'AUTHORITATIVE_STAGE complete\n'
 /usr/bin/jq '{claim_passed,gate_results,cells:[.cells[]|select(.role=="target")|{id,encode_execution,one_shot_encode}]}' \
     "$lane/campaign.json"
-/usr/bin/printf 'sealed_lane=%s\npostseal_verification=%s\n' \
-    "$lane" "$postseal_root"
+/usr/bin/printf 'sealed_envelope=%s\nexternal_verification=%s\n' \
+    "$envelope" "$verification_root"
 exit "$campaign_status"
