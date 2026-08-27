@@ -44,6 +44,35 @@ The short screens are diagnostic selection evidence, not promotion evidence.
 Production default-on status is conditional on a completed, immutable
 live-versus-replay campaign and a successful independent replay audit.
 
+## Authoritative result
+
+That qualification completed in the sealed V6 envelope at
+`.research/leopard-79h/f14aeead-t16-final-v6`, bound to source commit
+`f14aeead4ad3c65897c9990e47164a65ecd608a9` and tree
+`797d51815d8f5bf237fbcf712a41758cf518a7ac`.  Against the same binary with
+only this operation leaf disabled, the exact `K=16, R=16, T=16, B=64`,
+legacy-high GF8 AUTO workload measured:
+
+- ordinary encode: `3.3800831324506677x`, 95% confidence interval
+  `[3.3303699132991933, 3.430538432578953]`;
+- one-shot encode: `3.7003885797783203x`, 95% confidence interval
+  `[3.6607625548212575, 3.74044353773237]`.
+
+All 49 ABBA rounds and 196 launches were accepted with zero contamination
+retries.  All route, call-count, digest, isolation, inactive-neighbor, and
+timer-floor gates passed.  The frozen verifier and two independent no-timing
+replays reproduced every statistic and the complete source/build/evidence
+closure.  The retained campaign, binary, and completion SHA-256 values are,
+respectively, `7ad53caedfd1fd9668d240b3549e4b7ea8476a1cef9b68164fd4c0db4a98b3be`,
+`67f2b27961b9914ca1493ad1854d57b8e83a77b2c4cef81383467bfbe41284ea`,
+and `30b293d3c4fdfe814afee31c64f8b41acdd8226dc9cde9bc521c80fd2dcae69d`.
+
+This promotes only the optional runtime-qualified leaf on calibrated AMD
+family `1Ah`, model `08h` hosts with AVX-512F/BW/VL, GFNI, and OS ZMM state.
+Explicit backends and all other shapes retain their prior path.  The result is
+not an exact-main Leopard1 comparison and does not establish that Leopard2 is
+faster for every configuration.
+
 The final authoritative campaign is pinned to CPU 52 with SMT sibling 116.
 CPU 13/sibling 77 first exhausted the frozen contamination budget, a longer
 prereacquisition check rejected CPU 9/sibling 73, and the first retained scan
