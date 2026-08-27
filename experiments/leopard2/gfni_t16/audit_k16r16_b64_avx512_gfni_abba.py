@@ -638,6 +638,25 @@ def validate_launch(launch: Any, *, cell: tuple[Any, ...], mode: int,
     return launch
 
 
+def validate_source_archive_member(
+        member: tarfile.TarInfo, seen: set[str]) -> None:
+    is_root = member.name in {"source", "source/"}
+    require(member.name not in seen and
+            (is_root or member.name.startswith("source/")) and
+            not member.name.startswith("/") and
+            ".." not in Path(member.name).parts,
+            "source archive contains a duplicate or unsafe path")
+    seen.add(member.name)
+    require(member.isfile() or member.isdir() or member.issym(),
+            "source archive contains an unsupported entry type")
+    require(not is_root or member.isdir(),
+            "source archive root is not a directory")
+    if member.issym():
+        require(not member.linkname.startswith("/") and
+                ".." not in Path(member.linkname).parts,
+                "source archive contains an unsafe symlink")
+
+
 def validate_source_closure(report: dict[str, Any], controller: dict[str, str],
                             artifact_root: Path,
                             archive_only_source_closure: bool) \
@@ -741,17 +760,7 @@ def validate_source_closure(report: dict[str, Any], controller: dict[str, str],
                 "archive commit comment changed")
         seen: set[str] = set()
         for member in stream:
-            require(member.name not in seen and member.name.startswith("source/") and
-                    not member.name.startswith("/") and ".." not in
-                    Path(member.name).parts,
-                    "source archive contains a duplicate or unsafe path")
-            seen.add(member.name)
-            require(member.isfile() or member.isdir() or member.issym(),
-                    "source archive contains an unsupported entry type")
-            if member.issym():
-                require(not member.linkname.startswith("/") and
-                        ".." not in Path(member.linkname).parts,
-                        "source archive contains an unsafe symlink")
+            validate_source_archive_member(member, seen)
             if member.isfile() and member.name in {
                     "source/experiments/leopard2/gfni_t16/"
                     "run_k16r16_b64_avx512_gfni_abba.py",
@@ -1321,6 +1330,49 @@ def self_test() -> None:
     require(result["rounds"] == TARGET_ROUNDS and
             result["ci95"][0] < result["geometric_mean_speedup"] <
             result["ci95"][1], "Student-t self-test failed")
+    archive_bytes = io.BytesIO()
+    with tarfile.open(fileobj=archive_bytes, mode="w") as archive:
+        root_member = tarfile.TarInfo("source/")
+        root_member.type = tarfile.DIRTYPE
+        archive.addfile(root_member)
+        file_member = tarfile.TarInfo("source/file")
+        file_member.size = 0
+        archive.addfile(file_member, io.BytesIO())
+    archive_seen: set[str] = set()
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes.getvalue()), mode="r:") \
+            as archive:
+        for member in archive:
+            validate_source_archive_member(member, archive_seen)
+    require(archive_seen == {"source", "source/file"},
+            "canonical source archive root self-test failed")
+    adversarial_members = []
+    root_file = tarfile.TarInfo("source")
+    adversarial_members.append(root_file)
+    root_slash_file = tarfile.TarInfo("source/")
+    adversarial_members.append(root_slash_file)
+    outside_prefix = tarfile.TarInfo("source-other/file")
+    adversarial_members.append(outside_prefix)
+    traversal = tarfile.TarInfo("source/../outside")
+    adversarial_members.append(traversal)
+    unsafe_symlink = tarfile.TarInfo("source/link")
+    unsafe_symlink.type = tarfile.SYMTYPE
+    unsafe_symlink.linkname = "../outside"
+    adversarial_members.append(unsafe_symlink)
+    for member in adversarial_members:
+        try:
+            validate_source_archive_member(member, set())
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError(
+                "source archive self-test accepted an unsafe member")
+    duplicate_seen = {"source/file"}
+    try:
+        validate_source_archive_member(file_member, duplicate_seen)
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("source archive self-test accepted a duplicate")
     inherited_lock = {
         "path": "/tmp/leopard-gf8-authoritative.lock",
         "mode": "inherited-across-build-copy-campaign",
