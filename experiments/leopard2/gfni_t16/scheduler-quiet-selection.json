@@ -1,0 +1,128 @@
+{
+  "schema": "leopard2-t16-scheduler-quiet-selection/v1",
+  "candidate_timing_performed": false,
+  "counter_source": "/proc/stat",
+  "nonidle_definition": "user + nice + system + irq + softirq + steal",
+  "interval_seconds": 0.25,
+  "windows_per_pair": 80,
+  "selection_rule": "minimum (sibling_nonidle_windows, sibling_nonidle_ticks, primary_cpu)",
+  "topology_scope": {
+    "package": 0,
+    "die": 0,
+    "numa_node": 0,
+    "l3_shared_cpu_list": "8-15,72-79"
+  },
+  "excluded_pairs": [
+    {
+      "cpu": 13,
+      "sibling": 77,
+      "reason": "the frozen campaign exhausted its five-attempt sibling-contamination budget"
+    }
+  ],
+  "candidate_pairs": [
+    {
+      "cpu": 8,
+      "sibling": 72,
+      "cpu_nonidle_windows": 16,
+      "cpu_nonidle_ticks": 21,
+      "cpu_max_nonidle_ticks": 2,
+      "cpu_idle_ticks": 1982,
+      "cpu_total_ticks": 2003,
+      "sibling_nonidle_windows": 7,
+      "sibling_nonidle_ticks": 10,
+      "sibling_max_nonidle_ticks": 3,
+      "sibling_idle_ticks": 1993,
+      "sibling_total_ticks": 2003
+    },
+    {
+      "cpu": 9,
+      "sibling": 73,
+      "cpu_nonidle_windows": 10,
+      "cpu_nonidle_ticks": 11,
+      "cpu_max_nonidle_ticks": 2,
+      "cpu_idle_ticks": 1990,
+      "cpu_total_ticks": 2001,
+      "sibling_nonidle_windows": 6,
+      "sibling_nonidle_ticks": 9,
+      "sibling_max_nonidle_ticks": 3,
+      "sibling_idle_ticks": 1994,
+      "sibling_total_ticks": 2003
+    },
+    {
+      "cpu": 10,
+      "sibling": 74,
+      "cpu_nonidle_windows": 7,
+      "cpu_nonidle_ticks": 8,
+      "cpu_max_nonidle_ticks": 2,
+      "cpu_idle_ticks": 1996,
+      "cpu_total_ticks": 2004,
+      "sibling_nonidle_windows": 2,
+      "sibling_nonidle_ticks": 2,
+      "sibling_max_nonidle_ticks": 1,
+      "sibling_idle_ticks": 2006,
+      "sibling_total_ticks": 2008
+    },
+    {
+      "cpu": 11,
+      "sibling": 75,
+      "cpu_nonidle_windows": 5,
+      "cpu_nonidle_ticks": 6,
+      "cpu_max_nonidle_ticks": 2,
+      "cpu_idle_ticks": 2001,
+      "cpu_total_ticks": 2007,
+      "sibling_nonidle_windows": 6,
+      "sibling_nonidle_ticks": 13,
+      "sibling_max_nonidle_ticks": 5,
+      "sibling_idle_ticks": 1993,
+      "sibling_total_ticks": 2006
+    },
+    {
+      "cpu": 12,
+      "sibling": 76,
+      "cpu_nonidle_windows": 4,
+      "cpu_nonidle_ticks": 6,
+      "cpu_max_nonidle_ticks": 2,
+      "cpu_idle_ticks": 1997,
+      "cpu_total_ticks": 2003,
+      "sibling_nonidle_windows": 5,
+      "sibling_nonidle_ticks": 6,
+      "sibling_max_nonidle_ticks": 2,
+      "sibling_idle_ticks": 2000,
+      "sibling_total_ticks": 2006
+    },
+    {
+      "cpu": 14,
+      "sibling": 78,
+      "cpu_nonidle_windows": 2,
+      "cpu_nonidle_ticks": 3,
+      "cpu_max_nonidle_ticks": 2,
+      "cpu_idle_ticks": 2001,
+      "cpu_total_ticks": 2004,
+      "sibling_nonidle_windows": 4,
+      "sibling_nonidle_ticks": 4,
+      "sibling_max_nonidle_ticks": 1,
+      "sibling_idle_ticks": 2006,
+      "sibling_total_ticks": 2010
+    },
+    {
+      "cpu": 15,
+      "sibling": 79,
+      "cpu_nonidle_windows": 7,
+      "cpu_nonidle_ticks": 7,
+      "cpu_max_nonidle_ticks": 1,
+      "cpu_idle_ticks": 1998,
+      "cpu_total_ticks": 2005,
+      "sibling_nonidle_windows": 3,
+      "sibling_nonidle_ticks": 3,
+      "sibling_max_nonidle_ticks": 1,
+      "sibling_idle_ticks": 2005,
+      "sibling_total_ticks": 2008
+    }
+  ],
+  "selected": {
+    "cpu": 10,
+    "sibling": 74,
+    "sibling_nonidle_windows": 2,
+    "sibling_nonidle_ticks": 2
+  }
+}

@@ -36,12 +36,18 @@ Files:
   through a pre-opened descriptor only after every file and directory is
   read-only, and its precomputed digest is already in the envelope manifest.
   Its `--verify` mode rechecks the sealed envelope without collecting timing.
+- `scheduler-quiet-selection.json` retains the scheduler-only counters and
+  deterministic CPU-pair selection used before the authoritative acquisition.
 
 The short screens are diagnostic selection evidence, not promotion evidence.
 Production default-on status is conditional on a completed, immutable
 live-versus-replay campaign and a successful independent replay audit.
 
-The authoritative campaign is pinned to CPU 9 with SMT sibling 73.  This pair
-was selected solely from a prereacquisition 40-by-250-ms `/proc/stat` quietness
-scan after CPU 13/sibling 77 exhausted the frozen contamination budget; no
-candidate timing was collected while selecting the replacement pair.
+The authoritative campaign is pinned to CPU 10 with SMT sibling 74.  CPU
+13/sibling 77 exhausted the frozen contamination budget, and a longer
+prereacquisition check then rejected CPU 9/sibling 73.  Pair 10/74 was selected
+solely from 80-by-250-ms `/proc/stat` scans of every other same-L3 pair by
+the deterministic ordering `(sibling nonidle windows, sibling nonidle ticks,
+primary CPU)`: sibling 74 had two nonidle windows and two ticks, the minimum.
+The complete counters are retained in `scheduler-quiet-selection.json`.  No
+candidate timing was collected while selecting either replacement pair.

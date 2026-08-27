@@ -35,8 +35,8 @@ MAX_ROUND_ATTEMPTS = 5
 CAMPAIGN_DEADLINE_SECONDS = 7200
 MAX_RESULT_BYTES = 8 * 1024 * 1024
 MAX_VALIDATOR_BYTES = 8 * 1024 * 1024
-EXPECTED_CPU = 9
-EXPECTED_SIBLING = 73
+EXPECTED_CPU = 10
+EXPECTED_SIBLING = 74
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 GIT = Path("/usr/bin/git")
 TASKSET = Path("/usr/bin/taskset")
@@ -109,7 +109,7 @@ def verify_static_contract():
              MIN_RETAINED_TIMER_WINDOW_US) ==
             (25, 2, 31, 64, 32768, 250.0),
             "frozen campaign counts changed")
-    require((EXPECTED_CPU, EXPECTED_SIBLING) == (9, 73),
+    require((EXPECTED_CPU, EXPECTED_SIBLING) == (10, 74),
             "frozen CPU topology changed")
     require(len(CELLS) == 13 and
             len({cell[0] for cell in CELLS}) == len(CELLS),
@@ -1126,7 +1126,7 @@ def main():
     verify_static_contract()
     require(options.cpu == EXPECTED_CPU and
             options.sibling == EXPECTED_SIBLING,
-            "this frozen campaign is fixed to CPU 9 and sibling 73")
+            "this frozen campaign is fixed to CPU 10 and sibling 74")
     lock_descriptor, lock_identity = acquire_lock(options.lock_fd)
     require(set(os.sched_getaffinity(0)) == {options.cpu},
             "campaign controller must be singleton-pinned to the benchmark CPU")

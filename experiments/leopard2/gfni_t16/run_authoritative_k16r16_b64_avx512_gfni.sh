@@ -296,9 +296,9 @@ test "$(/usr/bin/readlink -f "$repo/$relative_wrapper")" = \
     > "$lane/live-git-status.txt"
 /usr/bin/printf '%s\n' "$commit" > "$lane/source-commit.txt"
 /usr/bin/printf '%s\n' "$tree" > "$lane/source-tree.txt"
-/usr/bin/printf '%s\n' "$(/usr/bin/cat /sys/devices/system/cpu/cpu9/topology/thread_siblings_list)" \
-    > "$lane/cpu9-thread-siblings.txt"
-test "$(/usr/bin/cat "$lane/cpu9-thread-siblings.txt")" = 9,73
+/usr/bin/printf '%s\n' "$(/usr/bin/cat /sys/devices/system/cpu/cpu10/topology/thread_siblings_list)" \
+    > "$lane/cpu10-thread-siblings.txt"
+test "$(/usr/bin/cat "$lane/cpu10-thread-siblings.txt")" = 10,74
 
 next_stage fresh_build_roots
 live_root="$(/usr/bin/mktemp -d /tmp/leopard-t16-live.XXXXXX)"
@@ -689,7 +689,7 @@ configuration_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/leopard2_be
 
 next_stage campaign
 campaign_command=(
-    /usr/bin/taskset -c 9
+    /usr/bin/taskset -c 10
     /usr/bin/python3 -I -S -B
     "$lane/run_k16r16_b64_avx512_gfni_abba.py"
     --binary "$lane/bench_leopard2"
@@ -703,8 +703,8 @@ campaign_command=(
     --source-commit "$commit"
     --source-tree "$tree"
     --repository "$repo"
-    --cpu 9
-    --sibling 73
+    --cpu 10
+    --sibling 74
     --output "$lane/campaign.json"
     --journal "$lane/campaign.jsonl"
     --invocations "$lane/invocations"
@@ -784,7 +784,7 @@ if [[ "$report_status" == failed ]]; then
         --arg archive_sha256 "$archive_hash" \
         --arg report_sha256 "$failed_report_sha" \
         --arg journal_sha256 "$failed_journal_sha" \
-        '{schema:"leopard2-k16r16-b64-avx512-gfni-failed-manifest/v1",campaign_exit_status:$campaign_exit_status,report_status:"failed",claim_passed:false,audit_performed:false,source_commit:$commit,source_tree:$tree,binary_sha256_pre_post:$binary_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,validator_sha256:$validator_sha256,wrapper_sha256:$wrapper_sha256,source_archive_sha256:$archive_sha256,campaign_sha256:$report_sha256,journal_sha256:($journal_sha256 | if . == "null" then null else . end),canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:9,sibling:73}' \
+        '{schema:"leopard2-k16r16-b64-avx512-gfni-failed-manifest/v1",campaign_exit_status:$campaign_exit_status,report_status:"failed",claim_passed:false,audit_performed:false,source_commit:$commit,source_tree:$tree,binary_sha256_pre_post:$binary_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,validator_sha256:$validator_sha256,wrapper_sha256:$wrapper_sha256,source_archive_sha256:$archive_sha256,campaign_sha256:$report_sha256,journal_sha256:($journal_sha256 | if . == "null" then null else . end),canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:10,sibling:74}' \
         > "$lane/manifest.json"
     next_stage seal_failed_campaign
     trap - ERR
@@ -879,7 +879,7 @@ audit_sha="$(/usr/bin/sha256sum "$lane/audit.json" | /usr/bin/cut -d' ' -f1)"
     --arg journal_sha256 "$journal_sha" \
     --arg audit_sha256 "$audit_sha" \
     --arg replay_root "$replay_root" \
-    '{schema:"leopard2-k16r16-b64-avx512-gfni-core-manifest/v1",campaign_exit_status:$campaign_exit_status,claim_passed:$claim_passed,preseal_audit_passed:true,promotion_passed:false,promotion_requires_completion_envelope:true,source_commit:$commit,source_tree:$tree,binary_sha256_pre_post:$binary_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,validator_sha256:$validator_sha256,wrapper_sha256:$wrapper_sha256,source_archive_sha256:$archive_sha256,campaign_sha256:$campaign_sha256,journal_sha256:$journal_sha256,audit_sha256:$audit_sha256,replay_root:$replay_root,canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:9,sibling:73,postseal_policy:"promotion requires the enclosing COMPLETED.json written only after a byte-identical postseal independent audit, core SHA verification, clean-source recheck, and zero controller exit"}' \
+    '{schema:"leopard2-k16r16-b64-avx512-gfni-core-manifest/v1",campaign_exit_status:$campaign_exit_status,claim_passed:$claim_passed,preseal_audit_passed:true,promotion_passed:false,promotion_requires_completion_envelope:true,source_commit:$commit,source_tree:$tree,binary_sha256_pre_post:$binary_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,validator_sha256:$validator_sha256,wrapper_sha256:$wrapper_sha256,source_archive_sha256:$archive_sha256,campaign_sha256:$campaign_sha256,journal_sha256:$journal_sha256,audit_sha256:$audit_sha256,replay_root:$replay_root,canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:10,sibling:74,postseal_policy:"promotion requires the enclosing COMPLETED.json written only after a byte-identical postseal independent audit, core SHA verification, clean-source recheck, and zero controller exit"}' \
     > "$lane/manifest.json"
 
 next_stage seal_core
