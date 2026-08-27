@@ -32,7 +32,14 @@ TARGET_ROUNDS = 25
 INACTIVE_ROUNDS = 2
 ITERATIONS = 9
 WARMUP = 2
-REUSE = 8
+DEFAULT_REUSE = 8
+INACTIVE_HIGH_GF8_REUSE = 64
+REUSE_OVERRIDES = {"inactive-high-gf8": INACTIVE_HIGH_GF8_REUSE}
+REUSE_POLICY_REASON = (
+    "The sealed v1 acquisition established that only the inactive high/GF8 "
+    "control was too fast for the fixed 20 ms retained timer floor at reuse "
+    "8; reuse 64 is a deterministic measurement-duration repair and inactive "
+    "timing is never a promotion gate.")
 MIN_RETAINED_TIMER_WINDOW_US = 20_000.0
 MAX_ROUND_ATTEMPTS = 5
 EXPECTED_CPU = 52
@@ -45,8 +52,8 @@ MAX_COMMAND_BYTES = 64 * 1024
 MAX_STREAM_BYTES = 1024 * 1024
 MAX_SOURCE_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_VALIDATOR_BYTES = 8 * 1024 * 1024
-REPORT_SCHEMA = "leopard2-auto-gf16-gfni-encode-frozen-abba/v1"
-AUDIT_SCHEMA = "leopard2-auto-gf16-gfni-encode-abba-audit/v1"
+REPORT_SCHEMA = "leopard2-auto-gf16-gfni-encode-frozen-abba/v2"
+AUDIT_SCHEMA = "leopard2-auto-gf16-gfni-encode-abba-audit/v2"
 BENCHMARK_SCHEMA = "leopard2-benchmark-v35"
 DIAGNOSTIC_OPTION = "--auto-gf16-gfni-encode-mode"
 CONTRACT = (
@@ -104,6 +111,47 @@ CELLS = (
     ("inactive-high-gf8", 128, 64, 65536, INACTIVE_ROUNDS,
      "inactive", "high", "gf8", "auto", "field boundary"),
 )
+EXPECTED_REUSE_PER_CELL = {
+    "target-k1000-r200-b65536-high-gf16-auto": 8,
+    "inactive-k999": 8,
+    "inactive-k1001": 8,
+    "inactive-r199": 8,
+    "inactive-r201": 8,
+    "inactive-b65534": 8,
+    "inactive-b65538": 8,
+    "inactive-b32768": 8,
+    "inactive-b131072": 8,
+    "inactive-low-gf16": 8,
+    "inactive-explicit-avx2": 8,
+    "inactive-explicit-gfni": 8,
+    "inactive-high-gf8": 64,
+}
+
+
+def reuse_for_cell(cell_id: str) -> int:
+    return REUSE_OVERRIDES.get(cell_id, DEFAULT_REUSE)
+
+
+def reuse_per_cell() -> dict[str, int]:
+    return {cell[0]: reuse_for_cell(cell[0]) for cell in CELLS}
+
+
+def verify_static_contract() -> None:
+    require((TARGET_ROUNDS, INACTIVE_ROUNDS, ITERATIONS, WARMUP,
+             DEFAULT_REUSE, INACTIVE_HIGH_GF8_REUSE,
+             MIN_RETAINED_TIMER_WINDOW_US) ==
+            (25, 2, 9, 2, 8, 64, 20_000.0),
+            "frozen campaign counts changed")
+    require(REUSE_OVERRIDES == {
+                "inactive-high-gf8": INACTIVE_HIGH_GF8_REUSE} and
+            reuse_per_cell() == EXPECTED_REUSE_PER_CELL,
+            "frozen per-cell reuse policy changed")
+
+
+def validate_reuse_policy(value: Any, reason: Any) -> None:
+    require(exact_json_equal(value, EXPECTED_REUSE_PER_CELL) and
+            reason == REUSE_POLICY_REASON,
+            "report per-cell reuse policy changed")
 
 
 def expected_route(k: int, r: int, shard_bytes: int, profile: str,
@@ -389,7 +437,7 @@ def finite_positive(value: Any, label: str) -> float:
     return result
 
 
-def timing(document: dict[str, Any], name: str) \
+def timing(document: dict[str, Any], name: str, reuse: int) \
         -> tuple[float, list[float], float]:
     summary = document["metrics"][name]
     samples_raw = summary["samples_us_per_batch_call"]
@@ -402,7 +450,9 @@ def timing(document: dict[str, Any], name: str) \
         summary["median_us_per_batch_call"], f"{name} median")
     require(abs(observed - reported) <= 0.000003,
             f"{name} median differs from retained samples")
-    minimum = min(item * REUSE for item in samples)
+    require(type(reuse) is int and reuse > 0,
+            f"{name} reuse is not a positive integer")
+    minimum = min(item * reuse for item in samples)
     require(minimum >= MIN_RETAINED_TIMER_WINDOW_US,
             f"{name} retained timer window is below the frozen floor")
     return reported, samples, minimum
@@ -540,18 +590,29 @@ def validate_canonical_lock(value: Any,
 def expected_benchmark_command(binary: Path, output: Path,
                                cell: tuple[Any, ...], mode: int,
                                seed: int) -> list[str]:
-    _, k, r, shard_bytes, _, _, profile, field, backend, _ = cell
+    cell_id, k, r, shard_bytes, _, _, profile, field, backend, _ = cell
+    reuse = reuse_for_cell(cell_id)
     return [
         "/usr/bin/taskset", "-c", str(EXPECTED_CPU), str(binary),
         "--k", str(k), "--r", str(r), "--profile", profile,
         "--field", field, "--backend", backend,
         "--bytes", str(shard_bytes), "--loss", "1", "--batch", "1",
-        "--reuse", str(REUSE), "--iterations", str(ITERATIONS),
+        "--reuse", str(reuse), "--iterations", str(ITERATIONS),
         "--warmup", str(WARMUP), "--threads", "1", "--seed", str(seed),
         "--skip-legacy", "--retain-samples", "--measure-one-shot-encode",
         "--attest-source", DIAGNOSTIC_OPTION, str(mode),
         "--json", str(output),
     ]
+
+
+def validate_benchmark_command(command: Any, command_bytes: bytes,
+                               expected: list[str], label: str) -> None:
+    require(type(command) is list and
+            all(type(item) is str for item in command),
+            f"{label} command is not a string list")
+    require(command == expected and command_bytes ==
+            (json.dumps(expected, separators=(",", ":")) + "\n").encode(),
+            f"{label} retained command changed")
 
 
 def validate_launch(launch: Any, *, cell: tuple[Any, ...], mode: int,
@@ -568,11 +629,12 @@ def validate_launch(launch: Any, *, cell: tuple[Any, ...], mode: int,
         "observed_call_count", "source", "raw",
     }
     launch = exact_keys(launch, launch_keys, f"launch {label}")
+    reuse = reuse_for_cell(cell[0])
     require(launch["label"] == label and type(launch["mode"]) is int and
             launch["mode"] == mode and
             type(launch["elapsed_ns"]) is int and launch["elapsed_ns"] > 0 and
             type(launch["reuse"]) is int and
-            launch["reuse"] == REUSE,
+            launch["reuse"] == reuse,
             f"launch identity changed: {label}")
     raw = exact_keys(launch["raw"],
                      {"command", "stdout", "stderr", "result"},
@@ -616,13 +678,9 @@ def validate_launch(launch: Any, *, cell: tuple[Any, ...], mode: int,
         })
     command_bytes = opened["command"][0]
     command = strict_json_bytes(command_bytes, f"{label} command")
-    require(type(command) is list and all(type(item) is str for item in command),
-            f"{label} command is not a string list")
     expected = expected_benchmark_command(
         binary, expected_paths["result"], cell, mode, seed)
-    require(command == expected and command_bytes ==
-            (json.dumps(expected, separators=(",", ":")) + "\n").encode(),
-            f"{label} retained command changed")
+    validate_benchmark_command(command, command_bytes, expected, label)
     require(opened["stdout"][0] == b"" and opened["stderr"][0] == b"",
             f"{label} retained terminal streams are nonempty")
     document = strict_json_bytes(opened["result"][0], f"{label} result")
@@ -651,7 +709,7 @@ def validate_launch(launch: Any, *, cell: tuple[Any, ...], mode: int,
             parameters["measure_one_shot_encode"] is True and
             parameters["attest_source"] is True and
             parameters["batch"] == 1 and parameters["thread_count"] == 1 and
-            parameters["reuse"] == REUSE and
+            parameters["reuse"] == reuse and
             parameters["iterations"] == ITERATIONS and
             parameters["warmup"] == WARMUP and parameters["loss_count"] == 1 and
             parameters["seed"] == seed,
@@ -688,9 +746,9 @@ def validate_launch(launch: Any, *, cell: tuple[Any, ...], mode: int,
             document["correctness"]["leopard2_round_trip"] is True,
             f"{label} selector/correctness contract changed")
     encode_us, encode_samples, encode_minimum = timing(
-        document, "encode_execution")
+        document, "encode_execution", reuse)
     one_shot_us, one_shot_samples, one_shot_minimum = timing(
-        document, "one_shot_encode")
+        document, "one_shot_encode", reuse)
     digests = document["workload_digests"]
     require(digests["algorithm"] == "fnv1a64",
             f"{label} digest algorithm changed")
@@ -954,6 +1012,7 @@ def validate_source_closure(report: dict[str, Any], controller: dict[str, str],
 
 def replay(report_path: Path, journal_path: Path,
            *, archive_only_source_closure: bool = False) -> dict[str, Any]:
+    verify_static_contract()
     auditor_identity = stable_file(
         Path(__file__).resolve(), maximum_bytes=MAX_VALIDATOR_BYTES,
         single_link=True)
@@ -968,7 +1027,8 @@ def replay(report_path: Path, journal_path: Path,
         "source_commit", "source_tree", "source_tracked_dirty", "cpu",
         "sibling", "affinity", "workload_seed", "iterations_per_launch",
         "warmup_per_launch",
-        "child_environment", "git_environment", "reuse_per_sample",
+        "child_environment", "git_environment", "reuse_per_cell",
+        "reuse_policy_reason",
         "retained_timer_duration_floor_us", "launches_per_round",
         "max_round_attempts", "target_rounds", "inactive_control_rounds",
         "benchmark_schema_required", "diagnostic_option", "co_primary_gate",
@@ -981,7 +1041,7 @@ def replay(report_path: Path, journal_path: Path,
     exact_keys(report, report_keys, "complete report")
     integer_report_fields = {
         "workload_seed", "cpu", "sibling", "iterations_per_launch",
-        "warmup_per_launch", "reuse_per_sample", "launches_per_round",
+        "warmup_per_launch", "launches_per_round",
         "max_round_attempts", "target_rounds", "inactive_control_rounds",
         "completed_cell_count", "total_cell_count",
     }
@@ -990,6 +1050,8 @@ def replay(report_path: Path, journal_path: Path,
             type(report["affinity"]) is list and
             all(type(cpu) is int for cpu in report["affinity"]),
             "report numeric types changed")
+    validate_reuse_policy(
+        report["reuse_per_cell"], report["reuse_policy_reason"])
     require(report["schema"] == REPORT_SCHEMA and
             report["claim_scope"] ==
                 "same-binary mode-0 control versus mode-1 candidate at the "
@@ -1006,7 +1068,6 @@ def replay(report_path: Path, journal_path: Path,
             report["workload_seed"] == WORKLOAD_SEED and
             report["iterations_per_launch"] == ITERATIONS and
             report["warmup_per_launch"] == WARMUP and
-            report["reuse_per_sample"] == REUSE and
             report["retained_timer_duration_floor_us"] ==
                 MIN_RETAINED_TIMER_WINDOW_US and
             report["launches_per_round"] == 4 and
@@ -1040,7 +1101,8 @@ def replay(report_path: Path, journal_path: Path,
                     "match under the common workload seed"),
                 "timer_duration": (
                     "every retained encode_execution and one_shot_encode "
-                    "sample multiplied by reuse must span at least 20 "
+                    "sample multiplied by that cell's frozen reuse (8; "
+                    "inactive-high-gf8 64) must span at least 20 "
                     "milliseconds"),
                 "inactive_controls": (
                     "timing is retained as descriptive evidence only and is "
@@ -1145,7 +1207,7 @@ def replay(report_path: Path, journal_path: Path,
                  cell["field"], cell["backend"], cell["rationale"],
                  cell["reuse"]) ==
                 (cell_id, k, r, shard_bytes, rounds, role, profile, field,
-                 backend, rationale, REUSE),
+                 backend, rationale, reuse_for_cell(cell_id)),
                 f"cell contract changed: {cell_id}")
         records = cell["records"]
         rejected = cell["rejected_contaminated_attempts"]
@@ -1462,7 +1524,8 @@ def replay(report_path: Path, journal_path: Path,
             "inactive_rounds": INACTIVE_ROUNDS,
             "iterations": ITERATIONS,
             "warmup": WARMUP,
-            "reuse": REUSE,
+            "reuse_per_cell": reuse_per_cell(),
+            "reuse_policy_reason": REUSE_POLICY_REASON,
             "workload_seed": WORKLOAD_SEED,
             "timer_window_floor_us": MIN_RETAINED_TIMER_WINDOW_US,
             "cpu": EXPECTED_CPU,
@@ -1510,6 +1573,7 @@ def write_canonical(path: Path, value: dict[str, Any]) -> None:
 
 
 def self_test() -> None:
+    verify_static_contract()
     for payload in (
             b'{"x":1,"x":2}', b'{"x":NaN}', b'{"x":1e309}', b'\xff'):
         try:
@@ -1535,8 +1599,19 @@ def self_test() -> None:
                 (1000, 200, 65536, TARGET_ROUNDS, "target", "high",
                  "gf16", "auto") and
             all(cell[4] == INACTIVE_ROUNDS and cell[5] == "inactive"
-                for cell in CELLS[1:]),
+                for cell in CELLS[1:]) and
+            REUSE_OVERRIDES == {
+                "inactive-high-gf8": INACTIVE_HIGH_GF8_REUSE} and
+            reuse_per_cell() == EXPECTED_REUSE_PER_CELL,
             "frozen cell matrix self-test failed")
+    mutated_reuse = dict(EXPECTED_REUSE_PER_CELL)
+    mutated_reuse["inactive-high-gf8"] = DEFAULT_REUSE
+    try:
+        validate_reuse_policy(mutated_reuse, REUSE_POLICY_REASON)
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("mutated per-cell reuse policy was accepted")
     target_off = expected_route(
         1000, 200, 65536, "high", "gf16", "auto", 0)
     target_on = expected_route(
@@ -1572,24 +1647,79 @@ def self_test() -> None:
     command = expected_benchmark_command(
         Path("/lane/benchmark"), Path("/lane/result.json"), CELLS[0], 1,
         WORKLOAD_SEED)
+    gf8_cells = [cell for cell in CELLS if cell[0] == "inactive-high-gf8"]
+    require(len(gf8_cells) == 1, "high/GF8 control lookup is ambiguous")
+    gf8_command = expected_benchmark_command(
+        Path("/lane/benchmark"), Path("/lane/gf8-result.json"),
+        gf8_cells[0], 1, WORKLOAD_SEED)
     require(command[-5:] == [
                 "--attest-source", DIAGNOSTIC_OPTION, "1", "--json",
                 "/lane/result.json"] and
-            command[command.index("--reuse") + 1] == str(REUSE) and
+            command[command.index("--reuse") + 1] == str(DEFAULT_REUSE) and
+            gf8_command[gf8_command.index("--reuse") + 1] ==
+                str(INACTIVE_HIGH_GF8_REUSE) and
             command[command.index("--seed") + 1] == str(WORKLOAD_SEED),
             "raw benchmark command reconstruction self-test failed")
+    tampered_gf8_command = list(gf8_command)
+    tampered_gf8_command[tampered_gf8_command.index("--reuse") + 1] = \
+        str(DEFAULT_REUSE)
+    tampered_gf8_bytes = (json.dumps(
+        tampered_gf8_command, separators=(",", ":")) + "\n").encode()
+    try:
+        validate_benchmark_command(
+            tampered_gf8_command, tampered_gf8_bytes, gf8_command,
+            "tampered high/GF8 command")
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("high/GF8 command with reuse 8 was accepted")
     timing_document = {"metrics": {"probe": {
         "samples_us_per_batch_call": [2500.0] * ITERATIONS,
         "median_us_per_batch_call": 2500.0,
     }}}
-    median, samples, minimum = timing(timing_document, "probe")
+    median, samples, minimum = timing(
+        timing_document, "probe", DEFAULT_REUSE)
     require(median == 2500.0 and len(samples) == ITERATIONS and
             minimum == MIN_RETAINED_TIMER_WINDOW_US,
             "retained timer floor self-test failed")
+    v1_short_document = {"metrics": {"probe": {
+        "samples_us_per_batch_call": [599.004875] * ITERATIONS,
+        "median_us_per_batch_call": 599.004875,
+    }}}
+    try:
+        timing(v1_short_document, "probe", DEFAULT_REUSE)
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("sealed v1 short-window regression was accepted")
+    median, _, minimum = timing(
+        v1_short_document, "probe", INACTIVE_HIGH_GF8_REUSE)
+    require(median == 599.004875 and minimum >
+            MIN_RETAINED_TIMER_WINDOW_US,
+            "sealed v1 sample did not clear the v2 reuse policy")
+    below_gf8_floor = {"metrics": {"probe": {
+        "samples_us_per_batch_call": [312.4] * ITERATIONS,
+        "median_us_per_batch_call": 312.4,
+    }}}
+    try:
+        timing(below_gf8_floor, "probe", INACTIVE_HIGH_GF8_REUSE)
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("reuse-64 timer boundary accepted a short sample")
+    fast_timing_document = {"metrics": {"probe": {
+        "samples_us_per_batch_call": [312.5] * ITERATIONS,
+        "median_us_per_batch_call": 312.5,
+    }}}
+    median, samples, minimum = timing(
+        fast_timing_document, "probe", INACTIVE_HIGH_GF8_REUSE)
+    require(median == 312.5 and len(samples) == ITERATIONS and
+            minimum == MIN_RETAINED_TIMER_WINDOW_US,
+            "inactive high/GF8 timer-floor self-test failed")
     timing_document["metrics"]["probe"]["samples_us_per_batch_call"][0] = \
         2499.0
     try:
-        timing(timing_document, "probe")
+        timing(timing_document, "probe", DEFAULT_REUSE)
     except RuntimeError:
         pass
     else:

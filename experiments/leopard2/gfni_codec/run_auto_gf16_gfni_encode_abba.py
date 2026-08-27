@@ -29,7 +29,14 @@ TARGET_ROUNDS = 25
 INACTIVE_ROUNDS = 2
 ITERATIONS = 9
 WARMUP = 2
-REUSE = 8
+DEFAULT_REUSE = 8
+INACTIVE_HIGH_GF8_REUSE = 64
+REUSE_OVERRIDES = {"inactive-high-gf8": INACTIVE_HIGH_GF8_REUSE}
+REUSE_POLICY_REASON = (
+    "The sealed v1 acquisition established that only the inactive high/GF8 "
+    "control was too fast for the fixed 20 ms retained timer floor at reuse "
+    "8; reuse 64 is a deterministic measurement-duration repair and inactive "
+    "timing is never a promotion gate.")
 MIN_RETAINED_TIMER_WINDOW_US = 20_000.0
 MAX_ROUND_ATTEMPTS = 5
 CAMPAIGN_DEADLINE_SECONDS = 7200
@@ -65,6 +72,7 @@ CONTRACT = (
     "encode_only,runtime_GFNI,startup_KAT,calibrated_AMD_1A_08,"
     "one_shot_and_one_item_batch,codec_setup_descriptive_only"
 )
+REPORT_SCHEMA = "leopard2-auto-gf16-gfni-encode-frozen-abba/v2"
 FAILURE_REPORT_WRITTEN = False
 JOURNAL_IDENTITIES = {}
 ACTIVE_CELL_EVIDENCE = None
@@ -99,6 +107,21 @@ CELLS = (
     ("inactive-high-gf8", 128, 64, 65536, INACTIVE_ROUNDS,
      "inactive", "high", "gf8", "auto", "field boundary"),
 )
+EXPECTED_REUSE_PER_CELL = {
+    "target-k1000-r200-b65536-high-gf16-auto": 8,
+    "inactive-k999": 8,
+    "inactive-k1001": 8,
+    "inactive-r199": 8,
+    "inactive-r201": 8,
+    "inactive-b65534": 8,
+    "inactive-b65538": 8,
+    "inactive-b32768": 8,
+    "inactive-b131072": 8,
+    "inactive-low-gf16": 8,
+    "inactive-explicit-avx2": 8,
+    "inactive-explicit-gfni": 8,
+    "inactive-high-gf8": 64,
+}
 
 
 def require(condition, message):
@@ -124,11 +147,24 @@ def expected_route(k, r, shard_bytes, profile, field, backend, mode):
     }
 
 
+def reuse_for_cell(cell_id):
+    return REUSE_OVERRIDES.get(cell_id, DEFAULT_REUSE)
+
+
+def reuse_per_cell():
+    return {cell[0]: reuse_for_cell(cell[0]) for cell in CELLS}
+
+
 def verify_static_contract():
-    require((TARGET_ROUNDS, INACTIVE_ROUNDS, ITERATIONS, WARMUP, REUSE,
+    require((TARGET_ROUNDS, INACTIVE_ROUNDS, ITERATIONS, WARMUP,
+             DEFAULT_REUSE, INACTIVE_HIGH_GF8_REUSE,
              MIN_RETAINED_TIMER_WINDOW_US) ==
-            (25, 2, 9, 2, 8, 20_000.0),
+            (25, 2, 9, 2, 8, 64, 20_000.0),
             "frozen campaign counts changed")
+    require(REUSE_OVERRIDES == {
+                "inactive-high-gf8": INACTIVE_HIGH_GF8_REUSE} and
+            reuse_per_cell() == EXPECTED_REUSE_PER_CELL,
+            "frozen per-cell reuse policy changed")
     require((EXPECTED_CPU, EXPECTED_SIBLING) == (52, 116),
             "frozen CPU topology changed")
     require(WORKLOAD_SEED == 0xA016F016,
@@ -581,7 +617,7 @@ def finite_positive(value, label):
     return value
 
 
-def timing(document, name):
+def timing(document, name, reuse):
     summary = document["metrics"][name]
     samples = summary["samples_us_per_batch_call"]
     require(len(samples) == ITERATIONS, f"{name} sample count changed")
@@ -591,7 +627,9 @@ def timing(document, name):
         summary["median_us_per_batch_call"], f"{name} median")
     require(abs(observed - reported) <= 0.000003,
             f"{name} median is not derived from retained samples")
-    retained_windows = [sample * REUSE for sample in samples]
+    require(type(reuse) is int and reuse > 0,
+            f"{name} reuse is not a positive integer")
+    retained_windows = [sample * reuse for sample in samples]
     require(min(retained_windows) >= MIN_RETAINED_TIMER_WINDOW_US,
             f"{name} retained timer window is shorter than the fixed floor")
     return reported, samples, min(retained_windows)
@@ -690,7 +728,7 @@ def retain_bootstrap_failure(error):
     if output is None:
         return
     write_report(output, {
-        "schema": "leopard2-auto-gf16-gfni-encode-frozen-abba/v1",
+        "schema": REPORT_SCHEMA,
         "status": "failed",
         "claim_passed": False,
         "failure_phase": "bootstrap_or_preflight",
@@ -709,6 +747,7 @@ def run_launch(binary, cpu, cell, mode, seed, source_commit, source_tree,
                validator, invocations, journal, label, deadline):
     (cell_id, k, r, shard_bytes, _, role, profile, field, backend,
      _) = cell
+    reuse = reuse_for_cell(cell_id)
     invocation = invocations / label
     invocation.mkdir(mode=0o700)
     output = invocation / "result.json"
@@ -720,7 +759,7 @@ def run_launch(binary, cpu, cell, mode, seed, source_commit, source_tree,
         "--k", str(k), "--r", str(r),
         "--profile", profile, "--field", field,
         "--backend", backend, "--bytes", str(shard_bytes),
-        "--loss", "1", "--batch", "1", "--reuse", str(REUSE),
+        "--loss", "1", "--batch", "1", "--reuse", str(reuse),
         "--iterations", str(ITERATIONS), "--warmup", str(WARMUP),
         "--threads", "1", "--seed", str(seed),
         "--skip-legacy", "--retain-samples",
@@ -825,7 +864,7 @@ def run_launch(binary, cpu, cell, mode, seed, source_commit, source_tree,
             parameters["requested_field"] == field and
             parameters["skip_legacy"] is True and
             parameters["thread_count"] == 1 and
-            parameters["batch"] == 1 and parameters["reuse"] == REUSE and
+            parameters["batch"] == 1 and parameters["reuse"] == reuse and
             parameters["loss_count"] == 1 and
             parameters["seed"] == seed and
             parameters["iterations"] == ITERATIONS and
@@ -875,9 +914,9 @@ def run_launch(binary, cpu, cell, mode, seed, source_commit, source_tree,
     require(document["correctness"]["leopard2_round_trip"] is True,
             "round-trip correctness failed")
     encode_us, encode_samples, encode_min_window_us = timing(
-        document, "encode_execution")
+        document, "encode_execution", reuse)
     one_shot_us, one_shot_samples, one_shot_min_window_us = timing(
-        document, "one_shot_encode")
+        document, "one_shot_encode", reuse)
     digests = document["workload_digests"]
     require(digests["algorithm"] == "fnv1a64",
             "workload digest algorithm changed")
@@ -885,7 +924,7 @@ def run_launch(binary, cpu, cell, mode, seed, source_commit, source_tree,
         "label": label,
         "mode": mode,
         "elapsed_ns": elapsed_ns,
-        "reuse": REUSE,
+        "reuse": reuse,
         "encode_us": encode_us,
         "one_shot_us": one_shot_us,
         "encode_samples_us": encode_samples,
@@ -966,6 +1005,7 @@ def run_cell(binary, cpu, sibling, cell, source_commit, source_tree, seed,
     global ACTIVE_CELL_EVIDENCE
     (cell_id, k, r, shard_bytes, rounds, role, profile, field, backend,
      rationale) = cell
+    reuse = reuse_for_cell(cell_id)
     records = []
     expected_digests = None
     encode_logs = []
@@ -1085,7 +1125,7 @@ def run_cell(binary, cpu, sibling, cell, source_commit, source_tree, seed,
         "backend": backend,
         "rationale": rationale,
         "rounds": rounds,
-        "reuse": REUSE,
+        "reuse": reuse,
         "workload_digests": expected_digests,
         "encode_execution": summarize(encode_logs, role == "target"),
         "one_shot_encode": summarize(one_shot_logs, role == "target"),
@@ -1099,7 +1139,7 @@ def run_cell(binary, cpu, sibling, cell, source_commit, source_tree, seed,
 def base_report(options, binary_hash, started, results, provenance,
                 lock_identity, quiet_presample):
     return {
-        "schema": "leopard2-auto-gf16-gfni-encode-frozen-abba/v1",
+        "schema": REPORT_SCHEMA,
         "claim_scope": (
             "same-binary mode-0 control versus mode-1 candidate at the exact "
             "K1000/R200/B65536/high/GF16/AUTO cell; no exact-main claim"),
@@ -1119,7 +1159,8 @@ def base_report(options, binary_hash, started, results, provenance,
         "warmup_per_launch": WARMUP,
         "child_environment": dict(CHILD_ENVIRONMENT),
         "git_environment": dict(GIT_ENVIRONMENT),
-        "reuse_per_sample": REUSE,
+        "reuse_per_cell": reuse_per_cell(),
+        "reuse_policy_reason": REUSE_POLICY_REASON,
         "retained_timer_duration_floor_us":
             MIN_RETAINED_TIMER_WINDOW_US,
         "launches_per_round": 4,
@@ -1184,24 +1225,63 @@ def self_test():
         "samples_us_per_batch_call": retained,
         "median_us_per_batch_call": 2500.0,
     }}}
-    median, samples, minimum = timing(document, "probe")
+    median, samples, minimum = timing(document, "probe", DEFAULT_REUSE)
     require(median == 2500.0 and samples == retained and
             minimum == MIN_RETAINED_TIMER_WINDOW_US,
             "timer-floor self-test failed")
+    fast_retained = [312.5] * ITERATIONS
+    fast_document = {"metrics": {"probe": {
+        "samples_us_per_batch_call": fast_retained,
+        "median_us_per_batch_call": 312.5,
+    }}}
+    median, samples, minimum = timing(
+        fast_document, "probe", INACTIVE_HIGH_GF8_REUSE)
+    require(median == 312.5 and samples == fast_retained and
+            minimum == MIN_RETAINED_TIMER_WINDOW_US and
+            reuse_for_cell(CELLS[0][0]) == DEFAULT_REUSE and
+            reuse_for_cell("inactive-high-gf8") ==
+                INACTIVE_HIGH_GF8_REUSE,
+            "per-cell timer-floor self-test failed")
+    v1_short_document = {"metrics": {"probe": {
+        "samples_us_per_batch_call": [599.004875] * ITERATIONS,
+        "median_us_per_batch_call": 599.004875,
+    }}}
+    try:
+        timing(v1_short_document, "probe", DEFAULT_REUSE)
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("sealed v1 short-window regression was accepted")
+    median, _, minimum = timing(
+        v1_short_document, "probe", INACTIVE_HIGH_GF8_REUSE)
+    require(median == 599.004875 and minimum >
+            MIN_RETAINED_TIMER_WINDOW_US,
+            "sealed v1 sample did not clear the v2 reuse policy")
+    below_gf8_floor = {"metrics": {"probe": {
+        "samples_us_per_batch_call": [312.4] * ITERATIONS,
+        "median_us_per_batch_call": 312.4,
+    }}}
+    try:
+        timing(below_gf8_floor, "probe", INACTIVE_HIGH_GF8_REUSE)
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("reuse-64 timer boundary accepted a short sample")
     summary = summarize([0.0] * TARGET_ROUNDS, True)
     require(summary["geometric_mean_speedup"] == 1.0 and
             summary["ci95"] == [1.0, 1.0],
             "paired-log summary self-test failed")
 
     print(json.dumps({
-        "schema": "leopard2-auto-gf16-gfni-encode-runner-self-test/v1",
+        "schema": "leopard2-auto-gf16-gfni-encode-runner-self-test/v2",
         "passed": True,
         "cells": len(CELLS),
         "target_rounds": TARGET_ROUNDS,
         "inactive_rounds": INACTIVE_ROUNDS,
         "iterations": ITERATIONS,
         "warmup": WARMUP,
-        "reuse": REUSE,
+        "reuse_per_cell": reuse_per_cell(),
+        "reuse_policy_reason": REUSE_POLICY_REASON,
         "timer_floor_us": MIN_RETAINED_TIMER_WINDOW_US,
     }, sort_keys=True))
 
@@ -1583,7 +1663,8 @@ def main():
                     "match under the common workload seed"),
                 "timer_duration": (
                     "every retained encode_execution and one_shot_encode "
-                    "sample multiplied by reuse must span at least 20 "
+                    "sample multiplied by that cell's frozen reuse (8; "
+                    "inactive-high-gf8 64) must span at least 20 "
                     "milliseconds"),
                 "inactive_controls": (
                     "timing is retained as descriptive evidence only and is "
