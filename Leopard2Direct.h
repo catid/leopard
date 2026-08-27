@@ -365,6 +365,25 @@ bool K16R16B64AVX512GFNISelectedForDiagnostics(
 unsigned K16R16B64AVX512GFNICallCountForDiagnostics();
 bool FinishK16R16B64AVX512GFNIRouteProbeForDiagnostics();
 
+// Default-off, operation-specific attribution for widening an AUTO AVX2
+// legacy-high GF16 one-shot or ordinary one-item-batch encode call to the
+// already-qualified VEX-256 GFNI table.  The scalable-preflight alias,
+// multi-item/reusable batches, explicit backends, and decode remain on their
+// requested/context table.  Probe
+// accounting is calling-thread-local and is armed only around untimed route
+// checks.  Set the diagnostic mode before codec creation, perform and query
+// the probe on that same thread, and call Finish only while no encode or path
+// introspection is executing.  The enabled arm can then qualify the optional
+// table while the production default-off arm remains setup- and memory-inert.
+bool SetAutoGF16GFNIEncodeEnabledForDiagnostics(bool enabled);
+unsigned AutoGF16GFNIEncodeModeForDiagnostics();
+bool AutoGF16GFNIEncodeAvailableForDiagnostics(const leo2_codec* codec);
+bool AutoGF16GFNIEncodeSelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes);
+unsigned AutoGF16GFNIEncodeCallCountForDiagnostics();
+bool FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics();
+
 /*
     Arithmetic-only same-executable benchmark control for the exact
     K=62/R=8/B=64 fused AVX2 leaf.  It deliberately does not affect adjacent

@@ -555,6 +555,7 @@ struct leo2_context
     const leopard::backend::Ops* baseline_ops;
     bool auto_requested;
     bool auto_avx512_encode_host;
+    bool auto_gf16_gfni_encode_host;
     leopard::backend::FF8K65R65B64PackedKernel
         auto_k65r65_b64_avx512_gfni_kernel;
     leopard::backend::FF8K65R65Multiples64PackedKernel
@@ -698,6 +699,7 @@ struct leo2_codec
 {
     leo2_context* context;
     const leopard::backend::Ops* auto_avx512_encode_ops;
+    const leopard::backend::Ops* auto_gf16_gfni_encode_ops;
     uint32_t original_count;
     uint32_t recovery_count;
     uint32_t parent_count;
@@ -1072,7 +1074,8 @@ static leo2_result EncodeInternal(
     size_t scratch_bytes,
     const void* protected_metadata,
     size_t protected_metadata_bytes,
-    bool prevalidated);
+    bool prevalidated,
+    bool allow_auto_gf16_gfni_route = true);
 
 #ifdef LEO_HAS_FF8
 static bool TryExecuteGF8AVX2T2Prevalidated(
@@ -1130,6 +1133,16 @@ static volatile uint32_t g_one_shot_equal_rounded_direct_mode =
 #endif
 static volatile uint32_t g_cauchy_log_reuse_mode =
     2U - LEO2_EXPERIMENT_CAUCHY_LOG_REUSE;
+#ifdef LEO_HAS_FF16
+/*
+    Default-off attribution for an operation-specific AUTO widening from the
+    process AVX2 table to the already-qualified native-Cantor GFNI table.  The
+    probe states count only untimed route checks, then normalize to the normal
+    enabled/disabled states before measurement.
+*/
+static std::atomic<uint32_t> g_auto_gf16_gfni_encode_mode(2U);
+static thread_local unsigned g_auto_gf16_gfni_encode_call_count = 0U;
+#endif
 #ifdef LEO_HAS_FF8
 static volatile uint32_t g_r1_early_dispatch_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_R1_EARLY_DISPATCH;
@@ -5358,6 +5371,9 @@ static leo2_result ValidateEncodeBuffers(
 }
 
 static bool CodecMayUseAutoAVX512Encode(const leo2_codec* codec);
+#ifdef LEO_HAS_FF16
+static bool CodecMayUseAutoGF16GFNIEncode(const leo2_codec* codec);
+#endif
 
 static bool CodecMayUseMeasuredSparseLowGF16AVX2Encode(
     const leo2_codec* codec,
@@ -7778,15 +7794,79 @@ static bool UseAutoAVX512Encode(
     return buffer_bytes >= kScratchAlignment;
 }
 
-static const leopard::backend::Ops& SelectTransformEncodeOps(
+#ifdef LEO_HAS_FF16
+static bool CodecMayUseAutoGF16GFNIEncode(const leo2_codec* codec)
+{
+    /*
+        Default-off measurement selector for the exact model-08 workload.
+        Neighbor screens are intentionally not promoted here: K, R, padded
+        side, and shard length all cross distinct FF16 layout and tiling paths.
+        A later same-binary boundary campaign may widen this predicate.
+    */
+    return codec && codec->context && codec->context->auto_requested &&
+        codec->context->auto_gf16_gfni_encode_host &&
+        codec->context->backend == LEO2_BACKEND_AVX2 &&
+        codec->context->thread_count == 1U &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF16 &&
+        codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        codec->flags == 0 && codec->original_count == 1000U &&
+        codec->recovery_count == 200U && codec->padded_side == 256U;
+}
+#endif
+
+static bool UseAutoGF16GFNIEncode(
     const leo2_codec* codec,
     size_t buffer_bytes,
     uint32_t requested_recovery_count,
     uint32_t requested_recovery_prefix)
 {
+#ifdef LEO_HAS_FF16
+    const unsigned mode = g_auto_gf16_gfni_encode_mode.load(
+        std::memory_order_relaxed);
+    if ((mode != 1U && mode != 3U) ||
+        !CodecMayUseAutoGF16GFNIEncode(codec) ||
+        !codec->auto_gf16_gfni_encode_ops ||
+        codec->context->ops != codec->context->baseline_ops ||
+        requested_recovery_count != codec->recovery_count ||
+        requested_recovery_prefix != codec->recovery_count)
+        return false;
+
+    return buffer_bytes == 64U * 1024U;
+#else
+    (void)codec;
+    (void)buffer_bytes;
+    (void)requested_recovery_count;
+    (void)requested_recovery_prefix;
+    return false;
+#endif
+}
+
+static const leopard::backend::Ops& SelectTransformEncodeOps(
+    const leo2_codec* codec,
+    size_t buffer_bytes,
+    uint32_t requested_recovery_count,
+    uint32_t requested_recovery_prefix,
+    bool account_auto_gf16_gfni_route = false,
+    bool allow_auto_gf16_gfni_route = true)
+{
     if (UseAutoAVX512Encode(codec, buffer_bytes,
             requested_recovery_count, requested_recovery_prefix))
         return *codec->auto_avx512_encode_ops;
+    if (allow_auto_gf16_gfni_route &&
+        UseAutoGF16GFNIEncode(codec, buffer_bytes,
+            requested_recovery_count, requested_recovery_prefix))
+    {
+#ifdef LEO_HAS_FF16
+        if (account_auto_gf16_gfni_route &&
+            g_auto_gf16_gfni_encode_mode.load(
+                std::memory_order_relaxed) == 3U)
+            ++g_auto_gf16_gfni_encode_call_count;
+#else
+        (void)account_auto_gf16_gfni_route;
+#endif
+        return *codec->auto_gf16_gfni_encode_ops;
+    }
     return *codec->context->ops;
 }
 
@@ -14740,6 +14820,8 @@ LEO2_EXPORT leo2_result leo2_context_create(
     context->auto_requested = requested == LEO2_BACKEND_AUTO;
     context->auto_avx512_encode_host = context->auto_requested &&
         leopard::backend::IsCalibratedAutoAVX512EncodeHost();
+    context->auto_gf16_gfni_encode_host = context->auto_requested &&
+        leopard::backend::IsCalibratedAutoGF16GFNIEncodeHost();
     context->auto_k65r65_b64_avx512_gfni_kernel =
         context->auto_requested &&
         leopard::backend::IsCalibratedK65R65B64AVX512GFNIHost()
@@ -15087,6 +15169,7 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         return LEO2_OUT_OF_MEMORY;
     codec->context = context;
     codec->auto_avx512_encode_ops = NULL;
+    codec->auto_gf16_gfni_encode_ops = NULL;
     codec->original_count = original_count;
     codec->recovery_count = recovery_count;
     codec->parent_count = parent;
@@ -15456,6 +15539,20 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         codec->auto_avx512_encode_ops =
             leopard::backend::GetQualifiedOps(LEO2_BACKEND_AVX512);
     }
+#ifdef LEO_HAS_FF16
+    const unsigned auto_gf16_gfni_encode_mode =
+        g_auto_gf16_gfni_encode_mode.load(std::memory_order_relaxed);
+    if (CodecMayUseAutoGF16GFNIEncode(codec) &&
+        (auto_gf16_gfni_encode_mode == 1U ||
+         auto_gf16_gfni_encode_mode == 3U))
+    {
+        // Reuse the explicit GFNI member's serialized, cached whole-backend
+        // KAT.  Failure withholds only this optional encode substitution;
+        // codec creation and every decode path retain the AUTO AVX2 table.
+        codec->auto_gf16_gfni_encode_ops =
+            leopard::backend::GetQualifiedOps(LEO2_BACKEND_GFNI);
+    }
+#endif
     *codec_out = codec;
     return LEO2_SUCCESS;
 }
@@ -16066,6 +16163,80 @@ bool FinishK16R16B64AVX512GFNIRouteProbeForDiagnostics()
         return false;
     g_k16r16_b64_avx512_gfni_mode = mode == 3U ? 1U : 2U;
     return true;
+#else
+    return false;
+#endif
+}
+
+bool SetAutoGF16GFNIEncodeEnabledForDiagnostics(bool enabled)
+{
+#ifdef LEO_HAS_FF16
+    g_auto_gf16_gfni_encode_call_count = 0U;
+    g_auto_gf16_gfni_encode_mode.store(
+        enabled ? 3U : 4U, std::memory_order_relaxed);
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
+unsigned AutoGF16GFNIEncodeModeForDiagnostics()
+{
+#ifdef LEO_HAS_FF16
+    const unsigned mode = g_auto_gf16_gfni_encode_mode.load(
+        std::memory_order_relaxed);
+    return mode == 3U ? 1U : mode == 4U ? 2U : mode;
+#else
+    return 0U;
+#endif
+}
+
+bool AutoGF16GFNIEncodeAvailableForDiagnostics(const leo2_codec* codec)
+{
+#ifdef LEO_HAS_FF16
+    return CodecMayUseAutoGF16GFNIEncode(codec) &&
+        codec->auto_gf16_gfni_encode_ops != NULL;
+#else
+    (void)codec;
+    return false;
+#endif
+}
+
+bool AutoGF16GFNIEncodeSelectedForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+#ifdef LEO_HAS_FF16
+    return codec && shard_bytes <= static_cast<uint64_t>(SIZE_MAX) &&
+        UseAutoGF16GFNIEncode(codec, static_cast<size_t>(shard_bytes),
+            codec->recovery_count, codec->recovery_count);
+#else
+    (void)codec;
+    (void)shard_bytes;
+    return false;
+#endif
+}
+
+unsigned AutoGF16GFNIEncodeCallCountForDiagnostics()
+{
+#ifdef LEO_HAS_FF16
+    return g_auto_gf16_gfni_encode_call_count;
+#else
+    return 0U;
+#endif
+}
+
+bool FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics()
+{
+#ifdef LEO_HAS_FF16
+    uint32_t mode = g_auto_gf16_gfni_encode_mode.load(
+        std::memory_order_relaxed);
+    if (mode != 3U && mode != 4U)
+        return false;
+    const uint32_t normalized = mode == 3U ? 1U : 2U;
+    return g_auto_gf16_gfni_encode_mode.compare_exchange_strong(
+        mode, normalized, std::memory_order_relaxed);
 #else
     return false;
 #endif
@@ -16967,7 +17138,8 @@ static leo2_result EncodeInternal(
     size_t scratch_bytes,
     const void* protected_metadata,
     size_t protected_metadata_bytes,
-    bool prevalidated);
+    bool prevalidated,
+    bool allow_auto_gf16_gfni_route);
 
 #ifdef LEO_HAS_FF8
 static LEO_FORCE_INLINE bool IsGF8AVX2T2PackedTerminalEligible(
@@ -21209,7 +21381,8 @@ static leo2_result EncodeInternal(
     size_t scratch_bytes,
     const void* protected_metadata,
     size_t protected_metadata_bytes,
-    bool prevalidated)
+    bool prevalidated,
+    bool allow_auto_gf16_gfni_route)
 {
     const bool single_side = UseSingleSideEncodeLayout(codec);
     if (single_side && IsLegacyHighK1R1Codec(codec))
@@ -21384,9 +21557,16 @@ static leo2_result EncodeInternal(
     // Choose once for the complete call so aligned and ragged passes cannot
     // observe different arithmetic tables.  The choice is deterministic and
     // depends only on immutable codec state, output shape, and shard length.
+    /*
+        The first GFNI qualification covers the public one-shot entry and an
+        ordinary one-item batch.  Multi-item and reusable-binding executors
+        arrive prevalidated and retain AVX2 until they have separate timing
+        evidence; the arithmetic result remains identical either way.
+    */
     const leopard::backend::Ops& transform_ops = SelectTransformEncodeOps(
         codec, static_cast<size_t>(shard_bytes), requested_recovery_count,
-        requested_recovery_prefix);
+        requested_recovery_prefix, true,
+        allow_auto_gf16_gfni_route && !prevalidated);
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && \
     defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
     !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
@@ -22224,7 +22404,8 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
 static leo2_result EncodeBatchCompatibilityInternal(
     const leo2_codec* codec,
     const leo2_encode_batch_item* items,
-    size_t item_count)
+    size_t item_count,
+    bool allow_auto_gf16_gfni_one_item)
 {
     if (item_count > 0xffffffffu)
         return LEO2_INVALID_ARGUMENT;
@@ -22249,7 +22430,8 @@ static leo2_result EncodeBatchCompatibilityInternal(
     {
         return EncodeInternal(codec, items[0].shard_bytes,
             items[0].original, items[0].recovery, items[0].scratch,
-            items[0].scratch_bytes, items, item_bytes, false);
+            items[0].scratch_bytes, items, item_bytes, false,
+            allow_auto_gf16_gfni_one_item);
     }
     EncodeBatchTaskContext batch = {
         codec, items, item_bytes, item_range
@@ -22592,7 +22774,7 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
                 codec, &items[0], item_range);
 #endif
     }
-    return EncodeBatchCompatibilityInternal(codec, items, item_count);
+    return EncodeBatchCompatibilityInternal(codec, items, item_count, true);
 }
 
 #undef LEO2_ENCODE_ENTRY_ALIGNED
@@ -22619,7 +22801,8 @@ LEO2_EXPORT leo2_result leo2_encode_batch_with_preflight_scratch(
     /* Preserve the established empty/single-item validation, metadata
        protection, and lazy-worker behavior without imposing a new workspace. */
     if (!UseScalableEncodeBatchPreflight(codec, item_count))
-        return EncodeBatchCompatibilityInternal(codec, items, item_count);
+        return EncodeBatchCompatibilityInternal(
+            codec, items, item_count, false);
     if (item_count > 0xffffffffu || !items || !codec)
         return LEO2_INVALID_ARGUMENT;
     size_t item_bytes = 0;

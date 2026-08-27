@@ -708,6 +708,9 @@ bool IsCalibratedAutoAVX512EncodeProcessor(
 bool IsCalibratedAutoAVX512EncodeHost();
 bool IsCalibratedAutoGFNIProcessor(const X86ProcessorIdentity& identity);
 bool IsCalibratedAutoGFNIHost();
+bool IsCalibratedAutoGF16GFNIEncodeProcessor(
+    const X86ProcessorIdentity& identity);
+bool IsCalibratedAutoGF16GFNIEncodeHost();
 bool IsCalibratedK65R65B64AVX512GFNIProcessor(
     const X86ProcessorIdentity& identity);
 bool IsCalibratedK65R65B64AVX512GFNIHost();

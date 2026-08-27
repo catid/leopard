@@ -82,6 +82,19 @@ K16R16_B64_AVX512_GFNI_CAMPAIGN_IDENTITIES = frozenset({
     ("legacy_high_v1", "gf16", "auto"),
     ("legacy_high_v1", "gf8", "avx2"),
 })
+AUTO_GF16_GFNI_ENCODE_CAMPAIGN_IDENTITIES = frozenset({
+    ("legacy_high_v1", "gf16", "auto"),
+    ("legacy_high_v1", "gf16", "avx2"),
+    ("legacy_high_v1", "gf16", "avx2-gfni"),
+    ("low_v1", "gf16", "auto"),
+    ("legacy_high_v1", "gf8", "auto"),
+})
+AUTO_GF16_GFNI_ENCODE_SELECTOR_CONTRACT = (
+    "LEGACY_HIGH_V1,GF16,AUTO,resolved_AVX2,"
+    "K=1000,R=200,T=256,B=65536,native_layout,"
+    "native_cantor_affine,dense_full_parity,encode_only,"
+    "runtime_GFNI,startup_KAT,calibrated_AMD_1A_08,"
+    "one_shot_and_one_item_batch,codec_setup_descriptive_only")
 ONE_SHOT_SCHEMAS = frozenset({
     "leopard2-benchmark-v8", "leopard2-benchmark-v9",
     "leopard2-benchmark-v12", "leopard2-benchmark-v15",
@@ -430,6 +443,7 @@ def run(
     k65r65_b64_avx512_gfni_mode: int | None = None,
     k65r65_t128_avx512_gfni_mode: int | None = None,
     k16r16_b64_avx512_gfni_mode: int | None = None,
+    auto_gf16_gfni_encode_mode: int | None = None,
     measure_one_shot_encode: bool = False,
     *,
     k: int = 3,
@@ -478,6 +492,10 @@ def run(
             (type(k16r16_b64_avx512_gfni_mode) is int and
              k16r16_b64_avx512_gfni_mode in {0, 1}),
             "K16/R16/B64 AVX-512/GFNI mode must be absent, zero, or one")
+    require(auto_gf16_gfni_encode_mode is None or
+            (type(auto_gf16_gfni_encode_mode) is int and
+             auto_gf16_gfni_encode_mode in {0, 1}),
+            "AUTO GF16 GFNI encode mode must be absent, zero, or one")
     require(k65r65_b64_packed_terminal_mode is None or
             k65r65_b64_avx512_gfni_mode is None,
             "K65/R65/B64 diagnostic modes must be mutually exclusive")
@@ -490,6 +508,12 @@ def run(
              k65r65_b64_avx512_gfni_mode is None and
              k65r65_t128_avx512_gfni_mode is None),
             "K16/R16/B64 mode must be exclusive with K65/R65 modes")
+    require(auto_gf16_gfni_encode_mode is None or
+            (k65r65_b64_packed_terminal_mode is None and
+             k65r65_b64_avx512_gfni_mode is None and
+             k65r65_t128_avx512_gfni_mode is None and
+             k16r16_b64_avx512_gfni_mode is None),
+            "AUTO GF16 GFNI encode mode must be exclusive with prior modes")
     require(type(measure_one_shot_encode) is bool,
             "one-shot encode measurement mode must be Boolean")
     require(type(shard_bytes) is int and shard_bytes > 0,
@@ -506,6 +530,7 @@ def run(
             k65r65_b64_avx512_gfni_mode is not None or
             k65r65_t128_avx512_gfni_mode is not None or
             k16r16_b64_avx512_gfni_mode is not None)
+        diagnostic_auto_gf16_gfni = auto_gf16_gfni_encode_mode is not None
         diagnostic_avx2 = (
             r1_small_reduction_mode is not None or
             r1_fixed_avx2_mode is not None or
@@ -516,6 +541,7 @@ def run(
         requested_field = field
         if requested_field is None:
             requested_field = (
+                "gf16" if diagnostic_auto_gf16_gfni else
                 "gf8" if diagnostic_avx2 or diagnostic_auto_gfni else "auto")
         requested_backend = backend
         if requested_backend is None:
@@ -583,6 +609,10 @@ def run(
             command.extend((
                 "--k16r16-b64-avx512-gfni-mode",
                 str(k16r16_b64_avx512_gfni_mode)))
+        if auto_gf16_gfni_encode_mode is not None:
+            command.extend((
+                "--auto-gf16-gfni-encode-mode",
+                str(auto_gf16_gfni_encode_mode)))
         command.extend(("--json", str(output)))
         completed = run_process(command)
         require(completed.returncode == 0,
@@ -609,6 +639,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 "leopard2-benchmark-v16", "leopard2-benchmark-v23",
                 "leopard2-benchmark-v31", "leopard2-benchmark-v32",
                 "leopard2-benchmark-v33", "leopard2-benchmark-v34",
+                "leopard2-benchmark-v35",
             }, "benchmark schema is unsupported")
     expected_top = {
         "schema", "build", "parameters", "resolved", "correctness",
@@ -622,7 +653,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "leopard2-benchmark-v15", "leopard2-benchmark-v16",
         "leopard2-benchmark-v23", "leopard2-benchmark-v31",
         "leopard2-benchmark-v32", "leopard2-benchmark-v33",
-        "leopard2-benchmark-v34",
+        "leopard2-benchmark-v34", "leopard2-benchmark-v35",
     }:
         expected_top.add("workload_digests")
     require(set(document) == expected_top, "top-level JSON keys changed")
@@ -649,6 +680,11 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     is_k16r16_v34 = document["schema"] == "leopard2-benchmark-v34"
     k16r16_v34_attested = (
         is_k16r16_v34 and
+        document["parameters"].get("attest_source") is True)
+    is_auto_gf16_gfni_v35 = \
+        document["schema"] == "leopard2-benchmark-v35"
+    auto_gf16_gfni_v35_attested = (
+        is_auto_gf16_gfni_v35 and
         document["parameters"].get("attest_source") is True)
     expected_build = {
         "compiler", "compiler_version", "cplusplus",
@@ -740,6 +776,20 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             "k16r16_b64_avx512_gfni_timed_ordinary_encode_api",
             "k16r16_b64_avx512_gfni_timed_one_shot_encode_api",
         })
+    if is_auto_gf16_gfni_v35:
+        expected_build.update({
+            "auto_gf16_gfni_encode_diagnostic_mode",
+            "auto_gf16_gfni_encode_diagnostic_disabled",
+            "auto_gf16_gfni_encode_mode_latched",
+            "auto_gf16_gfni_encode_kernel_available",
+            "auto_gf16_gfni_encode_kernel_qualified",
+            "auto_gf16_gfni_encode_selector_expected_selected",
+            "auto_gf16_gfni_encode_selector_selected",
+            "auto_gf16_gfni_encode_observed_call_count",
+            "auto_gf16_gfni_encode_selector_contract",
+            "auto_gf16_gfni_encode_timed_ordinary_encode_api",
+            "auto_gf16_gfni_encode_timed_one_shot_encode_api",
+        })
     if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
         expected_build.update({
             "one_shot_plan_setup_diagnostic_mode",
@@ -757,7 +807,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     if document["schema"] in {
             "leopard2-benchmark-v5", "leopard2-benchmark-v7"} or \
             k65r65_v31_attested or k65r65_v32_attested or \
-            k65r65_v33_attested or k16r16_v34_attested:
+            k65r65_v33_attested or k16r16_v34_attested or \
+            auto_gf16_gfni_v35_attested:
         expected_build.update({
             "source_commit", "source_tree", "source_tracked_dirty"})
     if document["schema"] in {
@@ -988,6 +1039,61 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                     "k16r16_b64_avx512_gfni_timed_one_shot_encode_api"] ==
                     K65R65_B64_TIMED_ONE_SHOT_ENCODE_API,
                 "K16/R16/B64 AVX-512/GFNI mode metadata is invalid")
+    if is_auto_gf16_gfni_v35:
+        build = document["build"]
+        parameters = document["parameters"]
+        resolved = document["resolved"]
+        mode = build["auto_gf16_gfni_encode_diagnostic_mode"]
+        available = build["auto_gf16_gfni_encode_kernel_available"]
+        qualified = build["auto_gf16_gfni_encode_kernel_qualified"]
+        codec_eligible = (
+            mode == 1 and
+            parameters["K"] == 1000 and parameters["R"] == 200 and
+            parameters["requested_profile"] == "legacy_high_v1" and
+            parameters["requested_field"] == "gf16" and
+            parameters["requested_backend"] == "auto" and
+            resolved["profile"] == "legacy_high_v1" and
+            resolved["field"] == "gf16" and
+            resolved["backend"] == "avx2" and
+            resolved["parent_count"] == 2048 and
+            resolved["padded_side"] == 256)
+        selector_expected = (
+            codec_eligible and qualified and
+            parameters["shard_bytes"] == 65536 and
+            parameters["loss_count"] <= parameters["R"])
+        require(type(mode) is int and mode in {0, 1} and
+                type(build[
+                    "auto_gf16_gfni_encode_diagnostic_disabled"]) is bool and
+                build["auto_gf16_gfni_encode_diagnostic_disabled"] is
+                    (mode == 0) and
+                type(build["auto_gf16_gfni_encode_mode_latched"]) is int and
+                build["auto_gf16_gfni_encode_mode_latched"] == mode and
+                type(available) is bool and type(qualified) is bool and
+                (codec_eligible or available is False) and
+                qualified is available and
+                type(build[
+                    "auto_gf16_gfni_encode_selector_expected_selected"])
+                    is bool and
+                type(build["auto_gf16_gfni_encode_selector_selected"])
+                    is bool and
+                build[
+                    "auto_gf16_gfni_encode_selector_expected_selected"] is
+                    selector_expected and
+                build["auto_gf16_gfni_encode_selector_selected"] is
+                    selector_expected and
+                type(build[
+                    "auto_gf16_gfni_encode_observed_call_count"]) is int and
+                build["auto_gf16_gfni_encode_observed_call_count"] ==
+                    (2 if selector_expected else 0) and
+                build["auto_gf16_gfni_encode_selector_contract"] ==
+                    AUTO_GF16_GFNI_ENCODE_SELECTOR_CONTRACT and
+                build[
+                    "auto_gf16_gfni_encode_timed_ordinary_encode_api"] ==
+                    K65R65_B64_TIMED_ORDINARY_ENCODE_API and
+                build[
+                    "auto_gf16_gfni_encode_timed_one_shot_encode_api"] ==
+                    K65R65_B64_TIMED_ONE_SHOT_ENCODE_API,
+                "AUTO GF16 GFNI encode mode metadata is invalid")
     if document["schema"] in R1_SCHEMAS:
         build = document["build"]
         for name in (
@@ -1048,7 +1154,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     if document["schema"] in {
             "leopard2-benchmark-v5", "leopard2-benchmark-v7"} or \
             k65r65_v31_attested or k65r65_v32_attested or \
-            k65r65_v33_attested or k16r16_v34_attested:
+            k65r65_v33_attested or k16r16_v34_attested or \
+            auto_gf16_gfni_v35_attested:
         for name in ("source_commit", "source_tree"):
             value = document["build"][name]
             require(value == "unknown" or
@@ -1087,6 +1194,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         })
     if document["schema"] == "leopard2-benchmark-v16":
         expected_resolved.add("gf8_avx2_walsh_locator_enabled")
+    if is_auto_gf16_gfni_v35:
+        expected_resolved.add("encode_backend")
     require(set(document["resolved"]) == expected_resolved,
             "resolved keys changed")
     parameters = document["parameters"]
@@ -1294,6 +1403,49 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                  parameters["attest_source"] is True),
                 "K16/R16/B64 AVX-512/GFNI parameters are invalid or "
                 "ambiguous")
+    if is_auto_gf16_gfni_v35:
+        expected_parameters = {
+            "K", "R", "requested_profile", "requested_field",
+            "requested_backend", "force_generic_decode",
+            "force_specialized_decode", "force_tiled_decode",
+            "force_materialized_decode", "skip_legacy", "retain_samples",
+            "measure_one_shot_encode", "auto_gf16_gfni_encode_mode",
+            "shard_bytes", "loss_count", "missing_original_indices",
+            "batch", "reuse", "iterations", "warmup", "thread_count",
+            "seed",
+        }
+        if auto_gf16_gfni_v35_attested:
+            expected_parameters.add("attest_source")
+        mode = parameters.get("auto_gf16_gfni_encode_mode")
+        requested_identity = (
+            parameters.get("requested_profile"),
+            parameters.get("requested_field"),
+            parameters.get("requested_backend"))
+        require(set(parameters) == expected_parameters and
+                type(mode) is int and mode in {0, 1} and
+                mode == document["build"][
+                    "auto_gf16_gfni_encode_diagnostic_mode"] and
+                requested_identity in
+                    AUTO_GF16_GFNI_ENCODE_CAMPAIGN_IDENTITIES and
+                parameters["batch"] == 1 and
+                parameters["thread_count"] == 1 and
+                parameters["skip_legacy"] is True and
+                parameters["retain_samples"] is True and
+                parameters["measure_one_shot_encode"] is True and
+                all(parameters[name] is False for name in (
+                    "force_generic_decode", "force_specialized_decode",
+                    "force_tiled_decode", "force_materialized_decode")) and
+                type(parameters["warmup"]) is int and
+                parameters["warmup"] >= 0 and
+                type(parameters["reuse"]) is int and
+                parameters["reuse"] > 0 and
+                type(parameters["iterations"]) is int and
+                parameters["iterations"] > 0 and
+                type(parameters["seed"]) is int and
+                0 <= parameters["seed"] <= (1 << 64) - 1 and
+                (not auto_gf16_gfni_v35_attested or
+                 parameters["attest_source"] is True),
+                "AUTO GF16 GFNI encode parameters are invalid or ambiguous")
     require(type(document["resolved"]["thread_count"]) is int and
             document["resolved"]["thread_count"] > 0 and
             type(document["resolved"]["parent_count"]) is int and
@@ -1346,6 +1498,31 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 resolved["thread_count"] == 1,
                 "K16/R16/B64 AVX-512/GFNI resolved codec identity is "
                 "invalid")
+    if is_auto_gf16_gfni_v35:
+        resolved = document["resolved"]
+        parameters = document["parameters"]
+        requested_backend = parameters["requested_backend"]
+        selected = document["build"][
+            "auto_gf16_gfni_encode_selector_selected"]
+        require(resolved["profile"] == parameters["requested_profile"] and
+                resolved["field"] == parameters["requested_field"] and
+                resolved["backend"] in {
+                    "scalar", "ssse3", "avx2", "neon", "avx512",
+                    "avx2-gfni"} and
+                (requested_backend == "auto" or
+                 resolved["backend"] == requested_backend) and
+                type(resolved["thread_count"]) is int and
+                resolved["thread_count"] == 1 and
+                resolved["parent_count"] >=
+                    parameters["K"] + parameters["R"] and
+                resolved["parent_count"] &
+                    (resolved["parent_count"] - 1) == 0 and
+                resolved["encode_backend"] in {
+                    "scalar", "ssse3", "avx2", "neon", "avx512",
+                    "avx2-gfni"} and
+                resolved["encode_backend"] ==
+                    ("avx2-gfni" if selected else resolved["backend"]),
+                "AUTO GF16 GFNI encode resolved codec identity is invalid")
     if document["schema"] in {
         "leopard2-benchmark-v3", "leopard2-benchmark-v6",
         "leopard2-benchmark-v7",
@@ -1434,7 +1611,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     if document["schema"] in R1_SCHEMAS:
         expected_metrics.add("one_shot_encode")
     if (k65r65_v31_one_shot or is_k65r65_v32 or is_k65r65_v33 or
-            is_k16r16_v34):
+            is_k16r16_v34 or is_auto_gf16_gfni_v35):
         expected_metrics.add("one_shot_encode")
     if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
         expected_metrics.update({
@@ -1472,7 +1649,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         output_rate_name="parity_output_GB_per_s",
         input_bytes=encode_input_bytes, output_bytes=encode_output_bytes)
     if (document["schema"] in R1_SCHEMAS or k65r65_v31_one_shot or
-            is_k65r65_v32 or is_k65r65_v33 or is_k16r16_v34):
+            is_k65r65_v32 or is_k65r65_v33 or is_k16r16_v34 or
+            is_auto_gf16_gfni_v35):
         validate_timing_summary(
             document["metrics"]["one_shot_encode"], "one_shot_encode",
             retain_samples=retain_samples, iterations=iterations,
@@ -2094,6 +2272,12 @@ def main() -> int:
             "k16r16_b64_avx512_gfni_mode" not in default["parameters"],
             "default benchmark exposed the opt-in K16/R16/B64 AVX-512/"
             "GFNI diagnostic")
+    require(all(not name.startswith("auto_gf16_gfni_encode_")
+                for name in default["build"]) and
+            "auto_gf16_gfni_encode_mode" not in default["parameters"] and
+            "encode_backend" not in default["resolved"],
+            "default benchmark exposed the opt-in AUTO GF16 GFNI encode "
+            "diagnostic")
     require(set(default["parameters"]) == {
         "K", "R", "requested_profile", "requested_field",
         "requested_backend", "force_generic_decode",
@@ -2975,6 +3159,235 @@ def main() -> int:
         "identity, batch=1, one thread, --skip-legacy, --retain-samples, and "
         "--measure-one-shot-encode")
 
+    if benchmark_supports_gf16(executable):
+        auto_gf16_target_documents = tuple(
+            run(executable, True, measure_one_shot_encode=True,
+                auto_gf16_gfni_encode_mode=mode,
+                k=1000, r=200, losses=1, shard_bytes=65536,
+                profile="high", field="gf16", backend="auto")
+            for mode in (0, 1))
+        for mode, document in enumerate(auto_gf16_target_documents):
+            require(document["schema"] == "leopard2-benchmark-v35",
+                    "AUTO GF16 GFNI encode diagnostic schema changed")
+            validate_common(document, True)
+            validate_workload_digests(document)
+            build = document["build"]
+            selected = build["auto_gf16_gfni_encode_selector_selected"]
+            expected_selected = bool(
+                mode == 1 and
+                build["auto_gf16_gfni_encode_kernel_qualified"])
+            require(build["auto_gf16_gfni_encode_diagnostic_mode"] == mode and
+                    build["auto_gf16_gfni_encode_diagnostic_disabled"] is
+                        (mode == 0) and
+                    build["auto_gf16_gfni_encode_mode_latched"] == mode and
+                    build[
+                        "auto_gf16_gfni_encode_selector_expected_selected"] is
+                        expected_selected and
+                    selected is expected_selected and
+                    build["auto_gf16_gfni_encode_observed_call_count"] ==
+                        (2 if selected else 0) and
+                    document["parameters"]["auto_gf16_gfni_encode_mode"] == mode,
+                    "AUTO GF16 GFNI encode target selector was not recorded "
+                    "exactly")
+        auto_gf16_mode_zero, auto_gf16_mode_one = auto_gf16_target_documents
+        require(auto_gf16_mode_zero["workload_digests"] ==
+                    auto_gf16_mode_one["workload_digests"] and
+                {name: value for name, value in
+                 auto_gf16_mode_zero["resolved"].items()
+                 if name != "encode_backend"} ==
+                    {name: value for name, value in
+                     auto_gf16_mode_one["resolved"].items()
+                     if name != "encode_backend"},
+                "AUTO GF16 GFNI encode mode changed the target workload or "
+                "resolved codec")
+
+        auto_gf16_attested = run(
+            executable, True, attest_source=True,
+            measure_one_shot_encode=True, auto_gf16_gfni_encode_mode=1,
+            k=1000, r=200, losses=1, shard_bytes=65536,
+            profile="high", field="gf16", backend="auto")
+        validate_common(auto_gf16_attested, True)
+        validate_workload_digests(auto_gf16_attested)
+        require(auto_gf16_attested["workload_digests"] ==
+                    auto_gf16_mode_one["workload_digests"] and
+                auto_gf16_attested["resolved"] ==
+                    auto_gf16_mode_one["resolved"] and
+                set(auto_gf16_attested["build"]) ==
+                    set(auto_gf16_mode_one["build"]) |
+                    {"source_commit", "source_tree", "source_tracked_dirty"} and
+                set(auto_gf16_attested["parameters"]) ==
+                    set(auto_gf16_mode_one["parameters"]) | {"attest_source"},
+                "AUTO GF16 GFNI encode source attestation is ambiguous")
+
+        auto_gf16_inactive_cells = (
+            ("inactive-k999", 999, 200, 65536, "high", "gf16", "auto"),
+            ("inactive-k1001", 1001, 200, 65536, "high", "gf16", "auto"),
+            ("inactive-r199", 1000, 199, 65536, "high", "gf16", "auto"),
+            ("inactive-r201", 1000, 201, 65536, "high", "gf16", "auto"),
+            ("inactive-b65534", 1000, 200, 65534, "high", "gf16", "auto"),
+            ("inactive-b65538", 1000, 200, 65538, "high", "gf16", "auto"),
+            ("inactive-low", 1000, 200, 65536, "low", "gf16", "auto"),
+            ("inactive-gf8", 128, 64, 65536, "high", "gf8", "auto"),
+            ("inactive-avx2", 1000, 200, 65536,
+             "high", "gf16", "avx2"),
+        )
+        if auto_gf16_mode_one["build"][
+                "auto_gf16_gfni_encode_kernel_available"]:
+            auto_gf16_inactive_cells += (
+                ("inactive-explicit-gfni", 1000, 200, 65536,
+                 "high", "gf16", "gfni"),)
+        target_available = auto_gf16_mode_one["build"][
+            "auto_gf16_gfni_encode_kernel_available"]
+        for (label, cell_k, cell_r, cell_bytes, cell_profile, cell_field,
+             cell_backend) in auto_gf16_inactive_cells:
+            documents = tuple(
+                run(executable, True, measure_one_shot_encode=True,
+                    auto_gf16_gfni_encode_mode=mode,
+                    k=cell_k, r=cell_r, losses=1, shard_bytes=cell_bytes,
+                    profile=cell_profile, field=cell_field,
+                    backend=cell_backend)
+                for mode in (0, 1))
+            codec_eligible_neighbor = (
+                cell_k == 1000 and cell_r == 200 and
+                cell_profile == "high" and cell_field == "gf16" and
+                cell_backend == "auto")
+            for mode, document in enumerate(documents):
+                require(document["schema"] == "leopard2-benchmark-v35",
+                        "AUTO GF16 GFNI encode inactive schema changed")
+                validate_common(document, True)
+                validate_workload_digests(document)
+                build = document["build"]
+                expected_available = bool(
+                    mode == 1 and codec_eligible_neighbor and target_available)
+                require(build["auto_gf16_gfni_encode_diagnostic_mode"] == mode and
+                        build["auto_gf16_gfni_encode_mode_latched"] == mode and
+                        build["auto_gf16_gfni_encode_kernel_available"] is
+                            expected_available and
+                        build["auto_gf16_gfni_encode_kernel_qualified"] is
+                            expected_available and
+                        build[
+                            "auto_gf16_gfni_encode_selector_expected_selected"]
+                            is False and
+                        build["auto_gf16_gfni_encode_selector_selected"] is
+                            False and
+                        build["auto_gf16_gfni_encode_observed_call_count"] == 0,
+                        f"AUTO GF16 GFNI encode {label} was not exactly inert")
+            require(documents[0]["workload_digests"] ==
+                        documents[1]["workload_digests"] and
+                    documents[0]["resolved"] == documents[1]["resolved"],
+                    f"AUTO GF16 GFNI encode {label} mode changed the workload "
+                    "or resolved codec")
+
+        for field_name, bad_value, label in (
+                ("auto_gf16_gfni_encode_diagnostic_mode", False,
+                 "Boolean mode"),
+                ("auto_gf16_gfni_encode_diagnostic_disabled", False,
+                 "incorrect disabled marker"),
+                ("auto_gf16_gfni_encode_mode_latched", True,
+                 "Boolean latched mode"),
+                ("auto_gf16_gfni_encode_kernel_available", True,
+                 "enabled availability in mode zero"),
+                ("auto_gf16_gfni_encode_kernel_qualified", True,
+                 "enabled qualification in mode zero"),
+                ("auto_gf16_gfni_encode_selector_expected_selected", True,
+                 "incorrect expected selection"),
+                ("auto_gf16_gfni_encode_selector_selected", True,
+                 "incorrect actual selection"),
+                ("auto_gf16_gfni_encode_observed_call_count", True,
+                 "Boolean call count"),
+                ("auto_gf16_gfni_encode_selector_contract", "ambiguous",
+                 "ambiguous contract"),
+                ("auto_gf16_gfni_encode_timed_ordinary_encode_api",
+                 "leo2_encode", "incorrect ordinary API"),
+                ("auto_gf16_gfni_encode_timed_one_shot_encode_api",
+                 "leo2_encode_batch", "incorrect one-shot API")):
+            malformed = copy.deepcopy(auto_gf16_mode_zero)
+            malformed["build"][field_name] = bad_value
+            require_common_rejected(
+                malformed, f"AUTO GF16 GFNI encode {label}")
+        malformed_auto_gf16_parameter = copy.deepcopy(auto_gf16_mode_zero)
+        malformed_auto_gf16_parameter["parameters"][
+            "auto_gf16_gfni_encode_mode"] = 1
+        require_common_rejected(
+            malformed_auto_gf16_parameter,
+            "inconsistent AUTO GF16 GFNI encode parameter")
+        malformed_auto_gf16_identity = copy.deepcopy(auto_gf16_mode_zero)
+        malformed_auto_gf16_identity["parameters"][
+            "requested_backend"] = "ssse3"
+        require_common_rejected(
+            malformed_auto_gf16_identity,
+            "unadmitted AUTO GF16 GFNI encode identity")
+        malformed_auto_gf16_resolved = copy.deepcopy(auto_gf16_mode_zero)
+        malformed_auto_gf16_resolved["resolved"]["encode_backend"] = "gfni"
+        require_common_rejected(
+            malformed_auto_gf16_resolved,
+            "unknown AUTO GF16 GFNI resolved encode backend")
+        malformed_auto_gf16_parent = copy.deepcopy(auto_gf16_mode_zero)
+        malformed_auto_gf16_parent["resolved"]["parent_count"] = 1201
+        require_common_rejected(
+            malformed_auto_gf16_parent,
+            "inconsistent AUTO GF16 GFNI resolved parent count")
+        malformed_auto_gf16_one_shot = copy.deepcopy(auto_gf16_mode_zero)
+        malformed_auto_gf16_one_shot["parameters"][
+            "measure_one_shot_encode"] = False
+        require_common_rejected(
+            malformed_auto_gf16_one_shot,
+            "false AUTO GF16 GFNI one-shot parameter")
+        missing_auto_gf16_metric = copy.deepcopy(auto_gf16_mode_zero)
+        del missing_auto_gf16_metric["metrics"]["one_shot_encode"]
+        require_common_rejected(
+            missing_auto_gf16_metric,
+            "missing AUTO GF16 GFNI one-shot metric")
+        malformed_auto_gf16_digest = copy.deepcopy(auto_gf16_mode_zero)
+        malformed_auto_gf16_digest["workload_digests"]["algorithm"] = "sha256"
+        require_workload_digests_rejected(
+            malformed_auto_gf16_digest,
+            "incorrect AUTO GF16 GFNI digest algorithm")
+        unexpected_auto_gf16_top = copy.deepcopy(auto_gf16_mode_zero)
+        unexpected_auto_gf16_top["diagnostic"] = {}
+        require_common_rejected(
+            unexpected_auto_gf16_top,
+            "unexpected AUTO GF16 GFNI top-level field")
+
+        require_schema_modes_rejected(
+            executable, ("--auto-gf16-gfni-encode-mode", "2"),
+            "--auto-gf16-gfni-encode-mode must be exactly 0 or 1")
+        require_schema_modes_rejected(
+            executable, ("--auto-gf16-gfni-encode-mode", "0"),
+            "--auto-gf16-gfni-encode-mode requires an admitted target or inert "
+            "identity, batch=1, one thread, --skip-legacy, --retain-samples, and "
+            "--measure-one-shot-encode")
+        auto_gf16_contract_arguments = (
+            "--k", "1000", "--r", "200", "--profile", "high",
+            "--field", "gf16", "--backend", "auto", "--bytes", "65536",
+            "--loss", "1", "--batch", "1", "--reuse", "1",
+            "--iterations", "1", "--warmup", "0", "--threads", "1",
+            "--skip-legacy", "--retain-samples", "--measure-one-shot-encode",
+            "--auto-gf16-gfni-encode-mode", "0",
+        )
+        auto_gf16_conflict_diagnostic = (
+            "--auto-gf16-gfni-encode-mode cannot be combined with another "
+            "diagnostic mode, terminal-disable control, or decode-path override")
+        require_schema_modes_rejected(
+            executable, auto_gf16_contract_arguments +
+            ("--k16r16-b64-avx512-gfni-mode", "0"),
+            auto_gf16_conflict_diagnostic)
+        require_schema_modes_rejected(
+            executable, auto_gf16_contract_arguments + ("--force-generic",),
+            auto_gf16_conflict_diagnostic)
+        require_schema_modes_rejected(
+            executable, (
+                "--k", "1000", "--r", "200", "--profile", "low",
+                "--field", "gf8", "--backend", "auto", "--bytes", "65536",
+                "--loss", "1", "--batch", "1", "--reuse", "1",
+                "--iterations", "1", "--warmup", "0", "--threads", "1",
+                "--skip-legacy", "--retain-samples",
+                "--measure-one-shot-encode",
+                "--auto-gf16-gfni-encode-mode", "0"),
+            "--auto-gf16-gfni-encode-mode requires an admitted target or inert "
+            "identity, batch=1, one thread, --skip-legacy, --retain-samples, and "
+            "--measure-one-shot-encode")
+
     disabled_k16_terminal = run(
         executable, True, disable_k16r8_b256_terminal=True)
     validate_common(disabled_k16_terminal, True)
@@ -3038,6 +3451,10 @@ def main() -> int:
     require_schema_modes_rejected(
         prevalidated_executable, k16r16_gfni_contract_arguments,
         "--k16r16-b64-avx512-gfni-mode requires the ordinary benchmark")
+    if benchmark_supports_gf16(executable):
+        require_schema_modes_rejected(
+            prevalidated_executable, auto_gf16_contract_arguments,
+            "--auto-gf16-gfni-encode-mode requires the ordinary benchmark")
     prevalidated = run(
         prevalidated_executable, True, k=1, r=1, losses=1)
     require(prevalidated["schema"] == "leopard2-benchmark-v2",

@@ -644,6 +644,26 @@ bool IsCalibratedAutoGFNIHost()
     return IsCalibratedAutoGFNIProcessor(DetectX86Processor());
 }
 
+bool IsCalibratedAutoGF16GFNIEncodeProcessor(
+    const X86ProcessorIdentity& identity)
+{
+    /*
+        Operation-specific encode qualification for the native-Cantor,
+        VEX-256 GFNI table.  Family 1Ah/model 08h is the Zen 5 Threadripper
+        class on which the AUTO-AVX2 versus GFNI transform campaign is run.
+        The ordinary feature classifier and the backend KAT independently
+        establish instruction safety and arithmetic correctness; this narrow
+        identity allowlist controls only the measured AUTO performance choice.
+    */
+    return identity.authentic_amd && identity.family == 0x1aU &&
+        identity.model == 0x08U;
+}
+
+bool IsCalibratedAutoGF16GFNIEncodeHost()
+{
+    return IsCalibratedAutoGF16GFNIEncodeProcessor(DetectX86Processor());
+}
+
 bool IsCalibratedK65R65B64AVX512GFNIProcessor(
     const X86ProcessorIdentity& identity)
 {

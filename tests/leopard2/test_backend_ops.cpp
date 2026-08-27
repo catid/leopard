@@ -150,6 +150,9 @@ void test_processor_classifier()
     require(!leopard::backend::
             IsCalibratedK16R16B64AVX512GFNIProcessor(zen5),
         "Granite Ridge entered the Threadripper-only T16 selector");
+    require(!leopard::backend::
+            IsCalibratedAutoGF16GFNIEncodeProcessor(zen5),
+        "Granite Ridge entered the Threadripper-only GF16 encode selector");
 
     const uint32_t family_1a_model_08 =
         (0xfU << 8) | (0xbU << 20) | (8U << 4);
@@ -165,6 +168,9 @@ void test_processor_classifier()
     require(leopard::backend::
             IsCalibratedK16R16B64AVX512GFNIProcessor(threadripper),
         "calibrated Threadripper T16 processor classification");
+    require(leopard::backend::
+            IsCalibratedAutoGF16GFNIEncodeProcessor(threadripper),
+        "calibrated Threadripper GF16 encode processor classification");
     const uint32_t family_1a_model_07 =
         (0xfU << 8) | (0xbU << 20) | (7U << 4);
     const uint32_t family_1a_model_09 =
@@ -180,6 +186,11 @@ void test_processor_classifier()
             !leopard::backend::
                 IsCalibratedK16R16B64AVX512GFNIProcessor(adjacent_after),
         "adjacent AMD models entered the exact T16 selector");
+    require(!leopard::backend::
+                IsCalibratedAutoGF16GFNIEncodeProcessor(adjacent_before) &&
+            !leopard::backend::
+                IsCalibratedAutoGF16GFNIEncodeProcessor(adjacent_after),
+        "adjacent AMD models entered the GF16 encode selector");
 
     const leopard::backend::X86ProcessorIdentity wrong_vendor =
         leopard::backend::ClassifyX86Processor(
@@ -204,6 +215,10 @@ void test_processor_classifier()
             IsCalibratedK16R16B64AVX512GFNIProcessor(
                 wrong_t128_vendor),
         "non-AMD processor entered the calibrated T16 selector");
+    require(!leopard::backend::
+            IsCalibratedAutoGF16GFNIEncodeProcessor(
+                wrong_t128_vendor),
+        "non-AMD processor entered the calibrated GF16 encode selector");
 
     const uint32_t family_6_model_9e =
         (6U << 8) | (0xeU << 4) | (9U << 16);
@@ -219,6 +234,9 @@ void test_processor_classifier()
     require(!leopard::backend::
             IsCalibratedK16R16B64AVX512GFNIProcessor(family6),
         "uncalibrated family/model entered the calibrated T16 selector");
+    require(!leopard::backend::
+            IsCalibratedAutoGF16GFNIEncodeProcessor(family6),
+        "uncalibrated family/model entered the calibrated GF16 encode selector");
 }
 
 #ifdef LEO_HAS_FF8

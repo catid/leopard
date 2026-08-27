@@ -2326,6 +2326,24 @@ if(LEO2_BUILD_TESTS)
             COMMAND leopard2_backend_failures_test gfni ff16-allocation)
         add_test(NAME leopard2_backend_failure_gfni_kat
             COMMAND leopard2_backend_failures_test gfni kat)
+        if(LEOPARD_ENABLE_GF16)
+            add_test(NAME leopard2_backend_auto_gfni_encode_disabled_inert
+                COMMAND leopard2_backend_failures_test
+                    auto-gfni-encode-disabled-inert)
+            add_test(NAME leopard2_backend_auto_gfni_encode_kat_fallback
+                COMMAND leopard2_backend_failures_test
+                    auto-gfni-encode-kat-fallback)
+            add_test(
+                NAME leopard2_backend_auto_gfni_encode_ff16_allocation_fallback
+                COMMAND leopard2_backend_failures_test
+                    auto-gfni-encode-ff16-allocation-fallback)
+            if(LEOPARD_ENABLE_GF8)
+                add_test(
+                    NAME leopard2_backend_auto_gfni_encode_ff8_allocation_fallback
+                    COMMAND leopard2_backend_failures_test
+                        auto-gfni-encode-ff8-allocation-fallback)
+            endif()
+        endif()
     endif()
     set_tests_properties(
         leopard2_backend_failure_scalar_ff8_allocation
@@ -2352,6 +2370,19 @@ if(LEO2_BUILD_TESTS)
             leopard2_backend_failure_gfni_ff16_allocation
             leopard2_backend_failure_gfni_kat
             PROPERTIES ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+        if(LEOPARD_ENABLE_GF16)
+            set_tests_properties(
+                leopard2_backend_auto_gfni_encode_disabled_inert
+                leopard2_backend_auto_gfni_encode_kat_fallback
+                leopard2_backend_auto_gfni_encode_ff16_allocation_fallback
+                PROPERTIES ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+            if(LEOPARD_ENABLE_GF8)
+                set_tests_properties(
+                    leopard2_backend_auto_gfni_encode_ff8_allocation_fallback
+                    PROPERTIES
+                        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+            endif()
+        endif()
     endif()
 
     add_executable(leopard2_context_backends_test

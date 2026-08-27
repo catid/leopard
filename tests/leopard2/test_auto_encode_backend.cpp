@@ -146,14 +146,14 @@ void test_balanced_execution_tile_geometry()
 class Context
 {
 public:
-    explicit Context(leo2_backend requested)
+    explicit Context(leo2_backend requested, uint32_t thread_count = 1)
         : value_(NULL), result_(LEO2_INTERNAL_ERROR)
     {
         leo2_context_options options;
         std::memset(&options, 0, sizeof(options));
         options.struct_size = sizeof(options);
         options.backend = requested;
-        options.thread_count = 1;
+        options.thread_count = thread_count;
         result_ = leo2_context_create(&options, &value_);
     }
 
@@ -177,15 +177,20 @@ public:
         uint32_t r,
         leo2_profile profile = LEO2_PROFILE_LEGACY_HIGH_V1,
         leo2_field field = LEO2_FIELD_GF16,
-        uint32_t flags = 0)
+        uint32_t flags = 0,
+        leo2_shard_layout layout = LEO2_SHARD_LAYOUT_NATIVE_V1)
         : value_(NULL)
     {
         leo2_codec_options options;
         std::memset(&options, 0, sizeof(options));
         options.struct_size = sizeof(options);
         options.flags = flags;
+        options.shard_layout = layout;
         require_result(leo2_codec_create(context, k, r,
-            profile, field, flags == 0 ? NULL : &options, &value_),
+            profile, field,
+            flags == 0 && layout == LEO2_SHARD_LAYOUT_NATIVE_V1
+                ? NULL : &options,
+            &value_),
             LEO2_SUCCESS, "codec create");
     }
 
@@ -829,6 +834,170 @@ Shards encode(
     return recovery;
 }
 
+Shards encode_one_item_batch(
+    const leo2_codec* codec,
+    const Shards& original,
+    uint32_t r,
+    bool reusable_binding)
+{
+    const size_t bytes = original[0].size();
+    std::vector<const void*> original_ptrs(original.size());
+    for (size_t i = 0; i < original.size(); ++i)
+        original_ptrs[i] = original[i].data();
+    Shards recovery(r, Bytes(bytes));
+    std::vector<void*> recovery_ptrs(r);
+    for (uint32_t i = 0; i < r; ++i)
+        recovery_ptrs[i] = recovery[i].data();
+    size_t scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(codec, bytes, &scratch_bytes),
+        LEO2_SUCCESS, "batch scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    leo2_encode_batch_item item = {};
+    item.shard_bytes = bytes;
+    item.original = original_ptrs.data();
+    item.recovery = recovery_ptrs.data();
+    item.scratch = scratch.get();
+    item.scratch_bytes = scratch_bytes;
+    if (reusable_binding)
+    {
+        leo2_encode_batch_binding* binding = NULL;
+        require_result(leo2_encode_batch_binding_create(
+                codec, &item, 1, &binding),
+            LEO2_SUCCESS, "encode batch binding create");
+        require(binding && leo2_encode_batch_binding_item_count(binding) == 1,
+            "encode batch binding item count");
+        const leo2_result result = leo2_encode_batch_binding_execute(binding);
+        leo2_encode_batch_binding_destroy(binding);
+        require_result(result, LEO2_SUCCESS,
+            "encode batch binding execute");
+    }
+    else
+    {
+        require_result(leo2_encode_batch(codec, &item, 1),
+            LEO2_SUCCESS, "one-item encode batch");
+    }
+    return recovery;
+}
+
+Shards encode_one_item_scalable_batch(
+    const leo2_codec* codec,
+    const Shards& original,
+    uint32_t r)
+{
+    const size_t bytes = original[0].size();
+    std::vector<const void*> original_ptrs(original.size());
+    for (size_t i = 0; i < original.size(); ++i)
+        original_ptrs[i] = original[i].data();
+    Shards recovery(r, Bytes(bytes));
+    std::vector<void*> recovery_ptrs(r);
+    for (uint32_t i = 0; i < r; ++i)
+        recovery_ptrs[i] = recovery[i].data();
+    size_t item_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(
+            codec, bytes, &item_scratch_bytes),
+        LEO2_SUCCESS, "scalable one-item scratch query");
+    AlignedBuffer item_scratch(item_scratch_bytes);
+    leo2_encode_batch_item item = {};
+    item.shard_bytes = bytes;
+    item.original = original_ptrs.data();
+    item.recovery = recovery_ptrs.data();
+    item.scratch = item_scratch.get();
+    item.scratch_bytes = item_scratch_bytes;
+    size_t preflight_bytes = 0;
+    require_result(leo2_encode_batch_preflight_scratch_size(
+            codec, 1, &preflight_bytes),
+        LEO2_SUCCESS, "scalable one-item preflight scratch query");
+    require(preflight_bytes == 0,
+        "scalable one-item alias unexpectedly required preflight scratch");
+    require_result(leo2_encode_batch_with_preflight_scratch(
+            codec, &item, 1, NULL, 0),
+        LEO2_SUCCESS, "scalable one-item encode batch");
+    return recovery;
+}
+
+void require_two_item_scalable_batch_matches(
+    const leo2_codec* codec,
+    const Shards& original,
+    const Shards& expected,
+    uint32_t r)
+{
+    const size_t bytes = original[0].size();
+    std::vector<const void*> original_ptrs(original.size());
+    for (size_t i = 0; i < original.size(); ++i)
+        original_ptrs[i] = original[i].data();
+    std::vector<Shards> recovery(
+        2, Shards(r, Bytes(bytes)));
+    std::vector<std::vector<void*> > recovery_ptrs(
+        2, std::vector<void*>(r));
+    size_t item_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(
+            codec, bytes, &item_scratch_bytes),
+        LEO2_SUCCESS, "scalable batch item scratch query");
+    std::vector<std::unique_ptr<AlignedBuffer> > item_scratch;
+    std::vector<leo2_encode_batch_item> items(2);
+    for (size_t item = 0; item < items.size(); ++item)
+    {
+        for (uint32_t parity = 0; parity < r; ++parity)
+            recovery_ptrs[item][parity] = recovery[item][parity].data();
+        item_scratch.push_back(std::unique_ptr<AlignedBuffer>(
+            new AlignedBuffer(item_scratch_bytes)));
+        items[item].shard_bytes = bytes;
+        items[item].original = original_ptrs.data();
+        items[item].recovery = recovery_ptrs[item].data();
+        items[item].scratch = item_scratch[item]->get();
+        items[item].scratch_bytes = item_scratch_bytes;
+    }
+    size_t preflight_bytes = 0;
+    require_result(leo2_encode_batch_preflight_scratch_size(
+            codec, items.size(), &preflight_bytes),
+        LEO2_SUCCESS, "scalable batch preflight scratch query");
+    require(preflight_bytes != 0,
+        "two-item batch did not request scalable preflight scratch");
+    AlignedBuffer preflight(preflight_bytes);
+    require_result(leo2_encode_batch_with_preflight_scratch(
+            codec, items.data(), items.size(), preflight.get(),
+            preflight_bytes),
+        LEO2_SUCCESS, "two-item scalable encode batch");
+    require(recovery[0] == expected && recovery[1] == expected,
+        "two-item scalable encode batch changed parity bytes");
+}
+
+void require_invalid_batch_is_atomic(
+    const leo2_codec* codec,
+    const Shards& original,
+    uint32_t r)
+{
+    const size_t bytes = original[0].size();
+    std::vector<const void*> original_ptrs(original.size());
+    for (size_t i = 0; i < original.size(); ++i)
+        original_ptrs[i] = original[i].data();
+    std::vector<Shards> recovery(
+        2, Shards(r, Bytes(bytes, 0xa5)));
+    const std::vector<Shards> before = recovery;
+    std::vector<std::vector<void*> > recovery_ptrs(
+        2, std::vector<void*>(r));
+    for (size_t item = 0; item < recovery.size(); ++item)
+        for (uint32_t parity = 0; parity < r; ++parity)
+            recovery_ptrs[item][parity] = recovery[item][parity].data();
+    size_t scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(codec, bytes, &scratch_bytes),
+        LEO2_SUCCESS, "invalid batch scratch query");
+    AlignedBuffer first_scratch(scratch_bytes);
+    leo2_encode_batch_item items[2] = {};
+    for (size_t item = 0; item < 2; ++item)
+    {
+        items[item].shard_bytes = bytes;
+        items[item].original = original_ptrs.data();
+        items[item].recovery = recovery_ptrs[item].data();
+    }
+    items[0].scratch = first_scratch.get();
+    items[0].scratch_bytes = scratch_bytes;
+    require_result(leo2_encode_batch(codec, items, 2),
+        LEO2_SCRATCH_TOO_SMALL, "invalid second batch item");
+    require(recovery == before,
+        "invalid batch modified output before complete preflight");
+}
+
 void run_t8_mixed_binding(
     leo2_codec* codec,
     uint32_t k,
@@ -1254,6 +1423,262 @@ void require_explicit_backend(Context& context, leo2_backend expected)
     require(selected_backend(codec.get(), 4U * 1024U * 1024U + 64U,
                 200, 200) == expected,
         "explicit backend was changed by the AUTO calibration bounds");
+}
+
+void test_auto_gf16_gfni_encode(
+    Context& automatic,
+    Context& avx2,
+    Context& gfni)
+{
+    if (!leopard::backend::IsCalibratedAutoGF16GFNIEncodeHost())
+        return;
+    if ((leo2_context_field_mask(automatic.get()) &
+            LEO2_FIELD_MASK_GF16) == 0)
+    {
+        require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() ==
+                0U,
+            "GF16-disabled build exposed the AUTO GF16 GFNI selector");
+        return;
+    }
+    if (leo2_context_backend(automatic.get()) != LEO2_BACKEND_AVX2 ||
+        avx2.result() != LEO2_SUCCESS || gfni.result() != LEO2_SUCCESS)
+    {
+        require(leopard2_internal::SetAutoGF16GFNIEncodeEnabledForDiagnostics(
+                true),
+            "enable unavailable AUTO GF16 GFNI encode probe");
+        Codec unavailable(automatic.get(), 1000, 200);
+        require(!leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+                    unavailable.get()) &&
+                selected_backend(unavailable.get(), 64U * 1024U,
+                    200, 200) == leo2_context_backend(automatic.get()),
+            "forced or GFNI-unavailable build widened AUTO GF16 encode");
+        require(leopard2_internal::FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics(),
+            "finish unavailable AUTO GF16 GFNI encode probe");
+        require(leopard2_internal::SetAutoGF16GFNIEncodeEnabledForDiagnostics(
+                false) &&
+                leopard2_internal::FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics(),
+            "restore unavailable AUTO GF16 GFNI selector");
+        return;
+    }
+    require(leo2_context_backend(automatic.get()) == LEO2_BACKEND_AVX2,
+        "model-08 AUTO baseline is not AVX2");
+    require_result(avx2.result(), LEO2_SUCCESS,
+        "model-08 explicit AVX2 context");
+    require_result(gfni.result(), LEO2_SUCCESS,
+        "model-08 explicit GFNI context");
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 2U,
+        "AUTO GF16 GFNI encode selector is not default-off");
+
+    require(leopard2_internal::SetAutoGF16GFNIEncodeEnabledForDiagnostics(
+            false),
+        "disable AUTO GF16 GFNI encode selector");
+    Codec disabled(automatic.get(), 1000, 200);
+    require(!leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+            disabled.get()),
+        "disabled AUTO GF16 GFNI encode selector qualified its table");
+    require(!leopard2_internal::AutoGF16GFNIEncodeSelectedForDiagnostics(
+            disabled.get(), 64U * 1024U),
+        "disabled AUTO GF16 GFNI encode selector remained selected");
+    require(selected_backend(disabled.get(), 64U * 1024U, 200, 200) ==
+            LEO2_BACKEND_AVX2,
+        "disabled AUTO GF16 GFNI encode selector widened");
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            0U,
+        "disabled AUTO GF16 GFNI encode route counted a call");
+    require(leopard2_internal::FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics(),
+        "finish disabled AUTO GF16 GFNI encode route probe");
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 2U,
+        "disabled AUTO GF16 GFNI encode mode did not normalize");
+
+    require(leopard2_internal::SetAutoGF16GFNIEncodeEnabledForDiagnostics(
+            true),
+        "enable AUTO GF16 GFNI encode selector");
+    Codec candidate(automatic.get(), 1000, 200);
+    Codec explicit_avx2(avx2.get(), 1000, 200);
+    Codec explicit_gfni(gfni.get(), 1000, 200);
+    require(leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+            candidate.get()),
+        "enabled AUTO GF16 GFNI encode table is unavailable");
+    require(leopard2_internal::AutoGF16GFNIEncodeSelectedForDiagnostics(
+            candidate.get(), 64U * 1024U),
+        "exact AUTO GF16 GFNI encode cell was not selected");
+    require(selected_backend(candidate.get(), 64U * 1024U, 200, 200) ==
+            LEO2_BACKEND_GFNI,
+        "exact AUTO GF16 GFNI encode cell did not widen");
+    require(selected_backend(candidate.get(), 64U * 1024U - 64U,
+                200, 200) == LEO2_BACKEND_AVX2 &&
+            selected_backend(candidate.get(), 64U * 1024U + 64U,
+                200, 200) == LEO2_BACKEND_AVX2,
+        "AUTO GF16 GFNI encode escaped its exact byte cell");
+    require(selected_backend(candidate.get(), 64U * 1024U - 2U,
+                200, 200) == LEO2_BACKEND_AVX2 &&
+            selected_backend(candidate.get(), 64U * 1024U + 2U,
+                200, 200) == LEO2_BACKEND_AVX2,
+        "AUTO GF16 GFNI encode escaped its immediate legal byte neighbors");
+    require(selected_backend(candidate.get(), 64U * 1024U, 199, 200) ==
+            LEO2_BACKEND_AVX2,
+        "AUTO GF16 GFNI encode widened a partial-output call");
+    require(selected_backend(explicit_avx2.get(), 64U * 1024U,
+                200, 200) == LEO2_BACKEND_AVX2 &&
+            selected_backend(explicit_gfni.get(), 64U * 1024U,
+                200, 200) == LEO2_BACKEND_GFNI,
+        "AUTO GF16 GFNI selector changed an explicit backend");
+
+    Codec below_k(automatic.get(), 999, 200);
+    Codec below_r(automatic.get(), 1000, 199);
+    Codec above_r(automatic.get(), 1000, 201);
+    Codec above_k(automatic.get(), 1001, 200);
+    Codec low_profile(
+        automatic.get(), 1000, 200, LEO2_PROFILE_LOW_V1);
+    Codec forced_decode(automatic.get(), 1000, 200,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE);
+    Codec padded_odd(automatic.get(), 1000, 200,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 0,
+        LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1);
+    Context two_threads(LEO2_BACKEND_AUTO, 2);
+    require_result(two_threads.result(), LEO2_SUCCESS,
+        "two-thread AUTO context");
+    Codec two_thread_codec(two_threads.get(), 1000, 200);
+    require(!leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+                below_k.get()) &&
+            !leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+                below_r.get()) &&
+            !leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+                above_r.get()) &&
+            !leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+                above_k.get()) &&
+            !leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+                low_profile.get()) &&
+            !leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+                forced_decode.get()) &&
+            !leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+                padded_odd.get()) &&
+            !leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+                two_thread_codec.get()),
+        "AUTO GF16 GFNI qualification escaped its exact codec cell");
+    if ((leo2_context_field_mask(automatic.get()) &
+            LEO2_FIELD_MASK_GF8) != 0)
+    {
+        Codec gf8_profile(automatic.get(), 128, 64,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        require(!leopard2_internal::
+                AutoGF16GFNIEncodeAvailableForDiagnostics(
+                    gf8_profile.get()),
+            "AUTO GF16 GFNI qualification escaped into GF8");
+    }
+
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            0U,
+        "AUTO GF16 GFNI introspection counted an encode call");
+    const Shards original = make_original(1000, 64U * 1024U);
+    const Shards automatic_parity = encode(
+        candidate.get(), original, 200, false);
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            1U,
+        "AUTO GF16 GFNI route did not count exactly one encode call");
+    {
+        const Shards sparse_parity = encode(
+            candidate.get(), original, 200, true);
+        require_sparse_matches_full(sparse_parity, automatic_parity);
+    }
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            1U,
+        "sparse AUTO encode entered the GF16 GFNI route");
+    const Shards avx2_parity = encode(
+        explicit_avx2.get(), original, 200, false);
+    const Shards gfni_parity = encode(
+        explicit_gfni.get(), original, 200, false);
+    require(automatic_parity == avx2_parity &&
+            automatic_parity == gfni_parity,
+        "AUTO GF16 GFNI widening changed parity bytes");
+    require(leo2_context_backend(automatic.get()) == LEO2_BACKEND_AVX2,
+        "encode-only GFNI widening changed the AUTO context backend");
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            1U,
+        "explicit backend encode polluted AUTO GF16 GFNI route count");
+
+    require_invalid_batch_is_atomic(candidate.get(), original, 200);
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            1U,
+        "rejected batch entered the AUTO GF16 GFNI route");
+    require(encode_one_item_batch(
+                candidate.get(), original, 200, false) == automatic_parity,
+        "one-item batch changed AUTO GF16 GFNI parity bytes");
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            2U,
+        "ordinary one-item batch did not enter the AUTO GF16 GFNI route");
+    require(encode_one_item_scalable_batch(
+                candidate.get(), original, 200) == automatic_parity,
+        "scalable one-item alias changed AUTO GF16 GFNI parity bytes");
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            2U,
+        "scalable one-item alias escaped the measured GFNI API scope");
+    require(encode_one_item_batch(
+                candidate.get(), original, 200, true) == automatic_parity,
+        "reusable batch binding changed AUTO GF16 GFNI parity bytes");
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            2U,
+        "reusable binding escaped the measured AUTO GF16 GFNI API scope");
+    require_two_item_scalable_batch_matches(
+        candidate.get(), original, automatic_parity, 200);
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            2U,
+        "multi-item batch escaped the measured AUTO GF16 GFNI API scope");
+    require(leopard2_internal::FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics(),
+        "finish enabled AUTO GF16 GFNI encode route probe");
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 1U,
+        "enabled AUTO GF16 GFNI encode mode did not normalize");
+
+    std::atomic<unsigned> concurrent_failures(0);
+    std::vector<std::thread> concurrent_threads;
+    for (unsigned lane = 0; lane < 2; ++lane)
+    {
+        concurrent_threads.push_back(std::thread([&]() {
+            try
+            {
+                require(encode(candidate.get(), original, 200, false) ==
+                        automatic_parity,
+                    "concurrent AUTO GF16 GFNI parity mismatch");
+            }
+            catch (...)
+            {
+                concurrent_failures.fetch_add(1, std::memory_order_relaxed);
+            }
+        }));
+    }
+    for (size_t i = 0; i < concurrent_threads.size(); ++i)
+        concurrent_threads[i].join();
+    require(concurrent_failures.load(std::memory_order_relaxed) == 0U,
+        "concurrent AUTO GF16 GFNI encode failed");
+
+    Plan plan(candidate.get(), 1000, 200, 1);
+    std::vector<const void*> original_inputs(1000);
+    for (uint32_t i = 1; i < 1000; ++i)
+        original_inputs[i] = original[i].data();
+    std::vector<const void*> recovery_inputs(200);
+    for (uint32_t i = 0; i < 200; ++i)
+        recovery_inputs[i] = automatic_parity[i].data();
+    Bytes restored(original[0].size());
+    std::vector<void*> restored_outputs(1000, NULL);
+    restored_outputs[0] = restored.data();
+    size_t decode_scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+            plan.get(), original[0].size(), &decode_scratch_bytes),
+        LEO2_SUCCESS, "AUTO GF16 GFNI decode scratch query");
+    AlignedBuffer decode_scratch(decode_scratch_bytes);
+    require_result(leo2_decode_plan_execute(plan.get(), original[0].size(),
+            original_inputs.data(), recovery_inputs.data(),
+            restored_outputs.data(), decode_scratch.get(),
+            decode_scratch_bytes),
+        LEO2_SUCCESS, "AUTO GF16 GFNI baseline decode");
+    require(restored == original[0],
+        "AUTO GF16 GFNI encode did not round-trip through baseline decode");
+
+    require(leopard2_internal::SetAutoGF16GFNIEncodeEnabledForDiagnostics(
+            false) &&
+            leopard2_internal::FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics(),
+        "restore disabled AUTO GF16 GFNI encode selector");
 }
 
 void test_small_high_encode(
@@ -1982,8 +2407,9 @@ int main()
         Context ssse3(LEO2_BACKEND_SSSE3);
         Context avx2(LEO2_BACKEND_AVX2);
         Context avx512(LEO2_BACKEND_AVX512);
-        // Explicit-only, like AVX-512: an unqualified host returns
-        // LEO2_UNSUPPORTED and require_explicit_backend returns early.
+        // The explicit request remains exact.  A separately qualified AUTO
+        // encode selector may borrow this table without changing the context
+        // backend; an unqualified host still returns LEO2_UNSUPPORTED here.
         Context gfni(LEO2_BACKEND_GFNI);
 
         if (std::getenv("LEO2_TEST_T8_ONE_BLOCK_ONLY"))
@@ -2021,6 +2447,7 @@ int main()
         test_t8_two_block_mixed_binding(avx2);
 
         test_small_high_encode(scalar, ssse3, avx2, avx512);
+        test_auto_gf16_gfni_encode(automatic, avx2, gfni);
 
         if (leopard::backend::IsCalibratedAutoAVX512EncodeHost() &&
             leo2_context_backend(automatic.get()) == LEO2_BACKEND_AVX2 &&
@@ -2032,11 +2459,14 @@ int main()
             test_selection_and_bytes(
                 automatic, scalar, ssse3, avx2, avx512);
         }
-        else
+        else if ((leo2_context_field_mask(automatic.get()) &
+                     LEO2_FIELD_MASK_GF16) != 0)
         {
             Codec codec(automatic.get(), 1000, 200);
-            require(selected_backend(codec.get(), 4096, 200, 200) ==
-                    leo2_context_backend(automatic.get()),
+            require(selected_backend(codec.get(), 4096U, 200, 200) ==
+                        leo2_context_backend(automatic.get()) &&
+                    selected_backend(codec.get(), 64U * 1024U,
+                        200, 200) == leo2_context_backend(automatic.get()),
                 "unsupported host widened away from its AUTO baseline");
         }
 
