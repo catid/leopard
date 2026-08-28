@@ -1135,12 +1135,13 @@ static volatile uint32_t g_cauchy_log_reuse_mode =
     2U - LEO2_EXPERIMENT_CAUCHY_LOG_REUSE;
 #ifdef LEO_HAS_FF16
 /*
-    Default-off attribution for an operation-specific AUTO widening from the
-    process AVX2 table to the already-qualified native-Cantor GFNI table.  The
-    probe states count only untimed route checks, then normalize to the normal
-    enabled/disabled states before measurement.
+    Production-enabled operation-specific AUTO widening from the process AVX2
+    table to the already-qualified native-Cantor GFNI table.  The exact
+    selector remains model-, codec-, call-, and API-scoped.  Probe states count
+    only untimed route checks, then normalize to the normal enabled/disabled
+    states before measurement.
 */
-static std::atomic<uint32_t> g_auto_gf16_gfni_encode_mode(2U);
+static std::atomic<uint32_t> g_auto_gf16_gfni_encode_mode(1U);
 static thread_local unsigned g_auto_gf16_gfni_encode_call_count = 0U;
 #endif
 #ifdef LEO_HAS_FF8
@@ -7798,7 +7799,7 @@ static bool UseAutoAVX512Encode(
 static bool CodecMayUseAutoGF16GFNIEncode(const leo2_codec* codec)
 {
     /*
-        Default-off measurement selector for the exact model-08 workload.
+        Production selector for the exact qualified model-08 workload.
         Neighbor screens are intentionally not promoted here: K, R, padded
         side, and shard length all cross distinct FF16 layout and tiling paths.
         A later same-binary boundary campaign may widen this predicate.

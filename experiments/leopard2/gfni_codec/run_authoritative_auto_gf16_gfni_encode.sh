@@ -355,8 +355,9 @@ build_targets=(
     leopard2_backend_ops_test
     leopard2_auto_encode_backend_test
     leopard2_backend_failures_test
+    leopard2_auto_gf16_gfni_production_test
 )
-focused_regex='^leopard2_(portable_isa|portable_isa_registration|backend_ops|auto_encode_backend|backend_auto_gfni_encode_(disabled_inert|kat_fallback|ff8_allocation_fallback|ff16_allocation_fallback)|benchmark_json_regression)$'
+focused_regex='^leopard2_(auto_gf16_gfni_production|portable_isa|portable_isa_registration|backend_ops|auto_encode_backend|backend_auto_gfni_encode_(disabled_inert|ineligible_inert|kat_fallback|ff8_allocation_fallback|ff16_allocation_fallback)|benchmark_json_regression)$'
 
 assert_pinned_cache()
 {
@@ -389,10 +390,12 @@ assert_focused_test_census()
         --show-only=json-v1 > "$output"
     /usr/bin/jq -e '
         [.tests[].name] == [
+            "leopard2_auto_gf16_gfni_production",
             "leopard2_portable_isa",
             "leopard2_portable_isa_registration",
             "leopard2_backend_ops",
             "leopard2_backend_auto_gfni_encode_disabled_inert",
+            "leopard2_backend_auto_gfni_encode_ineligible_inert",
             "leopard2_backend_auto_gfni_encode_kat_fallback",
             "leopard2_backend_auto_gfni_encode_ff16_allocation_fallback",
             "leopard2_backend_auto_gfni_encode_ff8_allocation_fallback",
@@ -452,12 +455,18 @@ live_attestation="$live_build/generated/leopard2-benchmark-attestation/leopard2_
 replay_attestation="$replay_build/generated/leopard2-benchmark-attestation/leopard2_benchmark_source_attestation.h"
 live_configuration="$live_build/generated/leopard2-benchmark-attestation/leopard2_benchmark_build_configuration.txt"
 replay_configuration="$replay_build/generated/leopard2-benchmark-attestation/leopard2_benchmark_build_configuration.txt"
+live_backend_failures_test="$live_build/leopard2_backend_failures_test"
+replay_backend_failures_test="$replay_build/leopard2_backend_failures_test"
+live_production_test="$live_build/leopard2_auto_gf16_gfni_production_test"
+replay_production_test="$replay_build/leopard2_auto_gf16_gfni_production_test"
 
 next_stage byte_replay
 /usr/bin/cmp "$live_build/bench_leopard2" "$replay_build/bench_leopard2"
 /usr/bin/cmp "$live_build/bench_leopard2_prevalidated_batch" \
     "$replay_build/bench_leopard2_prevalidated_batch"
 /usr/bin/cmp "$live_build/libleopard.a" "$replay_build/libleopard.a"
+/usr/bin/cmp "$live_backend_failures_test" "$replay_backend_failures_test"
+/usr/bin/cmp "$live_production_test" "$replay_production_test"
 /usr/bin/cmp "$live_gfni_object" "$replay_gfni_object"
 /usr/bin/cmp "$live_selector_object" "$replay_selector_object"
 /usr/bin/cmp "$live_benchmark_object" "$replay_benchmark_object"
@@ -520,6 +529,11 @@ copy_build_closure()
     /usr/bin/cp --reflink=never "$build/bench_leopard2" "$destination/bench_leopard2"
     /usr/bin/cp --reflink=never "$build/bench_leopard2_prevalidated_batch" \
         "$destination/bench_leopard2_prevalidated_batch"
+    /usr/bin/cp --reflink=never "$build/leopard2_backend_failures_test" \
+        "$destination/leopard2_backend_failures_test"
+    /usr/bin/cp --reflink=never \
+        "$build/leopard2_auto_gf16_gfni_production_test" \
+        "$destination/leopard2_auto_gf16_gfni_production_test"
     /usr/bin/cp --reflink=never "$gfni_object" \
         "$destination/Leopard2BackendGFNI.cpp.o"
     /usr/bin/cp --reflink=never "$selector_object" \
@@ -552,6 +566,11 @@ validate_retained_build_closure()
         "$live_build/bench_leopard2"
     /usr/bin/cmp "$lane/build-closure/live/bench_leopard2_prevalidated_batch" \
         "$live_build/bench_leopard2_prevalidated_batch"
+    /usr/bin/cmp "$lane/build-closure/live/leopard2_backend_failures_test" \
+        "$live_backend_failures_test"
+    /usr/bin/cmp \
+        "$lane/build-closure/live/leopard2_auto_gf16_gfni_production_test" \
+        "$live_production_test"
     /usr/bin/cmp "$lane/build-closure/live/Leopard2BackendGFNI.cpp.o" \
         "$live_gfni_object"
     /usr/bin/cmp "$lane/build-closure/live/leopard2.cpp.o" \
@@ -574,6 +593,11 @@ validate_retained_build_closure()
         "$replay_build/bench_leopard2"
     /usr/bin/cmp "$lane/build-closure/replay/bench_leopard2_prevalidated_batch" \
         "$replay_build/bench_leopard2_prevalidated_batch"
+    /usr/bin/cmp "$lane/build-closure/replay/leopard2_backend_failures_test" \
+        "$replay_backend_failures_test"
+    /usr/bin/cmp \
+        "$lane/build-closure/replay/leopard2_auto_gf16_gfni_production_test" \
+        "$replay_production_test"
     /usr/bin/cmp "$lane/build-closure/replay/Leopard2BackendGFNI.cpp.o" \
         "$replay_gfni_object"
     /usr/bin/cmp "$lane/build-closure/replay/leopard2.cpp.o" \
@@ -590,6 +614,11 @@ validate_retained_build_closure()
         "$lane/build-closure/replay/bench_leopard2"
     /usr/bin/cmp "$lane/build-closure/live/bench_leopard2_prevalidated_batch" \
         "$lane/build-closure/replay/bench_leopard2_prevalidated_batch"
+    /usr/bin/cmp "$lane/build-closure/live/leopard2_backend_failures_test" \
+        "$lane/build-closure/replay/leopard2_backend_failures_test"
+    /usr/bin/cmp \
+        "$lane/build-closure/live/leopard2_auto_gf16_gfni_production_test" \
+        "$lane/build-closure/replay/leopard2_auto_gf16_gfni_production_test"
     /usr/bin/cmp "$lane/build-closure/live/Leopard2BackendGFNI.cpp.o" \
         "$lane/build-closure/replay/Leopard2BackendGFNI.cpp.o"
     /usr/bin/cmp "$lane/build-closure/live/leopard2.cpp.o" \
@@ -608,6 +637,16 @@ validate_retained_build_closure
     > "$lane/build-closure/live-ninja-commands.txt"
 /usr/bin/ninja -C "$replay_build" -t commands bench_leopard2 \
     > "$lane/build-closure/replay-ninja-commands.txt"
+/usr/bin/ninja -C "$live_build" -t commands leopard2_backend_failures_test \
+    > "$lane/build-closure/live-backend-failures-test-ninja-commands.txt"
+/usr/bin/ninja -C "$replay_build" -t commands leopard2_backend_failures_test \
+    > "$lane/build-closure/replay-backend-failures-test-ninja-commands.txt"
+/usr/bin/ninja -C "$live_build" -t commands \
+    leopard2_auto_gf16_gfni_production_test \
+    > "$lane/build-closure/live-production-test-ninja-commands.txt"
+/usr/bin/ninja -C "$replay_build" -t commands \
+    leopard2_auto_gf16_gfni_production_test \
+    > "$lane/build-closure/replay-production-test-ninja-commands.txt"
 /usr/bin/objdump -drwC -Mintel "$replay_gfni_object" \
     > "$lane/build-closure/gfni-object-disassembly.txt"
 /usr/bin/objdump -h "$replay_gfni_object" \
@@ -677,6 +716,8 @@ selector_object_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/leopard2.
 benchmark_object_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/benchmark.cpp.o" | /usr/bin/cut -d' ' -f1)"
 attestation_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/leopard2_benchmark_source_attestation.h" | /usr/bin/cut -d' ' -f1)"
 configuration_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/leopard2_benchmark_build_configuration.txt" | /usr/bin/cut -d' ' -f1)"
+backend_failures_test_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/leopard2_backend_failures_test" | /usr/bin/cut -d' ' -f1)"
+production_test_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/leopard2_auto_gf16_gfni_production_test" | /usr/bin/cut -d' ' -f1)"
 
 /usr/bin/jq -n \
     --arg repository "$repo" \
@@ -694,13 +735,15 @@ configuration_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/leopard2_be
     --arg benchmark_object_sha256 "$benchmark_object_hash" \
     --arg attestation_sha256 "$attestation_hash" \
     --arg configuration_sha256 "$configuration_hash" \
+    --arg backend_failures_test_sha256 "$backend_failures_test_hash" \
+    --arg production_test_sha256 "$production_test_hash" \
     --arg runner_sha256 "$runner_hash" \
     --arg auditor_sha256 "$auditor_hash" \
     --arg validator_sha256 "$validator_hash" \
     --arg wrapper_sha256 "$wrapper_hash" \
     --arg archive_sha256 "$archive_hash" \
     '{
-        schema:"leopard2-auto-gf16-gfni-encode-build-closure/v1",
+        schema:"leopard2-auto-gf16-gfni-encode-build-closure/v2",
         repository:$repository,
         live_root:$live_root,
         live_build:$live_build,
@@ -720,6 +763,8 @@ configuration_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/leopard2_be
         byte_identical:{
             live_replay_binary:true,
             live_replay_prevalidated_binary:true,
+            live_replay_backend_failures_test:true,
+            live_replay_auto_gf16_gfni_production_test:true,
             live_replay_library:true,
             live_replay_gfni_object:true,
             live_replay_selector_object:true,
@@ -736,6 +781,8 @@ configuration_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/leopard2_be
             benchmark_object_sha256:$benchmark_object_sha256,
             attestation_sha256:$attestation_sha256,
             configuration_sha256:$configuration_sha256,
+            backend_failures_test_sha256:$backend_failures_test_sha256,
+            auto_gf16_gfni_production_test_sha256:$production_test_sha256,
             runner_sha256:$runner_sha256,
             auditor_sha256:$auditor_sha256,
             validator_sha256:$validator_sha256,
@@ -767,14 +814,17 @@ configuration_hash="$(/usr/bin/sha256sum "$lane/build-closure/replay/leopard2_be
             "--target","bench_leopard2","bench_leopard2_prevalidated_batch",
             "leopard2_backend_ops_test",
             "leopard2_auto_encode_backend_test",
-            "leopard2_backend_failures_test"
+            "leopard2_backend_failures_test",
+            "leopard2_auto_gf16_gfni_production_test"
         ],
-        focused_test_regex:"^leopard2_(portable_isa|portable_isa_registration|backend_ops|auto_encode_backend|backend_auto_gfni_encode_(disabled_inert|kat_fallback|ff8_allocation_fallback|ff16_allocation_fallback)|benchmark_json_regression)$",
+        focused_test_regex:"^leopard2_(auto_gf16_gfni_production|portable_isa|portable_isa_registration|backend_ops|auto_encode_backend|backend_auto_gfni_encode_(disabled_inert|ineligible_inert|kat_fallback|ff8_allocation_fallback|ff16_allocation_fallback)|benchmark_json_regression)$",
         focused_tests:[
+            "leopard2_auto_gf16_gfni_production",
             "leopard2_portable_isa",
             "leopard2_portable_isa_registration",
             "leopard2_backend_ops",
             "leopard2_backend_auto_gfni_encode_disabled_inert",
+            "leopard2_backend_auto_gfni_encode_ineligible_inert",
             "leopard2_backend_auto_gfni_encode_kat_fallback",
             "leopard2_backend_auto_gfni_encode_ff16_allocation_fallback",
             "leopard2_backend_auto_gfni_encode_ff8_allocation_fallback",
@@ -830,6 +880,8 @@ next_stage post_campaign_closure
 /usr/bin/cmp "$live_build/bench_leopard2" "$replay_build/bench_leopard2"
 /usr/bin/cmp "$live_build/bench_leopard2_prevalidated_batch" \
     "$replay_build/bench_leopard2_prevalidated_batch"
+/usr/bin/cmp "$live_backend_failures_test" "$replay_backend_failures_test"
+/usr/bin/cmp "$live_production_test" "$replay_production_test"
 /usr/bin/cmp "$lane/bench_leopard2" "$replay_build/bench_leopard2"
 /usr/bin/cmp "$live_build/libleopard.a" "$replay_build/libleopard.a"
 /usr/bin/cmp "$live_gfni_object" "$replay_gfni_object"

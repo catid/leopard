@@ -1430,16 +1430,11 @@ void test_auto_gf16_gfni_encode(
     Context& avx2,
     Context& gfni)
 {
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() ==
+            1U,
+        "AUTO GF16 GFNI encode production default is not enabled");
     if (!leopard::backend::IsCalibratedAutoGF16GFNIEncodeHost())
         return;
-    if ((leo2_context_field_mask(automatic.get()) &
-            LEO2_FIELD_MASK_GF16) == 0)
-    {
-        require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() ==
-                0U,
-            "GF16-disabled build exposed the AUTO GF16 GFNI selector");
-        return;
-    }
     if (leo2_context_backend(automatic.get()) != LEO2_BACKEND_AVX2 ||
         avx2.result() != LEO2_SUCCESS || gfni.result() != LEO2_SUCCESS)
     {
@@ -1454,10 +1449,9 @@ void test_auto_gf16_gfni_encode(
             "forced or GFNI-unavailable build widened AUTO GF16 encode");
         require(leopard2_internal::FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics(),
             "finish unavailable AUTO GF16 GFNI encode probe");
-        require(leopard2_internal::SetAutoGF16GFNIEncodeEnabledForDiagnostics(
-                false) &&
-                leopard2_internal::FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics(),
-            "restore unavailable AUTO GF16 GFNI selector");
+        require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() ==
+                1U,
+            "unavailable AUTO GF16 GFNI probe did not restore production");
         return;
     }
     require(leo2_context_backend(automatic.get()) == LEO2_BACKEND_AVX2,
@@ -1466,8 +1460,8 @@ void test_auto_gf16_gfni_encode(
         "model-08 explicit AVX2 context");
     require_result(gfni.result(), LEO2_SUCCESS,
         "model-08 explicit GFNI context");
-    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 2U,
-        "AUTO GF16 GFNI encode selector is not default-off");
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 1U,
+        "AUTO GF16 GFNI encode selector is not default-on");
 
     require(leopard2_internal::SetAutoGF16GFNIEncodeEnabledForDiagnostics(
             false),
@@ -1675,10 +1669,6 @@ void test_auto_gf16_gfni_encode(
     require(restored == original[0],
         "AUTO GF16 GFNI encode did not round-trip through baseline decode");
 
-    require(leopard2_internal::SetAutoGF16GFNIEncodeEnabledForDiagnostics(
-            false) &&
-            leopard2_internal::FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics(),
-        "restore disabled AUTO GF16 GFNI encode selector");
 }
 
 void test_small_high_encode(
@@ -2463,10 +2453,16 @@ int main()
                      LEO2_FIELD_MASK_GF16) != 0)
         {
             Codec codec(automatic.get(), 1000, 200);
+            const leo2_backend context_backend =
+                leo2_context_backend(automatic.get());
+            const leo2_backend expected_exact_backend =
+                leopard2_internal::
+                    AutoGF16GFNIEncodeAvailableForDiagnostics(codec.get())
+                ? LEO2_BACKEND_GFNI : context_backend;
             require(selected_backend(codec.get(), 4096U, 200, 200) ==
-                        leo2_context_backend(automatic.get()) &&
+                        context_backend &&
                     selected_backend(codec.get(), 64U * 1024U,
-                        200, 200) == leo2_context_backend(automatic.get()),
+                        200, 200) == expected_exact_backend,
                 "unsupported host widened away from its AUTO baseline");
         }
 

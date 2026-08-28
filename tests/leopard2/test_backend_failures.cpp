@@ -8,6 +8,7 @@
 #include "leopard.h"
 #include "leopard2.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -403,9 +404,11 @@ void run_auto_gfni_encode_fallback_case(
         "GFNI backend state is unavailable");
     require(!initial.qualified,
         "GFNI unexpectedly qualified before fallback injection");
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 1U,
+        "AUTO GF16 GFNI encode fallback did not start production-enabled");
     require(leopard2_internal::SetAutoGF16GFNIEncodeEnabledForDiagnostics(
             true),
-        "enable AUTO GF16 GFNI encode fallback probe");
+        "arm AUTO GF16 GFNI fallback route probe");
     TestSetSetupFault(fault);
 
     leo2_context_options context_options;
@@ -463,7 +466,7 @@ void run_auto_gfni_encode_fallback_case(
         "AVX2 encode after optional GFNI failure failed");
     require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
             0U,
-        "failed GFNI route counted an encode call");
+        "failed optional GFNI qualification counted an AUTO route");
 
     leo2_codec* second = NULL;
     require(leo2_codec_create(context, 1000, 200,
@@ -475,8 +478,12 @@ void run_auto_gfni_encode_fallback_case(
     require(!leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
             second),
         "cached failed GFNI table became available");
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 1U,
+        "AUTO GF16 GFNI fallback route probe changed the enabled view");
     require(leopard2_internal::FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics(),
-        "finish AUTO GF16 GFNI fallback probe");
+        "finish AUTO GF16 GFNI fallback route probe");
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 1U,
+        "AUTO GF16 GFNI fallback probe did not restore production mode");
 
     leo2_codec_destroy(second);
     leo2_codec_destroy(codec);
@@ -502,8 +509,11 @@ void run_auto_gfni_encode_disabled_inert_case()
     require(!initial.qualified && !initial.ff8_published &&
             !initial.ff16_published,
         "GFNI unexpectedly initialized before disabled-inert test");
-    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 2U,
-        "AUTO GF16 GFNI encode production default is not disabled");
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 1U,
+        "AUTO GF16 GFNI encode production default is not enabled");
+    require(leopard2_internal::SetAutoGF16GFNIEncodeEnabledForDiagnostics(
+            false),
+        "disable AUTO GF16 GFNI encode for inertness test");
     TestSetSetupFault(TestSetupFaultGFNIKAT);
 
     leo2_context_options context_options;
@@ -566,11 +576,257 @@ void run_auto_gfni_encode_disabled_inert_case()
         "disabled exact encode counted a GFNI route");
     require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 2U,
         "disabled exact encode changed the production mode");
+    require(leopard2_internal::FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics(),
+        "finish explicitly disabled AUTO GF16 GFNI encode probe");
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 2U,
+        "disabled AUTO GF16 GFNI probe did not normalize");
 
     TestSetSetupFault(TestSetupFaultNone);
     leo2_codec_destroy(codec);
     leo2_context_destroy(context);
-    std::printf("AUTO GF16 GFNI encode disabled-inert test passed\n");
+    std::printf("AUTO GF16 GFNI encode explicit-disabled inert test passed\n");
+}
+
+void run_auto_gfni_encode_ineligible_inert_case()
+{
+    using namespace leopard::backend;
+    if (!IsCalibratedAutoGF16GFNIEncodeHost() ||
+        TestDefaultBackendForHost() != LEO2_BACKEND_AVX2 ||
+        !TestBackendCanQualifyForHost(LEO2_BACKEND_GFNI))
+    {
+        std::printf("AUTO GF16 GFNI ineligible-inert test skipped: host is "
+            "not calibrated\n");
+        return;
+    }
+
+    TestBackendState initial;
+    require(TestGetBackendState(LEO2_BACKEND_GFNI, &initial) &&
+            !initial.qualified && !initial.ff8_published &&
+            !initial.ff16_published,
+        "GFNI unexpectedly initialized before ineligible-inert test");
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 1U,
+        "ineligible-inert test did not start in production mode");
+    TestSetSetupFault(TestSetupFaultGFNIKAT);
+
+    leo2_context_options context_options;
+    std::memset(&context_options, 0, sizeof(context_options));
+    context_options.struct_size = sizeof(context_options);
+    context_options.backend = LEO2_BACKEND_AUTO;
+    context_options.thread_count = 1;
+    leo2_context* context = NULL;
+    require(leo2_context_create(&context_options, &context) == LEO2_SUCCESS &&
+            context && leo2_context_backend(context) == LEO2_BACKEND_AVX2,
+        "ineligible-inert AUTO context creation failed");
+
+    leo2_codec* codec = NULL;
+    require(leo2_codec_create(context, 16, 16,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL, &codec) ==
+            LEO2_SUCCESS && codec,
+        "ineligible-inert codec creation failed");
+    require(TestSetupFaultPending() && TestSetupFaultConsumptions() == 0,
+        "ineligible production codec touched optional GFNI qualification");
+    require(!leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+                codec),
+        "ineligible production codec retained GFNI ops");
+    leo2_backend selected = LEO2_BACKEND_AUTO;
+    require(leo2_test_codec_transform_encode_backend(
+            codec, 64U * 1024U, 16, 16, &selected) == LEO2_SUCCESS &&
+            selected == LEO2_BACKEND_AVX2,
+        "ineligible production codec changed its encode backend");
+
+    static const size_t kBytes = 64U * 1024U;
+    std::vector<uint8_t> original(kBytes, 0xa5);
+    std::vector<uint8_t> recovery(16U * kBytes);
+    std::vector<const void*> original_ptrs(16, original.data());
+    std::vector<void*> recovery_ptrs(16);
+    for (unsigned shard = 0; shard < 16; ++shard)
+        recovery_ptrs[shard] = recovery.data() + shard * kBytes;
+    size_t scratch_bytes = 0;
+    require(leo2_encode_scratch_size(codec, kBytes, &scratch_bytes) ==
+            LEO2_SUCCESS && scratch_bytes != 0,
+        "ineligible-inert scratch query failed");
+    std::vector<uint8_t> scratch_storage(
+        scratch_bytes + leo2_scratch_alignment());
+    const uintptr_t unaligned = reinterpret_cast<uintptr_t>(
+        scratch_storage.data());
+    const uintptr_t aligned =
+        (unaligned + leo2_scratch_alignment() - 1U) &
+        ~(static_cast<uintptr_t>(leo2_scratch_alignment()) - 1U);
+    require(leo2_encode(codec, kBytes, original_ptrs.data(),
+            recovery_ptrs.data(), reinterpret_cast<void*>(aligned),
+            scratch_bytes) == LEO2_SUCCESS,
+        "ineligible-inert AVX2 encode failed");
+
+    TestBackendState final_state;
+    require(TestSetupFaultPending() && TestSetupFaultConsumptions() == 0 &&
+            TestGetBackendState(LEO2_BACKEND_GFNI, &final_state) &&
+            !final_state.qualified && !final_state.ff8_published &&
+            !final_state.ff16_published,
+        "ineligible production encode initialized optional GFNI state");
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 1U,
+        "ineligible production encode changed the default mode");
+
+    TestSetSetupFault(TestSetupFaultNone);
+    leo2_codec_destroy(codec);
+    leo2_context_destroy(context);
+    std::printf("AUTO GF16 GFNI ineligible production setup stayed inert\n");
+}
+
+void run_auto_gfni_encode_production_case()
+{
+    using namespace leopard::backend;
+    if (!IsCalibratedAutoGF16GFNIEncodeHost() ||
+        TestDefaultBackendForHost() != LEO2_BACKEND_AVX2 ||
+        !TestBackendCanQualifyForHost(LEO2_BACKEND_GFNI))
+    {
+        std::printf("AUTO GF16 GFNI production route skipped: host is not "
+            "calibrated\n");
+        return;
+    }
+
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 1U,
+        "AUTO GF16 GFNI production route did not start enabled");
+    require(leopard2_internal::SetAutoGF16GFNIEncodeEnabledForDiagnostics(
+            true),
+        "arm AUTO GF16 GFNI production route probe");
+
+    leo2_context_options automatic_options;
+    std::memset(&automatic_options, 0, sizeof(automatic_options));
+    automatic_options.struct_size = sizeof(automatic_options);
+    automatic_options.backend = LEO2_BACKEND_AUTO;
+    automatic_options.thread_count = 1;
+    leo2_context* automatic = NULL;
+    require(leo2_context_create(&automatic_options, &automatic) ==
+            LEO2_SUCCESS && automatic &&
+            leo2_context_backend(automatic) == LEO2_BACKEND_AVX2,
+        "AUTO GF16 baseline context creation failed");
+
+    leo2_context_options avx2_options = automatic_options;
+    avx2_options.backend = LEO2_BACKEND_AVX2;
+    leo2_context* avx2 = NULL;
+    require(leo2_context_create(&avx2_options, &avx2) == LEO2_SUCCESS &&
+            avx2 && leo2_context_backend(avx2) == LEO2_BACKEND_AVX2,
+        "explicit AVX2 comparison context creation failed");
+
+    leo2_codec* candidate = NULL;
+    leo2_codec* comparator = NULL;
+    require(leo2_codec_create(automatic, 1000, 200,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL,
+            &candidate) == LEO2_SUCCESS && candidate,
+        "AUTO GF16 production codec creation failed");
+    require(leo2_codec_create(avx2, 1000, 200,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL,
+            &comparator) == LEO2_SUCCESS && comparator,
+        "explicit AVX2 comparison codec creation failed");
+    require(leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+                candidate),
+        "AUTO GF16 production codec did not retain qualified GFNI ops");
+
+    leo2_backend selected = LEO2_BACKEND_AUTO;
+    require(leo2_test_codec_transform_encode_backend(
+            candidate, 64U * 1024U, 200, 200, &selected) == LEO2_SUCCESS &&
+            selected == LEO2_BACKEND_GFNI,
+        "exact AUTO GF16 production cell did not select GFNI");
+    require(leo2_test_codec_transform_encode_backend(
+            candidate, 64U * 1024U - 2U, 200, 200, &selected) ==
+            LEO2_SUCCESS && selected == LEO2_BACKEND_AVX2,
+        "AUTO GF16 production route widened below its exact byte cell");
+    require(leo2_test_codec_transform_encode_backend(
+            candidate, 64U * 1024U + 2U, 200, 200, &selected) ==
+            LEO2_SUCCESS && selected == LEO2_BACKEND_AVX2,
+        "AUTO GF16 production route widened above its exact byte cell");
+    require(leo2_test_codec_transform_encode_backend(
+            candidate, 64U * 1024U, 199, 200, &selected) == LEO2_SUCCESS &&
+            selected == LEO2_BACKEND_AVX2,
+        "AUTO GF16 production route widened a partial-output call");
+
+    static const size_t kBytes = 64U * 1024U;
+    std::vector<uint8_t> original(kBytes);
+    for (size_t i = 0; i < kBytes; ++i)
+        original[i] = static_cast<uint8_t>(i * 29U + (i >> 8U));
+    std::vector<const void*> original_ptrs(1000, original.data());
+    std::vector<uint8_t> automatic_recovery(200U * kBytes);
+    std::vector<uint8_t> avx2_recovery(200U * kBytes);
+    std::vector<uint8_t> batch_recovery(200U * kBytes);
+    std::vector<void*> automatic_ptrs(200);
+    std::vector<void*> avx2_ptrs(200);
+    std::vector<void*> batch_ptrs(200);
+    for (unsigned shard = 0; shard < 200; ++shard)
+    {
+        automatic_ptrs[shard] =
+            automatic_recovery.data() + shard * kBytes;
+        avx2_ptrs[shard] = avx2_recovery.data() + shard * kBytes;
+        batch_ptrs[shard] = batch_recovery.data() + shard * kBytes;
+    }
+
+    size_t candidate_scratch_bytes = 0;
+    size_t comparator_scratch_bytes = 0;
+    require(leo2_encode_scratch_size(
+            candidate, kBytes, &candidate_scratch_bytes) == LEO2_SUCCESS &&
+            leo2_encode_scratch_size(
+                comparator, kBytes, &comparator_scratch_bytes) ==
+                LEO2_SUCCESS &&
+            candidate_scratch_bytes == comparator_scratch_bytes &&
+            candidate_scratch_bytes != 0,
+        "AUTO GF16 production scratch contract changed by route selection");
+    std::vector<uint8_t> scratch_storage(
+        candidate_scratch_bytes + leo2_scratch_alignment());
+    const uintptr_t unaligned = reinterpret_cast<uintptr_t>(
+        scratch_storage.data());
+    const uintptr_t aligned =
+        (unaligned + leo2_scratch_alignment() - 1U) &
+        ~(static_cast<uintptr_t>(leo2_scratch_alignment()) - 1U);
+    void* const scratch = reinterpret_cast<void*>(aligned);
+
+    require(leo2_encode(candidate, kBytes, original_ptrs.data(),
+            automatic_ptrs.data(), scratch, candidate_scratch_bytes) ==
+            LEO2_SUCCESS,
+        "AUTO GF16 production encode failed");
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            1U,
+        "AUTO GF16 production encode did not enter GFNI exactly once");
+    require(leo2_encode(comparator, kBytes, original_ptrs.data(),
+            avx2_ptrs.data(), scratch, comparator_scratch_bytes) ==
+            LEO2_SUCCESS,
+        "explicit AVX2 comparison encode failed");
+    require(automatic_recovery == avx2_recovery,
+        "AUTO GF16 production GFNI bytes differ from explicit AVX2");
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            1U,
+        "explicit AVX2 encode polluted AUTO GF16 route accounting");
+
+    leo2_encode_batch_item item;
+    std::memset(&item, 0, sizeof(item));
+    item.shard_bytes = kBytes;
+    item.original = original_ptrs.data();
+    item.recovery = batch_ptrs.data();
+    item.scratch = scratch;
+    item.scratch_bytes = candidate_scratch_bytes;
+    require(leo2_encode_batch(candidate, &item, 1) == LEO2_SUCCESS &&
+            batch_recovery == automatic_recovery,
+        "ordinary one-item AUTO GF16 batch changed parity bytes");
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            2U,
+        "ordinary one-item AUTO GF16 batch did not enter GFNI");
+    std::fill(batch_recovery.begin(), batch_recovery.end(), 0);
+    require(leo2_encode_batch_with_preflight_scratch(
+            candidate, &item, 1, NULL, 0) == LEO2_SUCCESS &&
+            batch_recovery == automatic_recovery,
+        "scalable one-item AUTO GF16 alias changed parity bytes");
+    require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
+            2U,
+        "scalable one-item AUTO GF16 alias escaped the qualified API scope");
+
+    require(leopard2_internal::FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics(),
+        "finish AUTO GF16 production route probe");
+    require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 1U,
+        "AUTO GF16 production route probe did not restore default-on mode");
+
+    leo2_codec_destroy(comparator);
+    leo2_codec_destroy(candidate);
+    leo2_context_destroy(avx2);
+    leo2_context_destroy(automatic);
+    std::printf("AUTO GF16 GFNI production route passed\n");
 }
 
 } // namespace
@@ -589,6 +845,18 @@ int main(int argc, char** argv)
             std::strcmp(argv[1], "auto-gfni-encode-disabled-inert") == 0)
         {
             run_auto_gfni_encode_disabled_inert_case();
+            return 0;
+        }
+        if (argc == 2 &&
+            std::strcmp(argv[1], "auto-gfni-encode-production") == 0)
+        {
+            run_auto_gfni_encode_production_case();
+            return 0;
+        }
+        if (argc == 2 &&
+            std::strcmp(argv[1], "auto-gfni-encode-ineligible-inert") == 0)
+        {
+            run_auto_gfni_encode_ineligible_inert_case();
             return 0;
         }
         if (argc == 2 &&

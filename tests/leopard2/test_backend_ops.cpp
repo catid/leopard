@@ -682,9 +682,11 @@ void verify_forced_avx512_qualification_cap()
     else if (std::strcmp(expected, "avx512") == 0)
         require(avx512 != NULL,
             "forced AVX-512 variant did not qualify its selected table");
-    // GFNI is the second explicit-only member and the same lower forced
-    // variants cap it.  A forced AVX-512 variant does not cap it, and its
-    // availability there still depends on the host, so it is not asserted.
+    // GFNI remains an exact explicit member, while the production AUTO binary
+    // may also borrow it for one operation-specific cell.  The same lower
+    // forced variants cap both uses.  A forced AVX-512 variant does not cap it,
+    // and its availability there still depends on the host, so it is not
+    // asserted.
     const leopard::backend::Ops* gfni =
         leopard::backend::GetQualifiedOps(LEO2_BACKEND_GFNI);
     if (forced_lower)

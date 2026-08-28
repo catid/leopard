@@ -365,16 +365,20 @@ bool K16R16B64AVX512GFNISelectedForDiagnostics(
 unsigned K16R16B64AVX512GFNICallCountForDiagnostics();
 bool FinishK16R16B64AVX512GFNIRouteProbeForDiagnostics();
 
-// Default-off, operation-specific attribution for widening an AUTO AVX2
-// legacy-high GF16 one-shot or ordinary one-item-batch encode call to the
-// already-qualified VEX-256 GFNI table.  The scalable-preflight alias,
+// Production-enabled, operation-specific widening of the exact qualified AUTO
+// AVX2 legacy-high GF16 one-shot or ordinary one-item-batch encode call to the
+// VEX-256 GFNI table.  The scalable-preflight alias,
 // multi-item/reusable batches, explicit backends, and decode remain on their
 // requested/context table.  Probe
 // accounting is calling-thread-local and is armed only around untimed route
 // checks.  Set the diagnostic mode before codec creation, perform and query
 // the probe on that same thread, and call Finish only while no encode or path
-// introspection is executing.  The enabled arm can then qualify the optional
-// table while the production default-off arm remains setup- and memory-inert.
+// introspection is executing.  The disabled diagnostic arm remains setup- and
+// memory-inert; the enabled arm may qualify the optional table at codec setup.
+// Set(true) followed by Finish restores production mode 1.  Set(false)
+// followed by Finish deliberately normalizes to mode 2 and leaves the route
+// disabled; callers that need to restore the production default must finish a
+// subsequent quiescent Set(true) probe.
 bool SetAutoGF16GFNIEncodeEnabledForDiagnostics(bool enabled);
 unsigned AutoGF16GFNIEncodeModeForDiagnostics();
 bool AutoGF16GFNIEncodeAvailableForDiagnostics(const leo2_codec* codec);

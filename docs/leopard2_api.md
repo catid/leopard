@@ -311,10 +311,11 @@ An explicit context `backend` option selects one immutable execution table.
 `AUTO` reports the production-default table that passed the startup capability
 checks and known-answer tests as its immutable baseline.  In one ordinary
 production x86 binary, explicit `SCALAR`,
-`SSSE3`, `AVX2`, and `AVX512` requests select that table when it
+`SSSE3`, `AVX2`, `AVX512`, and `GFNI` requests select that table when it
 was compiled and supported by the
-host.  Lower tables are allocated and known-answer-tested once, on the first
-explicit context request, so legacy and `AUTO`-only applications do not pay
+host.  Optional tables are allocated and known-answer-tested once, on the first
+explicit context request or the first codec setup eligible for a bounded AUTO
+policy.  Legacy and AUTO applications outside those exact policies do not pay
 their setup or memory cost.  Qualification is serialized and its result is
 cached: an unavailable ISA returns `LEO2_UNSUPPORTED`, allocation failure
 returns `LEO2_OUT_OF_MEMORY`, and a known-answer-test failure returns
@@ -341,6 +342,23 @@ requires AVX2 plus AVX-512F/BW/VL and operating-system support for opmask and
 ZMM state; its current kernels retain 256-bit data operations and use the
 expanded architectural register file.  Unsupported hosts return
 `LEO2_UNSUPPORTED` without executing the backend.
+
+A second, narrower AUTO policy is enabled on the calibrated AMD family
+1Ah/model 08h host class.  A context whose reported baseline is AVX2 may borrow
+the startup-qualified VEX-256 GFNI table only for a native-layout, flags-zero,
+legacy-high GF16 codec with `K=1000`, `R=200`, `T=256`, a one-thread context,
+exactly 65,536 bytes per shard, and all 200 parity outputs requested.  The
+admitted entry points are `leo2_encode` and ordinary
+`leo2_encode_batch(..., item_count=1, ...)` without caller-owned scalable
+preflight scratch.  The scalable-preflight alias, multi-item batches, reusable
+bindings, decode, neighboring K/R/byte cells, non-native layouts, nonzero codec
+flags, unknown CPU models, and every explicit backend request retain their
+context table.  Optional GFNI allocation or known-answer-test failure also
+falls back to AVX2 without failing codec creation.  The context continues to
+report AVX2 because this is an operation-specific kernel choice, not a new
+context or wire identity.  Explicit GFNI requires AVX2 plus GFNI and uses
+VEX-encoded 256-bit operations; it does not require AVX-512 or ZMM state.  See
+`docs/leopard2_gfni_codec.md`.
 
 Backend choice affects execution-path thresholds and kernels only, never the
 profile, field, coordinate map, or parity bytes.  Diagnostic builds still cap

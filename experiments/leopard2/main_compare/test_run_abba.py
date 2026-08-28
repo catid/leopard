@@ -19,6 +19,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import unittest
@@ -29,6 +30,8 @@ from typing import Mapping
 
 
 MODULE_PATH = Path(__file__).with_name("run_abba.py")
+V16_SOURCE_FIXTURE_COMMIT = \
+    "4a68fc4315bd269b815e9280881c3e3831154aae"
 SPEC = importlib.util.spec_from_file_location("main_compare_run_abba", MODULE_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError("cannot load the main-comparison evidence runner")
@@ -1773,6 +1776,60 @@ class MainCompareRunnerTests(unittest.TestCase):
         with self.assertRaises(runner.EvidenceError):
             runner.expected_compile_argv(
                 "baseline", source, specification, "/usr/bin/c++")
+
+    def test_v16_fresh_producer_requires_default_disabled_gfni_selector(
+        self,
+    ) -> None:
+        disabled = (
+            b"static std::atomic<uint32_t> "
+            b"g_auto_gf16_gfni_encode_mode(2U);\n")
+
+        def source_identity(data: bytes, *, object_id: str | None = None,
+                            records: int = 1) -> dict:
+            blob = hashlib.sha1(
+                b"blob " + str(len(data)).encode("ascii") + b"\0" + data
+            ).hexdigest()
+            return {
+                "candidate_source": {
+                    "tracked_files": [
+                        {
+                            "path": "leopard2.cpp",
+                            "kind": "regular",
+                            "object_id": object_id or blob,
+                        }
+                        for _ in range(records)
+                    ]
+                }
+            }
+
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-main-v16-selector-") as directory:
+            root = Path(directory)
+            source = root / "leopard2.cpp"
+            specification = {"candidate_source_root": str(root)}
+            source.write_bytes(disabled)
+            runner.require_v16_effective_avx2_source(
+                specification, source_identity(disabled))
+
+            rejected = (
+                (b"static std::atomic<uint32_t> "
+                 b"g_auto_gf16_gfni_encode_mode(1U);\n", None, 1),
+                (b"// selector missing\n", None, 1),
+                (disabled + disabled, None, 1),
+                (b"static std::atomic<uint32_t> "
+                 b"g_auto_gf16_gfni_encode_mode = 2U;\n", None, 1),
+                (disabled, "0" * 40, 1),
+                (disabled, None, 2),
+            )
+            for data, object_id, records in rejected:
+                with self.subTest(
+                        data=data, object_id=object_id, records=records):
+                    source.write_bytes(data)
+                    with self.assertRaises(runner.EvidenceError):
+                        runner.require_v16_effective_avx2_source(
+                            specification,
+                            source_identity(
+                                data, object_id=object_id, records=records))
 
     @unittest.skipUnless(Path("/proc/self/fd").is_dir(),
                          "descriptor-count regression needs procfs")
@@ -4433,43 +4490,20 @@ class MainCompareRunnerTests(unittest.TestCase):
                 shutil.which("make") is None:
             self.skipTest("CMake, Ninja, and Make are required")
         source_checkout = MODULE_PATH.resolve().parents[3]
-        tracked = subprocess.run(
-            ["git", "-C", str(source_checkout), "ls-files", "-z"],
-            check=True, stdout=subprocess.PIPE).stdout.split(b"\0")
         with tempfile.TemporaryDirectory(
                 prefix="leopard2-real-cmake-provenance-") as directory:
             root = Path(directory)
             source = root / "source"
             source.mkdir()
-            for encoded in tracked:
-                if not encoded:
-                    continue
-                relative = os.fsdecode(encoded)
-                original = source_checkout / relative
-                destination = source / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                if original.is_dir():
-                    # A gitlink such as sse2neon is not a regular tracked file;
-                    # the x86 provenance fixtures do not consume its checkout.
-                    continue
-                if original.is_symlink():
-                    destination.symlink_to(os.readlink(original))
-                else:
-                    shutil.copy2(original, destination)
-            # The production source-closure contract can be tested before the
-            # surrounding milestone is committed.  Materialize any newly added
-            # required library TU that is present in the working checkout but
-            # not yet in git ls-files, then commit the isolated fixture below.
-            for relative in runner.CANDIDATE_LIBRARY_SOURCES:
-                original = source_checkout / relative
-                destination = source / relative
-                if destination.exists():
-                    continue
-                self.assertTrue(
-                    original.is_file(),
-                    f"required candidate source is missing: {relative}")
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(original, destination)
+            archive = root / "source.tar"
+            with archive.open("wb") as stream:
+                subprocess.run(
+                    ["git", "-C", str(source_checkout), "archive",
+                     "--format=tar", V16_SOURCE_FIXTURE_COMMIT],
+                    check=True, stdout=stream)
+            with tarfile.open(archive, "r") as archive_file:
+                archive_file.extractall(source, filter="data")
+            archive.unlink()
             subprocess.run(["git", "init", "-q", str(source)], check=True)
             subprocess.run(
                 ["git", "-C", str(source), "config", "user.email",
@@ -4513,6 +4547,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=ON",
                 "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=ON",
                 "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=ON",
+                "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=OFF",
                 "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=ON",
                 "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0",
                 "-DLEO2_FLAG_MAVX512F=FALSE",
@@ -6078,6 +6113,9 @@ class MainCompareRunnerTests(unittest.TestCase):
                  mock.patch.object(runner, "Reservation", FakeContext), \
                  mock.patch.object(runner.os, "sched_setaffinity"), \
                  mock.patch.object(runner, "input_snapshot", return_value={}), \
+                 mock.patch.object(
+                     runner, "require_v16_effective_avx2_source",
+                     return_value=None), \
                  mock.patch.object(
                      runner, "capture_campaign_executables",
                      side_effect=capture), \

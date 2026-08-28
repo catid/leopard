@@ -146,13 +146,13 @@ typedef enum leo2_backend {
     reported baseline.  On production
     x86 builds, SCALAR, SSSE3, AVX2, AVX512, and GFNI may explicitly
     select any compiled, host-qualified table.  AUTO deliberately reports AVX2
-    as its baseline because AVX512 whole-codec evidence supports only bounded
-    encode regions rather than a universal default, and GFNI whole-codec
-    evidence is single-host; both remain explicit requests until a same-binary
-    selector screen promotes them.  Within such a fixed,
+    as its baseline because evidence for the wider x86 tables supports bounded
+    encode regions rather than a universal default.  Within a fixed,
     offline-calibrated region on a recognized CPU model, AUTO may use another
     startup-qualified immutable table for one operation; unknown models retain
-    the baseline.  This changes neither code identity nor wire bytes.
+    the baseline.  This changes neither code identity nor wire bytes.  The
+    detailed API guide records the exact AVX512 and GFNI regions and the batch
+    entry points they admit.
     Explicit backend requests never widen.  A table beyond the process
     baseline is allocated and known-answer-tested on its first explicit
     context request or first eligible AUTO codec setup.  Results are cached.

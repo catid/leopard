@@ -807,7 +807,8 @@ endif()
 if(LEO2_HAVE_AVX2_BACKEND)
     target_compile_definitions(leopard2_backend_avx2 PRIVATE
         LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
-    if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+    if(LEOPARD_ENABLE_GF8 AND
+       LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
         target_sources(leopard2_backend_avx2 PRIVATE
             Leopard2BackendAVX2T16Q2.cpp)
         target_compile_definitions(leopard2_backend_avx2 PRIVATE
@@ -1215,7 +1216,8 @@ if(LEO2_BUILD_TESTS)
         target_compile_definitions(leopard2_backend_avx2_test_hooks PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1
             LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
-        if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+        if(LEOPARD_ENABLE_GF8 AND
+           LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
             target_sources(leopard2_backend_avx2_test_hooks PRIVATE
                 Leopard2BackendAVX2T16Q2.cpp)
             target_compile_definitions(
@@ -1455,6 +1457,62 @@ if(LEO2_BUILD_TESTS)
     set_tests_properties(leopard2_field_options PROPERTIES
         ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
 
+    # The comprehensive backend suite below intentionally requires both
+    # fields, but the production AUTO GF16/GFNI route is also compiled into a
+    # supported GF16-only archive.  Reuse the focused hook executable here so
+    # that reduced archive independently proves the default route and each
+    # optional-qualification fallback instead of inheriting dual-field
+    # coverage by assumption.
+    if(LEOPARD_ENABLE_GF16 AND NOT LEOPARD_ENABLE_GF8 AND
+       LEO2_HAVE_GFNI_BACKEND)
+        add_executable(leopard2_gf16_only_auto_gfni_test
+            tests/leopard2/test_backend_failures.cpp)
+        target_compile_definitions(leopard2_gf16_only_auto_gfni_test PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
+        target_link_libraries(
+            leopard2_gf16_only_auto_gfni_test leopard_test_hooks)
+        add_test(NAME leopard2_backend_auto_gfni_encode_production
+            COMMAND leopard2_gf16_only_auto_gfni_test
+                auto-gfni-encode-production)
+        add_test(NAME leopard2_backend_auto_gfni_encode_ineligible_inert
+            COMMAND leopard2_gf16_only_auto_gfni_test
+                auto-gfni-encode-ineligible-inert)
+        add_test(NAME leopard2_backend_auto_gfni_encode_disabled_inert
+            COMMAND leopard2_gf16_only_auto_gfni_test
+                auto-gfni-encode-disabled-inert)
+        add_test(NAME leopard2_backend_auto_gfni_encode_kat_fallback
+            COMMAND leopard2_gf16_only_auto_gfni_test
+                auto-gfni-encode-kat-fallback)
+        add_test(
+            NAME leopard2_backend_auto_gfni_encode_ff16_allocation_fallback
+            COMMAND leopard2_gf16_only_auto_gfni_test
+                auto-gfni-encode-ff16-allocation-fallback)
+        set_tests_properties(
+            leopard2_backend_auto_gfni_encode_production
+            leopard2_backend_auto_gfni_encode_ineligible_inert
+            leopard2_backend_auto_gfni_encode_disabled_inert
+            leopard2_backend_auto_gfni_encode_kat_fallback
+            leopard2_backend_auto_gfni_encode_ff16_allocation_fallback
+            PROPERTIES
+                ENVIRONMENT
+                    "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+    endif()
+
+    if(LEOPARD_ENABLE_GF16 AND LEO2_HAVE_GFNI_BACKEND)
+        # Link the shipped production archive, not leopard_test_hooks.  This
+        # independently proves that the exact default AUTO route preserves
+        # explicit-AVX2 parity for one-shot and ordinary one-item batch calls.
+        add_executable(leopard2_auto_gf16_gfni_production_test
+            tests/leopard2/test_auto_gf16_gfni_production.cpp)
+        target_link_libraries(
+            leopard2_auto_gf16_gfni_production_test leopard)
+        add_test(NAME leopard2_auto_gf16_gfni_production
+            COMMAND leopard2_auto_gf16_gfni_production_test)
+        set_tests_properties(leopard2_auto_gf16_gfni_production PROPERTIES
+            ENVIRONMENT
+                "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+    endif()
+
     add_executable(leopard2_concurrent_initialization_test
         tests/leopard2/test_concurrent_initialization.cpp)
     target_link_libraries(leopard2_concurrent_initialization_test leopard)
@@ -1575,13 +1633,12 @@ if(LEO2_BUILD_TESTS)
             endif()
             if(LEO2_HAVE_AVX2_BACKEND)
                 list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2)
-                if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+                if(LEOPARD_ENABLE_GF8 AND
+                   LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
                         avx2_t16_q2)
-                    if(LEOPARD_ENABLE_GF8)
-                        list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
-                            avx2_t16_k66)
-                    endif()
+                    list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
+                        avx2_t16_k66)
                 endif()
                 if(LEOPARD_ENABLE_GF8 AND
                    LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING AND
@@ -2326,24 +2383,23 @@ if(LEO2_BUILD_TESTS)
             COMMAND leopard2_backend_failures_test gfni ff16-allocation)
         add_test(NAME leopard2_backend_failure_gfni_kat
             COMMAND leopard2_backend_failures_test gfni kat)
-        if(LEOPARD_ENABLE_GF16)
-            add_test(NAME leopard2_backend_auto_gfni_encode_disabled_inert
-                COMMAND leopard2_backend_failures_test
-                    auto-gfni-encode-disabled-inert)
-            add_test(NAME leopard2_backend_auto_gfni_encode_kat_fallback
-                COMMAND leopard2_backend_failures_test
-                    auto-gfni-encode-kat-fallback)
-            add_test(
-                NAME leopard2_backend_auto_gfni_encode_ff16_allocation_fallback
-                COMMAND leopard2_backend_failures_test
-                    auto-gfni-encode-ff16-allocation-fallback)
-            if(LEOPARD_ENABLE_GF8)
-                add_test(
-                    NAME leopard2_backend_auto_gfni_encode_ff8_allocation_fallback
-                    COMMAND leopard2_backend_failures_test
-                        auto-gfni-encode-ff8-allocation-fallback)
-            endif()
-        endif()
+        add_test(NAME leopard2_backend_auto_gfni_encode_disabled_inert
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-disabled-inert)
+        add_test(NAME leopard2_backend_auto_gfni_encode_ineligible_inert
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-ineligible-inert)
+        add_test(NAME leopard2_backend_auto_gfni_encode_kat_fallback
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-kat-fallback)
+        add_test(
+            NAME leopard2_backend_auto_gfni_encode_ff16_allocation_fallback
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-ff16-allocation-fallback)
+        add_test(
+            NAME leopard2_backend_auto_gfni_encode_ff8_allocation_fallback
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-ff8-allocation-fallback)
     endif()
     set_tests_properties(
         leopard2_backend_failure_scalar_ff8_allocation
@@ -2370,19 +2426,13 @@ if(LEO2_BUILD_TESTS)
             leopard2_backend_failure_gfni_ff16_allocation
             leopard2_backend_failure_gfni_kat
             PROPERTIES ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
-        if(LEOPARD_ENABLE_GF16)
-            set_tests_properties(
-                leopard2_backend_auto_gfni_encode_disabled_inert
-                leopard2_backend_auto_gfni_encode_kat_fallback
-                leopard2_backend_auto_gfni_encode_ff16_allocation_fallback
-                PROPERTIES ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
-            if(LEOPARD_ENABLE_GF8)
-                set_tests_properties(
-                    leopard2_backend_auto_gfni_encode_ff8_allocation_fallback
-                    PROPERTIES
-                        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
-            endif()
-        endif()
+        set_tests_properties(
+            leopard2_backend_auto_gfni_encode_disabled_inert
+            leopard2_backend_auto_gfni_encode_ineligible_inert
+            leopard2_backend_auto_gfni_encode_kat_fallback
+            leopard2_backend_auto_gfni_encode_ff16_allocation_fallback
+            leopard2_backend_auto_gfni_encode_ff8_allocation_fallback
+            PROPERTIES ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
     endif()
 
     add_executable(leopard2_context_backends_test
@@ -2405,19 +2455,17 @@ if(LEO2_BUILD_TESTS)
     set_tests_properties(leopard2_auto_encode_backend PROPERTIES
         ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
-    if(LEOPARD_ENABLE_GF16)
-        # This target deliberately links the ordinary production archive, not
-        # leopard_test_hooks.  Sparse AUTO scratch and dispatch must therefore
-        # remain correct when diagnostic hook builds do not conservatively
-        # reserve schedules for every codec/backend.
-        add_executable(leopard2_sparse_encode_production_test
-            tests/leopard2/test_sparse_encode_production.cpp)
-        target_link_libraries(leopard2_sparse_encode_production_test leopard)
-        add_test(NAME leopard2_sparse_encode_production
-            COMMAND leopard2_sparse_encode_production_test)
-        set_tests_properties(leopard2_sparse_encode_production PROPERTIES
-            ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
-    endif()
+    # This target deliberately links the ordinary production archive, not
+    # leopard_test_hooks.  Sparse AUTO scratch and dispatch must therefore
+    # remain correct when diagnostic hook builds do not conservatively reserve
+    # schedules for every codec/backend.
+    add_executable(leopard2_sparse_encode_production_test
+        tests/leopard2/test_sparse_encode_production.cpp)
+    target_link_libraries(leopard2_sparse_encode_production_test leopard)
+    add_test(NAME leopard2_sparse_encode_production
+        COMMAND leopard2_sparse_encode_production_test)
+    set_tests_properties(leopard2_sparse_encode_production PROPERTIES
+        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
     add_executable(leopard2_r1_xor_test
         tests/leopard2/test_r1_xor.cpp)
@@ -2440,6 +2488,11 @@ if(LEO2_BUILD_TESTS)
        LEO2_HAVE_AVX512_BACKEND)
         target_compile_definitions(leopard2_direct_encode_test PRIVATE
             LEO2_TEST_AUTO_MAY_USE_AVX512_ENCODE=1)
+    endif()
+    if(LEO2_BACKEND_VARIANT STREQUAL "auto" AND
+       LEO2_HAVE_GFNI_BACKEND)
+        target_compile_definitions(leopard2_direct_encode_test PRIVATE
+            LEO2_TEST_AUTO_MAY_USE_GF16_GFNI_ENCODE=1)
     endif()
     target_include_directories(leopard2_direct_encode_test PRIVATE tests/leopard2)
     target_link_libraries(leopard2_direct_encode_test leopard_test_hooks)

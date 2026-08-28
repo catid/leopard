@@ -17,8 +17,13 @@ baseline when it is available.  On the offline-calibrated AMD family
 1Ah/model 44h host class, a legacy-high GF16 codec may use the qualified
 AVX-512VL table for a full-output encode only when `K >= 8`, `N >= 16`,
 `2 <= R <= 4096`, and the shard length is a multiple of 64 bytes from 64 bytes
-through 4 MiB inclusive.  All other AUTO operations retain the context
-baseline; explicit backend requests retain their exact table.  A normal
+through 4 MiB inclusive.  On AMD family 1Ah/model 08h, the exact native
+legacy-high GF16 `K=1000`, `R=200`, `T=256`, 64-KiB, full-output encode with a
+single-thread context may instead use the qualified 256-bit GFNI table.  That
+second policy is limited to `leo2_encode` and the ordinary one-item
+`leo2_encode_batch` path without preflight scratch; scalable-preflight,
+multi-item and reusable batches, decode, neighboring cells, unknown CPUs, and
+explicit backend requests retain their exact context table.  A normal
 distributable build therefore needs no host-CPU option:
 
 ```sh
@@ -41,8 +46,8 @@ qualified backend during testing; accepted values are `auto`, `scalar`,
 `ssse3`, `avx2`, and `avx512`.  Lower forced variants cap explicit contexts at
 the selected backend, while `avx512` retains access to qualified lower tables.
 This setting is not a portability target or a wire-format choice.  `auto`
-continues to report AVX2 as its context baseline even when one bounded encode
-operation is eligible for the model-scoped AVX-512VL policy above.
+continues to report AVX2 as its context baseline even when a bounded encode
+operation is eligible for one of the model-scoped policies above.
 When its POSIX shell and disassembly tools are available, the normal test build
 registers `leopard2_portable_isa` to audit the x86-64 archive and any available
 build metadata.  Missing audit tools remain non-fatal for ordinary developer,

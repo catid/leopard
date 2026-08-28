@@ -243,13 +243,17 @@ is needed.
 The later GF16 K=1000/R=200/64-KiB byte-tiling checkpoint halves Leopard2
 scratch from 33,585,728 to 16,808,512 bytes and improves the prior Leopard2
 implementation by 1.135x for full parity (1.108x--1.147x for measured parity
-subsets).  A clean exact-main ABBA gate nevertheless measures only 0.97678x,
-95% CI [0.97349, 0.98008], so Leopard2 remains 2.32% slower than exact Leopard
-main in that full-output cell.  The optimization is retained as a composable
-scratch and same-source improvement, but the GF16 exact-main encoder gap is not
-closed.  A distinct K=1000/R=199 neighbor measures 1.01049x, 95% CI
-[1.00875, 1.01224]; it is not evidence for the R=200 prefix-output branch,
-because Leopard1 has no parity-subset API.
+subsets).  Its frozen pre-production-default AVX2 exact-main ABBA gate measured
+0.97678x, 95% CI [0.97349, 0.98008], so that candidate was 2.32% slower than
+exact Leopard main in the full-output cell.  The optimization remains a
+composable scratch and same-source improvement.  Current source
+production-enables an operation-specific GFNI route for this cell; schema v16
+cannot attest that substitution, so this historical ratio is not a current
+Leopard2-versus-Leopard1 result.  No current-source exact-main claim is made
+until the successor route-attestation campaign completes.  A distinct
+K=1000/R=199 neighbor measured 1.01049x, 95% CI [1.00875, 1.01224]; it is not
+evidence for the R=200 prefix-output branch, because Leopard1 has no
+parity-subset API.
 
 Machine-readable evidence, including binary/source identities, raw-bundle
 hashes, isolation limits, selector bounds, and validation, is retained in:
@@ -521,7 +525,12 @@ The committed evidence bundle is under
   `5ca4cec26af2c3394aaf9ef017ef6fbbb57a5b6638ed0945e0b69510013308e8`
 
 `experiments/leopard2/main_compare/README.md` contains the exact fresh-build,
-reservation, run, and verification commands. From a different machine, replay
+reservation, run, and verification commands.  Raw schemas v12 through v16 are
+frozen pre-production-default-GFNI contracts.  The fresh v16 producer now
+requires the source-bound selector initializer to be uniquely the historical
+default-disabled `2U`; v12-v15 are replay schemas and historical verification
+remains unchanged.  Use the versioned successor route-attestation contract for
+a fresh comparison of current code.  From a different machine, replay
 the retained streams and analysis structurally with:
 
     python3 experiments/leopard2/main_compare/run_abba.py verify \

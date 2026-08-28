@@ -2639,8 +2639,12 @@ class CMakeProductionGraph(object):
         option = option_scoped_definitions.get((target, specification))
         if option:
             guard = bool_atom("option:" + option)
-            if (target == "leopard2_backend_avx2" or
-                    option == "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"):
+            if option == "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED":
+                guard = bool_and(
+                    guard,
+                    bool_atom("option:LEOPARD_ENABLE_GF8"),
+                    avx2_probe)
+            elif target == "leopard2_backend_avx2":
                 guard = bool_and(guard, avx2_probe)
             return guard
         forced_variants = {
@@ -8467,13 +8471,12 @@ target_sources(leopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
         target_sources(leopard PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_t16_k66>)
     endif()"""
-        audit_record = """                if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+        audit_record = """                if(LEOPARD_ENABLE_GF8 AND
+                   LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
                         avx2_t16_q2)
-                    if(LEOPARD_ENABLE_GF8)
-                        list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
-                            avx2_t16_k66)
-                    endif()
+                    list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
+                        avx2_t16_k66)
                 endif()"""
         self.assertEqual(1, self.cmake.count(compile_option))
         self.assertEqual(1, self.cmake.count(attachment))
@@ -8497,7 +8500,9 @@ target_sources(leopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
             (self.cmake.replace(
                 audit_record,
                 audit_record.replace(
-                    "if(LEOPARD_ENABLE_GF8)", "if(TRUE)"), 1),
+                    "if(LEOPARD_ENABLE_GF8 AND\n"
+                    "                   LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)",
+                    "if(TRUE)"), 1),
              "missing or duplicate guarded K66 portable audit record"),
         )
         for text, error in mutations:

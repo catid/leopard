@@ -174,21 +174,32 @@ Both implementations must report the same deterministic loss set and all three
 workload digests. A strict child environment prevents ambient OpenMP, loader,
 allocator, or profiling settings from silently changing one executable.
 
-Versions 12 through 16 are effective-AVX2 comparisons, not merely requests for the AUTO
-backend. Leopard main must use the pure-AVX2 build above. Leopard2 must use
+Versions 12 through 16 are frozen effective-AVX2 comparisons for source
+revisions where GFNI remained explicit-only, not merely requests for the AUTO
+backend. They must not be used with a source revision whose operation-specific
+AUTO GF16/GFNI selector is production-enabled. Leopard main must use the
+pure-AVX2 build above. Leopard2 must use
 `LEO2_BACKEND_VARIANT=auto`, and the benchmark must resolve that AUTO request to
 `avx2`. The AVX-512F/BW/VL and preferred-vector-width probes are forced false,
 so `Leopard2BackendAVX512.cpp` cannot enter the build closure. The
 VEX-encoded GFNI translation unit may remain in the archive with
-`-mavx2 -mgfni -mno-avx512f`; GFNI remains explicit-only in this profile and
-AUTO may not select it. The runner attests the CMake cache, complete compile
-graph, per-TU
-ISA flags, archive members, linked executable, and reported runtime backend,
-so a native, AVX-512, or AUTO-GFNI candidate cannot be relabeled as version-16
-AVX2 evidence.
+`-mavx2 -mgfni -mno-avx512f`. On family 1Ah/model 08h, current production
+source can borrow that table for the exact K=1000/R=200/64-KiB full-output
+cell while the context still reports `avx2`; schema v16 cannot observe that
+operation-specific substitution. A successor schema must either pin the
+selector off and attest the zero-route control, or attest the production
+default GFNI route under a separately named comparison. Until then, a current
+AUTO-GFNI candidate cannot be labeled version-16 AVX2 evidence.
 
-Build Leopard2 separately with production test hooks disabled and the complete
-version-16 selector set fixed explicitly:
+The fresh v16 producer enforces that boundary before capturing executables or
+starting timing: the Git-bound `leopard2.cpp` must contain exactly one selector
+initializer in the historical default-disabled `2U` form.  Missing, duplicated,
+reformatted, stale, or default-on selectors fail closed.  This producer-only
+guard does not change structural replay of retained v12-v16 evidence.
+
+For reproduction from a pre-default-on source revision, build Leopard2
+separately with production test hooks disabled and the complete version-16
+selector set fixed explicitly:
 
     cmake -S . -B /tmp/leopard2-production -G "Unix Makefiles" \
         -DCMAKE_BUILD_TYPE=Release \

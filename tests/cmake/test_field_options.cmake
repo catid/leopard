@@ -89,18 +89,76 @@ foreach(field_variant gf8 gf16)
                 "${exhaustive_build_stdout}\n${exhaustive_build_stderr}")
         endif()
     endif()
-    execute_process(
-        COMMAND "${LEO2_CTEST_COMMAND}" -C Release -R
-            "^leopard2_field_options$" --output-on-failure
-        WORKING_DIRECTORY "${build_dir}"
-        RESULT_VARIABLE test_result
-        OUTPUT_VARIABLE test_stdout
-        ERROR_VARIABLE test_stderr)
-    if(NOT test_result EQUAL 0)
-        message(FATAL_ERROR
-            "${field_variant} contract test failed (${test_result})\n"
-            "${test_stdout}\n${test_stderr}")
+    set(contract_tests leopard2_field_options)
+    if(field_variant STREQUAL "gf16")
+        # Derive the optional member from this nested build's actual CTest
+        # inventory.  The parent may have been configured with a different
+        # compiler or toolchain, so borrowing its compiler-probe result could
+        # either skip real coverage or require tests this build cannot create.
+        execute_process(
+            COMMAND "${LEO2_CTEST_COMMAND}" -C Release -N -R
+                "^leopard2_backend_auto_gfni_encode_production$"
+            WORKING_DIRECTORY "${build_dir}"
+            RESULT_VARIABLE inventory_result
+            OUTPUT_VARIABLE inventory_stdout
+            ERROR_VARIABLE inventory_stderr)
+        set(inventory_output "${inventory_stdout}\n${inventory_stderr}")
+        string(FIND "${inventory_output}"
+            "leopard2_backend_auto_gfni_encode_production"
+            production_test_position)
+        if(NOT inventory_result EQUAL 0)
+            message(FATAL_ERROR
+                "gf16 optional-test inventory failed (${inventory_result})\n"
+                "${inventory_output}")
+        endif()
+        file(STRINGS "${build_dir}/CMakeCache.txt" inner_avx2_probe
+            REGEX "^LEO2_FLAG_MAVX2:INTERNAL=(1|ON|TRUE|YES|Y)$")
+        file(STRINGS "${build_dir}/CMakeCache.txt" inner_no_avx512_probe
+            REGEX "^LEO2_FLAG_MNO_AVX512F:INTERNAL=(1|ON|TRUE|YES|Y)$")
+        file(STRINGS "${build_dir}/CMakeCache.txt" inner_gfni_probe
+            REGEX "^LEO2_FLAG_MGFNI:INTERNAL=(1|ON|TRUE|YES|Y)$")
+        set(inner_have_gfni_backend OFF)
+        if(inner_avx2_probe AND inner_no_avx512_probe AND inner_gfni_probe)
+            set(inner_have_gfni_backend ON)
+        endif()
+        if(inner_have_gfni_backend AND production_test_position EQUAL -1)
+            message(FATAL_ERROR
+                "gf16 GFNI backend was compiled without its production "
+                "route test\n${inventory_output}")
+        endif()
+        if(NOT inner_have_gfni_backend AND
+           NOT production_test_position EQUAL -1)
+            message(FATAL_ERROR
+                "gf16 production route test was registered without a GFNI "
+                "backend\n${inventory_output}")
+        endif()
+        if(inner_have_gfni_backend)
+            list(APPEND contract_tests
+                leopard2_auto_gf16_gfni_production
+                leopard2_backend_auto_gfni_encode_production
+                leopard2_backend_auto_gfni_encode_ineligible_inert
+                leopard2_backend_auto_gfni_encode_disabled_inert
+                leopard2_backend_auto_gfni_encode_kat_fallback
+                leopard2_backend_auto_gfni_encode_ff16_allocation_fallback)
+        endif()
     endif()
+    foreach(contract_test IN LISTS contract_tests)
+        execute_process(
+            COMMAND "${LEO2_CTEST_COMMAND}" -C Release -R
+                "^${contract_test}$" --output-on-failure
+            WORKING_DIRECTORY "${build_dir}"
+            RESULT_VARIABLE test_result
+            OUTPUT_VARIABLE test_stdout
+            ERROR_VARIABLE test_stderr)
+        set(test_output "${test_stdout}\n${test_stderr}")
+        string(FIND "${test_output}" "${contract_test}"
+            executed_test_position)
+        if(NOT test_result EQUAL 0 OR executed_test_position EQUAL -1)
+            message(FATAL_ERROR
+                "${field_variant} ${contract_test} failed "
+                "(${test_result})\n${test_stdout}\n${test_stderr}")
+        endif()
+    endforeach()
 
     if(LEO2_ARCHIVE_SYMBOL_CHECKS)
         set(library_name

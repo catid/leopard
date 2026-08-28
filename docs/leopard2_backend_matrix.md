@@ -3,7 +3,8 @@
 `LEO2_BACKEND_VARIANT` is a diagnostic CMake cache setting with five values:
 `auto`, `scalar`, `ssse3`, `avx2`, and `avx512`. The default is `auto`. In that mode the
 project builds baseline control flow at the x86-64 SSE2 floor and adds named
-SSSE3, AVX2, and AVX-512VL object members compiled with target-local ISA flags
+SSSE3, AVX2, AVX-512VL, and VEX-256 GFNI object members compiled with
+target-local ISA flags
 when the compiler supports them. Startup CPUID/XCR0 probing selects the
 immutable context-baseline table only after its GF8/GF16/XOR known-answer tests
 pass. A forced variant caps both `AUTO` and explicit context selection at that
@@ -19,12 +20,21 @@ kernels. `avx2` additionally requires AVX, OSXSAVE, XMM/YMM XCR0 state, and the
 AVX2 CPUID bit before selecting 256-bit fixed multiplication and Common XOR.
 `avx512` requires AVX2 plus AVX-512F/BW/VL and OS-enabled opmask/ZMM state. It
 selects the explicit AVX-512VL table, whose current data path remains 256 bits
-wide while using the expanded register file. `AUTO` reports AVX2 as the
+wide while using the expanded register file.  `LEO2_BACKEND_GFNI` is a separate
+runtime API request for the VEX-256 AVX2+GFNI member, not a forced CMake
+variant. `AUTO` reports AVX2 as the
 context baseline on a qualifying x86 host. On AMD family 1Ah/model 44h only,
 a legacy-high GF16 codec may select the qualified AVX-512VL operation table for
 a full-output encode when `K >= 8`, `N >= 16`, `2 <= R <= 4096`, and the shard
 length is an exact 64-byte multiple from 64 bytes through 4 MiB inclusive.
 Unknown CPU models and all cells outside those fixed bounds retain AVX2.
+On AMD family 1Ah/model 08h, the exact single-thread native legacy-high GF16
+`K=1000`, `R=200`, `T=256`, 64-KiB, full-output call may instead borrow the
+qualified GFNI table through `leo2_encode` or ordinary one-item
+`leo2_encode_batch`.  Scalable-preflight, multi-item/reusable batches, decode,
+neighbors, and explicit backend requests retain their context table.  GFNI is
+not a sixth `LEO2_BACKEND_VARIANT` value: that CMake control still has the five
+diagnostic variants listed above.
 All baseline FF/control objects have legacy whole-TU optional code generation
 disabled.
 
@@ -49,7 +59,10 @@ Run the standard-library-only matrix from the repository root:
 
 The runner detects the process affinity instead of assuming CPU numbers,
 checks host and compiler support for the SIMD variants, and creates one
-isolated build per variant.
+isolated dual-field build per variant.  Its compile-source and failure-test
+models reject reduced-field caches instead of extrapolating the comprehensive
+test graph; the recursive CMake field-option matrix owns GF8-only and GF16-only
+archive coverage.
 It builds and runs the startup-KAT/synthetic-feature/concurrency gate, frozen
 legacy golden vectors, the public API suite, a
 fixed-seed random smoke suite, the independent production-constant and bare-LCH
@@ -66,6 +79,20 @@ Lower forced builds also assert that an explicit AVX-512 context is rejected,
 so matching output alone cannot conceal a failed force or qualification cap.
 The failure matrix verifies that an optional AVX-512 KAT failure during
 eligible AUTO codec setup falls back to AVX2 without changing codec creation.
+It also runs the AUTO GF16/GFNI explicitly-disabled and production-enabled
+ineligible setup-inert cases plus the optional GFNI KAT, FF16-allocation, and
+(when GF8 is enabled) GF8-allocation fallbacks, so production-default codec
+setup cannot silently lose its fail-closed path.  A separate run-only test is
+compiled without `LEO2_ENABLE_TEST_HOOKS`, links the shipped `leopard` archive,
+and compares the exact one-shot and ordinary one-item-batch route bytes with an
+explicit AVX2 context.  That target is selected only when the configured
+compile graph actually contains the optional GFNI member.
+The recursive field-option matrix separately requires the supported GF16-only
+archive's production-route and fallback tests whenever its compiler probes
+build the GFNI member.  On the calibrated model-08 host those tests execute the
+exact route, ordinary one-item batch, disabled inertness, KAT fallback, and
+FF16-allocation fallback; other hosts retain the explicit runtime skip rather
+than borrowing execution evidence from a dual-field binary.
 If CMake did not register or execute the portable-ISA gate (for example because
 `objdump` or a POSIX `sh` is unavailable), the matrix fails with an actionable
 reason; it does not accept CTest's zero exit status for an empty selection.

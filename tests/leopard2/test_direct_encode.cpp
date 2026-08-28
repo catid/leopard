@@ -1768,6 +1768,14 @@ void test_high_gf16_byte_tiling(
             leopard::backend::IsCalibratedAutoAVX512EncodeHost())
             expected_dense_backend = LEO2_BACKEND_AVX512;
 #endif
+#if defined(LEO2_TEST_AUTO_MAY_USE_GF16_GFNI_ENCODE)
+        if (expected_dense_backend == context_backend &&
+            context_backend == LEO2_BACKEND_AVX2 &&
+            leopard::backend::IsCalibratedAutoGF16GFNIEncodeHost() &&
+            leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+                owner->codec))
+            expected_dense_backend = LEO2_BACKEND_GFNI;
+#endif
         require(dense_backend == expected_dense_backend &&
                 partial_backend == context_backend,
             "GF16 byte-tile/backend dispatch boundary mismatch: dense=" +

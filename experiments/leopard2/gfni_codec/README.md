@@ -6,9 +6,10 @@ that `VGF2P8AFFINEQB` computes Leopard's GF8 fixed multiplication correctly and
 is much faster than nibble tables on a standalone chain, but it did not put the
 instruction behind the codec's dispatch or run whole-codec benchmarks.
 
-This directory does that.  It is an evaluation, not a promotion: the production
-integration requirements are listed at the end of
-`docs/leopard2_gfni_codec.md`.
+This directory began as that evaluation.  The VEX-256 GFNI member is now a
+production explicit backend, and one exact model-08 GF16 encode cell has a
+production AUTO operation policy.  The remaining evidence boundaries are
+listed at the end of `docs/leopard2_gfni_codec.md`.
 
 ## What the candidate changes
 
@@ -70,6 +71,13 @@ its own allowed-instruction list rather than relaxing that audit.
   identical round-trip flag, and identical accept/reject behaviour.
 - `backend_ab.py` — within-binary clustered ABBA between two `--backend`
   selections.
+- `run_auto_gf16_gfni_encode_abba.py` — frozen same-binary mode-0/mode-1
+  qualification for the exact AUTO GF16/GFNI encode cell and its inactive
+  route neighbors.
+- `audit_auto_gf16_gfni_encode_abba.py` — independent retained-only replay of
+  that campaign; it imports neither the acquisition runner nor its policy.
+- `run_authoritative_auto_gf16_gfni_encode.sh` — clean-build, byte-replay,
+  focused-test, acquisition, audit, and immutable-envelope controller.
 - `main_compare_screen.py` — clustered ABBA screen of a Leopard2 binary against
   the exact Leopard main adapter built by
   `experiments/leopard2/main_compare`.  This is a diagnostic screen, not

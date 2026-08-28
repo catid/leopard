@@ -2,15 +2,18 @@
 
 ## Status
 
-**Promoted: production explicit backend member.**  Default builds compile
+**Promoted: production explicit backend member plus one exact AUTO encode
+policy.**  Default builds compile
 `Leopard2BackendGFNI.cpp` into the archive whenever the toolchain accepts
 `-mgfni`; a GFNI-capable host selects it with `LEO2_BACKEND_GFNI` at context
-creation.  `AUTO` never selects it (explicit-only, mirroring the AVX-512
-policy), parity is byte-identical to the AVX2 member, and the same-binary
-speedup over AVX2 is 1.33x-1.73x on the measured cells.  Requirements 1 and 2
-of the production integration list at the end of this document are satisfied;
-requirements 3-6 (AUTO selector policy, isolated exact-main evidence, a second
-microarchitecture, and the 512-bit follow-up) remain open.
+creation.  On calibrated AMD family 1Ah/model 08h, an AUTO context may also use
+it for the exact single-thread legacy-high GF16 `K=1000`, `R=200`, `T=256`,
+64-KiB, full-output one-shot or ordinary one-item-batch encode.  AUTO still
+reports AVX2, all other operations and cells retain their context table, and
+parity is byte-identical to the AVX2 member.  Requirements 1-3 of the
+production integration list at the end of this document are satisfied;
+requirements 4-6 (isolated exact-main evidence, a second microarchitecture,
+and the 512-bit follow-up) remain open.
 
 The historical evaluation path — `LEO2_GFNI_VARIANT` via compiler flags,
 running under the AVX2 identity — remains available for A/B experiments and
@@ -366,15 +369,16 @@ rather than papered over.
 
 ## Production integration requirements
 
-Requirements 1 and 2 are now satisfied; requirements 3-6 remain open.
+Requirements 1-3 are now satisfied; requirements 4-6 remain open.
 
 1. **Own qualified member — SATISFIED.**  `Leopard2BackendGFNI.cpp` re-includes
    the AVX2 source with `LEO2_GFNI_MEMBER` + `LEO2_GFNI_VARIANT`, compiled
    `-mavx2 -mgfni -mno-avx512f`, publishing `LEO2_BACKEND_GFNI = 6`
    (name `"avx2-gfni"`).  Qualification is the AVX2 gate plus CPUID.(7,0):ECX
-   bit 8 (`X86Features.gfni`); selection is explicit-only — `AUTO` never picks
-   it (`QualifiableBackendMaskFor` mirrors the AVX-512 policy).  The startup
-   KAT gained `TestFF8Butterfly8Out`, which checks both fused radix-eight
+   bit 8 (`X86Features.gfni`).  Explicit selection remains exact; the bounded
+   AUTO policy described in requirement 3 can qualify and borrow the same
+   immutable table without changing the context's reported AVX2 baseline.  The
+   startup KAT gained `TestFF8Butterfly8Out`, which checks both fused radix-eight
    kernels against a reference composed from the audited two-point butterfly —
    including the sentinel-skew contract, where the fused ops absorb the skip
    branch that two-point callers perform themselves.  The portable-ISA checker
@@ -400,15 +404,33 @@ Requirements 1 and 2 are now satisfied; requirements 3-6 remain open.
    `experiments/leopard2/optimization_log/24-gf16-affine-table-packing.md`).
    GF8 keeps its 32-byte rows deliberately: 8 KB total, and the radix-eight
    kernels load the duplicated form directly.
-3. **Selector policy.**  Whether `AUTO` may select GFNI, and on which processor
-   families, needs the same treatment the AVX-512VL encode callback received:
-   a same-binary screen across the parent/redundancy/shard-size space before any
-   default changes.
+3. **Selector policy — SATISFIED FOR ONE EXACT CELL.**  The production selector
+   admits only AMD family 1Ah/model 08h, an AUTO AVX2 baseline, native-layout
+   flags-zero legacy-high GF16 `K=1000`, `R=200`, `T=256`, one context thread,
+   exactly 65,536 bytes, all 200 outputs, and either `leo2_encode` or the
+   ordinary one-item batch path without scalable preflight scratch.  Explicit
+   backends, decode, scalable-preflight, multi-item/reusable batches, and every
+   neighboring identity remain on their context table.  The sealed v2
+   same-binary campaign retained 25 target ABBA rounds and 12 inactive cells:
+   GFNI/AVX2 was 1.449623x for ordinary encode (95% CI
+   `[1.445842, 1.453414]`) and 1.452917x for one-shot encode
+   (`[1.448359, 1.457489]`).  All route, call-count, digest, timer-floor, and
+   inactive-cell gates passed.  The bound source was commit
+   `dbe26daac245739a9692e481622af0a0a077462c`, tree
+   `167fd0034673901f015ea5d812604b6c2cbee5f6`; the campaign report SHA-256 is
+   `680b42c53e90dad3ec3529fbc048fcb273763d410eb84dd8421100014b8e2233`.
+   This qualifies the bounded selector; it is not an exact-Leopard1
+   performance claim.
 4. **Isolated exact-main evidence.**  The counterbalanced
-   `experiments/leopard2/main_compare/run_abba.py` campaign with the CPU-pair
+   `experiments/leopard2/main_compare/run_abba.py` lineage with the CPU-pair
    lease, source/build closure, and the zero-sibling-jiffy gate is still
-   required before any claim enters
-   `docs/leopard2_vs_main_benchmark.md`.
+   required before any claim enters `docs/leopard2_vs_main_benchmark.md`.
+   Its frozen schema v16 predates the production-default operation selector
+   and cannot distinguish this exact GFNI route from its reported AVX2 context
+   baseline.  It must not be reused for current source.  A successor contract
+   must attest an actual production-default GFNI call in every Leopard2 child
+   (or explicitly pin and attest the selector off for a separately named AVX2
+   control) before the exact-main comparison is valid.
 5. **Second microarchitecture.**  Everything here is one Zen 5 part.  Intel
    parts with GFNI have different affine throughput and different 512-bit
    frequency behaviour.

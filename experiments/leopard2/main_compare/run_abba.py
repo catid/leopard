@@ -120,6 +120,9 @@ FAILURE_EVIDENCE_CONTRACT_V15 = \
     "leopard2-main-compare-failure-evidence-contract/v15"
 FAILURE_EVIDENCE_CONTRACT = \
     "leopard2-main-compare-failure-evidence-contract/v16"
+_V16_AUTO_GF16_GFNI_SELECTOR = re.compile(
+    rb"(?m)^static std::atomic<uint32_t> "
+    rb"g_auto_gf16_gfni_encode_mode\(([0-9]+)U\);$")
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 ISOLATION_SCHEMA = "leopard2-main-compare-isolation/v1"
@@ -5674,6 +5677,59 @@ def input_snapshot(
     return result
 
 
+def require_v16_effective_avx2_source(
+    specification: Mapping[str, Any], snapshot: Mapping[str, Any],
+) -> None:
+    """Reject fresh v16 acquisition if AUTO can substitute GFNI secretly.
+
+    Schema v16 attests the context backend as AVX2 but has no operation-route
+    field.  It is therefore sound only for the historical source state whose
+    exact AUTO GF16/GFNI selector initializer is disabled (2U).  This guard is
+    intentionally producer-only so retained v1-v16 replay semantics do not
+    change.
+    """
+    candidate_source = snapshot.get("candidate_source")
+    require(isinstance(candidate_source, Mapping),
+            "schema v16 candidate source identity is missing")
+    tracked_files = candidate_source.get("tracked_files")
+    require(isinstance(tracked_files, list),
+            "schema v16 candidate tracked-file identity is missing")
+    records = [
+        record for record in tracked_files
+        if isinstance(record, Mapping) and
+        record.get("path") == "leopard2.cpp"
+    ]
+    require(len(records) == 1 and records[0].get("kind") == "regular" and
+            isinstance(records[0].get("object_id"), str) and
+            re.fullmatch(r"[0-9a-f]{40}", records[0]["object_id"])
+                is not None,
+            "schema v16 leopard2.cpp source identity is not unique and regular")
+    source_path = Path(specification["candidate_source_root"]) / "leopard2.cpp"
+    before = os.lstat(source_path)
+    require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and
+            source_path.resolve(strict=True) == source_path,
+            "schema v16 leopard2.cpp is not a canonical single-link regular file")
+    captured, data = bounded_file_contents_snapshot(source_path)
+    after = os.lstat(source_path)
+    require(stat.S_ISREG(after.st_mode) and after.st_nlink == 1 and
+            (before.st_dev, before.st_ino, before.st_size,
+             before.st_mtime_ns, before.st_ctime_ns) ==
+            (captured.st_dev, captured.st_ino, captured.st_size,
+             captured.st_mtime_ns, captured.st_ctime_ns) ==
+            (after.st_dev, after.st_ino, after.st_size,
+             after.st_mtime_ns, after.st_ctime_ns),
+            "schema v16 leopard2.cpp changed during selector verification")
+    object_id = hashlib.sha1(
+        b"blob " + str(len(data)).encode("ascii") + b"\0" + data
+    ).hexdigest()
+    require(object_id == records[0]["object_id"],
+            "schema v16 leopard2.cpp changed after Git source capture")
+    require(_V16_AUTO_GF16_GFNI_SELECTOR.findall(data) == [b"2"],
+            "schema v16 requires the unique AUTO GF16/GFNI selector "
+            "initializer to be default-disabled 2U; use a successor "
+            "route-attestation schema")
+
+
 def input_snapshots_equal(
     current: object, retained: object, raw_schema: str,
 ) -> bool:
@@ -9375,6 +9431,7 @@ def _run_campaign_owned(
         ) as reservation, pair_guard as pair_lease:
             os.sched_setaffinity(0, housekeeping)
             initial = input_snapshot(specification)
+            require_v16_effective_avx2_source(specification, initial)
             executable_snapshots = capture_campaign_executables(
                 specification, initial, snapshot_owner)
             before_monotonic_ns = time.monotonic_ns()

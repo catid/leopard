@@ -3680,10 +3680,10 @@ static uint32_t QualifiableBackendMaskFor(
 # endif
 #endif
 #if defined(LEO2_HAVE_GFNI_BACKEND)
-    // Explicit-only, mirroring the AVX-512 policy: the GFNI table may be
-    // requested by API selection on a qualified host, and AUTO never selects
-    // it until a same-binary selector screen exists.  The same lower forced
-    // variants cap it.
+    // The GFNI table may be requested explicitly or borrowed by the exact
+    // operation-specific AUTO selector after codec setup qualifies it.  The
+    // reported AUTO context remains on its baseline table.  Lower forced
+    // variants cap both uses.
 # if !defined(LEO2_BACKEND_FORCE_SCALAR) && \
      !defined(LEO2_BACKEND_FORCE_SSSE3) && \
      !defined(LEO2_BACKEND_FORCE_AVX2)

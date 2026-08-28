@@ -29,7 +29,8 @@ HISTORICAL_SCHEMA = "leopard2-backend-matrix/v1"
 PRE_GFNI_SCHEMA = "leopard2-backend-matrix/v2"
 PRE_T16_SCHEMA = "leopard2-backend-matrix/v3"
 PRE_K8_SCHEMA = "leopard2-backend-matrix/v4"
-SCHEMA = "leopard2-backend-matrix/v5"
+PRE_AUTO_GFNI_SCHEMA = "leopard2-backend-matrix/v5"
+SCHEMA = "leopard2-backend-matrix/v6"
 VARIANTS = ("auto", "scalar", "ssse3", "avx2", "avx512")
 COMPARE_TESTS = (
     "field_options",
@@ -73,9 +74,13 @@ COMPARE_TESTS = (
 # build.  Forced scalar/SSSE3 variants therefore report different aggregate
 # counters even though every byte comparison passes, so run it in every
 # variant without requiring identical stdout.
-RUN_ONLY_TESTS = ("pruned_transform",)
+PRE_AUTO_GFNI_RUN_ONLY_TESTS = ("pruned_transform",)
+RUN_ONLY_TESTS = PRE_AUTO_GFNI_RUN_ONLY_TESTS + (
+    "auto_gf16_gfni_production",
+)
+PRE_AUTO_GFNI_RUN_TESTS = COMPARE_TESTS + PRE_AUTO_GFNI_RUN_ONLY_TESTS
 RUN_TESTS = COMPARE_TESTS + RUN_ONLY_TESTS
-TEST_SPECS = {
+PRE_AUTO_GFNI_TEST_SPECS = {
     "field_options": ("leopard2_field_options_test", []),
     "direct_oracle": ("leopard2_direct_oracle_test", []),
     "backend_ops": ("leopard2_backend_ops_test", []),
@@ -124,7 +129,12 @@ TEST_SPECS = {
     "fuzz_smoke": ("leopard2_fuzz_smoke", []),
     "pruned_fuzz_smoke": ("leopard2_pruned_fuzz_smoke", []),
 }
-BUILD_TARGETS = (
+TEST_SPECS = dict(PRE_AUTO_GFNI_TEST_SPECS)
+TEST_SPECS.update({
+    "auto_gf16_gfni_production": (
+        "leopard2_auto_gf16_gfni_production_test", []),
+})
+PRE_AUTO_GFNI_BUILD_TARGETS = (
     "leopard2_field_options_test",
     "leopard2_direct_oracle_test",
     "leopard2_backend_ops_test",
@@ -159,6 +169,11 @@ BUILD_TARGETS = (
     "leopard2_fuzz_smoke",
     "leopard2_pruned_fuzz_smoke",
 )
+BUILD_TARGETS = PRE_AUTO_GFNI_BUILD_TARGETS + (
+    "leopard2_auto_gf16_gfni_production_test",
+)
+AUTO_GF16_GFNI_PRODUCTION_TEST_SOURCE = \
+    "tests/leopard2/test_auto_gf16_gfni_production.cpp"
 BASE_BACKEND_FAILURE_TESTS = (
     "leopard2_backend_failure_scalar_ff8_allocation",
     "leopard2_backend_failure_scalar_ff16_allocation",
@@ -176,19 +191,36 @@ AVX512_BACKEND_FAILURE_TESTS = (
     "leopard2_backend_failure_avx512_kat",
     "leopard2_backend_auto_avx512_kat_fallback",
 )
-# GFNI has no AUTO fallback case: AUTO never selects it, so there is no
-# selected-backend qualification to fall back from.
-GFNI_BACKEND_FAILURE_TESTS = (
+PRE_AUTO_GFNI_BACKEND_FAILURE_TESTS = (
     "leopard2_backend_failure_gfni_ff8_allocation",
     "leopard2_backend_failure_gfni_ff16_allocation",
     "leopard2_backend_failure_gfni_kat",
+)
+AUTO_GFNI_ENCODE_GF16_FAILURE_TESTS = (
+    "leopard2_backend_auto_gfni_encode_disabled_inert",
+    "leopard2_backend_auto_gfni_encode_ineligible_inert",
+    "leopard2_backend_auto_gfni_encode_kat_fallback",
+    "leopard2_backend_auto_gfni_encode_ff16_allocation_fallback",
+)
+AUTO_GFNI_ENCODE_GF8_FAILURE_TESTS = (
+    "leopard2_backend_auto_gfni_encode_ff8_allocation_fallback",
+)
+GFNI_BACKEND_FAILURE_TESTS = (
+    PRE_AUTO_GFNI_BACKEND_FAILURE_TESTS +
+    AUTO_GFNI_ENCODE_GF16_FAILURE_TESTS +
+    AUTO_GFNI_ENCODE_GF8_FAILURE_TESTS
 )
 BACKEND_FAILURE_TESTS = (
     BASE_BACKEND_FAILURE_TESTS + AVX512_BACKEND_FAILURE_TESTS +
     GFNI_BACKEND_FAILURE_TESTS
 )
-BACKEND_FAILURE_CTEST_REGEX = \
+PRE_AUTO_GFNI_BACKEND_FAILURE_CTEST_REGEX = \
     "^leopard2_backend_(failure_|auto_avx512_kat_fallback$)"
+BACKEND_FAILURE_CTEST_REGEX = (
+    "^leopard2_backend_(failure_|auto_avx512_kat_fallback$|"
+    "auto_gfni_encode_(disabled_inert|ineligible_inert|kat_fallback|"
+    "ff16_allocation_fallback|ff8_allocation_fallback)$)"
+)
 PORTABLE_CTEST_REGEX = "^leopard2_portable_isa$"
 CUDA_CTEST_REGEX = "^leopard2_cuda_optional$"
 PRE_T16_BUILD_CACHE_KEYS = (
@@ -201,12 +233,22 @@ PRE_T16_BUILD_CACHE_KEYS = (
     "LEO2_BUILD_BENCHMARKS", "LEO2_BUILD_FUZZERS", "LEO2_ENABLE_CUDA",
     "LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16",
 )
-CURRENT_PRODUCTION_OBJECT_OPTIONS = (
+PRE_AUTO_GFNI_PRODUCTION_OBJECT_OPTIONS = (
     "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
     "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
     "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
     "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
 )
+CURRENT_PRODUCTION_OBJECT_OPTIONS = (
+    PRE_AUTO_GFNI_PRODUCTION_OBJECT_OPTIONS + (
+        "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
+        "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING",
+        "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
+        "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
+    )
+)
+PRE_AUTO_GFNI_BUILD_CACHE_KEYS = PRE_T16_BUILD_CACHE_KEYS + \
+    PRE_AUTO_GFNI_PRODUCTION_OBJECT_OPTIONS
 BUILD_CACHE_KEYS = PRE_T16_BUILD_CACHE_KEYS + \
     CURRENT_PRODUCTION_OBJECT_OPTIONS
 
@@ -309,10 +351,30 @@ PRE_K8_EXPECTED_COMPILE_SOURCE_COUNTS.update({
     "tests/leopard2/test_t4_packed_terminal_family_production.cpp": 1,
     "tests/leopard2/test_translated_metadata.cpp": 2,
 })
-EXPECTED_COMPILE_SOURCE_COUNTS = dict(
+PRE_AUTO_GFNI_EXPECTED_COMPILE_SOURCE_COUNTS = dict(
     PRE_K8_EXPECTED_COMPILE_SOURCE_COUNTS)
-EXPECTED_COMPILE_SOURCE_COUNTS[
+PRE_AUTO_GFNI_EXPECTED_COMPILE_SOURCE_COUNTS[
     "Leopard2BackendAVX2T8K8B1024.cpp"] = 1
+EXPECTED_COMPILE_SOURCE_COUNTS = dict(
+    PRE_AUTO_GFNI_EXPECTED_COMPILE_SOURCE_COUNTS)
+EXPECTED_COMPILE_SOURCE_COUNTS.update({
+    "Leopard2BackendAVX2T16K66.cpp": 1,
+    "Leopard2BackendAVX2T16Q2.cpp": 2,
+    "Leopard2BackendAVX2T8K62.cpp": 2,
+    "Leopard2BackendAVX512GFNIT128.cpp": 1,
+    "Leopard2BackendAVX512GFNIT16.cpp": 1,
+    "experiments/leopard2/gfni_t16/public_screen.cpp": 1,
+    "experiments/leopard2/gfni_t16/screen.cpp": 1,
+    "tests/leopard2/test_avx512_gfni_t16_prototype.cpp": 1,
+    "tests/leopard2/test_auto_gf16_gfni_production.cpp": 1,
+    "tests/leopard2/test_small_dual_direct.cpp": 1,
+    "tests/leopard2/test_t16_prepared_terminal.cpp": 1,
+    "tests/leopard2/test_t16_prepared_terminal_production.cpp": 1,
+    "tests/leopard2/test_t16_q2_b64_fused.cpp": 1,
+    "tests/leopard2/test_t2_multi_production.cpp": 1,
+    "tests/leopard2/direct_oracle.cpp": 38,
+    "tests/leopard2/direct_repair.cpp": 2,
+})
 PRE_GFNI_SOURCE_FILES = (
     "CMakeLists.txt",
     "LeopardCommon.cpp",
@@ -417,8 +479,24 @@ PRE_K8_SOURCE_FILES = PRE_T16_SOURCE_FILES + (
     "tests/leopard2/test_t4_packed_terminal_family_production.cpp",
     "tests/leopard2/test_translated_metadata.cpp",
 )
-SOURCE_FILES = PRE_K8_SOURCE_FILES + (
+PRE_AUTO_GFNI_SOURCE_FILES = PRE_K8_SOURCE_FILES + (
     "Leopard2BackendAVX2T8K8B1024.cpp",
+)
+SOURCE_FILES = PRE_AUTO_GFNI_SOURCE_FILES + (
+    "Leopard2BackendAVX2T16K66.cpp",
+    "Leopard2BackendAVX2T16Q2.cpp",
+    "Leopard2BackendAVX2T8K62.cpp",
+    "Leopard2BackendAVX512GFNIT128.cpp",
+    "Leopard2BackendAVX512GFNIT16.cpp",
+    "experiments/leopard2/gfni_t16/public_screen.cpp",
+    "experiments/leopard2/gfni_t16/screen.cpp",
+    "tests/leopard2/test_avx512_gfni_t16_prototype.cpp",
+    "tests/leopard2/test_auto_gf16_gfni_production.cpp",
+    "tests/leopard2/test_small_dual_direct.cpp",
+    "tests/leopard2/test_t16_prepared_terminal.cpp",
+    "tests/leopard2/test_t16_prepared_terminal_production.cpp",
+    "tests/leopard2/test_t16_q2_b64_fused.cpp",
+    "tests/leopard2/test_t2_multi_production.cpp",
 )
 
 
@@ -430,47 +508,77 @@ def evidence_contract(schema=SCHEMA):
     Schema v2 remains available for historical butterfly-v9 replay, v3
     retains the GFNI-only closure used by butterfly-v10, and v4 preserves the
     promoted conditional AVX2/GF8 and T2/K4 closure used by butterfly-v11.
-    Current schema v5 additionally binds the fixed-shape T8/K8/B1024 object.
+    Schema v5 adds the fixed-shape T8/K8/B1024 object.  Current schema v6 also
+    binds the production AUTO-GFNI disabled/ineligible/KAT/allocation fallback
+    census and the hookless shipped-archive route test.
     """
     if schema not in (
-            PRE_GFNI_SCHEMA, PRE_T16_SCHEMA, PRE_K8_SCHEMA, SCHEMA):
+            PRE_GFNI_SCHEMA, PRE_T16_SCHEMA, PRE_K8_SCHEMA,
+            PRE_AUTO_GFNI_SCHEMA, SCHEMA):
         raise ValueError("unsupported backend-matrix evidence schema")
     current = schema == SCHEMA
+    pre_auto_gfni = schema == PRE_AUTO_GFNI_SCHEMA
     pre_k8 = schema == PRE_K8_SCHEMA
     pre_t16 = schema == PRE_T16_SCHEMA
     contract = {
         "schema": schema,
         "source_files": tuple(
             SOURCE_FILES if current else
+            PRE_AUTO_GFNI_SOURCE_FILES if pre_auto_gfni else
             PRE_K8_SOURCE_FILES if pre_k8 else
             PRE_T16_SOURCE_FILES if pre_t16 else PRE_GFNI_SOURCE_FILES),
         "expected_compile_source_counts": dict(
             EXPECTED_COMPILE_SOURCE_COUNTS if current else
+            PRE_AUTO_GFNI_EXPECTED_COMPILE_SOURCE_COUNTS
+            if pre_auto_gfni else
             PRE_K8_EXPECTED_COMPILE_SOURCE_COUNTS if pre_k8 else
             PRE_T16_EXPECTED_COMPILE_SOURCE_COUNTS if pre_t16 else
             PRE_GFNI_EXPECTED_COMPILE_SOURCE_COUNTS),
         "compare_tests": tuple(COMPARE_TESTS),
-        "run_only_tests": tuple(RUN_ONLY_TESTS),
-        "run_tests": tuple(RUN_TESTS),
+        "run_only_tests": tuple(
+            RUN_ONLY_TESTS if current else PRE_AUTO_GFNI_RUN_ONLY_TESTS),
+        "run_tests": tuple(
+            RUN_TESTS if current else PRE_AUTO_GFNI_RUN_TESTS),
         "test_specs": {
             name: (specification[0], list(specification[1]))
-            for name, specification in TEST_SPECS.items()
+            for name, specification in (
+                TEST_SPECS if current else
+                PRE_AUTO_GFNI_TEST_SPECS).items()
         },
-        "build_targets": tuple(BUILD_TARGETS),
+        "build_targets": tuple(
+            BUILD_TARGETS if current else PRE_AUTO_GFNI_BUILD_TARGETS),
         "build_cache_keys": tuple(
-            BUILD_CACHE_KEYS if current or pre_k8 else
+            BUILD_CACHE_KEYS if current else
+            PRE_AUTO_GFNI_BUILD_CACHE_KEYS
+            if pre_auto_gfni or pre_k8 else
             PRE_T16_BUILD_CACHE_KEYS) + (
             "CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER"),
         "base_backend_failure_tests": tuple(BASE_BACKEND_FAILURE_TESTS),
         "avx512_backend_failure_tests": tuple(
             AVX512_BACKEND_FAILURE_TESTS),
-        "backend_failure_ctest_regex": BACKEND_FAILURE_CTEST_REGEX,
+        "backend_failure_ctest_regex": (
+            BACKEND_FAILURE_CTEST_REGEX if current else
+            PRE_AUTO_GFNI_BACKEND_FAILURE_CTEST_REGEX),
         "portable_ctest_regex": PORTABLE_CTEST_REGEX,
         "cuda_ctest_regex": CUDA_CTEST_REGEX,
     }
-    if current or pre_k8 or pre_t16:
+    if current:
         contract["gfni_backend_failure_tests"] = tuple(
             GFNI_BACKEND_FAILURE_TESTS)
+        contract["auto_gfni_encode_failure_tests"] = tuple(
+            AUTO_GFNI_ENCODE_GF16_FAILURE_TESTS +
+            AUTO_GFNI_ENCODE_GF8_FAILURE_TESTS)
+        contract["conditional_run_tests"] = ((
+            "auto_gf16_gfni_production",
+            AUTO_GF16_GFNI_PRODUCTION_TEST_SOURCE,
+        ),)
+        contract["conditional_build_targets"] = ((
+            "leopard2_auto_gf16_gfni_production_test",
+            AUTO_GF16_GFNI_PRODUCTION_TEST_SOURCE,
+        ),)
+    elif pre_auto_gfni or pre_k8 or pre_t16:
+        contract["gfni_backend_failure_tests"] = tuple(
+            PRE_AUTO_GFNI_BACKEND_FAILURE_TESTS)
     return contract
 
 
@@ -504,6 +612,9 @@ def expected_compile_source_counts(cache):
     """Bind optional ISA objects to the compiler probes from this build."""
     expected = dict(EXPECTED_COMPILE_SOURCE_COUNTS)
 
+    def option_enabled(name):
+        return cmake_cache_true(cache, name) if name in cache else True
+
     # GCC, Clang, and AppleClang use the paired isolation flags below.  MSVC
     # always has the x64 SSSE3 object and records its AVX2 probe in
     # LEO2_FLAG_ARCH_AVX2.  AVX-512VL is deliberately unavailable in the
@@ -530,13 +641,27 @@ def expected_compile_source_counts(cache):
     have_gfni = have_avx2 and cmake_cache_true(cache, "LEO2_FLAG_MGFNI")
     have_gf8 = cmake_cache_true(cache, "LEOPARD_ENABLE_GF8") \
         if "LEOPARD_ENABLE_GF8" in cache else True
-    have_t16 = (
-        have_avx2 and have_gf8 and
-        (cmake_cache_true(cache, "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED")
-         if "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED" in cache else True)
+    have_gf16 = cmake_cache_true(cache, "LEOPARD_ENABLE_GF16") \
+        if "LEOPARD_ENABLE_GF16" in cache else True
+    if not (have_gf8 and have_gf16):
+        raise MatrixError("compile-source model requires dual-field build")
+    have_t16 = have_avx2 and \
+        option_enabled("LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED")
+    have_t16_q2_source = have_avx2 and \
+        option_enabled("LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED")
+    have_high_t8_vector = not (
+        cmake_cache_true(cache, "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR")
+        if "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR" in cache else False
+    )
+    have_t8_two_block_tests = \
+        option_enabled("LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING") and \
+        have_high_t8_vector
+    have_t8_k62 = (
+        have_avx2 and
+        have_t8_two_block_tests
     )
     have_t32 = (
-        have_avx2 and have_gf8 and (
+        have_avx2 and (
             (cmake_cache_true(
                 cache, "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED")
              if "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED" in cache else
@@ -546,28 +671,98 @@ def expected_compile_source_counts(cache):
              if "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK" in cache else
              True)))
     have_p32 = (
-        have_avx2 and have_gf8 and
+        have_avx2 and
         (cmake_cache_true(cache, "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL")
          if "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL" in cache else True)
     )
-    if not (have_avx2 and have_gf8):
-        # The ordinary-archive T2/K4 gate contributes one additional direct
-        # oracle compilation only when its AVX2/GF8 executable is configured.
-        expected["tests/leopard2/direct_oracle.cpp"] = 14
+    have_avx512_gfni_t128 = (
+        have_avx2 and
+        cmake_cache_true(cache, "LEO2_FLAG_MAVX512F") and
+        cmake_cache_true(cache, "LEO2_FLAG_MAVX512BW") and
+        cmake_cache_true(cache, "LEO2_FLAG_MAVX512VL") and
+        cmake_cache_true(cache, "LEO2_FLAG_MGFNI")
+    )
+    have_avx512_gfni_t16_object = have_avx512_gfni_t128 and have_t16
+    have_one_shot_equal_rounded = have_avx2 and \
+        option_enabled("LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT")
+    direct_oracle_count = expected["tests/leopard2/direct_oracle.cpp"]
+    # Three tests require only AVX2 itself: the two T=2 production gates and
+    # the excluded-from-all small-direct exhaustive target.  Every other
+    # optional direct-oracle target has its own independently modeled gate.
+    if not have_avx2:
+        direct_oracle_count -= 3
+    if not have_one_shot_equal_rounded:
+        direct_oracle_count -= 1
+    if not have_p32:
+        direct_oracle_count -= 1
+    if not have_t16:
+        direct_oracle_count -= 2
+    if not have_t16_q2_source:
+        direct_oracle_count -= 1
+    if not have_t32:
+        direct_oracle_count -= 1
+    if not have_high_t8_vector:
+        direct_oracle_count -= 2
+    if not have_t8_two_block_tests:
+        direct_oracle_count -= 2
+    expected["tests/leopard2/direct_oracle.cpp"] = direct_oracle_count
+    if not have_t32:
+        # One ordinary balanced-production target is unconditional; the
+        # second compiles the same source for the T32/B256 selector gate.
+        expected[
+            "tests/leopard2/test_balanced_b64_terminal_production.cpp"
+        ] -= 1
     for source, available in (
             ("Leopard2BackendSSSE3.cpp", have_ssse3),
             ("Leopard2BackendAVX2.cpp", have_avx2),
-            ("Leopard2BackendAVX2Xor.cpp", have_avx2 and have_gf8),
-            ("Leopard2BackendAVX2T2K4.cpp", have_avx2 and have_gf8),
+            ("Leopard2BackendAVX2Xor.cpp", have_avx2),
+            ("Leopard2BackendAVX2T2K4.cpp", have_avx2),
             ("Leopard2BackendAVX2T8K8B1024.cpp",
-             have_avx2 and have_gf8),
+             have_avx2),
+            ("Leopard2BackendAVX2T16K66.cpp", have_t16_q2_source),
+            ("Leopard2BackendAVX2T16Q2.cpp", have_t16_q2_source),
+            ("Leopard2BackendAVX2T8K62.cpp", have_t8_k62),
             ("Leopard2BackendAVX2T16B64.cpp", have_t16),
             ("Leopard2BackendAVX2T32B256.cpp", have_t32),
             ("Leopard2LowP32B64AVX2.cpp", have_p32),
             ("tests/leopard2/test_t2_k4_production.cpp",
-             have_avx2 and have_gf8),
+             have_avx2),
+            ("tests/leopard2/test_t2_multi_production.cpp",
+             have_avx2),
+            ("tests/leopard2/test_high_t32_tiny_schedule_policy.cpp",
+             have_avx2),
+            ("tests/leopard2/test_small_direct_exhaustive.cpp",
+             have_avx2),
+            ("tests/leopard2/test_k8r4_one_shot_direct.cpp",
+             have_one_shot_equal_rounded),
+            ("tests/leopard2/test_low_p32_b64_terminal.cpp", have_p32),
+            ("tests/leopard2/test_k8r8_b64_terminal.cpp",
+             have_high_t8_vector),
+            ("tests/leopard2/test_k8r8_b64_terminal_production.cpp",
+             have_high_t8_vector),
+            ("tests/leopard2/test_k16r8_b256_terminal.cpp",
+             have_t8_two_block_tests),
+            ("tests/leopard2/test_k9r5_b256_terminal.cpp",
+             have_t8_two_block_tests),
+            ("tests/leopard2/test_t16_prepared_terminal.cpp", have_t16),
+            ("tests/leopard2/test_t16_prepared_terminal_production.cpp",
+             have_t16),
+            ("tests/leopard2/test_t16_q2_b64_fused.cpp",
+             have_t16_q2_source),
             ("Leopard2BackendAVX512.cpp", have_avx512),
-            ("Leopard2BackendGFNI.cpp", have_gfni)):
+            ("Leopard2BackendGFNI.cpp", have_gfni),
+            ("tests/leopard2/test_auto_gf16_gfni_production.cpp",
+             have_gfni),
+            ("Leopard2BackendAVX512GFNIT128.cpp",
+             have_avx512_gfni_t128),
+            ("Leopard2BackendAVX512GFNIT16.cpp",
+             have_avx512_gfni_t16_object),
+            ("experiments/leopard2/gfni_t16/public_screen.cpp",
+             have_avx512_gfni_t16_object),
+            ("experiments/leopard2/gfni_t16/screen.cpp",
+             have_avx512_gfni_t16_object),
+            ("tests/leopard2/test_avx512_gfni_t16_prototype.cpp",
+             have_avx512_gfni_t16_object)):
         if not available:
             expected.pop(source)
     return expected
@@ -608,17 +803,52 @@ def backend_failure_ctest_executed(
 
 
 def backend_failure_tests_for_build(build_identity):
+    cache = build_identity.get("cache", {})
+    have_gf16 = cmake_cache_true(cache, "LEOPARD_ENABLE_GF16") \
+        if "LEOPARD_ENABLE_GF16" in cache else True
+    have_gf8 = cmake_cache_true(cache, "LEOPARD_ENABLE_GF8") \
+        if "LEOPARD_ENABLE_GF8" in cache else True
+    if not (have_gf8 and have_gf16):
+        raise MatrixError("backend-failure model requires dual-field build")
     sources = {
         command["file"] for command in build_identity["compile_commands"]
     }
     tests = BASE_BACKEND_FAILURE_TESTS
-    # The two explicit-only members are independent compiler probes, so each
-    # contributes its own failure cases only when its object was compiled.
+    # The optional members are independent compiler probes, so each contributes
+    # its own failure cases only when its object was compiled.  This model is
+    # deliberately dual-field; reduced-field coverage belongs to the recursive
+    # CMake field-options contract.
     if "Leopard2BackendAVX512.cpp" in sources:
         tests += AVX512_BACKEND_FAILURE_TESTS
     if "Leopard2BackendGFNI.cpp" in sources:
-        tests += GFNI_BACKEND_FAILURE_TESTS
+        tests += PRE_AUTO_GFNI_BACKEND_FAILURE_TESTS
+        tests += AUTO_GFNI_ENCODE_GF16_FAILURE_TESTS
+        tests += AUTO_GFNI_ENCODE_GF8_FAILURE_TESTS
     return tests
+
+
+def build_has_source(build_identity, source):
+    return any(
+        command.get("file") == source
+        for command in build_identity.get("compile_commands", ())
+        if isinstance(command, dict)
+    )
+
+
+def build_targets_for_build(build_identity):
+    targets = list(PRE_AUTO_GFNI_BUILD_TARGETS)
+    if build_has_source(
+            build_identity, AUTO_GF16_GFNI_PRODUCTION_TEST_SOURCE):
+        targets.append("leopard2_auto_gf16_gfni_production_test")
+    return tuple(targets)
+
+
+def run_tests_for_build(build_identity):
+    tests = list(PRE_AUTO_GFNI_RUN_TESTS)
+    if build_has_source(
+            build_identity, AUTO_GF16_GFNI_PRODUCTION_TEST_SOURCE):
+        tests.append("auto_gf16_gfni_production")
+    return tuple(tests)
 
 
 def portable_ctest_executed(stdout, stderr=b""):
@@ -1021,7 +1251,8 @@ def run_variant(context, variant, index):
     if context["resume"] and result_path.is_file():
         try:
             previous = json.loads(result_path.read_text(encoding="utf-8"))
-            if (previous.get("configuration_id") == configuration_id and
+            if (previous.get("schema") == SCHEMA and
+                    previous.get("configuration_id") == configuration_id and
                     previous.get("status") in ("passed", "unavailable")):
                 return previous
         except (OSError, UnicodeError, ValueError):
@@ -1097,10 +1328,11 @@ def run_variant(context, variant, index):
         atomic_write_json(result_path, base)
         return base
 
+    selected_build_targets = build_targets_for_build(base["build_identity"])
     build_command = [
         context["cmake"], "--build", build, "--config", "Release",
         "-j", str(context["jobs_per_variant"]), "--target",
-    ] + list(BUILD_TARGETS)
+    ] + list(selected_build_targets)
     command = run_command(
         "build", build_command, context["source"], result_dir,
         context["timeout"], environment
@@ -1114,7 +1346,7 @@ def run_variant(context, variant, index):
 
     tests = {}
     pin_cpu = context["allowed_cpus"][index % len(context["allowed_cpus"])]
-    for name in RUN_TESTS:
+    for name in run_tests_for_build(base["build_identity"]):
         target, arguments = TEST_SPECS[name]
         executable = executable_path(build, target)
         argv = pinned_command(
@@ -1428,6 +1660,7 @@ def self_test():
     historical_contract = evidence_contract(PRE_GFNI_SCHEMA)
     pre_t16_contract = evidence_contract(PRE_T16_SCHEMA)
     pre_k8_contract = evidence_contract(PRE_K8_SCHEMA)
+    pre_auto_gfni_contract = evidence_contract(PRE_AUTO_GFNI_SCHEMA)
     check(current_contract["schema"] == SCHEMA,
           "current contract schema")
     check(len(current_contract["source_files"]) ==
@@ -1442,12 +1675,44 @@ def self_test():
           "pre-T16 contract schema")
     check(pre_k8_contract["schema"] == PRE_K8_SCHEMA,
           "pre-K8 contract schema")
+    check(pre_auto_gfni_contract["schema"] == PRE_AUTO_GFNI_SCHEMA,
+          "pre-AUTO-GFNI contract schema")
     check("gfni_backend_failure_tests" in current_contract,
           "current contract GFNI failure tests")
     check("gfni_backend_failure_tests" not in historical_contract,
           "pre-GFNI contract excludes GFNI failure tests")
     check("gfni_backend_failure_tests" in pre_t16_contract,
           "pre-T16 contract retains GFNI failure tests")
+    check("auto_gfni_encode_failure_tests" in current_contract,
+          "current contract AUTO GFNI fallback tests")
+    check("auto_gfni_encode_failure_tests" not in pre_auto_gfni_contract,
+          "pre-AUTO-GFNI contract excludes AUTO GFNI fallback tests")
+    check("auto_gf16_gfni_production" in
+          current_contract["run_only_tests"],
+          "current contract hookless AUTO GF16/GFNI production test")
+    check(current_contract["conditional_run_tests"] == ((
+              "auto_gf16_gfni_production",
+              AUTO_GF16_GFNI_PRODUCTION_TEST_SOURCE),) and
+          current_contract["conditional_build_targets"] == ((
+              "leopard2_auto_gf16_gfni_production_test",
+              AUTO_GF16_GFNI_PRODUCTION_TEST_SOURCE),),
+          "current contract hookless test availability rule")
+    check("auto_gf16_gfni_production" not in
+          pre_auto_gfni_contract["run_tests"] and
+          "auto_gf16_gfni_production" not in
+          pre_auto_gfni_contract["test_specs"] and
+          "leopard2_auto_gf16_gfni_production_test" not in
+          pre_auto_gfni_contract["build_targets"],
+          "pre-AUTO-GFNI contract excludes hookless production test")
+    check(pre_auto_gfni_contract["gfni_backend_failure_tests"] ==
+          PRE_AUTO_GFNI_BACKEND_FAILURE_TESTS,
+          "pre-AUTO-GFNI explicit failure-test contract")
+    check(current_contract["backend_failure_ctest_regex"] ==
+          BACKEND_FAILURE_CTEST_REGEX,
+          "current AUTO GFNI fallback CTest regex")
+    check(pre_auto_gfni_contract["backend_failure_ctest_regex"] ==
+          PRE_AUTO_GFNI_BACKEND_FAILURE_CTEST_REGEX,
+          "pre-AUTO-GFNI fallback CTest regex")
     check("Leopard2BackendGFNI.cpp" in current_contract["source_files"],
           "current contract GFNI source")
     check("Leopard2BackendGFNI.cpp" not in
@@ -1500,8 +1765,11 @@ def self_test():
           current_contract["expected_compile_source_counts"],
           "current contract T2/K4 test compile closure")
     check(current_contract["expected_compile_source_counts"].get(
+              "tests/leopard2/direct_oracle.cpp") == 38,
+          "current contract direct-oracle compile closure")
+    check(pre_auto_gfni_contract["expected_compile_source_counts"].get(
               "tests/leopard2/direct_oracle.cpp") == 33,
-          "current contract T2/K4 direct-oracle compile closure")
+          "pre-AUTO-GFNI direct-oracle compile closure")
     check(historical_contract["expected_compile_source_counts"].get(
               "tests/leopard2/direct_oracle.cpp") == 14,
           "pre-GFNI contract direct-oracle compile closure")
@@ -1527,12 +1795,29 @@ def self_test():
               "current contract {} compile closure".format(label))
         check(source_name not in pre_t16_contract["source_files"],
               "pre-T16 contract excludes {} source".format(label))
+    for source_name in (
+            "Leopard2BackendAVX2T16K66.cpp",
+            "Leopard2BackendAVX2T16Q2.cpp",
+            "Leopard2BackendAVX2T8K62.cpp",
+            "Leopard2BackendAVX512GFNIT128.cpp",
+            "Leopard2BackendAVX512GFNIT16.cpp"):
+        check(source_name in current_contract["source_files"],
+              "current contract new source: " + source_name)
+        check(source_name not in pre_auto_gfni_contract["source_files"],
+              "pre-AUTO-GFNI contract excludes source: " + source_name)
     for option in CURRENT_PRODUCTION_OBJECT_OPTIONS:
         check(option in current_contract["build_cache_keys"],
               "current contract object option provenance: " + option)
         check(option not in pre_t16_contract["build_cache_keys"],
               "pre-T16 contract excludes object option provenance: " +
               option)
+    for option in PRE_AUTO_GFNI_PRODUCTION_OBJECT_OPTIONS:
+        check(option in pre_auto_gfni_contract["build_cache_keys"],
+              "pre-AUTO-GFNI retains object option: " + option)
+    for option in set(CURRENT_PRODUCTION_OBJECT_OPTIONS) - \
+            set(PRE_AUTO_GFNI_PRODUCTION_OBJECT_OPTIONS):
+        check(option not in pre_auto_gfni_contract["build_cache_keys"],
+              "pre-AUTO-GFNI excludes new object option: " + option)
     try:
         evidence_contract("leopard2-backend-matrix/v999")
     except ValueError:
@@ -1578,6 +1863,21 @@ def self_test():
         backend_failure_ctest_executed(failure_output),
         "complete backend failure CTest set",
     )
+    for name in BACKEND_FAILURE_TESTS:
+        check(re.match(BACKEND_FAILURE_CTEST_REGEX, name) is not None,
+              "backend failure regex covers " + name)
+    for name in (
+            "leopard2_backend_auto_gfni_encode_kat_fallback_extra",
+            "leopard2_backend_auto_gfni_encode_unknown",
+            "leopard2_backend_auto_gfni_decode_kat_fallback",
+            "leopard2_backend_auto_avx512_kat_fallback_extra"):
+        check(re.match(BACKEND_FAILURE_CTEST_REGEX, name) is None,
+              "backend failure regex rejects " + name)
+    for name in (AUTO_GFNI_ENCODE_GF16_FAILURE_TESTS +
+                 AUTO_GFNI_ENCODE_GF8_FAILURE_TESTS):
+        check(re.match(PRE_AUTO_GFNI_BACKEND_FAILURE_CTEST_REGEX, name)
+              is None,
+              "pre-AUTO-GFNI regex excludes " + name)
     check(
         backend_failure_ctest_executed(
             failure_output_for(BASE_BACKEND_FAILURE_TESTS),
@@ -1608,6 +1908,30 @@ def self_test():
         ]}) == BASE_BACKEND_FAILURE_TESTS + GFNI_BACKEND_FAILURE_TESTS,
         "GFNI backend failure tests selected",
     )
+    for label, field_cache in (
+            ("no-field", {
+                "LEOPARD_ENABLE_GF8": "OFF",
+                "LEOPARD_ENABLE_GF16": "OFF",
+            }),
+            ("GF16-only", {
+                "LEOPARD_ENABLE_GF8": "OFF",
+                "LEOPARD_ENABLE_GF16": "ON",
+            }),
+            ("GF8-only", {
+                "LEOPARD_ENABLE_GF8": "ON",
+                "LEOPARD_ENABLE_GF16": "OFF",
+            })):
+        try:
+            backend_failure_tests_for_build({
+                "cache": field_cache,
+                "compile_commands": [{"file": "Leopard2BackendGFNI.cpp"}],
+            })
+        except MatrixError as error:
+            rejected = str(error) == \
+                "backend-failure model requires dual-field build"
+        else:
+            rejected = False
+        check(rejected, label + " backend-failure model rejected")
     check(
         backend_failure_tests_for_build({"compile_commands": [
             {"file": "Leopard2BackendAVX512.cpp"},
@@ -1716,12 +2040,19 @@ def self_test():
           "AVX2 low P32/B64 object excluded without compiler probe")
     check("tests/leopard2/test_t2_k4_production.cpp" not in no_isa,
           "AVX2 T2/K4 test excluded without compiler probe")
-    check(no_isa.get("tests/leopard2/direct_oracle.cpp") == 14,
-          "T2/K4 direct-oracle compile excluded without compiler probe")
+    check("tests/leopard2/test_high_t32_tiny_schedule_policy.cpp" not in
+          no_isa,
+          "AVX2 high-T32 policy test excluded without compiler probe")
+    check("tests/leopard2/test_small_direct_exhaustive.cpp" not in no_isa,
+          "AVX2 small-direct exhaustive test excluded without compiler probe")
+    check(no_isa.get("tests/leopard2/direct_oracle.cpp") == 29,
+          "AVX2 direct-oracle additions excluded without compiler probe")
     check("Leopard2BackendAVX512.cpp" not in no_isa,
           "AVX-512 object excluded without compiler probe")
     check("Leopard2BackendGFNI.cpp" not in no_isa,
           "GFNI object excluded without compiler probe")
+    check("tests/leopard2/test_auto_gf16_gfni_production.cpp" not in no_isa,
+          "hookless AUTO GF16/GFNI test excluded without GFNI probe")
     avx2_only = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
         "LEO2_FLAG_MNO_AVX": "1",
@@ -1746,12 +2077,17 @@ def self_test():
           "AVX2 low P32/B64 compile-source count")
     check(avx2_only.get("tests/leopard2/test_t2_k4_production.cpp") == 1,
           "AVX2 T2/K4 test compile-source count")
-    check(avx2_only.get("tests/leopard2/direct_oracle.cpp") == 33,
-          "AVX2 T2/K4 direct-oracle compile-source count")
+    check(avx2_only.get("tests/leopard2/direct_oracle.cpp") == 38,
+          "AVX2 direct-oracle compile-source count")
     check("Leopard2BackendAVX512.cpp" not in avx2_only,
           "AVX-512 object excluded from AVX2-only probes")
     check("Leopard2BackendGFNI.cpp" not in avx2_only,
           "GFNI object excluded from AVX2-only probes")
+    check(build_targets_for_build({"compile_commands": []}) ==
+          PRE_AUTO_GFNI_BUILD_TARGETS and
+          run_tests_for_build({"compile_commands": []}) ==
+          PRE_AUTO_GFNI_RUN_TESTS,
+          "hookless production test omitted without GFNI source")
     t16_off = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
         "LEO2_FLAG_MNO_AVX": "1",
@@ -1763,6 +2099,23 @@ def self_test():
           "T16/B64 object excluded when experiment is disabled")
     check(t16_off.get("Leopard2BackendAVX2T2K4.cpp") == 1,
           "T2/K4 object retained when T16/B64 is disabled")
+    check(t16_off.get("tests/leopard2/direct_oracle.cpp") == 36,
+          "T16/B64 direct-oracle tests follow their experiment")
+    check(all(source not in t16_off for source in (
+              "tests/leopard2/test_t16_prepared_terminal.cpp",
+              "tests/leopard2/test_t16_prepared_terminal_production.cpp")),
+          "T16/B64 sibling tests follow their experiment")
+    t16_q2_off = expected_compile_source_counts({
+        "LEO2_FLAG_MSSSE3": "1",
+        "LEO2_FLAG_MNO_AVX": "1",
+        "LEO2_FLAG_MAVX2": "1",
+        "LEO2_FLAG_MNO_AVX512F": "1",
+        "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "OFF",
+    })
+    check(t16_q2_off.get("tests/leopard2/direct_oracle.cpp") == 37,
+          "T16/Q2 direct-oracle test follows its experiment")
+    check("tests/leopard2/test_t16_q2_b64_fused.cpp" not in t16_q2_off,
+          "T16/Q2 sibling test follows its experiment")
     t32_off = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
         "LEO2_FLAG_MNO_AVX": "1",
@@ -1773,6 +2126,12 @@ def self_test():
     })
     check("Leopard2BackendAVX2T32B256.cpp" not in t32_off,
           "T32/B256 object excluded when both selectors are disabled")
+    check(t32_off.get("tests/leopard2/direct_oracle.cpp") == 37,
+          "T32/B256 direct-oracle test follows both selectors")
+    check(t32_off.get(
+              "tests/leopard2/test_balanced_b64_terminal_production.cpp") ==
+          1,
+          "T32/B256 shared production source follows both selectors")
     p32_off = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
         "LEO2_FLAG_MNO_AVX": "1",
@@ -1782,6 +2141,61 @@ def self_test():
     })
     check("Leopard2LowP32B64AVX2.cpp" not in p32_off,
           "low P32/B64 object excluded when its selector is disabled")
+    check(p32_off.get("tests/leopard2/direct_oracle.cpp") == 37,
+          "low P32/B64 direct-oracle test follows its selector")
+    check("tests/leopard2/test_low_p32_b64_terminal.cpp" not in p32_off,
+          "low P32/B64 sibling test follows its selector")
+    one_shot_off = expected_compile_source_counts({
+        "LEO2_FLAG_MSSSE3": "1",
+        "LEO2_FLAG_MNO_AVX": "1",
+        "LEO2_FLAG_MAVX2": "1",
+        "LEO2_FLAG_MNO_AVX512F": "1",
+        "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "OFF",
+    })
+    check(one_shot_off.get("tests/leopard2/direct_oracle.cpp") == 37,
+          "one-shot direct-oracle test follows its experiment")
+    check("tests/leopard2/test_k8r4_one_shot_direct.cpp" not in one_shot_off,
+          "one-shot sibling test follows its experiment")
+    t8_two_block_off = expected_compile_source_counts({
+        "LEO2_FLAG_MSSSE3": "1",
+        "LEO2_FLAG_MNO_AVX": "1",
+        "LEO2_FLAG_MAVX2": "1",
+        "LEO2_FLAG_MNO_AVX512F": "1",
+        "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "OFF",
+    })
+    check(t8_two_block_off.get("tests/leopard2/direct_oracle.cpp") == 36,
+          "T8 two-block direct-oracle tests follow their experiment")
+    check("tests/leopard2/test_k16r8_b256_terminal.cpp" not in
+          t8_two_block_off and
+          "tests/leopard2/test_k9r5_b256_terminal.cpp" not in
+          t8_two_block_off,
+          "T8 two-block sibling tests follow their experiment")
+    high_t8_disabled = expected_compile_source_counts({
+        "LEO2_FLAG_MSSSE3": "1",
+        "LEO2_FLAG_MNO_AVX": "1",
+        "LEO2_FLAG_MAVX2": "1",
+        "LEO2_FLAG_MNO_AVX512F": "1",
+        "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "ON",
+    })
+    check(high_t8_disabled.get("tests/leopard2/direct_oracle.cpp") == 34,
+          "disabled high-T8 direct-oracle families are excluded")
+    check(all(source not in high_t8_disabled for source in (
+              "tests/leopard2/test_k8r8_b64_terminal.cpp",
+              "tests/leopard2/test_k8r8_b64_terminal_production.cpp",
+              "tests/leopard2/test_k16r8_b256_terminal.cpp",
+              "tests/leopard2/test_k9r5_b256_terminal.cpp")),
+          "disabled high-T8 sibling-test families are excluded")
+    high_t8_disabled_two_block_off = expected_compile_source_counts({
+        "LEO2_FLAG_MSSSE3": "1",
+        "LEO2_FLAG_MNO_AVX": "1",
+        "LEO2_FLAG_MAVX2": "1",
+        "LEO2_FLAG_MNO_AVX512F": "1",
+        "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "ON",
+        "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "OFF",
+    })
+    check(high_t8_disabled_two_block_off.get(
+              "tests/leopard2/direct_oracle.cpp") == 34,
+          "overlapping high-T8 gates subtract each target only once")
     gfni_only = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
         "LEO2_FLAG_MNO_AVX": "1",
@@ -1791,34 +2205,38 @@ def self_test():
     })
     check(gfni_only.get("Leopard2BackendGFNI.cpp") == 2,
           "GFNI compile-source count")
+    check(gfni_only.get(
+              "tests/leopard2/test_auto_gf16_gfni_production.cpp") == 1,
+          "hookless AUTO GF16/GFNI test compile-source count")
+    gfni_test_identity = {"compile_commands": [{
+        "file": AUTO_GF16_GFNI_PRODUCTION_TEST_SOURCE,
+    }]}
+    check(build_targets_for_build(gfni_test_identity) == BUILD_TARGETS and
+          run_tests_for_build(gfni_test_identity) == RUN_TESTS,
+          "hookless production test selected with GFNI source")
     check("Leopard2BackendAVX512.cpp" not in gfni_only,
           "AVX-512 object excluded from GFNI-only probes")
-    gf16_only = expected_compile_source_counts({
-        "LEO2_FLAG_MSSSE3": "1",
-        "LEO2_FLAG_MNO_AVX": "1",
-        "LEO2_FLAG_MAVX2": "1",
-        "LEO2_FLAG_MNO_AVX512F": "1",
-        "LEOPARD_ENABLE_GF8": "OFF",
-        "LEOPARD_ENABLE_GF16": "ON",
-    })
-    check("Leopard2BackendAVX2Xor.cpp" not in gf16_only,
-          "GF8-only AVX2 XOR object excluded from GF16 build")
-    check("Leopard2BackendAVX2T2K4.cpp" not in gf16_only,
-          "GF8-only AVX2 T2/K4 object excluded from GF16 build")
-    check("Leopard2BackendAVX2T8K8B1024.cpp" not in gf16_only,
-          "GF8-only AVX2 T8/K8/B1024 object excluded from GF16 build")
-    check("Leopard2BackendAVX2T16B64.cpp" not in gf16_only,
-          "GF8-only AVX2 T16/B64 object excluded from GF16 build")
-    check("Leopard2BackendAVX2T32B256.cpp" not in gf16_only,
-          "GF8-only AVX2 T32/B256 object excluded from GF16 build")
-    check("Leopard2LowP32B64AVX2.cpp" not in gf16_only,
-          "GF8-only AVX2 low P32/B64 object excluded from GF16 build")
-    check("tests/leopard2/test_t2_k4_production.cpp" not in gf16_only,
-          "GF8-only AVX2 T2/K4 test excluded from GF16 build")
-    check(gf16_only.get("tests/leopard2/direct_oracle.cpp") == 14,
-          "GF8-only T2/K4 direct-oracle compile excluded from GF16 build")
-    check(gf16_only.get("Leopard2BackendAVX2.cpp") == 2,
-          "AVX2 object retained in GF16 build")
+    for label, field_cache in (
+            ("no-field", {
+                "LEOPARD_ENABLE_GF8": "OFF",
+                "LEOPARD_ENABLE_GF16": "OFF",
+            }),
+            ("GF16-only", {
+                "LEOPARD_ENABLE_GF8": "OFF",
+                "LEOPARD_ENABLE_GF16": "ON",
+            }),
+            ("GF8-only", {
+                "LEOPARD_ENABLE_GF8": "ON",
+                "LEOPARD_ENABLE_GF16": "OFF",
+            })):
+        try:
+            expected_compile_source_counts(field_cache)
+        except MatrixError as error:
+            rejected = str(error) == \
+                "compile-source model requires dual-field build"
+        else:
+            rejected = False
+        check(rejected, label + " compile-source model rejected")
     all_isa = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
         "LEO2_FLAG_MNO_AVX": "1",
