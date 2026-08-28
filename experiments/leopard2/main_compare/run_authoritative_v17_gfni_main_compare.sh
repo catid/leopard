@@ -93,7 +93,7 @@ tools_to_hash=(
 require_empty_output()
 {
     local observed_output
-    observed_output="$("$@")"
+    observed_output="$("$@")" || return 1
     test -z "$observed_output"
 }
 
@@ -104,6 +104,7 @@ install_build_order_normalizer()
     /usr/bin/tee "$normalizer_output" >/dev/null <<'PY'
 #!/usr/bin/python3
 import argparse
+from collections import Counter, defaultdict
 import hashlib
 import json
 import os
@@ -114,15 +115,21 @@ import shutil
 import stat
 import tempfile
 
-SCHEMA = "leopard2-v17-candidate-build-order-normalization/v1"
+SCHEMA = "leopard2-v17-candidate-build-order-normalization/v3"
 EXCEPTIONS = ("compile_commands.json", "CMakeFiles/Makefile2")
 COMPILE_KEYS = {"command", "directory", "file", "output"}
+TEMPLATE_BUILD = b"${BUILD}"
+TEMPLATE_SOURCE = b"${SOURCE}"
+TEMPLATE_COMMIT = b"${COMMIT}"
 MAKE_RULE = re.compile(
     r"^(CMakeFiles/[A-Za-z0-9_.+@-]+\.dir/all): "
     r"(CMakeFiles/[A-Za-z0-9_.+@-]+\.dir/all)\n$")
+MAKE_RULE_LIKE = re.compile(
+    r"^(CMakeFiles/[A-Za-z0-9_.+@-]+\.dir/all)[ \t]*:+[ \t]*"
+    r"(CMakeFiles/[A-Za-z0-9_.+@-]+\.dir/all)[ \t]*\n$")
 ORDER_SENSITIVE_AUTOMATIC = re.compile(
     r"\$(?:[<^+?|]|\([<^+?|](?:[DF])?\)|\{[<^+?|](?:[DF])?\})")
-MAKE_BLOCKS = (
+COMMON_MAKE_BLOCKS = (
     (
         "CMakeFiles/leopard.dir/all",
         (
@@ -160,6 +167,77 @@ MAKE_BLOCKS = (
         ),
     ),
 )
+TEST_HOOKS_BLOCK = (
+    "CMakeFiles/leopard_test_hooks.dir/all",
+    (
+        "CMakeFiles/leopard2_backend_avx2_t16_b64.dir/all",
+        "CMakeFiles/leopard2_backend_avx2_t16_k66.dir/all",
+        "CMakeFiles/leopard2_backend_avx2_t2_k4.dir/all",
+        "CMakeFiles/leopard2_backend_avx2_t8_k8_b1024.dir/all",
+        "CMakeFiles/leopard2_backend_avx2_test_hooks.dir/all",
+        "CMakeFiles/leopard2_backend_gfni_test_hooks.dir/all",
+        "CMakeFiles/leopard2_backend_ssse3_test_hooks.dir/all",
+        "CMakeFiles/leopard2_low_p32_b64_avx2.dir/all",
+    ),
+)
+DIRECT_ENCODE_BLOCK = (
+    "CMakeFiles/bench_leopard2_direct_encode.dir/all",
+    (
+        "CMakeFiles/leopard2_benchmark_source_attestation_refresh.dir/all",
+        "CMakeFiles/leopard_test_hooks.dir/all",
+    ),
+)
+PROFILES = {
+    "candidate-timing": {
+        "compile_entry_count": 30,
+        "compiler_counts": {"/usr/bin/c++": 30},
+        "compile_output_list_sha256":
+            "a39c7e87cc0a506148faaa4023b11f96c2e26b22c103584a62b62ae91f2387b7",
+        "compile_template_sha256":
+            "6ad3a97ffe31f4eaf5c8f2ff5459dd310635e6e430181c460d9803f11cc5fb28",
+        "make_blocks": COMMON_MAKE_BLOCKS,
+        "make_normalized_targets": frozenset(
+            target for target, _prerequisites in COMMON_MAKE_BLOCKS),
+        "make_template_sha256":
+            "5ab77166d931546b1cb998cfdf4eb5c7dd1850994b2eef65d8c5e627a3899a62",
+        "node_census_count": 131,
+        "node_census_sha256":
+            "d3194ea1135fbdc0067cd3af72693cbf27d1e28a4734804b52bf5be1a3f37aca",
+        "profile_sha256":
+            "d2a07561d2e5919051c2b7d7464f6aa844752e42e92099190feeea004f2716b3",
+        "single_c_record": None,
+        "template_origin":
+            "rederived from sealed v1 candidate timing closure",
+    },
+    "candidate-tests": {
+        "compile_entry_count": 170,
+        "compiler_counts": {"/usr/bin/c++": 169, "/usr/bin/cc": 1},
+        "compile_output_list_sha256":
+            "8aeea7120bbbe5e3f5e71059b29007b4fb3e01b153c55f0aa874c45de9e48574",
+        "compile_template_sha256":
+            "dda169bcd458db8b17c09c1e8873c9342731a4c5639874849ad87d3c1003badb",
+        "make_blocks":
+            COMMON_MAKE_BLOCKS + (TEST_HOOKS_BLOCK, DIRECT_ENCODE_BLOCK),
+        "make_normalized_targets": frozenset(
+            target for target, _prerequisites in
+            COMMON_MAKE_BLOCKS + (TEST_HOOKS_BLOCK, DIRECT_ENCODE_BLOCK)),
+        "make_template_sha256":
+            "c56eb276850e7acbc5242e91c26b8fecf993040feeeb88b56596a189924a8479",
+        "node_census_count": 556,
+        "node_census_sha256":
+            "2fa17fb9bb1458ea2bb7c361de077323e6f0a55359ba137eb445d231dd13d24b",
+        "profile_sha256":
+            "bead85b797c0e9966d4f09ba5b18b48739a350f550f831d1afa5bd2ae68dfa69",
+        "single_c_record": {
+            "output":
+                "CMakeFiles/leopard2_codec_options_abi_test.dir/"
+                "tests/leopard2/test_codec_options_abi.c.o",
+            "source": "tests/leopard2/test_codec_options_abi.c",
+        },
+        "template_origin":
+            "rederived from sealed v1/v2 candidate correctness closures",
+    },
+}
 
 
 class ContractError(RuntimeError):
@@ -180,6 +258,103 @@ def canonical_json(value, final_lf=True):
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return encoded + (b"\n" if final_lf else b"")
+
+
+def profile_document(profile_name, profile):
+    return {
+        "compile_commands": {
+            "compiler_counts": profile["compiler_counts"],
+            "entry_count": profile["compile_entry_count"],
+            "output_list_sha256": profile["compile_output_list_sha256"],
+            "single_c_record": profile["single_c_record"],
+            "whole_file_template_sha256":
+                profile["compile_template_sha256"],
+        },
+        "makefile2": {
+            "normalized_targets":
+                sorted(profile["make_normalized_targets"]),
+            "validated_blocks": [
+                {"prerequisites": list(prerequisites), "target": target}
+                for target, prerequisites in profile["make_blocks"]
+            ],
+            "whole_file_template_sha256": profile["make_template_sha256"],
+        },
+        "name": profile_name,
+        "node_census": {
+            "count": profile["node_census_count"],
+            "relative_path_type_mode_sha256":
+                profile["node_census_sha256"],
+        },
+        "schema": "leopard2-v17-build-order-profile/v2",
+        "template_path_tokens": {
+            "build": TEMPLATE_BUILD.decode("ascii"),
+            "commit": TEMPLATE_COMMIT.decode("ascii"),
+            "source": TEMPLATE_SOURCE.decode("ascii"),
+        },
+    }
+
+
+def profile_contract(profile_name):
+    require(profile_name in PROFILES, "unknown normalization profile")
+    profile = PROFILES[profile_name]
+    require(profile["compile_entry_count"] ==
+            sum(profile["compiler_counts"].values()),
+            "normalization profile compiler census is inconsistent")
+    require(set(profile["make_normalized_targets"]).issubset(
+            {target for target, _dependencies in profile["make_blocks"]}),
+            "normalization profile target map is inconsistent")
+    require(isinstance(profile["node_census_count"], int) and
+            profile["node_census_count"] > 0,
+            "normalization profile node census is invalid")
+    for key in (
+            "compile_output_list_sha256", "compile_template_sha256",
+            "make_template_sha256", "node_census_sha256", "profile_sha256"):
+        require(re.fullmatch(r"[0-9a-f]{64}", profile[key]) is not None,
+                "normalization profile has an invalid template digest")
+    require(sha256_bytes(canonical_json(
+        profile_document(profile_name, profile))) == profile["profile_sha256"],
+        "normalization profile digest differs")
+    return profile
+
+
+def exact_commit(value, label):
+    require(isinstance(value, str) and
+            re.fullmatch(r"[0-9a-f]{40}", value) is not None,
+            label + " is not an exact lowercase 40-hex commit")
+    encoded = value.encode("ascii")
+    require(all(token not in encoded for token in (
+                TEMPLATE_BUILD, TEMPLATE_SOURCE, TEMPLATE_COMMIT)),
+            label + " collides with a reserved template token")
+    return value
+
+
+def canonical_template(
+        value, expected_build, expected_source, expected_commit, label,
+        commit_required=False):
+    build = expected_build.encode("utf-8")
+    source = expected_source.encode("utf-8")
+    commit = exact_commit(expected_commit, "expected commit").encode("ascii")
+    require(build != source and build not in source and source not in build,
+            label + " has overlapping expected path prefixes")
+    require(commit not in build and commit not in source,
+            label + " has an expected commit embedded in a path prefix")
+    require(all(token not in value for token in (
+                TEMPLATE_BUILD, TEMPLATE_SOURCE, TEMPLATE_COMMIT)),
+            label + " already contains a reserved template token")
+    require(build in value and source in value,
+            label + " omits an expected path prefix")
+    if commit_required:
+        require(commit in value, label + " omits the expected commit")
+    templated = value.replace(build, TEMPLATE_BUILD)
+    templated = templated.replace(source, TEMPLATE_SOURCE)
+    templated = templated.replace(commit, TEMPLATE_COMMIT)
+    if commit_required:
+        require(TEMPLATE_COMMIT in templated,
+                label + " did not produce the expected commit token")
+    require(build not in templated and source not in templated and
+            commit not in templated,
+            label + " retained an expected input after templating")
+    return templated
 
 
 def strict_object(pairs):
@@ -314,7 +489,20 @@ def snapshot_tree(root, label):
     return nodes, file_bytes
 
 
-def normalize_compile_commands(raw, expected_build, expected_source):
+def relative_node_census(nodes):
+    return [
+        {
+            "mode": nodes[path]["mode"],
+            "path": path,
+            "type": nodes[path]["type"],
+        }
+        for path in sorted(nodes)
+    ]
+
+
+def normalize_compile_commands(
+        raw, expected_build, expected_source, expected_commit, profile_name):
+    profile = profile_contract(profile_name)
     require(raw and not raw.endswith(b"\n") and b"\r" not in raw,
             "compile_commands.json source framing changed")
     try:
@@ -325,11 +513,15 @@ def normalize_compile_commands(raw, expected_build, expected_source):
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ContractError("compile_commands.json is not strict UTF-8 JSON") from error
-    require(isinstance(value, list) and len(value) == 30,
-            "compile_commands.json does not have exactly 30 entries")
+    require(isinstance(value, list) and
+            len(value) == profile["compile_entry_count"],
+            "compile_commands.json entry count differs for profile " +
+            profile_name)
     require(render_cmake_compile_commands(value) == raw,
             "compile_commands.json differs from the exact CMake formatter")
     outputs = set()
+    compiler_counts = Counter()
+    c_records = []
     normalized = []
     source_prefix = expected_source + os.sep
     for index, record in enumerate(value):
@@ -363,9 +555,10 @@ def normalize_compile_commands(raw, expected_build, expected_source):
             tokens = shlex.split(command, posix=True)
         except ValueError as error:
             raise ContractError(label + " command is not shell-tokenizable") from error
-        require(tokens and tokens[0] == "/usr/bin/c++" and
+        require(tokens and tokens[0] in profile["compiler_counts"] and
                 tokens.count("-o") == 1 and tokens.count("-c") == 1,
                 label + " command has an unexpected compiler/output/source form")
+        compiler_counts[tokens[0]] += 1
         output_index = tokens.index("-o")
         source_index = tokens.index("-c")
         require(output_index + 1 < len(tokens) and
@@ -373,17 +566,58 @@ def normalize_compile_commands(raw, expected_build, expected_source):
                 source_index + 1 < len(tokens) and
                 tokens[source_index + 1] == source_file,
                 label + " command/output/source fields disagree")
+        if tokens[0] == "/usr/bin/cc":
+            c_records.append({"output": output, "source": source_file})
         normalized.append(record)
+    require(dict(compiler_counts) == profile["compiler_counts"],
+            "compile_commands.json compiler census differs for profile " +
+            profile_name)
+    expected_c_record = profile["single_c_record"]
+    if expected_c_record is None:
+        require(not c_records,
+                "compile_commands.json unexpectedly contains a C compiler record")
+    else:
+        require(c_records == [{
+            "output": expected_c_record["output"],
+            "source": expected_source + os.sep + expected_c_record["source"],
+        }], "compile_commands.json C compiler record differs")
     normalized.sort(key=lambda record: record["output"])
-    return render_cmake_compile_commands(normalized), {
+    canonical = render_cmake_compile_commands(normalized)
+    templated = canonical_template(
+        canonical, expected_build, expected_source, expected_commit,
+        "compile_commands.json canonical template", commit_required=True)
+    output_list = canonical_json(sorted(outputs))
+    template_sha256 = sha256_bytes(templated)
+    output_list_sha256 = sha256_bytes(output_list)
+    require(template_sha256 == profile["compile_template_sha256"],
+            "compile_commands.json closed-world template differs for profile " +
+            profile_name)
+    require(output_list_sha256 == profile["compile_output_list_sha256"],
+            "compile_commands.json output census differs for profile " +
+            profile_name)
+    return canonical, templated, output_list, {
+        "compiler_counts": dict(sorted(compiler_counts.items())),
         "entry_count": len(normalized),
         "exact_cmake_rendering": True,
+        "expected_output_list_sha256":
+            profile["compile_output_list_sha256"],
+        "expected_template_sha256": profile["compile_template_sha256"],
+        "output_list_sha256": output_list_sha256,
         "source_final_lf": False,
+        "template_algorithm":
+            "canonicalize then replace exact expected path bytes with "
+            "${BUILD} and ${SOURCE}, then replace the exact expected commit "
+            "with ${COMMIT}",
+        "template_sha256": template_sha256,
+        "template_size": len(templated),
         "unique_output_count": len(outputs),
+        "whole_file_template": True,
     }
 
 
-def normalize_makefile2(raw, expected_build, expected_source):
+def normalize_makefile2(
+        raw, expected_build, expected_source, expected_commit, profile_name):
+    profile = profile_contract(profile_name)
     require(raw.endswith(b"\n") and b"\r" not in raw and b"\x00" not in raw,
             "Makefile2 source framing changed")
     try:
@@ -402,15 +636,27 @@ def normalize_makefile2(raw, expected_build, expected_source):
     require(ORDER_SENSITIVE_AUTOMATIC.search(text) is None,
             "Makefile2 contains an order-sensitive automatic variable")
     expected_blocks = {target: tuple(prerequisites)
-                       for target, prerequisites in MAKE_BLOCKS}
-    positions = {target: [] for target in expected_blocks}
+                       for target, prerequisites in profile["make_blocks"]}
+    all_positions = defaultdict(list)
     for index, line in enumerate(lines):
+        rule_like = MAKE_RULE_LIKE.fullmatch(line)
+        if rule_like is not None:
+            require(MAKE_RULE.fullmatch(line) is not None,
+                    "Makefile2 has a noncanonical .dir/all dependency rule: " +
+                    rule_like.group(1))
         match = MAKE_RULE.fullmatch(line)
-        if match and match.group(1) in positions:
-            positions[match.group(1)].append((index, match.group(2)))
+        if match:
+            all_positions[match.group(1)].append((index, match.group(2)))
+    multi_prerequisite_targets = {
+        target for target, observed in all_positions.items()
+        if len(observed) >= 2
+    }
+    require(multi_prerequisite_targets == set(expected_blocks),
+            "Makefile2 multi-prerequisite target allowlist is incomplete")
+    positions = {target: all_positions[target] for target in expected_blocks}
     output = list(lines)
     block_report = []
-    for target, prerequisites in MAKE_BLOCKS:
+    for target, prerequisites in profile["make_blocks"]:
         observed = positions[target]
         require(len(observed) == len(prerequisites),
                 "Makefile2 allowlisted block length differs: " + target)
@@ -434,19 +680,50 @@ def normalize_makefile2(raw, expected_build, expected_source):
                 "Makefile2 allowlisted target recipe context differs: " + target)
         require(ORDER_SENSITIVE_AUTOMATIC.search("".join(recipe)) is None,
                 "Makefile2 allowlisted recipe is order-sensitive: " + target)
-        output[start:end] = sorted(output[start:end])
+        normalized = target in profile["make_normalized_targets"]
+        if normalized:
+            output[start:end] = sorted(output[start:end])
         block_report.append({
             "line_count": len(indexes),
+            "normalized": normalized,
             "phony_marker_count": len(phony_indexes),
             "recipe_line_count": len(recipe),
             "target": target,
         })
-    require(len(block_report) == 4,
-            "Makefile2 does not have exactly four normalized blocks")
-    return "".join(output).encode("utf-8"), {
-        "normalized_blocks": block_report,
-        "normalized_block_count": len(block_report),
+    normalized_count = sum(block["normalized"] for block in block_report)
+    require(len(block_report) == len(profile["make_blocks"]),
+            "Makefile2 validated block census differs for profile " +
+            profile_name)
+    require(normalized_count == len(profile["make_normalized_targets"]),
+            "Makefile2 normalized block census differs for profile " +
+            profile_name)
+    canonical = "".join(output).encode("utf-8")
+    templated = canonical_template(
+        canonical, expected_build, expected_source, expected_commit,
+        "Makefile2 canonical template")
+    template_sha256 = sha256_bytes(templated)
+    require(template_sha256 == profile["make_template_sha256"],
+            "Makefile2 closed-world template differs for profile " +
+            profile_name)
+    return canonical, templated, {
+        "all_allowlisted_lhs_colon_forms_validated": True,
+        "all_multi_prerequisite_targets_allowlisted": True,
+        "expected_template_sha256": profile["make_template_sha256"],
+        "multi_prerequisite_target_count":
+            len(multi_prerequisite_targets),
+        "multi_prerequisite_targets":
+            sorted(multi_prerequisite_targets),
+        "normalized_block_count": normalized_count,
         "source_final_lf": True,
+        "template_algorithm":
+            "canonicalize then replace exact expected path bytes with "
+            "${BUILD} and ${SOURCE}, then replace the exact expected commit "
+            "with ${COMMIT}",
+        "template_sha256": template_sha256,
+        "template_size": len(templated),
+        "validated_block_count": len(block_report),
+        "validated_blocks": block_report,
+        "whole_file_template": True,
     }
 
 
@@ -467,9 +744,13 @@ def write_exclusive(path, value):
         os.close(descriptor)
 
 
-def compare_pair(left, right, expected_build, expected_source, output_dir):
+def compare_pair(
+        left, right, expected_build, expected_source, expected_commit,
+        output_dir, profile_name):
+    profile = profile_contract(profile_name)
     expected_build = exact_absolute(expected_build, "expected build path")
     expected_source = exact_absolute(expected_source, "expected source path")
+    expected_commit = exact_commit(expected_commit, "expected commit")
     left = Path(exact_absolute(str(left), "left closure path"))
     right = Path(exact_absolute(str(right), "right closure path"))
     output_dir = Path(exact_absolute(str(output_dir), "normalization output path"))
@@ -477,32 +758,59 @@ def compare_pair(left, right, expected_build, expected_source, output_dir):
     output_dir.mkdir(mode=0o700)
     left_nodes, left_files = snapshot_tree(left, "left closure")
     right_nodes, right_files = snapshot_tree(right, "right closure")
-    require(left_nodes == right_nodes, "closure path/type census differs")
+    require(left_nodes == right_nodes,
+            "closure path/type/mode/ownership/link census differs")
+    node_census = relative_node_census(left_nodes)
+    node_census_sha256 = sha256_bytes(canonical_json(node_census))
+    require(len(node_census) == profile["node_census_count"] and
+            node_census_sha256 == profile["node_census_sha256"],
+            "closed-world relative node/type/mode census differs for profile " +
+            profile_name)
     for relative in sorted(left_files):
         if relative not in EXCEPTIONS:
             require(left_files[relative] == right_files[relative],
                     "nonexception closure bytes differ: " + relative)
 
-    left_compile, left_compile_report = normalize_compile_commands(
-        left_files[EXCEPTIONS[0]], expected_build, expected_source)
-    right_compile, right_compile_report = normalize_compile_commands(
-        right_files[EXCEPTIONS[0]], expected_build, expected_source)
-    left_make, left_make_report = normalize_makefile2(
-        left_files[EXCEPTIONS[1]], expected_build, expected_source)
-    right_make, right_make_report = normalize_makefile2(
-        right_files[EXCEPTIONS[1]], expected_build, expected_source)
+    left_compile, left_compile_template, left_compile_outputs, \
+        left_compile_report = \
+        normalize_compile_commands(
+            left_files[EXCEPTIONS[0]], expected_build, expected_source,
+            expected_commit, profile_name)
+    right_compile, right_compile_template, right_compile_outputs, \
+        right_compile_report = \
+        normalize_compile_commands(
+            right_files[EXCEPTIONS[0]], expected_build, expected_source,
+            expected_commit, profile_name)
+    left_make, left_make_template, left_make_report = normalize_makefile2(
+        left_files[EXCEPTIONS[1]], expected_build, expected_source,
+        expected_commit, profile_name)
+    right_make, right_make_template, right_make_report = normalize_makefile2(
+        right_files[EXCEPTIONS[1]], expected_build, expected_source,
+        expected_commit, profile_name)
 
     outputs = {
         "left-compile_commands.canonical.json": left_compile,
+        "left-compile_outputs.canonical.json": left_compile_outputs,
+        "left-compile_commands.template.json": left_compile_template,
         "right-compile_commands.canonical.json": right_compile,
+        "right-compile_outputs.canonical.json": right_compile_outputs,
+        "right-compile_commands.template.json": right_compile_template,
         "left-Makefile2.canonical": left_make,
+        "left-Makefile2.template": left_make_template,
         "right-Makefile2.canonical": right_make,
+        "right-Makefile2.template": right_make_template,
     }
     for name, value in outputs.items():
         write_exclusive(output_dir / name, value)
     require(left_compile == right_compile,
             "compile_commands canonical semantics differ")
+    require(left_compile_outputs == right_compile_outputs,
+            "compile_commands output censuses differ")
+    require(left_compile_template == right_compile_template,
+            "compile_commands closed-world templates differ")
     require(left_make == right_make, "Makefile2 canonical semantics differ")
+    require(left_make_template == right_make_template,
+            "Makefile2 closed-world templates differ")
 
     raw_equal = all(left_files[path] == right_files[path]
                     for path in left_files)
@@ -530,11 +838,21 @@ def compare_pair(left, right, expected_build, expected_source, output_dir):
         },
         "contract": {
             "all_other_relative_file_bytes_identical": True,
-            "compile_commands_order_only": "sort 30 unique exact four-key records by output",
+            "closed_world_templates_verified": True,
+            "compile_commands_order_only":
+                "sort exactly {} unique exact four-key records by output".format(
+                    profile["compile_entry_count"]),
             "exception_paths": list(EXCEPTIONS),
             "makefile2_order_only":
-                "sort only four exact consecutive allowlisted dependency blocks",
+                "sort only exact profile-allowlisted consecutive dependency blocks",
+            "operation": "compare",
+            "profile": profile_name,
             "raw_tree_file_bytes_identical": raw_equal,
+            "template_path_tokens": {
+                "build": TEMPLATE_BUILD.decode("ascii"),
+                "commit": TEMPLATE_COMMIT.decode("ascii"),
+                "source": TEMPLATE_SOURCE.decode("ascii"),
+            },
         },
         "exact_byte_files": {
             "count": len(exact_byte_files),
@@ -542,6 +860,7 @@ def compare_pair(left, right, expected_build, expected_source, output_dir):
             "manifest_sha256": sha256_bytes(canonical_json(exact_byte_files)),
         },
         "expected_build": expected_build,
+        "expected_commit": expected_commit,
         "expected_source": expected_source,
         "makefile2": {
             "canonical_sha256": sha256_bytes(left_make),
@@ -558,6 +877,27 @@ def compare_pair(left, right, expected_build, expected_source, output_dir):
             "count": len(inventory),
             "manifest": inventory,
             "manifest_sha256": sha256_bytes(canonical_json(inventory)),
+            "profile_relative_path_type_mode_count": len(node_census),
+            "profile_relative_path_type_mode_manifest": node_census,
+            "profile_relative_path_type_mode_sha256": node_census_sha256,
+        },
+        "profile_contract": {
+            "compile_entry_count": profile["compile_entry_count"],
+            "compile_output_list_sha256":
+                profile["compile_output_list_sha256"],
+            "compile_template_sha256": profile["compile_template_sha256"],
+            "compiler_counts": profile["compiler_counts"],
+            "make_normalized_targets":
+                sorted(profile["make_normalized_targets"]),
+            "make_template_sha256": profile["make_template_sha256"],
+            "make_validated_targets": [
+                target for target, _dependencies in profile["make_blocks"]],
+            "node_census_count": profile["node_census_count"],
+            "node_census_sha256": profile["node_census_sha256"],
+            "profile_sha256": profile["profile_sha256"],
+            "profile_document": profile_document(profile_name, profile),
+            "single_c_record": profile["single_c_record"],
+            "template_origin": profile["template_origin"],
         },
         "schema": SCHEMA,
         "semantic_equal": True,
@@ -566,14 +906,28 @@ def compare_pair(left, right, expected_build, expected_source, output_dir):
     return report
 
 
-def fixture_compile(build, source, reverse=False):
+def fixture_compile(
+        build, source, expected_commit, base_profile_name, reverse=False):
+    profile = profile_contract(base_profile_name)
     records = []
-    for index in range(30):
-        source_file = source + "/f{:02d}.cpp".format(index)
-        output = "CMakeFiles/t{:02d}.dir/f{:02d}.cpp.o".format(index, index)
+    c_record = profile["single_c_record"]
+    c_index = profile["compile_entry_count"] - 1 if c_record else None
+    for index in range(profile["compile_entry_count"]):
+        if index == c_index:
+            compiler = "/usr/bin/cc"
+            source_file = source + os.sep + c_record["source"]
+            output = c_record["output"]
+        else:
+            compiler = "/usr/bin/c++"
+            source_file = source + "/fixture/f{:03d}.cpp".format(index)
+            output = (
+                "CMakeFiles/fixture_{:03d}.dir/fixture/f{:03d}.cpp.o".format(
+                    index, index))
         records.append({
-            "command": "/usr/bin/c++ -DVALUE={} -o {} -c {}".format(
-                index, output, source_file),
+            "command":
+                "{} -DLEO2_FIXTURE_SOURCE_GIT_SHA={} -DVALUE={} "
+                "-o {} -c {}".format(
+                    compiler, expected_commit, index, output, source_file),
             "directory": build,
             "file": source_file,
             "output": output,
@@ -583,7 +937,8 @@ def fixture_compile(build, source, reverse=False):
     return render_cmake_compile_commands(records)
 
 
-def fixture_make(build, source, reverse=False):
+def fixture_make(build, source, base_profile_name, reverse=False):
+    profile = profile_contract(base_profile_name)
     lines = [
         "# CMAKE generated file: DO NOT EDIT!\n",
         "# Generated by fixture\n",
@@ -591,9 +946,9 @@ def fixture_make(build, source, reverse=False):
         "CMAKE_BINARY_DIR = " + build + "\n",
         "\n",
     ]
-    for target, prerequisites in MAKE_BLOCKS:
+    for target, prerequisites in profile["make_blocks"]:
         ordered = list(prerequisites)
-        if reverse:
+        if reverse and target in profile["make_normalized_targets"]:
             ordered.reverse()
         lines.extend(target + ": " + dependency + "\n"
                      for dependency in ordered)
@@ -605,14 +960,47 @@ def fixture_make(build, source, reverse=False):
     return "".join(lines).encode("utf-8")
 
 
-def install_fixture(root, build, source, reverse=False):
+def install_fixture(
+        root, build, source, expected_commit, base_profile_name,
+        reverse=False):
     root.mkdir()
     (root / "CMakeFiles").mkdir()
     (root / "compile_commands.json").write_bytes(
-        fixture_compile(build, source, reverse))
+        fixture_compile(
+            build, source, expected_commit, base_profile_name, reverse))
     (root / "CMakeFiles/Makefile2").write_bytes(
-        fixture_make(build, source, reverse))
+        fixture_make(build, source, base_profile_name, reverse))
     (root / "selected-object.o").write_bytes(b"exact-object-bytes\x00\xff")
+
+
+def install_fixture_profile(
+        profile_name, base_profile_name, build, source, expected_commit,
+        fixture_root):
+    require(profile_name not in PROFILES, "fixture profile already exists")
+    base_profile = profile_contract(base_profile_name)
+    profile = dict(base_profile)
+    records = json.loads(fixture_compile(
+        build, source, expected_commit, base_profile_name, False))
+    compile_canonical = render_cmake_compile_commands(
+        sorted(records, key=lambda record: record["output"]))
+    make_canonical = fixture_make(
+        build, source, base_profile_name, False)
+    profile["compile_output_list_sha256"] = sha256_bytes(
+        canonical_json(sorted(record["output"] for record in records)))
+    profile["compile_template_sha256"] = sha256_bytes(canonical_template(
+        compile_canonical, build, source, expected_commit,
+        "fixture compile template", commit_required=True))
+    profile["make_template_sha256"] = sha256_bytes(canonical_template(
+        make_canonical, build, source, expected_commit,
+        "fixture Makefile2 template"))
+    nodes, _files = snapshot_tree(fixture_root, "fixture profile closure")
+    node_census = relative_node_census(nodes)
+    profile["node_census_count"] = len(node_census)
+    profile["node_census_sha256"] = sha256_bytes(canonical_json(node_census))
+    profile["template_origin"] = "embedded adversarial self-test fixture"
+    profile["profile_sha256"] = sha256_bytes(canonical_json(
+        profile_document(profile_name, profile)))
+    PROFILES[profile_name] = profile
 
 
 def set_fixture_writable(root):
@@ -638,26 +1026,91 @@ def self_test():
         base = Path(tmp)
         build = "/tmp/leopard-v17-order-self-test/build"
         source = "/tmp/leopard-v17-order-self-test/source"
-        left = base / "left"
-        reordered = base / "reordered"
-        install_fixture(left, build, source, False)
-        install_fixture(reordered, build, source, True)
-        seal_fixture(left)
-        seal_fixture(reordered)
-        report = compare_pair(
-            left, reordered, build, source, base / "accepted")
-        require(report["semantic_equal"] is True and
-                report["contract"]["raw_tree_file_bytes_identical"] is False,
-                "reorder-only fixture was not qualified honestly")
+        expected_commit = "0123456789abcdef0123456789abcdef01234567"
+        alternate_commit = "89abcdef0123456789abcdef0123456789abcdef"
+        timing_profile = "self-test-candidate-timing"
+        tests_profile = "self-test-candidate-tests"
 
-        def rejected(name, mutate):
-            target = base / name
-            shutil.copytree(reordered, target, symlinks=True)
-            set_fixture_writable(target)
-            mutate(target)
-            seal_fixture(target)
+        closures = {}
+        for label, base_profile_name, fixture_profile_name in (
+                ("timing", "candidate-timing", timing_profile),
+                ("tests", "candidate-tests", tests_profile)):
+            left = base / (label + "-left")
+            reordered = base / (label + "-reordered")
+            install_fixture(
+                left, build, source, expected_commit, base_profile_name, False)
+            install_fixture(
+                reordered, build, source, expected_commit, base_profile_name,
+                True)
+            seal_fixture(left)
+            seal_fixture(reordered)
+            install_fixture_profile(
+                fixture_profile_name, base_profile_name, build, source,
+                expected_commit, left)
+            report = compare_pair(
+                left, reordered, build, source, expected_commit,
+                base / (label + "-accepted"), fixture_profile_name)
+            expected_validated = 4 if label == "timing" else 6
+            expected_normalized = 4 if label == "timing" else 6
+            require(report["semantic_equal"] is True and
+                    report["contract"]["profile"] == fixture_profile_name and
+                    report["contract"]["operation"] == "compare" and
+                    report["contract"]["raw_tree_file_bytes_identical"] is
+                    False and
+                    report["compile_commands"]["left"]["entry_count"] ==
+                    PROFILES[fixture_profile_name]["compile_entry_count"] and
+                    report["makefile2"]["left"]["validated_block_count"] ==
+                    expected_validated and
+                    report["makefile2"]["left"]["normalized_block_count"] ==
+                    expected_normalized and
+                    report["makefile2"]["left"]
+                        ["all_multi_prerequisite_targets_allowlisted"] is
+                    True and
+                    report["makefile2"]["left"]
+                        ["multi_prerequisite_target_count"] ==
+                    expected_validated and
+                    report["contract"]["closed_world_templates_verified"] is
+                    True and
+                    report["contract"]["template_path_tokens"] == {
+                        "build": "${BUILD}", "commit": "${COMMIT}",
+                        "source": "${SOURCE}"} and
+                    report["expected_commit"] == expected_commit,
+                    label + " reorder-only fixture was not qualified honestly")
+            alternate_raw = fixture_compile(
+                build, source, alternate_commit, base_profile_name, False)
+            _alternate_canonical, alternate_template, \
+                _alternate_outputs, _alternate_report = \
+                normalize_compile_commands(
+                    alternate_raw, build, source, alternate_commit,
+                    fixture_profile_name)
+            require(alternate_template == (base / (
+                        label + "-accepted/left-compile_commands.template.json"
+                    )).read_bytes(),
+                    label + " compile template is not commit-invariant")
+            closures[label] = (left, reordered, fixture_profile_name)
+
+        def rejected(
+                name, label="timing", mutate_left=None, mutate_right=None,
+                profile_name=None, expected_commit_override=None):
+            clean_left, clean_right, default_profile = closures[label]
+            left = base / (name + "-left")
+            right = base / (name + "-right")
+            shutil.copytree(clean_left, left, symlinks=True)
+            shutil.copytree(clean_right, right, symlinks=True)
+            set_fixture_writable(left)
+            set_fixture_writable(right)
+            if mutate_left is not None:
+                mutate_left(left)
+            if mutate_right is not None:
+                mutate_right(right)
+            seal_fixture(left)
+            seal_fixture(right)
             try:
-                compare_pair(left, target, build, source, base / (name + "-out"))
+                compare_pair(
+                    left, right, build, source,
+                    expected_commit_override or expected_commit,
+                    base / (name + "-out"),
+                    profile_name or default_profile)
             except ContractError:
                 return
             raise ContractError("adversarial fixture was accepted: " + name)
@@ -675,11 +1128,44 @@ def self_test():
             records[1]["output"] = records[0]["output"]
             path.write_bytes(render_cmake_compile_commands(records))
 
-        def token_mutation(root):
+        def count_mutation(root):
+            path = root / "compile_commands.json"
+            records = json.loads(path.read_bytes())
+            records.pop()
+            path.write_bytes(render_cmake_compile_commands(records))
+
+        def compiler_action_mutation(root):
             path = root / "compile_commands.json"
             records = json.loads(path.read_bytes())
             records[0]["command"] = records[0]["command"].replace(
+                " -c ", " -E ", 1)
+            path.write_bytes(render_cmake_compile_commands(records))
+
+        def token_mutation(root):
+            path = root / "compile_commands.json"
+            records = json.loads(path.read_bytes())
+            record = min(records, key=lambda item: item["output"])
+            record["command"] = record["command"].replace(
                 "/usr/bin/c++ ", "/usr/bin/c++ -DSEMANTIC_MUTATION=1 ", 1)
+            path.write_bytes(render_cmake_compile_commands(records))
+
+        def commit_token_collision(root):
+            path = root / "compile_commands.json"
+            records = json.loads(path.read_bytes())
+            record = min(records, key=lambda item: item["output"])
+            record["command"] = record["command"].replace(
+                "/usr/bin/c++ ", "/usr/bin/c++ -DRESERVED=${COMMIT} ", 1)
+            path.write_bytes(render_cmake_compile_commands(records))
+
+        def c_record_mutation(root):
+            path = root / "compile_commands.json"
+            records = json.loads(path.read_bytes())
+            record = next(record for record in records
+                          if record["command"].startswith("/usr/bin/cc "))
+            changed = record["file"] + ".changed"
+            record["command"] = record["command"].replace(
+                record["file"], changed)
+            record["file"] = changed
             path.write_bytes(render_cmake_compile_commands(records))
 
         def nonallowlisted_prerequisite(root):
@@ -698,6 +1184,13 @@ def self_test():
             lines.remove(needle)
             lines.append(needle)
             path.write_text("".join(lines))
+
+        def alternate_colon_form(root):
+            path = root / "CMakeFiles/Makefile2"
+            raw = path.read_bytes().replace(
+                b"CMakeFiles/leopard.dir/all: ",
+                b"CMakeFiles/leopard.dir/all : ", 1)
+            path.write_bytes(raw)
 
         def recipe_mutation(root):
             path = root / "CMakeFiles/Makefile2"
@@ -730,8 +1223,37 @@ def self_test():
         def extra_node(root):
             (root / "unexpected.bin").write_bytes(b"unexpected")
 
+        def unallowlisted_multi_prerequisite(root):
+            path = root / "CMakeFiles/Makefile2"
+            raw = path.read_bytes()
+            raw += (
+                b"\nCMakeFiles/unallowlisted.dir/all: "
+                b"CMakeFiles/unexpected_dep_a.dir/all\n"
+                b"CMakeFiles/unallowlisted.dir/all: "
+                b"CMakeFiles/unexpected_dep_b.dir/all\n"
+                b"\t@echo stable recipe\n"
+                b".PHONY : CMakeFiles/unallowlisted.dir/all\n"
+            )
+            path.write_bytes(raw)
+
+        def unallowlisted_multi_prerequisite_alternate_colon(root):
+            path = root / "CMakeFiles/Makefile2"
+            raw = path.read_bytes()
+            raw += (
+                b"\nCMakeFiles/unallowlisted.dir/all : "
+                b"CMakeFiles/unexpected_dep_a.dir/all\n"
+                b"CMakeFiles/unallowlisted.dir/all : "
+                b"CMakeFiles/unexpected_dep_b.dir/all\n"
+                b"\t@echo stable recipe\n"
+                b".PHONY : CMakeFiles/unallowlisted.dir/all\n"
+            )
+            path.write_bytes(raw)
+
         def special_node(root):
             os.symlink("selected-object.o", root / "unexpected-link")
+
+        def hardlink_node(root):
+            os.link(root / "selected-object.o", root / "unexpected-hardlink")
 
         def misplaced_exception(root):
             (root / "nested").mkdir()
@@ -740,9 +1262,13 @@ def self_test():
         for name, mutation in (
             ("duplicate-key", duplicate_key),
             ("duplicate-output", duplicate_output),
-            ("token-mutation", token_mutation),
+            ("count-mutation", count_mutation),
+            ("compiler-action-mutation", compiler_action_mutation),
+            ("one-sided-semantic-mutation", token_mutation),
+            ("commit-token-collision", commit_token_collision),
             ("nonallowlisted-prerequisite", nonallowlisted_prerequisite),
             ("moved-prerequisite", moved_prerequisite),
+            ("alternate-colon-form", alternate_colon_form),
             ("recipe-mutation", recipe_mutation),
             ("automatic-variable", automatic_variable),
             ("automatic-variable-derived", automatic_variable_derived),
@@ -750,9 +1276,58 @@ def self_test():
             ("mode-drift", mode_drift),
             ("extra-node", extra_node),
             ("special-node", special_node),
+            ("hardlink-node", hardlink_node),
             ("misplaced-exception", misplaced_exception),
         ):
-            rejected(name, mutation)
+            rejected(name, mutate_right=mutation)
+
+        for label in ("timing", "tests"):
+            rejected(
+                label + "-identical-compile-template-mutation", label=label,
+                mutate_left=token_mutation, mutate_right=token_mutation)
+            rejected(
+                label + "-identical-make-template-mutation", label=label,
+                mutate_left=recipe_mutation, mutate_right=recipe_mutation)
+            rejected(
+                label + "-identical-extra-node", label=label,
+                mutate_left=extra_node, mutate_right=extra_node)
+            rejected(
+                label + "-identical-mode-drift", label=label,
+                mutate_left=mode_drift, mutate_right=mode_drift)
+            rejected(
+                label + "-identical-unallowlisted-multi-prerequisite",
+                label=label,
+                mutate_left=unallowlisted_multi_prerequisite,
+                mutate_right=unallowlisted_multi_prerequisite)
+            rejected(
+                label + "-identical-unallowlisted-multi-alternate-colon",
+                label=label,
+                mutate_left=unallowlisted_multi_prerequisite_alternate_colon,
+                mutate_right=unallowlisted_multi_prerequisite_alternate_colon)
+        rejected(
+            "candidate-tests-c-record-mutation", label="tests",
+            mutate_right=c_record_mutation)
+        rejected(
+            "timing-closure-under-tests-profile", label="timing",
+            profile_name=tests_profile)
+        rejected(
+            "tests-closure-under-timing-profile", label="tests",
+            profile_name=timing_profile)
+        rejected(
+            "uppercase-expected-commit",
+            expected_commit_override=expected_commit.upper())
+        rejected(
+            "short-expected-commit",
+            expected_commit_override=expected_commit[:-1])
+        rejected(
+            "wrong-expected-commit",
+            expected_commit_override=alternate_commit)
+        try:
+            profile_contract("candidate-unknown")
+        except ContractError:
+            pass
+        else:
+            raise ContractError("unknown profile was accepted")
     print("v17 candidate build order normalizer self-test passed")
 
 
@@ -763,8 +1338,11 @@ def main():
     compare_parser.add_argument("--left", required=True, type=Path)
     compare_parser.add_argument("--right", required=True, type=Path)
     compare_parser.add_argument("--expected-build", required=True)
+    compare_parser.add_argument("--expected-commit", required=True)
     compare_parser.add_argument("--expected-source", required=True)
     compare_parser.add_argument("--output-dir", required=True, type=Path)
+    compare_parser.add_argument(
+        "--profile", required=True, choices=tuple(sorted(PROFILES)))
     subparsers.add_parser("self-test")
     options = parser.parse_args()
     try:
@@ -773,7 +1351,8 @@ def main():
         else:
             compare_pair(
                 options.left, options.right, options.expected_build,
-                options.expected_source, options.output_dir)
+                options.expected_source, options.expected_commit,
+                options.output_dir, options.profile)
     except ContractError as error:
         print("build order normalization rejected: " + str(error), file=os.sys.stderr)
         return 1
@@ -800,14 +1379,223 @@ capture_allowed_diff()
     /usr/bin/printf '%s\n' "$diff_status" > "$output.status"
 }
 
-compare_candidate_timing_build_closures()
+normalized_evidence_files=(
+    left-Makefile2.canonical
+    left-Makefile2.template
+    left-compile_commands.canonical.json
+    left-compile_commands.template.json
+    left-compile_outputs.canonical.json
+    report.json
+    right-Makefile2.canonical
+    right-Makefile2.template
+    right-compile_commands.canonical.json
+    right-compile_commands.template.json
+    right-compile_outputs.canonical.json
+)
+
+verify_normalized_evidence_directory()
+{
+    local normalized=$1
+    local expected_census=
+    local observed_census=
+    test -d "$normalized" || return 1
+    test ! -L "$normalized" || return 1
+    require_empty_output /usr/bin/find "$normalized" \
+        -mindepth 1 -maxdepth 1 ! -type f -print -quit || return 1
+    require_empty_output /usr/bin/find "$normalized" \
+        -mindepth 2 -print -quit || return 1
+    require_empty_output /usr/bin/find "$normalized" \
+        -type f -links +1 -print -quit || return 1
+    expected_census="$(/usr/bin/printf '%s\n' \
+        "${normalized_evidence_files[@]}" | /usr/bin/sort)" || return 1
+    observed_census="$(/usr/bin/find "$normalized" \
+        -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | /usr/bin/sort)" \
+        || return 1
+    test "$observed_census" = "$expected_census" || return 1
+}
+
+compare_normalized_evidence_closures()
+{
+    local retained=$1
+    local recomputed=$2
+    verify_normalized_evidence_directory "$retained/normalized" || return 1
+    verify_normalized_evidence_directory "$recomputed/normalized" || return 1
+    /usr/bin/diff -qr "$retained/normalized" \
+        "$recomputed/normalized" >/dev/null || return 1
+    /usr/bin/cmp "$retained/canonical-SHA256SUMS" \
+        "$recomputed/canonical-SHA256SUMS" || return 1
+    (
+        cd "$retained/normalized"
+        /usr/bin/sha256sum -c ../canonical-SHA256SUMS
+    ) >/dev/null || return 1
+    (
+        cd "$recomputed/normalized"
+        /usr/bin/sha256sum -c ../canonical-SHA256SUMS
+    ) >/dev/null || return 1
+}
+
+normalized_evidence_closure_self_test()
+{
+    local self_test_root=
+    local left=
+    local right=
+    local relative=
+    local failed_census=
+    self_test_root="$(/usr/bin/mktemp -d \
+        /tmp/leopard-v17-normalized-evidence-self-test.XXXXXX)"
+    if require_empty_output /usr/bin/bash -c 'exit 1'; then
+        /usr/bin/printf '%s\n' \
+            'empty output from a failed command was accepted' >&2
+        return 1
+    fi
+    if failed_census="$(/usr/bin/find \
+            "$self_test_root/missing-normalized-evidence" \
+            -mindepth 1 -maxdepth 1 -type f -printf '%f\n' \
+            2>/dev/null | /usr/bin/sort)"; then
+        /usr/bin/printf '%s\n' \
+            'empty output from a failed normalized census was accepted' >&2
+        return 1
+    fi
+    test -z "$failed_census" || return 1
+    left="$self_test_root/left"
+    right="$self_test_root/right"
+    /usr/bin/mkdir -m 0700 "$left" "$right"
+    /usr/bin/mkdir -m 0700 "$left/normalized" "$right/normalized"
+    for relative in "${normalized_evidence_files[@]}"; do
+        /usr/bin/printf 'canonical fixture: %s\n' "$relative" \
+            > "$left/normalized/$relative"
+        /usr/bin/cp --reflink=never "$left/normalized/$relative" \
+            "$right/normalized/$relative"
+    done
+    (
+        cd "$left/normalized"
+        /usr/bin/sha256sum "${normalized_evidence_files[@]}" \
+            > ../canonical-SHA256SUMS
+    )
+    /usr/bin/cp --reflink=never "$left/canonical-SHA256SUMS" \
+        "$right/canonical-SHA256SUMS"
+    compare_normalized_evidence_closures "$left" "$right"
+    /usr/bin/printf 'adversarial replacement\n' \
+        >> "$right/normalized/left-compile_commands.template.json"
+    (
+        cd "$right/normalized"
+        /usr/bin/sha256sum "${normalized_evidence_files[@]}" \
+            > ../canonical-SHA256SUMS.replaced
+    )
+    /usr/bin/mv "$right/canonical-SHA256SUMS.replaced" \
+        "$right/canonical-SHA256SUMS"
+    if compare_normalized_evidence_closures "$left" "$right" \
+            >/dev/null 2>&1; then
+        /usr/bin/printf '%s\n' \
+            'mutated normalized evidence and regenerated checksums were accepted' \
+            >&2
+        return 1
+    fi
+    /usr/bin/printf '%s\n' \
+        'normalized evidence closure adversarial self-test passed'
+}
+
+verify_candidate_commit_binding()
+{
+    local build_closure_json=$1
+    local core_manifest_json=$2
+    local status_json=$3
+    local bound_commit=
+    local manifest_commit=
+    local status_commit=
+    bound_commit="$(/usr/bin/jq -er '.candidate.commit | strings' \
+        "$build_closure_json")" || return 1
+    [[ "$bound_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+    manifest_commit="$(/usr/bin/jq -er '.source_commit | strings' \
+        "$core_manifest_json")" || return 1
+    status_commit="$(/usr/bin/jq -er '.source_commit | strings' \
+        "$status_json")" || return 1
+    test "$manifest_commit" = "$bound_commit" || return 1
+    test "$status_commit" = "$bound_commit" || return 1
+    /usr/bin/printf '%s\n' "$bound_commit"
+}
+
+candidate_commit_binding_self_test()
+{
+    local self_test_root=
+    local expected_commit=0123456789abcdef0123456789abcdef01234567
+    local tampered_commit=89abcdef0123456789abcdef0123456789abcdef
+    local observed_commit=
+    self_test_root="$(/usr/bin/mktemp -d \
+        /tmp/leopard-v17-commit-binding-self-test.XXXXXX)" || return 1
+    /usr/bin/jq -n --arg commit "$expected_commit" \
+        '{candidate:{commit:$commit}}' \
+        > "$self_test_root/build-closure.json" || return 1
+    /usr/bin/jq -n --arg commit "$expected_commit" \
+        '{source_commit:$commit}' \
+        > "$self_test_root/manifest.json" || return 1
+    /usr/bin/jq -n --arg commit "$expected_commit" \
+        '{source_commit:$commit}' \
+        > "$self_test_root/status.json" || return 1
+    observed_commit="$(verify_candidate_commit_binding \
+        "$self_test_root/build-closure.json" \
+        "$self_test_root/manifest.json" \
+        "$self_test_root/status.json")" || return 1
+    test "$observed_commit" = "$expected_commit" || return 1
+    /usr/bin/jq --arg commit "$tampered_commit" \
+        '.source_commit = $commit' "$self_test_root/manifest.json" \
+        > "$self_test_root/manifest-tampered.json" || return 1
+    if verify_candidate_commit_binding \
+            "$self_test_root/build-closure.json" \
+            "$self_test_root/manifest-tampered.json" \
+            "$self_test_root/status.json" >/dev/null 2>&1; then
+        /usr/bin/printf '%s\n' \
+            'mismatched candidate/core/status commits were accepted' >&2
+        return 1
+    fi
+    /usr/bin/jq --arg commit "$tampered_commit" \
+        '.source_commit = $commit' "$self_test_root/status.json" \
+        > "$self_test_root/status-tampered.json" || return 1
+    if verify_candidate_commit_binding \
+            "$self_test_root/build-closure.json" \
+            "$self_test_root/manifest.json" \
+            "$self_test_root/status-tampered.json" >/dev/null 2>&1; then
+        /usr/bin/printf '%s\n' \
+            'mismatched candidate/core/status commits were accepted' >&2
+        return 1
+    fi
+    /usr/bin/jq --arg commit "${expected_commit^^}" \
+        '.candidate.commit = $commit' "$self_test_root/build-closure.json" \
+        > "$self_test_root/build-closure-uppercase.json" || return 1
+    if verify_candidate_commit_binding \
+            "$self_test_root/build-closure-uppercase.json" \
+            "$self_test_root/manifest.json" \
+            "$self_test_root/status.json" >/dev/null 2>&1; then
+        /usr/bin/printf '%s\n' \
+            'non-lowercase candidate commit was accepted' >&2
+        return 1
+    fi
+    /usr/bin/cp --reflink=never "$self_test_root/manifest.json" \
+        "$self_test_root/manifest-trailing-garbage.json" || return 1
+    /usr/bin/printf '%s\n' 'not-json' \
+        >> "$self_test_root/manifest-trailing-garbage.json" || return 1
+    if verify_candidate_commit_binding \
+            "$self_test_root/build-closure.json" \
+            "$self_test_root/manifest-trailing-garbage.json" \
+            "$self_test_root/status.json" >/dev/null 2>&1; then
+        /usr/bin/printf '%s\n' \
+            'failed commit-binding jq parse with valid prefix was accepted' >&2
+        return 1
+    fi
+    /usr/bin/printf '%s\n' \
+        'candidate commit binding adversarial self-test passed'
+}
+
+compare_candidate_build_closures()
 {
     local normalizer=$1
-    local left=$2
-    local right=$3
-    local expected_build=$4
-    local expected_source=$5
-    local evidence=$6
+    local profile=$2
+    local left=$3
+    local right=$4
+    local expected_build=$5
+    local expected_source=$6
+    local expected_commit=$7
+    local evidence=$8
     test ! -e "$evidence"
     /usr/bin/mkdir -m 0700 "$evidence"
     capture_allowed_diff "$evidence/raw-tree.diff" -qr "$left" "$right"
@@ -818,10 +1606,12 @@ compare_candidate_timing_build_closures()
     /usr/bin/diff -qr --exclude=compile_commands.json --exclude=Makefile2 \
         "$left" "$right" > "$evidence/required-byte-identity.diff"
     /usr/bin/python3 -I -S -B "$normalizer" compare \
+        --profile "$profile" \
         --left "$left" \
         --right "$right" \
         --expected-build "$expected_build" \
         --expected-source "$expected_source" \
+        --expected-commit "$expected_commit" \
         --output-dir "$evidence/normalized" \
         > "$evidence/normalizer-summary.txt" \
         2> "$evidence/normalizer-stderr.log"
@@ -839,13 +1629,13 @@ compare_candidate_timing_build_closures()
         "$left/CMakeFiles/Makefile2" \
         "$right/CMakeFiles/Makefile2" \
         > "$evidence/raw-ordering-file-SHA256SUMS"
-    /usr/bin/sha256sum \
-        "$evidence/normalized/left-compile_commands.canonical.json" \
-        "$evidence/normalized/right-compile_commands.canonical.json" \
-        "$evidence/normalized/left-Makefile2.canonical" \
-        "$evidence/normalized/right-Makefile2.canonical" \
-        "$evidence/normalized/report.json" \
-        > "$evidence/canonical-SHA256SUMS"
+    verify_normalized_evidence_directory "$evidence/normalized"
+    (
+        cd "$evidence/normalized"
+        /usr/bin/sha256sum "${normalized_evidence_files[@]}" \
+            > ../canonical-SHA256SUMS
+        /usr/bin/sha256sum -c ../canonical-SHA256SUMS
+    ) > "$evidence/canonical-sha256-check.txt"
 }
 
 verify_sealed_tree()
@@ -1202,6 +1992,9 @@ verify_envelope()
     local campaign_exit_value=
     local campaign_manifest_sha=
     local candidate_raw_tree_value=
+    local candidate_test_normalization_report_sha256=
+    local candidate_test_raw_tree_value=
+    local verified_candidate_commit=
     local replay_campaign=
     local replay_controller_root=
     local verifier_tmp=
@@ -1287,6 +2080,12 @@ verify_envelope()
         test -f \
             "$verified_core/build-closure/candidate-test-selected-SHA256SUMS"
         test -f \
+            "$verified_core/build-closure/candidate-test-order-normalization/normalized/report.json"
+        test -f \
+            "$verified_core/build-closure/candidate-test-order-normalization/canonical-SHA256SUMS"
+        test -f \
+            "$verified_core/build-closure/candidate-timing-order-normalization/canonical-SHA256SUMS"
+        test -f \
             "$verified_core/build-closure/live-candidate-tests/leopard2_backend_failures_test"
         test -f \
             "$verified_core/build-closure/replay-candidate-tests/leopard2_backend_failures_test"
@@ -1306,7 +2105,12 @@ verify_envelope()
             "$verified_core/build-closure/committed-build-provenance.py"
         test "$(/usr/bin/jq -er '.schema | strings' \
             "$verified_core/build-closure.json")" = \
-            leopard2-v17-gfni-main-build-closure/v2
+            leopard2-v17-gfni-main-build-closure/v3
+        candidate_commit_binding_self_test \
+            > "$verifier_tmp/candidate-commit-binding-self-test.log" 2>&1
+        verified_candidate_commit="$(verify_candidate_commit_binding \
+            "$verified_core/build-closure.json" \
+            "$verified_core/manifest.json" "$status_file")" || return 1
         test "$(/usr/bin/sha256sum \
             "$verified_core/build-order-normalizer.py" | \
             /usr/bin/cut -d' ' -f1)" = \
@@ -1319,30 +2123,64 @@ verify_envelope()
             "$verifier_tmp/reconstructed-build-order-normalizer.py"
         /usr/bin/jq -e '
             .schema ==
-                "leopard2-v17-build-order-normalizer-reconstruction/v1" and
+                "leopard2-v17-build-order-normalizer-reconstruction/v3" and
             .embedded_wrapper_reconstruction_byte_identical == true and
             .self_test_passed == true and
-            .timing_performed == false
+            .normalized_evidence_closure_self_test_passed == true and
+            .candidate_commit_binding_self_test_passed == true and
+            .timing_performed == false and
+            .profiles == ["candidate-tests", "candidate-timing"] and
+            .profile_sha256s == {
+                "candidate-tests":"bead85b797c0e9966d4f09ba5b18b48739a350f550f831d1afa5bd2ae68dfa69",
+                "candidate-timing":"d2a07561d2e5919051c2b7d7464f6aa844752e42e92099190feeea004f2716b3"
+            } and
+            .closed_world_profile_templates == true and
+            .normalized_evidence_exact_file_count == 11 and
+            .template_path_tokens ==
+                {build:"${BUILD}",commit:"${COMMIT}",source:"${SOURCE}"}
         ' "$verified_core/build-order-normalizer-reconstruction.json" >/dev/null
         /usr/bin/python3 -I -S -B \
             "$verified_core/build-order-normalizer.py" self-test \
             > "$verifier_tmp/build-order-normalizer-self-test.log" \
             2> "$verifier_tmp/build-order-normalizer-self-test-stderr.log"
-        compare_candidate_timing_build_closures \
-            "$verified_core/build-order-normalizer.py" \
+        normalized_evidence_closure_self_test \
+            > "$verifier_tmp/normalized-evidence-closure-self-test.log" 2>&1
+        compare_candidate_build_closures \
+            "$verified_core/build-order-normalizer.py" candidate-timing \
             "$verified_core/build-closure/live-candidate" \
             "$verified_core/build-closure/replay-candidate" \
             "$(/usr/bin/jq -er '.candidate.build | strings' \
                 "$verified_core/build-closure.json")" \
             "$(/usr/bin/jq -er '.candidate.source | strings' \
                 "$verified_core/build-closure.json")" \
+            "$verified_candidate_commit" \
+            "$verifier_tmp/candidate-timing-order-normalization"
+        compare_normalized_evidence_closures \
+            "$verified_core/build-closure/candidate-timing-order-normalization" \
             "$verifier_tmp/candidate-timing-order-normalization"
         /usr/bin/cmp \
             "$verified_core/build-closure/candidate-timing-order-normalization/normalized/report.json" \
             "$verifier_tmp/candidate-timing-order-normalization/normalized/report.json"
+        /usr/bin/jq -e '
+            .schema ==
+                "leopard2-v17-candidate-build-order-normalization/v3" and
+            .contract.operation == "compare" and
+            .contract.profile == "candidate-timing" and
+            .contract.template_path_tokens ==
+                {build:"${BUILD}",commit:"${COMMIT}",source:"${SOURCE}"} and
+            .makefile2.left.all_multi_prerequisite_targets_allowlisted == true and
+            .makefile2.right.all_multi_prerequisite_targets_allowlisted == true and
+            .makefile2.left.multi_prerequisite_target_count == 4 and
+            .makefile2.right.multi_prerequisite_target_count == 4 and
+            .semantic_equal == true
+        ' "$verifier_tmp/candidate-timing-order-normalization/normalized/report.json" \
+            >/dev/null
         candidate_raw_tree_value="$(/usr/bin/jq -er \
             '.contract.raw_tree_file_bytes_identical | booleans | tostring' \
             "$verifier_tmp/candidate-timing-order-normalization/normalized/report.json")"
+        test "$(/usr/bin/jq -er '.expected_commit | strings' \
+            "$verifier_tmp/candidate-timing-order-normalization/normalized/report.json")" = \
+            "$verified_candidate_commit"
         test "$candidate_raw_tree_value" = \
             "$(/usr/bin/jq -er \
                 '.candidate.reproduction.raw_tree_file_bytes_identical | booleans | tostring' \
@@ -1368,19 +2206,173 @@ verify_envelope()
             "$(/usr/bin/jq -er \
                 '.candidate.reproduction.normalization_report_sha256 | strings' \
                 "$verified_core/build-closure.json")"
+        compare_candidate_build_closures \
+            "$verified_core/build-order-normalizer.py" candidate-tests \
+            "$verified_core/build-closure/live-candidate-tests" \
+            "$verified_core/build-closure/replay-candidate-tests" \
+            "$(/usr/bin/jq -er '.candidate_tests.build | strings' \
+                "$verified_core/build-closure.json")" \
+            "$(/usr/bin/jq -er '.candidate.source | strings' \
+                "$verified_core/build-closure.json")" \
+            "$verified_candidate_commit" \
+            "$verifier_tmp/candidate-test-order-normalization"
+        compare_normalized_evidence_closures \
+            "$verified_core/build-closure/candidate-test-order-normalization" \
+            "$verifier_tmp/candidate-test-order-normalization"
+        /usr/bin/cmp \
+            "$verified_core/build-closure/candidate-test-order-normalization/normalized/report.json" \
+            "$verifier_tmp/candidate-test-order-normalization/normalized/report.json"
+        /usr/bin/jq -e '
+            .schema ==
+                "leopard2-v17-candidate-build-order-normalization/v3" and
+            .contract.operation == "compare" and
+            .contract.profile == "candidate-tests" and
+            .contract.template_path_tokens ==
+                {build:"${BUILD}",commit:"${COMMIT}",source:"${SOURCE}"} and
+            .makefile2.left.all_multi_prerequisite_targets_allowlisted == true and
+            .makefile2.right.all_multi_prerequisite_targets_allowlisted == true and
+            .makefile2.left.multi_prerequisite_target_count == 6 and
+            .makefile2.right.multi_prerequisite_target_count == 6 and
+            .semantic_equal == true
+        ' "$verifier_tmp/candidate-test-order-normalization/normalized/report.json" \
+            >/dev/null
+        candidate_test_raw_tree_value="$(/usr/bin/jq -er \
+            '.contract.raw_tree_file_bytes_identical | booleans | tostring' \
+            "$verifier_tmp/candidate-test-order-normalization/normalized/report.json")"
+        test "$(/usr/bin/jq -er '.expected_commit | strings' \
+            "$verifier_tmp/candidate-test-order-normalization/normalized/report.json")" = \
+            "$verified_candidate_commit"
+        test "$candidate_test_raw_tree_value" = \
+            "$(/usr/bin/jq -er \
+                '.candidate_tests.reproduction.raw_tree_file_bytes_identical | booleans | tostring' \
+                "$verified_core/build-closure.json")"
+        test "$candidate_test_raw_tree_value" = \
+            "$(/usr/bin/jq -er \
+                '.candidate_tests.two_clean_builds_raw_tree_file_bytes_identical | booleans | tostring' \
+                "$verified_core/build-closure.json")"
+        test "$candidate_test_raw_tree_value" = \
+            "$(/usr/bin/jq -er \
+                '.build_reproduction.candidate_tests_raw_tree_file_bytes_identical | booleans | tostring' \
+                "$verified_core/build-closure.json")"
+        test "$candidate_test_raw_tree_value" = \
+            "$(/usr/bin/jq -er \
+                '.two_clean_builds_raw_tree_file_bytes_identical | booleans | tostring' \
+                "$verified_core/candidate-test-temporal-closure.json")"
+        test "$candidate_test_raw_tree_value" = \
+            "$(/usr/bin/jq -er \
+                '.build_reproduction.candidate_tests_raw_tree_file_bytes_identical | booleans | tostring' \
+                "$verified_core/manifest.json")"
+        if [[ "$candidate_test_raw_tree_value" == true ]]; then
+            test "$(/usr/bin/cat \
+                "$verifier_tmp/candidate-test-order-normalization/raw-tree.diff.status")" = 0
+        else
+            test "$(/usr/bin/cat \
+                "$verifier_tmp/candidate-test-order-normalization/raw-tree.diff.status")" = 1
+        fi
+        candidate_test_normalization_report_sha256="$(/usr/bin/sha256sum \
+            "$verified_core/build-closure/candidate-test-order-normalization/normalized/report.json" | \
+            /usr/bin/cut -d' ' -f1)"
+        test "$candidate_test_normalization_report_sha256" = \
+            "$(/usr/bin/jq -er \
+                '.candidate_tests.reproduction.normalization_report_sha256 | strings' \
+                "$verified_core/build-closure.json")"
+        test "$candidate_test_normalization_report_sha256" = \
+            "$(/usr/bin/jq -er '.normalization_report_sha256 | strings' \
+                "$verified_core/candidate-test-temporal-closure.json")"
+        test "$candidate_test_normalization_report_sha256" = \
+            "$(/usr/bin/jq -er \
+                '.candidate_test_normalization_report_sha256 | strings' \
+                "$verified_core/manifest.json")"
+        test "$(/usr/bin/jq -cer '[
+                .profile_contract.profile_sha256,
+                .profile_contract.node_census_count,
+                .profile_contract.node_census_sha256,
+                .profile_contract.compile_template_sha256,
+                .profile_contract.compile_output_list_sha256,
+                .profile_contract.make_template_sha256
+            ]' \
+            "$verified_core/build-closure/candidate-timing-order-normalization/normalized/report.json")" = \
+            "$(/usr/bin/jq -cer '[
+                .candidate.reproduction.profile_sha256,
+                .candidate.reproduction.node_census_count,
+                .candidate.reproduction.node_census_sha256,
+                .candidate.reproduction.closed_world_template_sha256s.compile_commands,
+                .candidate.reproduction.closed_world_template_sha256s.compile_output_list,
+                .candidate.reproduction.closed_world_template_sha256s.makefile2
+            ]' "$verified_core/build-closure.json")"
+        test "$(/usr/bin/jq -cer '[
+                .profile_contract.profile_sha256,
+                .profile_contract.node_census_count,
+                .profile_contract.node_census_sha256,
+                .profile_contract.compile_template_sha256,
+                .profile_contract.compile_output_list_sha256,
+                .profile_contract.make_template_sha256
+            ]' \
+            "$verified_core/build-closure/candidate-test-order-normalization/normalized/report.json")" = \
+            "$(/usr/bin/jq -cer '[
+                .candidate_tests.reproduction.profile_sha256,
+                .candidate_tests.reproduction.node_census_count,
+                .candidate_tests.reproduction.node_census_sha256,
+                .candidate_tests.reproduction.closed_world_template_sha256s.compile_commands,
+                .candidate_tests.reproduction.closed_world_template_sha256s.compile_output_list,
+                .candidate_tests.reproduction.closed_world_template_sha256s.makefile2
+            ]' "$verified_core/build-closure.json")"
         /usr/bin/jq -e '
             .candidate.reproduction.qualified_semantic_equal == true and
+            .candidate.reproduction.normalizer_profile == "candidate-timing" and
             .candidate.reproduction.all_nonexception_file_bytes_identical == true and
             .candidate.reproduction.order_normalized_exception_paths ==
                 ["compile_commands.json", "CMakeFiles/Makefile2"] and
             .candidate.reproduction.compile_commands_exact_entry_count == 30 and
-            .candidate.reproduction.makefile2_exact_allowlisted_block_count == 4 and
+            .candidate.reproduction.compile_commands_compiler_counts ==
+                {"/usr/bin/c++":30} and
+            .candidate.reproduction.makefile2_exact_validated_block_count == 4 and
+            .candidate.reproduction.makefile2_exact_normalized_block_count == 4 and
+            .candidate.reproduction.closed_world_template_sha256s == {
+                compile_commands:"6ad3a97ffe31f4eaf5c8f2ff5459dd310635e6e430181c460d9803f11cc5fb28",
+                compile_output_list:"a39c7e87cc0a506148faaa4023b11f96c2e26b22c103584a62b62ae91f2387b7",
+                makefile2:"5ab77166d931546b1cb998cfdf4eb5c7dd1850994b2eef65d8c5e627a3899a62"
+            } and
+            .candidate.reproduction.node_census_count == 131 and
+            .candidate.reproduction.node_census_sha256 ==
+                "d3194ea1135fbdc0067cd3af72693cbf27d1e28a4734804b52bf5be1a3f37aca" and
+            .candidate.reproduction.profile_sha256 ==
+                "d2a07561d2e5919051c2b7d7464f6aa844752e42e92099190feeea004f2716b3" and
+            .candidate.reproduction.normalized_evidence_exact_file_count == 11 and
+            .candidate.reproduction.normalized_evidence_relative_canonical_sha256sums == true and
+            .candidate_tests.reproduction.qualified_semantic_equal == true and
+            .candidate_tests.reproduction.normalizer_profile == "candidate-tests" and
+            .candidate_tests.reproduction.all_nonexception_file_bytes_identical == true and
+            .candidate_tests.reproduction.order_normalized_exception_paths ==
+                ["compile_commands.json", "CMakeFiles/Makefile2"] and
+            .candidate_tests.reproduction.compile_commands_exact_entry_count == 170 and
+            .candidate_tests.reproduction.compile_commands_compiler_counts ==
+                {"/usr/bin/c++":169,"/usr/bin/cc":1} and
+            .candidate_tests.reproduction.single_c_record == {
+                source:"tests/leopard2/test_codec_options_abi.c",
+                output:"CMakeFiles/leopard2_codec_options_abi_test.dir/tests/leopard2/test_codec_options_abi.c.o"
+            } and
+            .candidate_tests.reproduction.makefile2_exact_validated_block_count == 6 and
+            .candidate_tests.reproduction.makefile2_exact_normalized_block_count == 6 and
+            .candidate_tests.reproduction.closed_world_template_sha256s == {
+                compile_commands:"dda169bcd458db8b17c09c1e8873c9342731a4c5639874849ad87d3c1003badb",
+                compile_output_list:"8aeea7120bbbe5e3f5e71059b29007b4fb3e01b153c55f0aa874c45de9e48574",
+                makefile2:"c56eb276850e7acbc5242e91c26b8fecf993040feeeb88b56596a189924a8479"
+            } and
+            .candidate_tests.reproduction.node_census_count == 556 and
+            .candidate_tests.reproduction.node_census_sha256 ==
+                "2fa17fb9bb1458ea2bb7c361de077323e6f0a55359ba137eb445d231dd13d24b" and
+            .candidate_tests.reproduction.profile_sha256 ==
+                "bead85b797c0e9966d4f09ba5b18b48739a350f550f831d1afa5bd2ae68dfa69" and
+            .candidate_tests.reproduction.normalized_evidence_exact_file_count == 11 and
+            .candidate_tests.reproduction.normalized_evidence_relative_canonical_sha256sums == true and
+            .candidate_tests.two_clean_builds_qualified_semantic_equal == true and
             .build_reproduction.candidate_timing_qualified_semantic_equal == true and
-            .build_reproduction.candidate_tests_raw_byte_identical == true and
+            .build_reproduction.candidate_tests_qualified_semantic_equal == true and
             .build_reproduction.baseline_raw_byte_identical == true and
             .baseline.two_clean_builds_raw_byte_identical == true and
             .build_reproduction.identical_absolute_source_and_build_paths == true and
-            .build_reproduction.objects_archives_binaries_link_recipes_cache_and_generated_inputs_raw_byte_identical == true and
+            .build_reproduction.objects_archives_binaries_link_recipes_cache_and_nonordering_generated_inputs_raw_byte_identical == true and
             .controllers.build_order_normalizer_origin ==
                 "embedded deterministic helper from committed wrapper" and
             .audit_boundary ==
@@ -1393,6 +2385,7 @@ verify_envelope()
             "$verified_core/build-closure/live-candidate-tests/bench_leopard2_prevalidated_batch" \
             "$verified_core/build-closure/replay-candidate-tests/bench_leopard2_prevalidated_batch"
         /usr/bin/diff -qr \
+            --exclude=compile_commands.json --exclude=Makefile2 \
             "$verified_core/build-closure/live-candidate-tests" \
             "$verified_core/build-closure/replay-candidate-tests" >/dev/null
         (
@@ -1424,7 +2417,7 @@ verify_envelope()
                 '.candidate_tests.prevalidated_batch_test_sha256 | strings' \
                 "$verified_core/build-closure.json")"
         test "$(/usr/bin/jq -er \
-            '.candidate_tests.two_clean_builds_raw_byte_identical | booleans | tostring' \
+            '.candidate_tests.two_clean_builds_qualified_semantic_equal | booleans | tostring' \
             "$verified_core/build-closure.json")" = true
         test "$(/usr/bin/jq -er \
             '.candidate_tests.complete_object_link_cache_closure | booleans | tostring' \
@@ -1446,7 +2439,7 @@ verify_envelope()
         ' "$verified_core/build-closure.json" >/dev/null
         test "$(/usr/bin/jq -er '.schema | strings' \
             "$verified_core/candidate-test-temporal-closure.json")" = \
-            leopard2-v17-gfni-main-candidate-test-temporal-closure/v1
+            leopard2-v17-gfni-main-candidate-test-temporal-closure/v2
         test "$(/usr/bin/jq -er \
             '.selected_sha256sums_sha256 | strings' \
             "$verified_core/candidate-test-temporal-closure.json")" = \
@@ -1454,7 +2447,9 @@ verify_envelope()
             '.candidate_tests.selected_sha256sums_sha256 | strings' \
             "$verified_core/build-closure.json")"
         /usr/bin/jq -e '
-            .two_clean_builds_byte_identical == true and
+            .two_clean_builds_qualified_semantic_equal == true and
+            (.two_clean_builds_raw_tree_file_bytes_identical |
+                type == "boolean") and
             .posttest_byte_identical == true and
             .postcampaign_byte_identical == true and
             .canonical_test_build_frozen_during_campaign == true
@@ -1466,7 +2461,7 @@ verify_envelope()
             "$status_file")" = "$promotion_value"
         test "$(/usr/bin/jq -er '.schema | strings' \
             "$verified_core/manifest.json")" = \
-            leopard2-v17-gfni-main-core-manifest/v2
+            leopard2-v17-gfni-main-core-manifest/v3
         test "$(/usr/bin/jq -er '.campaign_exit_status | numbers' \
             "$verified_core/manifest.json")" -eq 0
         test "$(/usr/bin/jq -er '.evidence_valid | booleans | tostring' \
@@ -1521,7 +2516,9 @@ verify_envelope()
             .build_reproduction.candidate_timing_qualified_semantic_equal == true and
             (.build_reproduction.candidate_timing_raw_tree_file_bytes_identical |
                 type == "boolean") and
-            .build_reproduction.candidate_tests_raw_byte_identical == true and
+            .build_reproduction.candidate_tests_qualified_semantic_equal == true and
+            (.build_reproduction.candidate_tests_raw_tree_file_bytes_identical |
+                type == "boolean") and
             .build_reproduction.baseline_raw_byte_identical == true and
             .independent_auditor_scope ==
                 "campaign semantics only; build-order qualification is separately recomputed by the frozen wrapper normalizer"
@@ -1843,8 +2840,12 @@ install_build_order_normalizer \
     "$normalizer_reconstruction_root/build-order-normalizer.py"
 /usr/bin/python3 -I -S -B "$lane/build-order-normalizer.py" self-test \
     > "$lane/build-order-normalizer-self-test.log" 2>&1
+normalized_evidence_closure_self_test \
+    > "$lane/normalized-evidence-closure-self-test.log" 2>&1
+candidate_commit_binding_self_test \
+    > "$lane/candidate-commit-binding-self-test.log" 2>&1
 /usr/bin/jq -n \
-    '{schema:"leopard2-v17-build-order-normalizer-reconstruction/v1",embedded_wrapper_reconstruction_byte_identical:true,self_test_passed:true,timing_performed:false}' \
+    '{schema:"leopard2-v17-build-order-normalizer-reconstruction/v3",embedded_wrapper_reconstruction_byte_identical:true,self_test_passed:true,normalized_evidence_closure_self_test_passed:true,candidate_commit_binding_self_test_passed:true,timing_performed:false,profiles:["candidate-tests","candidate-timing"],profile_sha256s:{"candidate-tests":"bead85b797c0e9966d4f09ba5b18b48739a350f550f831d1afa5bd2ae68dfa69","candidate-timing":"d2a07561d2e5919051c2b7d7464f6aa844752e42e92099190feeea004f2716b3"},closed_world_profile_templates:true,normalized_evidence_exact_file_count:11,template_path_tokens:{build:"${BUILD}",commit:"${COMMIT}",source:"${SOURCE}"}}' \
     > "$lane/build-order-normalizer-reconstruction.json"
 
 next_stage tree_metadata_protocol_self_test
@@ -2212,10 +3213,29 @@ configure_and_build_candidate_tests replay
 copy_candidate_test_closure "$candidate_test_build" \
     "$lane/build-closure/replay-candidate-tests"
 
-next_stage candidate_correctness_build_byte_closure
-/usr/bin/diff -qr "$lane/build-closure/live-candidate-tests" \
+next_stage freeze_candidate_correctness_closure_inputs
+/usr/bin/find \
+    "$lane/build-closure/live-candidate-tests" \
     "$lane/build-closure/replay-candidate-tests" \
-    > "$lane/candidate-test-build-byte-diff.txt"
+    -type f -perm /222 -exec /usr/bin/chmod a-w {} +
+/usr/bin/find \
+    "$lane/build-closure/live-candidate-tests" \
+    "$lane/build-closure/replay-candidate-tests" \
+    -type d -perm /222 -exec /usr/bin/chmod a-w {} +
+
+next_stage candidate_correctness_build_qualified_closure
+compare_candidate_build_closures \
+    "$lane/build-order-normalizer.py" candidate-tests \
+    "$lane/build-closure/live-candidate-tests" \
+    "$lane/build-closure/replay-candidate-tests" \
+    "$candidate_test_build" "$candidate_source" "$commit" \
+    "$lane/build-closure/candidate-test-order-normalization"
+/usr/bin/cp --reflink=never \
+    "$lane/build-closure/candidate-test-order-normalization/raw-tree.diff" \
+    "$lane/candidate-test-build-byte-diff.txt"
+/usr/bin/cp --reflink=never \
+    "$lane/build-closure/candidate-test-order-normalization/raw-tree.diff.status" \
+    "$lane/candidate-test-build-byte-diff.status"
 (
     cd "$lane/build-closure/replay-candidate-tests"
     /usr/bin/sha256sum "${candidate_test_selected_files[@]}" \
@@ -2405,12 +3425,12 @@ next_stage freeze_candidate_timing_closure_inputs
     "$lane/build-closure/replay-candidate" \
     -type d -perm /222 -exec /usr/bin/chmod a-w {} +
 
-next_stage live_replay_byte_closure
-compare_candidate_timing_build_closures \
-    "$lane/build-order-normalizer.py" \
+next_stage timing_live_replay_qualified_closure
+compare_candidate_build_closures \
+    "$lane/build-order-normalizer.py" candidate-timing \
     "$lane/build-closure/live-candidate" \
     "$lane/build-closure/replay-candidate" \
-    "$candidate_build" "$candidate_source" \
+    "$candidate_build" "$candidate_source" "$commit" \
     "$lane/build-closure/candidate-timing-order-normalization"
 /usr/bin/cp --reflink=never \
     "$lane/build-closure/candidate-timing-order-normalization/raw-tree.diff" \
@@ -2541,6 +3561,12 @@ candidate_timing_normalization_report_hash="$(/usr/bin/sha256sum \
 candidate_timing_raw_tree_byte_identical="$(/usr/bin/jq -er \
     '.contract.raw_tree_file_bytes_identical | booleans | tostring' \
     "$lane/build-closure/candidate-timing-order-normalization/normalized/report.json")"
+candidate_test_normalization_report_hash="$(/usr/bin/sha256sum \
+    "$lane/build-closure/candidate-test-order-normalization/normalized/report.json" | \
+    /usr/bin/cut -d' ' -f1)"
+candidate_test_raw_tree_byte_identical="$(/usr/bin/jq -er \
+    '.contract.raw_tree_file_bytes_identical | booleans | tostring' \
+    "$lane/build-closure/candidate-test-order-normalization/normalized/report.json")"
 candidate_source_archive_hash="$(/usr/bin/sha256sum \
     "$lane/candidate-source.tar" | /usr/bin/cut -d' ' -f1)"
 baseline_source_archive_hash="$(/usr/bin/sha256sum \
@@ -2574,11 +3600,118 @@ sse2neon_source_archive_hash="$(/usr/bin/sha256sum \
         "$candidate_timing_normalization_report_hash" \
     --argjson candidate_timing_raw_tree_byte_identical \
         "$candidate_timing_raw_tree_byte_identical" \
+    --arg candidate_test_normalization_report_sha256 \
+        "$candidate_test_normalization_report_hash" \
+    --argjson candidate_test_raw_tree_byte_identical \
+        "$candidate_test_raw_tree_byte_identical" \
     --arg candidate_source_archive_sha256 "$candidate_source_archive_hash" \
     --arg baseline_source_archive_sha256 "$baseline_source_archive_hash" \
     --arg sse2neon_commit "$candidate_submodule_commit" \
     --arg sse2neon_source_archive_sha256 "$sse2neon_source_archive_hash" \
-    '{schema:"leopard2-v17-gfni-main-build-closure/v2",candidate:{commit:$commit,tree:$tree,source:$candidate_source,build:$candidate_build,profile:"standard AUTO Release; tests off; benchmarks on; GF8/GF16 on",binary_sha256:$candidate_binary_sha256,archive_sha256:$candidate_archive_sha256,source_archive_sha256:$candidate_source_archive_sha256,reproduction:{qualified_semantic_equal:true,raw_tree_file_bytes_identical:$candidate_timing_raw_tree_byte_identical,all_nonexception_file_bytes_identical:true,order_normalized_exception_paths:["compile_commands.json","CMakeFiles/Makefile2"],compile_commands_exact_entry_count:30,makefile2_exact_allowlisted_block_count:4,normalization_report_sha256:$candidate_timing_normalization_report_sha256}},candidate_tests:{build:$candidate_test_build,profile:"standard AUTO Release; tests and benchmarks on; GF8/GF16 on",selected_files:["bench_leopard2","bench_leopard2_prevalidated_batch","leopard2_auto_gf16_gfni_production_test","leopard2_backend_failures_test","leopard2_legacy_golden_test","libleopard.a","libleopard_test_hooks.a","generated/leopard2-benchmark-attestation/leopard2_benchmark_source_attestation.h","generated/leopard2-benchmark-attestation/leopard2_benchmark_build_configuration.txt"],selected_sha256sums_sha256:$candidate_test_selected_sha256sums_sha256,backend_failures_test_sha256:$backend_failures_test_sha256,prevalidated_batch_test_sha256:$prevalidated_batch_test_sha256,two_clean_builds_raw_byte_identical:true,posttest_raw_byte_identical:true,postcampaign_revalidation_required:true,complete_object_link_cache_closure:true},baseline:{commit:$main_commit,source:$baseline_source,build:$baseline_build,profile:"canonical Leopard1 native Release (-march=native; LEO_MAIN_PURE_AVX2=OFF)",binary_sha256:$baseline_binary_sha256,archive_sha256:$baseline_archive_sha256,source_archive_sha256:$baseline_source_archive_sha256,two_clean_builds_raw_byte_identical:true},sse2neon:{commit:$sse2neon_commit,archive_prefix:"sse2neon-source/",source_archive_sha256:$sse2neon_source_archive_sha256,reproduced_from_candidate_and_baseline_clones:true},generator:"Unix Makefiles",compiler:"/usr/bin/c++",build_reproduction:{candidate_timing_qualified_semantic_equal:true,candidate_timing_raw_tree_file_bytes_identical:$candidate_timing_raw_tree_byte_identical,candidate_tests_raw_byte_identical:true,baseline_raw_byte_identical:true,identical_absolute_source_and_build_paths:true,objects_archives_binaries_link_recipes_cache_and_generated_inputs_raw_byte_identical:true},controllers:{runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,supervisor_sha256:$supervisor_sha256,wrapper_sha256:$wrapper_sha256,build_order_normalizer_sha256:$build_order_normalizer_sha256,build_order_normalizer_origin:"embedded deterministic helper from committed wrapper"},audit_boundary:"independent campaign auditor covers retained campaign semantics; build-order qualification is separately recomputed by the frozen wrapper normalizer during durable verification",canonical_lock:"/tmp/leopard-gf8-authoritative.lock",python_controller:["/usr/bin/python3","-I","-S","-B"]}' \
+    '{
+        schema:"leopard2-v17-gfni-main-build-closure/v3",
+        candidate:{
+            commit:$commit,tree:$tree,source:$candidate_source,
+            build:$candidate_build,
+            profile:"standard AUTO Release; tests off; benchmarks on; GF8/GF16 on",
+            binary_sha256:$candidate_binary_sha256,
+            archive_sha256:$candidate_archive_sha256,
+            source_archive_sha256:$candidate_source_archive_sha256,
+            reproduction:{
+                qualified_semantic_equal:true,
+                normalizer_profile:"candidate-timing",
+                raw_tree_file_bytes_identical:$candidate_timing_raw_tree_byte_identical,
+                all_nonexception_file_bytes_identical:true,
+                order_normalized_exception_paths:["compile_commands.json","CMakeFiles/Makefile2"],
+                compile_commands_exact_entry_count:30,
+                compile_commands_compiler_counts:{"/usr/bin/c++":30},
+                makefile2_exact_validated_block_count:4,
+                makefile2_exact_normalized_block_count:4,
+                closed_world_template_sha256s:{
+                    compile_commands:"6ad3a97ffe31f4eaf5c8f2ff5459dd310635e6e430181c460d9803f11cc5fb28",
+                    compile_output_list:"a39c7e87cc0a506148faaa4023b11f96c2e26b22c103584a62b62ae91f2387b7",
+                    makefile2:"5ab77166d931546b1cb998cfdf4eb5c7dd1850994b2eef65d8c5e627a3899a62"
+                },
+                node_census_count:131,
+                node_census_sha256:"d3194ea1135fbdc0067cd3af72693cbf27d1e28a4734804b52bf5be1a3f37aca",
+                profile_sha256:"d2a07561d2e5919051c2b7d7464f6aa844752e42e92099190feeea004f2716b3",
+                normalized_evidence_exact_file_count:11,
+                normalized_evidence_relative_canonical_sha256sums:true,
+                normalization_report_sha256:$candidate_timing_normalization_report_sha256
+            }
+        },
+        candidate_tests:{
+            build:$candidate_test_build,
+            profile:"standard AUTO Release; tests and benchmarks on; GF8/GF16 on",
+            selected_files:["bench_leopard2","bench_leopard2_prevalidated_batch","leopard2_auto_gf16_gfni_production_test","leopard2_backend_failures_test","leopard2_legacy_golden_test","libleopard.a","libleopard_test_hooks.a","generated/leopard2-benchmark-attestation/leopard2_benchmark_source_attestation.h","generated/leopard2-benchmark-attestation/leopard2_benchmark_build_configuration.txt"],
+            selected_sha256sums_sha256:$candidate_test_selected_sha256sums_sha256,
+            backend_failures_test_sha256:$backend_failures_test_sha256,
+            prevalidated_batch_test_sha256:$prevalidated_batch_test_sha256,
+            reproduction:{
+                qualified_semantic_equal:true,
+                normalizer_profile:"candidate-tests",
+                raw_tree_file_bytes_identical:$candidate_test_raw_tree_byte_identical,
+                all_nonexception_file_bytes_identical:true,
+                order_normalized_exception_paths:["compile_commands.json","CMakeFiles/Makefile2"],
+                compile_commands_exact_entry_count:170,
+                compile_commands_compiler_counts:{"/usr/bin/c++":169,"/usr/bin/cc":1},
+                single_c_record:{
+                    source:"tests/leopard2/test_codec_options_abi.c",
+                    output:"CMakeFiles/leopard2_codec_options_abi_test.dir/tests/leopard2/test_codec_options_abi.c.o"
+                },
+                makefile2_exact_validated_block_count:6,
+                makefile2_exact_normalized_block_count:6,
+                closed_world_template_sha256s:{
+                    compile_commands:"dda169bcd458db8b17c09c1e8873c9342731a4c5639874849ad87d3c1003badb",
+                    compile_output_list:"8aeea7120bbbe5e3f5e71059b29007b4fb3e01b153c55f0aa874c45de9e48574",
+                    makefile2:"c56eb276850e7acbc5242e91c26b8fecf993040feeeb88b56596a189924a8479"
+                },
+                node_census_count:556,
+                node_census_sha256:"2fa17fb9bb1458ea2bb7c361de077323e6f0a55359ba137eb445d231dd13d24b",
+                profile_sha256:"bead85b797c0e9966d4f09ba5b18b48739a350f550f831d1afa5bd2ae68dfa69",
+                normalized_evidence_exact_file_count:11,
+                normalized_evidence_relative_canonical_sha256sums:true,
+                normalization_report_sha256:$candidate_test_normalization_report_sha256
+            },
+            two_clean_builds_qualified_semantic_equal:true,
+            two_clean_builds_raw_tree_file_bytes_identical:$candidate_test_raw_tree_byte_identical,
+            posttest_raw_byte_identical:true,
+            postcampaign_revalidation_required:true,
+            complete_object_link_cache_closure:true
+        },
+        baseline:{
+            commit:$main_commit,source:$baseline_source,build:$baseline_build,
+            profile:"canonical Leopard1 native Release (-march=native; LEO_MAIN_PURE_AVX2=OFF)",
+            binary_sha256:$baseline_binary_sha256,
+            archive_sha256:$baseline_archive_sha256,
+            source_archive_sha256:$baseline_source_archive_sha256,
+            two_clean_builds_raw_byte_identical:true
+        },
+        sse2neon:{
+            commit:$sse2neon_commit,archive_prefix:"sse2neon-source/",
+            source_archive_sha256:$sse2neon_source_archive_sha256,
+            reproduced_from_candidate_and_baseline_clones:true
+        },
+        generator:"Unix Makefiles",compiler:"/usr/bin/c++",
+        build_reproduction:{
+            candidate_timing_qualified_semantic_equal:true,
+            candidate_timing_raw_tree_file_bytes_identical:$candidate_timing_raw_tree_byte_identical,
+            candidate_tests_qualified_semantic_equal:true,
+            candidate_tests_raw_tree_file_bytes_identical:$candidate_test_raw_tree_byte_identical,
+            baseline_raw_byte_identical:true,
+            identical_absolute_source_and_build_paths:true,
+            objects_archives_binaries_link_recipes_cache_and_nonordering_generated_inputs_raw_byte_identical:true
+        },
+        controllers:{
+            runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,
+            supervisor_sha256:$supervisor_sha256,wrapper_sha256:$wrapper_sha256,
+            build_order_normalizer_sha256:$build_order_normalizer_sha256,
+            build_order_normalizer_origin:"embedded deterministic helper from committed wrapper"
+        },
+        audit_boundary:"independent campaign auditor covers retained campaign semantics; build-order qualification is separately recomputed by the frozen wrapper normalizer during durable verification",
+        canonical_lock:"/tmp/leopard-gf8-authoritative.lock",
+        python_controller:["/usr/bin/python3","-I","-S","-B"]
+    }' \
     > "$lane/build-closure.json"
 
 next_stage freeze_build_and_source_inputs
@@ -2845,7 +3978,11 @@ test "$(/usr/bin/sha256sum \
 /usr/bin/jq -n \
     --arg selected_sha256sums_sha256 \
         "$candidate_test_selected_sha256sums_hash" \
-    '{schema:"leopard2-v17-gfni-main-candidate-test-temporal-closure/v1",selected_sha256sums_sha256:$selected_sha256sums_sha256,two_clean_builds_byte_identical:true,posttest_byte_identical:true,postcampaign_byte_identical:true,canonical_test_build_frozen_during_campaign:true}' \
+    --arg normalization_report_sha256 \
+        "$candidate_test_normalization_report_hash" \
+    --argjson two_clean_builds_raw_tree_file_bytes_identical \
+        "$candidate_test_raw_tree_byte_identical" \
+    '{schema:"leopard2-v17-gfni-main-candidate-test-temporal-closure/v2",selected_sha256sums_sha256:$selected_sha256sums_sha256,normalization_report_sha256:$normalization_report_sha256,two_clean_builds_qualified_semantic_equal:true,two_clean_builds_raw_tree_file_bytes_identical:$two_clean_builds_raw_tree_file_bytes_identical,posttest_byte_identical:true,postcampaign_byte_identical:true,canonical_test_build_frozen_during_campaign:true}' \
     > "$lane/candidate-test-temporal-closure.json"
 /usr/bin/cmp "$candidate_build/bench_leopard2" \
     "$lane/build-closure/replay-candidate/bench_leopard2"
@@ -2991,6 +4128,10 @@ next_stage final_core_manifest
         "$candidate_timing_normalization_report_hash" \
     --argjson candidate_timing_raw_tree_byte_identical \
         "$candidate_timing_raw_tree_byte_identical" \
+    --arg candidate_test_normalization_report_sha256 \
+        "$candidate_test_normalization_report_hash" \
+    --argjson candidate_test_raw_tree_byte_identical \
+        "$candidate_test_raw_tree_byte_identical" \
     --arg campaign_manifest_sha256 "$campaign_manifest_hash" \
     --arg campaign_raw_sha256 "$campaign_raw_hash" \
     --arg affinity_report_sha256 "$affinity_report_hash" \
@@ -2998,7 +4139,7 @@ next_stage final_core_manifest
     --arg audit_sha256 "$audit_hash" \
     --arg sse2neon_commit "$candidate_submodule_commit" \
     --arg sse2neon_source_archive_sha256 "$sse2neon_source_archive_hash" \
-    '{schema:"leopard2-v17-gfni-main-core-manifest/v2",status:"complete",campaign_exit_status:$campaign_exit_status,evidence_valid:true,performance_gate_passed:$performance_gate_passed,promotion_passed:false,promotion_requires_completion_envelope:true,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,sse2neon_commit:$sse2neon_commit,sse2neon_source_archive_sha256:$sse2neon_source_archive_sha256,candidate_binary_sha256_pre_post:$candidate_binary_sha256,candidate_archive_sha256_pre_post:$candidate_archive_sha256,baseline_binary_sha256_pre_post:$baseline_binary_sha256,baseline_archive_sha256_pre_post:$baseline_archive_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,supervisor_sha256:$supervisor_sha256,wrapper_sha256:$wrapper_sha256,build_order_normalizer_sha256:$build_order_normalizer_sha256,candidate_timing_normalization_report_sha256:$candidate_timing_normalization_report_sha256,campaign_manifest_sha256:$campaign_manifest_sha256,campaign_raw_sha256:$campaign_raw_sha256,affinity_report_sha256:$affinity_report_sha256,affinity_binding_sha256:$affinity_binding_sha256,audit_sha256:$audit_sha256,build_reproduction:{candidate_timing_qualified_semantic_equal:true,candidate_timing_raw_tree_file_bytes_identical:$candidate_timing_raw_tree_byte_identical,candidate_tests_raw_byte_identical:true,baseline_raw_byte_identical:true},producer_verification_passed:true,independent_preseal_audit_passed:true,independent_auditor_scope:"campaign semantics only; build-order qualification is separately recomputed by the frozen wrapper normalizer",canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116,ratio_policy:{ordinary_and_one_shot_are_separate:true,ratios_are_separate_correlated_and_must_not_be_multiplied:true,combined_or_stacked_ratio_emitted:false,same_binary_ratio_is_another_campaign:true},postseal_policy:"promotion requires the enclosing COMPLETED.json written only after byte-identical independent pre/post audits, qualified-semantic build closure verification, core SHA verification, clean-source recheck, and a zero campaign exit"}' \
+    '{schema:"leopard2-v17-gfni-main-core-manifest/v3",status:"complete",campaign_exit_status:$campaign_exit_status,evidence_valid:true,performance_gate_passed:$performance_gate_passed,promotion_passed:false,promotion_requires_completion_envelope:true,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,sse2neon_commit:$sse2neon_commit,sse2neon_source_archive_sha256:$sse2neon_source_archive_sha256,candidate_binary_sha256_pre_post:$candidate_binary_sha256,candidate_archive_sha256_pre_post:$candidate_archive_sha256,baseline_binary_sha256_pre_post:$baseline_binary_sha256,baseline_archive_sha256_pre_post:$baseline_archive_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,supervisor_sha256:$supervisor_sha256,wrapper_sha256:$wrapper_sha256,build_order_normalizer_sha256:$build_order_normalizer_sha256,candidate_timing_normalization_report_sha256:$candidate_timing_normalization_report_sha256,candidate_test_normalization_report_sha256:$candidate_test_normalization_report_sha256,campaign_manifest_sha256:$campaign_manifest_sha256,campaign_raw_sha256:$campaign_raw_sha256,affinity_report_sha256:$affinity_report_sha256,affinity_binding_sha256:$affinity_binding_sha256,audit_sha256:$audit_sha256,build_reproduction:{candidate_timing_qualified_semantic_equal:true,candidate_timing_raw_tree_file_bytes_identical:$candidate_timing_raw_tree_byte_identical,candidate_tests_qualified_semantic_equal:true,candidate_tests_raw_tree_file_bytes_identical:$candidate_test_raw_tree_byte_identical,baseline_raw_byte_identical:true},producer_verification_passed:true,independent_preseal_audit_passed:true,independent_auditor_scope:"campaign semantics only; build-order qualification is separately recomputed by the frozen wrapper normalizer",canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116,ratio_policy:{ordinary_and_one_shot_are_separate:true,ratios_are_separate_correlated_and_must_not_be_multiplied:true,combined_or_stacked_ratio_emitted:false,same_binary_ratio_is_another_campaign:true},postseal_policy:"promotion requires the enclosing COMPLETED.json written only after byte-identical independent pre/post audits, qualified-semantic build closure verification, core SHA verification, clean-source recheck, and a zero campaign exit"}' \
     > "$lane/manifest.json"
 
 next_stage seal_core
