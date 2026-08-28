@@ -97,6 +97,757 @@ require_empty_output()
     test -z "$observed_output"
 }
 
+install_build_order_normalizer()
+{
+    local normalizer_output=$1
+    test ! -e "$normalizer_output"
+    /usr/bin/tee "$normalizer_output" >/dev/null <<'PY'
+#!/usr/bin/python3
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import stat
+import tempfile
+
+SCHEMA = "leopard2-v17-candidate-build-order-normalization/v1"
+EXCEPTIONS = ("compile_commands.json", "CMakeFiles/Makefile2")
+COMPILE_KEYS = {"command", "directory", "file", "output"}
+MAKE_RULE = re.compile(
+    r"^(CMakeFiles/[A-Za-z0-9_.+@-]+\.dir/all): "
+    r"(CMakeFiles/[A-Za-z0-9_.+@-]+\.dir/all)\n$")
+ORDER_SENSITIVE_AUTOMATIC = re.compile(
+    r"\$(?:[<^+?|]|\([<^+?|](?:[DF])?\)|\{[<^+?|](?:[DF])?\})")
+MAKE_BLOCKS = (
+    (
+        "CMakeFiles/leopard.dir/all",
+        (
+            "CMakeFiles/leopard2_backend_avx2.dir/all",
+            "CMakeFiles/leopard2_backend_avx2_t16_b64.dir/all",
+            "CMakeFiles/leopard2_backend_avx2_t16_k66.dir/all",
+            "CMakeFiles/leopard2_backend_avx2_t2_k4.dir/all",
+            "CMakeFiles/leopard2_backend_avx2_t32_b256.dir/all",
+            "CMakeFiles/leopard2_backend_avx2_t8_k8_b1024.dir/all",
+            "CMakeFiles/leopard2_backend_gfni.dir/all",
+            "CMakeFiles/leopard2_backend_ssse3.dir/all",
+            "CMakeFiles/leopard2_low_p32_b64_avx2.dir/all",
+        ),
+    ),
+    (
+        "CMakeFiles/bench_leopard2.dir/all",
+        (
+            "CMakeFiles/leopard.dir/all",
+            "CMakeFiles/leopard2_benchmark_source_attestation_refresh.dir/all",
+        ),
+    ),
+    (
+        "CMakeFiles/bench_leopard2_prevalidated_batch.dir/all",
+        (
+            "CMakeFiles/leopard.dir/all",
+            "CMakeFiles/leopard2_benchmark_source_attestation_refresh.dir/all",
+        ),
+    ),
+    (
+        "CMakeFiles/bench_leopard2_sparse_encode.dir/all",
+        (
+            "CMakeFiles/leopard.dir/all",
+            "CMakeFiles/leopard2_sparse_encode_benchmark_object.dir/all",
+            "CMakeFiles/leopard2_sparse_encode_oracle_object.dir/all",
+        ),
+    ),
+)
+
+
+class ContractError(RuntimeError):
+    pass
+
+
+def require(condition, message):
+    if not condition:
+        raise ContractError(message)
+
+
+def sha256_bytes(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def canonical_json(value, final_lf=True):
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return encoded + (b"\n" if final_lf else b"")
+
+
+def strict_object(pairs):
+    result = {}
+    for key, value in pairs:
+        require(key not in result, "duplicate JSON key: " + key)
+        result[key] = value
+    return result
+
+
+def exact_absolute(value, label):
+    require(isinstance(value, str) and value, label + " is not a string")
+    require("\x00" not in value and "\n" not in value and "\r" not in value,
+            label + " contains a control separator")
+    require(os.path.isabs(value) and os.path.normpath(value) == value,
+            label + " is not an exact normalized absolute path")
+    return value
+
+
+def render_cmake_compile_commands(records):
+    pieces = ["[\n"]
+    ordered_keys = ("directory", "command", "file", "output")
+    for index, record in enumerate(records):
+        pieces.append("{\n")
+        for key_index, key in enumerate(ordered_keys):
+            pieces.append("  " + json.dumps(key) + ": " +
+                          json.dumps(record[key], ensure_ascii=False))
+            pieces.append(",\n" if key_index + 1 < len(ordered_keys) else "\n")
+        pieces.append("},\n" if index + 1 < len(records) else "}\n")
+    pieces.append("]")
+    return "".join(pieces).encode("utf-8")
+
+
+def stable_bytes(path, label):
+    path = Path(path)
+    metadata = os.lstat(path)
+    require(stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode),
+            label + " is not a regular file")
+    require(metadata.st_uid == os.geteuid() and metadata.st_gid == os.getegid(),
+            label + " has unexpected ownership")
+    require(metadata.st_nlink == 1, label + " is hard-linked")
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        identity = (
+            metadata.st_dev, metadata.st_ino, metadata.st_mode,
+            metadata.st_uid, metadata.st_gid, metadata.st_nlink,
+            metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns,
+        )
+        require(identity == (
+            opened.st_dev, opened.st_ino, opened.st_mode, opened.st_uid,
+            opened.st_gid, opened.st_nlink, opened.st_size,
+            opened.st_mtime_ns, opened.st_ctime_ns,
+        ), label + " changed before read")
+        remaining = metadata.st_size
+        chunks = []
+        while remaining:
+            block = os.read(descriptor, min(1024 * 1024, remaining))
+            require(block, label + " had a short read")
+            chunks.append(block)
+            remaining -= len(block)
+        require(not os.read(descriptor, 1), label + " grew during read")
+        final = os.fstat(descriptor)
+        require(identity == (
+            final.st_dev, final.st_ino, final.st_mode, final.st_uid,
+            final.st_gid, final.st_nlink, final.st_size,
+            final.st_mtime_ns, final.st_ctime_ns,
+        ), label + " changed during read")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def snapshot_tree(root, label):
+    root = Path(root)
+    require(root.is_absolute() and os.path.normpath(str(root)) == str(root),
+            label + " root is not an exact absolute path")
+    metadata = os.lstat(root)
+    require(stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode),
+            label + " root is not a directory")
+    require(metadata.st_uid == os.geteuid() and metadata.st_gid == os.getegid(),
+            label + " root has unexpected ownership")
+    require(not stat.S_IMODE(metadata.st_mode) & 0o222,
+            label + " root remains writable")
+
+    def node_record(relative, kind, item):
+        return {
+            "gid": item.st_gid,
+            "mode": format(stat.S_IMODE(item.st_mode), "04o"),
+            "nlink": item.st_nlink,
+            "path": relative,
+            "type": kind,
+            "uid": item.st_uid,
+        }
+
+    nodes = {".": node_record(".", "directory", metadata)}
+    file_bytes = {}
+
+    def visit(directory, relative_parent):
+        with os.scandir(directory) as stream:
+            entries = sorted(stream, key=lambda entry: entry.name)
+        for entry in entries:
+            relative = (relative_parent + "/" + entry.name
+                        if relative_parent else entry.name)
+            path = Path(directory) / entry.name
+            item = os.lstat(path)
+            require(item.st_uid == os.geteuid() and item.st_gid == os.getegid(),
+                    label + " node has unexpected ownership: " + relative)
+            require(not stat.S_IMODE(item.st_mode) & 0o222,
+                    label + " node remains writable: " + relative)
+            if stat.S_ISDIR(item.st_mode) and not stat.S_ISLNK(item.st_mode):
+                nodes[relative] = node_record(relative, "directory", item)
+                visit(path, relative)
+            elif stat.S_ISREG(item.st_mode) and not stat.S_ISLNK(item.st_mode):
+                require(item.st_nlink == 1,
+                        label + " file is hard-linked: " + relative)
+                if entry.name in {"compile_commands.json", "Makefile2"}:
+                    require(relative in EXCEPTIONS,
+                            label + " has a non-allowlisted ordering file: " +
+                            relative)
+                nodes[relative] = node_record(relative, "file", item)
+                file_bytes[relative] = stable_bytes(path, label + " " + relative)
+            else:
+                raise ContractError(label + " has a special node: " + relative)
+
+    visit(root, "")
+    require(all(path in file_bytes for path in EXCEPTIONS),
+            label + " omits an exact ordering exception")
+    return nodes, file_bytes
+
+
+def normalize_compile_commands(raw, expected_build, expected_source):
+    require(raw and not raw.endswith(b"\n") and b"\r" not in raw,
+            "compile_commands.json source framing changed")
+    try:
+        value = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=strict_object,
+            parse_constant=lambda token: (_ for _ in ()).throw(
+                ContractError("non-finite JSON token: " + token)),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ContractError("compile_commands.json is not strict UTF-8 JSON") from error
+    require(isinstance(value, list) and len(value) == 30,
+            "compile_commands.json does not have exactly 30 entries")
+    require(render_cmake_compile_commands(value) == raw,
+            "compile_commands.json differs from the exact CMake formatter")
+    outputs = set()
+    normalized = []
+    source_prefix = expected_source + os.sep
+    for index, record in enumerate(value):
+        label = "compile command {}".format(index)
+        require(isinstance(record, dict) and set(record) == COMPILE_KEYS,
+                label + " does not have the exact four-key schema")
+        require(all(isinstance(record[key], str) and record[key]
+                    for key in COMPILE_KEYS),
+                label + " has a non-string or empty member")
+        directory = exact_absolute(record["directory"], label + " directory")
+        source_file = exact_absolute(record["file"], label + " file")
+        require(directory == expected_build,
+                label + " directory differs from the canonical build path")
+        require(source_file.startswith(source_prefix),
+                label + " file escapes the canonical source root")
+        output = record["output"]
+        require("\x00" not in output and "\n" not in output and
+                "\r" not in output and not os.path.isabs(output) and
+                os.path.normpath(output) == output and
+                output not in (".", "..") and
+                not output.startswith(".." + os.sep),
+                label + " output is not an exact safe relative path")
+        require(output not in outputs,
+                "compile_commands.json has a duplicate output: " + output)
+        outputs.add(output)
+        command = record["command"]
+        require("\x00" not in command and "\n" not in command and
+                "\r" not in command,
+                label + " command contains a control separator")
+        try:
+            tokens = shlex.split(command, posix=True)
+        except ValueError as error:
+            raise ContractError(label + " command is not shell-tokenizable") from error
+        require(tokens and tokens[0] == "/usr/bin/c++" and
+                tokens.count("-o") == 1 and tokens.count("-c") == 1,
+                label + " command has an unexpected compiler/output/source form")
+        output_index = tokens.index("-o")
+        source_index = tokens.index("-c")
+        require(output_index + 1 < len(tokens) and
+                tokens[output_index + 1] == output and
+                source_index + 1 < len(tokens) and
+                tokens[source_index + 1] == source_file,
+                label + " command/output/source fields disagree")
+        normalized.append(record)
+    normalized.sort(key=lambda record: record["output"])
+    return render_cmake_compile_commands(normalized), {
+        "entry_count": len(normalized),
+        "exact_cmake_rendering": True,
+        "source_final_lf": False,
+        "unique_output_count": len(outputs),
+    }
+
+
+def normalize_makefile2(raw, expected_build, expected_source):
+    require(raw.endswith(b"\n") and b"\r" not in raw and b"\x00" not in raw,
+            "Makefile2 source framing changed")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ContractError("Makefile2 is not UTF-8") from error
+    lines = text.splitlines(keepends=True)
+    require(lines and all(line.endswith("\n") for line in lines),
+            "Makefile2 has a non-LF-terminated line")
+    require(lines[0] == "# CMAKE generated file: DO NOT EDIT!\n",
+            "Makefile2 header differs")
+    require(lines.count("CMAKE_SOURCE_DIR = " + expected_source + "\n") == 1,
+            "Makefile2 source path binding differs")
+    require(lines.count("CMAKE_BINARY_DIR = " + expected_build + "\n") == 1,
+            "Makefile2 build path binding differs")
+    require(ORDER_SENSITIVE_AUTOMATIC.search(text) is None,
+            "Makefile2 contains an order-sensitive automatic variable")
+    expected_blocks = {target: tuple(prerequisites)
+                       for target, prerequisites in MAKE_BLOCKS}
+    positions = {target: [] for target in expected_blocks}
+    for index, line in enumerate(lines):
+        match = MAKE_RULE.fullmatch(line)
+        if match and match.group(1) in positions:
+            positions[match.group(1)].append((index, match.group(2)))
+    output = list(lines)
+    block_report = []
+    for target, prerequisites in MAKE_BLOCKS:
+        observed = positions[target]
+        require(len(observed) == len(prerequisites),
+                "Makefile2 allowlisted block length differs: " + target)
+        indexes = [index for index, _dependency in observed]
+        require(indexes == list(range(indexes[0], indexes[0] + len(indexes))),
+                "Makefile2 allowlisted block is not consecutive: " + target)
+        observed_dependencies = [dependency for _index, dependency in observed]
+        require(len(set(observed_dependencies)) == len(observed_dependencies) and
+                set(observed_dependencies) == set(prerequisites),
+                "Makefile2 has a moved/nonallowlisted prerequisite: " + target)
+        start = indexes[0]
+        end = start + len(indexes)
+        phony = ".PHONY : " + target + "\n"
+        phony_indexes = [index for index, line in enumerate(lines)
+                         if line == phony]
+        require(len(phony_indexes) == 1 and phony_indexes[0] > end,
+                "Makefile2 allowlisted target has no unique later PHONY marker: " +
+                target)
+        recipe = lines[end:phony_indexes[0]]
+        require(recipe and all(line.startswith("\t") for line in recipe),
+                "Makefile2 allowlisted target recipe context differs: " + target)
+        require(ORDER_SENSITIVE_AUTOMATIC.search("".join(recipe)) is None,
+                "Makefile2 allowlisted recipe is order-sensitive: " + target)
+        output[start:end] = sorted(output[start:end])
+        block_report.append({
+            "line_count": len(indexes),
+            "phony_marker_count": len(phony_indexes),
+            "recipe_line_count": len(recipe),
+            "target": target,
+        })
+    require(len(block_report) == 4,
+            "Makefile2 does not have exactly four normalized blocks")
+    return "".join(output).encode("utf-8"), {
+        "normalized_blocks": block_report,
+        "normalized_block_count": len(block_report),
+        "source_final_lf": True,
+    }
+
+
+def write_exclusive(path, value):
+    path = Path(path)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        view = memoryview(value)
+        while view:
+            written = os.write(descriptor, view)
+            require(written > 0, "short canonical output write")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def compare_pair(left, right, expected_build, expected_source, output_dir):
+    expected_build = exact_absolute(expected_build, "expected build path")
+    expected_source = exact_absolute(expected_source, "expected source path")
+    left = Path(exact_absolute(str(left), "left closure path"))
+    right = Path(exact_absolute(str(right), "right closure path"))
+    output_dir = Path(exact_absolute(str(output_dir), "normalization output path"))
+    require(not output_dir.exists(), "normalization output already exists")
+    output_dir.mkdir(mode=0o700)
+    left_nodes, left_files = snapshot_tree(left, "left closure")
+    right_nodes, right_files = snapshot_tree(right, "right closure")
+    require(left_nodes == right_nodes, "closure path/type census differs")
+    for relative in sorted(left_files):
+        if relative not in EXCEPTIONS:
+            require(left_files[relative] == right_files[relative],
+                    "nonexception closure bytes differ: " + relative)
+
+    left_compile, left_compile_report = normalize_compile_commands(
+        left_files[EXCEPTIONS[0]], expected_build, expected_source)
+    right_compile, right_compile_report = normalize_compile_commands(
+        right_files[EXCEPTIONS[0]], expected_build, expected_source)
+    left_make, left_make_report = normalize_makefile2(
+        left_files[EXCEPTIONS[1]], expected_build, expected_source)
+    right_make, right_make_report = normalize_makefile2(
+        right_files[EXCEPTIONS[1]], expected_build, expected_source)
+
+    outputs = {
+        "left-compile_commands.canonical.json": left_compile,
+        "right-compile_commands.canonical.json": right_compile,
+        "left-Makefile2.canonical": left_make,
+        "right-Makefile2.canonical": right_make,
+    }
+    for name, value in outputs.items():
+        write_exclusive(output_dir / name, value)
+    require(left_compile == right_compile,
+            "compile_commands canonical semantics differ")
+    require(left_make == right_make, "Makefile2 canonical semantics differ")
+
+    raw_equal = all(left_files[path] == right_files[path]
+                    for path in left_files)
+    inventory = [left_nodes[path] for path in sorted(left_nodes)]
+    exact_byte_files = [
+        {
+            "path": path,
+            "sha256": sha256_bytes(left_files[path]),
+            "size": len(left_files[path]),
+        }
+        for path in sorted(left_files)
+        if path not in EXCEPTIONS
+    ]
+    report = {
+        "compile_commands": {
+            "canonical_sha256": sha256_bytes(left_compile),
+            "left": left_compile_report,
+            "left_raw_sha256": sha256_bytes(left_files[EXCEPTIONS[0]]),
+            "left_raw_size": len(left_files[EXCEPTIONS[0]]),
+            "raw_byte_identical":
+                left_files[EXCEPTIONS[0]] == right_files[EXCEPTIONS[0]],
+            "right": right_compile_report,
+            "right_raw_sha256": sha256_bytes(right_files[EXCEPTIONS[0]]),
+            "right_raw_size": len(right_files[EXCEPTIONS[0]]),
+        },
+        "contract": {
+            "all_other_relative_file_bytes_identical": True,
+            "compile_commands_order_only": "sort 30 unique exact four-key records by output",
+            "exception_paths": list(EXCEPTIONS),
+            "makefile2_order_only":
+                "sort only four exact consecutive allowlisted dependency blocks",
+            "raw_tree_file_bytes_identical": raw_equal,
+        },
+        "exact_byte_files": {
+            "count": len(exact_byte_files),
+            "manifest": exact_byte_files,
+            "manifest_sha256": sha256_bytes(canonical_json(exact_byte_files)),
+        },
+        "expected_build": expected_build,
+        "expected_source": expected_source,
+        "makefile2": {
+            "canonical_sha256": sha256_bytes(left_make),
+            "left": left_make_report,
+            "left_raw_sha256": sha256_bytes(left_files[EXCEPTIONS[1]]),
+            "left_raw_size": len(left_files[EXCEPTIONS[1]]),
+            "raw_byte_identical":
+                left_files[EXCEPTIONS[1]] == right_files[EXCEPTIONS[1]],
+            "right": right_make_report,
+            "right_raw_sha256": sha256_bytes(right_files[EXCEPTIONS[1]]),
+            "right_raw_size": len(right_files[EXCEPTIONS[1]]),
+        },
+        "node_inventory": {
+            "count": len(inventory),
+            "manifest": inventory,
+            "manifest_sha256": sha256_bytes(canonical_json(inventory)),
+        },
+        "schema": SCHEMA,
+        "semantic_equal": True,
+    }
+    write_exclusive(output_dir / "report.json", canonical_json(report))
+    return report
+
+
+def fixture_compile(build, source, reverse=False):
+    records = []
+    for index in range(30):
+        source_file = source + "/f{:02d}.cpp".format(index)
+        output = "CMakeFiles/t{:02d}.dir/f{:02d}.cpp.o".format(index, index)
+        records.append({
+            "command": "/usr/bin/c++ -DVALUE={} -o {} -c {}".format(
+                index, output, source_file),
+            "directory": build,
+            "file": source_file,
+            "output": output,
+        })
+    if reverse:
+        records.reverse()
+    return render_cmake_compile_commands(records)
+
+
+def fixture_make(build, source, reverse=False):
+    lines = [
+        "# CMAKE generated file: DO NOT EDIT!\n",
+        "# Generated by fixture\n",
+        "CMAKE_SOURCE_DIR = " + source + "\n",
+        "CMAKE_BINARY_DIR = " + build + "\n",
+        "\n",
+    ]
+    for target, prerequisites in MAKE_BLOCKS:
+        ordered = list(prerequisites)
+        if reverse:
+            ordered.reverse()
+        lines.extend(target + ": " + dependency + "\n"
+                     for dependency in ordered)
+        lines.extend((
+            "\t@echo stable recipe\n",
+            ".PHONY : " + target + "\n",
+            "\n",
+        ))
+    return "".join(lines).encode("utf-8")
+
+
+def install_fixture(root, build, source, reverse=False):
+    root.mkdir()
+    (root / "CMakeFiles").mkdir()
+    (root / "compile_commands.json").write_bytes(
+        fixture_compile(build, source, reverse))
+    (root / "CMakeFiles/Makefile2").write_bytes(
+        fixture_make(build, source, reverse))
+    (root / "selected-object.o").write_bytes(b"exact-object-bytes\x00\xff")
+
+
+def set_fixture_writable(root):
+    for directory, directories, files in os.walk(root, topdown=True):
+        os.chmod(directory, stat.S_IMODE(os.lstat(directory).st_mode) | 0o200)
+        for name in files:
+            path = Path(directory) / name
+            if not path.is_symlink():
+                os.chmod(path, stat.S_IMODE(os.lstat(path).st_mode) | 0o200)
+
+
+def seal_fixture(root):
+    for directory, directories, files in os.walk(root, topdown=False):
+        for name in files:
+            path = Path(directory) / name
+            if not path.is_symlink():
+                os.chmod(path, stat.S_IMODE(os.lstat(path).st_mode) & ~0o222)
+        os.chmod(directory, stat.S_IMODE(os.lstat(directory).st_mode) & ~0o222)
+
+
+def self_test():
+    with tempfile.TemporaryDirectory(prefix="leopard-v17-order-self-test.") as tmp:
+        base = Path(tmp)
+        build = "/tmp/leopard-v17-order-self-test/build"
+        source = "/tmp/leopard-v17-order-self-test/source"
+        left = base / "left"
+        reordered = base / "reordered"
+        install_fixture(left, build, source, False)
+        install_fixture(reordered, build, source, True)
+        seal_fixture(left)
+        seal_fixture(reordered)
+        report = compare_pair(
+            left, reordered, build, source, base / "accepted")
+        require(report["semantic_equal"] is True and
+                report["contract"]["raw_tree_file_bytes_identical"] is False,
+                "reorder-only fixture was not qualified honestly")
+
+        def rejected(name, mutate):
+            target = base / name
+            shutil.copytree(reordered, target, symlinks=True)
+            set_fixture_writable(target)
+            mutate(target)
+            seal_fixture(target)
+            try:
+                compare_pair(left, target, build, source, base / (name + "-out"))
+            except ContractError:
+                return
+            raise ContractError("adversarial fixture was accepted: " + name)
+
+        def duplicate_key(root):
+            path = root / "compile_commands.json"
+            raw = path.read_bytes()
+            raw = raw.replace(
+                b'"directory":', b'"directory":"duplicate","directory":', 1)
+            path.write_bytes(raw)
+
+        def duplicate_output(root):
+            path = root / "compile_commands.json"
+            records = json.loads(path.read_bytes())
+            records[1]["output"] = records[0]["output"]
+            path.write_bytes(render_cmake_compile_commands(records))
+
+        def token_mutation(root):
+            path = root / "compile_commands.json"
+            records = json.loads(path.read_bytes())
+            records[0]["command"] = records[0]["command"].replace(
+                "/usr/bin/c++ ", "/usr/bin/c++ -DSEMANTIC_MUTATION=1 ", 1)
+            path.write_bytes(render_cmake_compile_commands(records))
+
+        def nonallowlisted_prerequisite(root):
+            path = root / "CMakeFiles/Makefile2"
+            raw = path.read_bytes()
+            raw = raw.replace(
+                b"CMakeFiles/leopard2_backend_avx2.dir/all",
+                b"CMakeFiles/not_allowlisted.dir/all", 1)
+            path.write_bytes(raw)
+
+        def moved_prerequisite(root):
+            path = root / "CMakeFiles/Makefile2"
+            lines = path.read_text().splitlines(keepends=True)
+            needle = ("CMakeFiles/leopard.dir/all: "
+                      "CMakeFiles/leopard2_backend_avx2.dir/all\n")
+            lines.remove(needle)
+            lines.append(needle)
+            path.write_text("".join(lines))
+
+        def recipe_mutation(root):
+            path = root / "CMakeFiles/Makefile2"
+            raw = path.read_bytes().replace(
+                b"\t@echo stable recipe\n", b"\t@echo changed recipe\n", 1)
+            path.write_bytes(raw)
+
+        def automatic_variable(root):
+            path = root / "CMakeFiles/Makefile2"
+            raw = path.read_bytes().replace(
+                b"\t@echo stable recipe\n", b"\t@echo $^\n", 1)
+            path.write_bytes(raw)
+
+        def automatic_variable_derived(root):
+            path = root / "CMakeFiles/Makefile2"
+            raw = path.read_bytes().replace(
+                b"\t@echo stable recipe\n", b"\t@echo $(^D)\n", 1)
+            path.write_bytes(raw)
+
+        def duplicate_phony(root):
+            path = root / "CMakeFiles/Makefile2"
+            raw = path.read_bytes()
+            marker = b".PHONY : CMakeFiles/leopard.dir/all\n"
+            raw = raw.replace(marker, marker + marker, 1)
+            path.write_bytes(raw)
+
+        def mode_drift(root):
+            os.chmod(root / "selected-object.o", 0o440)
+
+        def extra_node(root):
+            (root / "unexpected.bin").write_bytes(b"unexpected")
+
+        def special_node(root):
+            os.symlink("selected-object.o", root / "unexpected-link")
+
+        def misplaced_exception(root):
+            (root / "nested").mkdir()
+            (root / "nested/compile_commands.json").write_bytes(b"[]")
+
+        for name, mutation in (
+            ("duplicate-key", duplicate_key),
+            ("duplicate-output", duplicate_output),
+            ("token-mutation", token_mutation),
+            ("nonallowlisted-prerequisite", nonallowlisted_prerequisite),
+            ("moved-prerequisite", moved_prerequisite),
+            ("recipe-mutation", recipe_mutation),
+            ("automatic-variable", automatic_variable),
+            ("automatic-variable-derived", automatic_variable_derived),
+            ("duplicate-phony", duplicate_phony),
+            ("mode-drift", mode_drift),
+            ("extra-node", extra_node),
+            ("special-node", special_node),
+            ("misplaced-exception", misplaced_exception),
+        ):
+            rejected(name, mutation)
+    print("v17 candidate build order normalizer self-test passed")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="operation", required=True)
+    compare_parser = subparsers.add_parser("compare")
+    compare_parser.add_argument("--left", required=True, type=Path)
+    compare_parser.add_argument("--right", required=True, type=Path)
+    compare_parser.add_argument("--expected-build", required=True)
+    compare_parser.add_argument("--expected-source", required=True)
+    compare_parser.add_argument("--output-dir", required=True, type=Path)
+    subparsers.add_parser("self-test")
+    options = parser.parse_args()
+    try:
+        if options.operation == "self-test":
+            self_test()
+        else:
+            compare_pair(
+                options.left, options.right, options.expected_build,
+                options.expected_source, options.output_dir)
+    except ContractError as error:
+        print("build order normalization rejected: " + str(error), file=os.sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+PY
+    /usr/bin/chmod 0400 "$normalizer_output"
+}
+
+capture_allowed_diff()
+{
+    local output=$1
+    shift
+    local diff_status=0
+    if /usr/bin/diff "$@" > "$output"; then
+        diff_status=0
+    else
+        diff_status=$?
+        test "$diff_status" -eq 1
+    fi
+    /usr/bin/printf '%s\n' "$diff_status" > "$output.status"
+}
+
+compare_candidate_timing_build_closures()
+{
+    local normalizer=$1
+    local left=$2
+    local right=$3
+    local expected_build=$4
+    local expected_source=$5
+    local evidence=$6
+    test ! -e "$evidence"
+    /usr/bin/mkdir -m 0700 "$evidence"
+    capture_allowed_diff "$evidence/raw-tree.diff" -qr "$left" "$right"
+    capture_allowed_diff "$evidence/raw-compile_commands.diff" -u \
+        "$left/compile_commands.json" "$right/compile_commands.json"
+    capture_allowed_diff "$evidence/raw-Makefile2.diff" -u \
+        "$left/CMakeFiles/Makefile2" "$right/CMakeFiles/Makefile2"
+    /usr/bin/diff -qr --exclude=compile_commands.json --exclude=Makefile2 \
+        "$left" "$right" > "$evidence/required-byte-identity.diff"
+    /usr/bin/python3 -I -S -B "$normalizer" compare \
+        --left "$left" \
+        --right "$right" \
+        --expected-build "$expected_build" \
+        --expected-source "$expected_source" \
+        --output-dir "$evidence/normalized" \
+        > "$evidence/normalizer-summary.txt" \
+        2> "$evidence/normalizer-stderr.log"
+    /usr/bin/diff -u \
+        "$evidence/normalized/left-compile_commands.canonical.json" \
+        "$evidence/normalized/right-compile_commands.canonical.json" \
+        > "$evidence/canonical-compile_commands.diff"
+    /usr/bin/diff -u \
+        "$evidence/normalized/left-Makefile2.canonical" \
+        "$evidence/normalized/right-Makefile2.canonical" \
+        > "$evidence/canonical-Makefile2.diff"
+    /usr/bin/sha256sum \
+        "$left/compile_commands.json" \
+        "$right/compile_commands.json" \
+        "$left/CMakeFiles/Makefile2" \
+        "$right/CMakeFiles/Makefile2" \
+        > "$evidence/raw-ordering-file-SHA256SUMS"
+    /usr/bin/sha256sum \
+        "$evidence/normalized/left-compile_commands.canonical.json" \
+        "$evidence/normalized/right-compile_commands.canonical.json" \
+        "$evidence/normalized/left-Makefile2.canonical" \
+        "$evidence/normalized/right-Makefile2.canonical" \
+        "$evidence/normalized/report.json" \
+        > "$evidence/canonical-SHA256SUMS"
+}
+
 verify_sealed_tree()
 {
     local verified=$1
@@ -450,6 +1201,7 @@ verify_envelope()
     local promotion_value=
     local campaign_exit_value=
     local campaign_manifest_sha=
+    local candidate_raw_tree_value=
     local replay_campaign=
     local replay_controller_root=
     local verifier_tmp=
@@ -515,6 +1267,8 @@ verify_envelope()
 
     if [[ "$status_value" == complete ]]; then
         test "$campaign_exit_value" -eq 0
+        verifier_tmp="$(/usr/bin/mktemp -d \
+            /tmp/leopard-v17-gfni-main-verify.XXXXXX)"
         test -f "$verified_core/manifest.json"
         test -f "$verified_core/campaign/manifest.json"
         test -f "$verified_core/audit.json"
@@ -524,6 +1278,8 @@ verify_envelope()
         test -f "$verified_core/git_capture.py"
         test -f "$verified_core/balanced_evidence_common.py"
         test -f "$verified_core/leopard2_build_provenance.py"
+        test -f "$verified_core/build-order-normalizer.py"
+        test -f "$verified_core/build-order-normalizer-reconstruction.json"
         test -f "$verified_core/leopard2_affinity_supervisor.py"
         test -f "$verified_core/sse2neon-source.tar"
         test -f "$verified_core/build-closure.json"
@@ -548,6 +1304,88 @@ verify_envelope()
             "$verified_core/build-closure/committed-auditor.py"
         /usr/bin/cmp "$verified_core/leopard2_build_provenance.py" \
             "$verified_core/build-closure/committed-build-provenance.py"
+        test "$(/usr/bin/jq -er '.schema | strings' \
+            "$verified_core/build-closure.json")" = \
+            leopard2-v17-gfni-main-build-closure/v2
+        test "$(/usr/bin/sha256sum \
+            "$verified_core/build-order-normalizer.py" | \
+            /usr/bin/cut -d' ' -f1)" = \
+            "$(/usr/bin/jq -er \
+                '.controllers.build_order_normalizer_sha256 | strings' \
+                "$verified_core/build-closure.json")"
+        install_build_order_normalizer \
+            "$verifier_tmp/reconstructed-build-order-normalizer.py"
+        /usr/bin/cmp "$verified_core/build-order-normalizer.py" \
+            "$verifier_tmp/reconstructed-build-order-normalizer.py"
+        /usr/bin/jq -e '
+            .schema ==
+                "leopard2-v17-build-order-normalizer-reconstruction/v1" and
+            .embedded_wrapper_reconstruction_byte_identical == true and
+            .self_test_passed == true and
+            .timing_performed == false
+        ' "$verified_core/build-order-normalizer-reconstruction.json" >/dev/null
+        /usr/bin/python3 -I -S -B \
+            "$verified_core/build-order-normalizer.py" self-test \
+            > "$verifier_tmp/build-order-normalizer-self-test.log" \
+            2> "$verifier_tmp/build-order-normalizer-self-test-stderr.log"
+        compare_candidate_timing_build_closures \
+            "$verified_core/build-order-normalizer.py" \
+            "$verified_core/build-closure/live-candidate" \
+            "$verified_core/build-closure/replay-candidate" \
+            "$(/usr/bin/jq -er '.candidate.build | strings' \
+                "$verified_core/build-closure.json")" \
+            "$(/usr/bin/jq -er '.candidate.source | strings' \
+                "$verified_core/build-closure.json")" \
+            "$verifier_tmp/candidate-timing-order-normalization"
+        /usr/bin/cmp \
+            "$verified_core/build-closure/candidate-timing-order-normalization/normalized/report.json" \
+            "$verifier_tmp/candidate-timing-order-normalization/normalized/report.json"
+        candidate_raw_tree_value="$(/usr/bin/jq -er \
+            '.contract.raw_tree_file_bytes_identical | booleans | tostring' \
+            "$verifier_tmp/candidate-timing-order-normalization/normalized/report.json")"
+        test "$candidate_raw_tree_value" = \
+            "$(/usr/bin/jq -er \
+                '.candidate.reproduction.raw_tree_file_bytes_identical | booleans | tostring' \
+                "$verified_core/build-closure.json")"
+        test "$candidate_raw_tree_value" = \
+            "$(/usr/bin/jq -er \
+                '.build_reproduction.candidate_timing_raw_tree_file_bytes_identical | booleans | tostring' \
+                "$verified_core/build-closure.json")"
+        test "$candidate_raw_tree_value" = \
+            "$(/usr/bin/jq -er \
+                '.build_reproduction.candidate_timing_raw_tree_file_bytes_identical | booleans | tostring' \
+                "$verified_core/manifest.json")"
+        if [[ "$candidate_raw_tree_value" == true ]]; then
+            test "$(/usr/bin/cat \
+                "$verifier_tmp/candidate-timing-order-normalization/raw-tree.diff.status")" = 0
+        else
+            test "$(/usr/bin/cat \
+                "$verifier_tmp/candidate-timing-order-normalization/raw-tree.diff.status")" = 1
+        fi
+        test "$(/usr/bin/sha256sum \
+            "$verified_core/build-closure/candidate-timing-order-normalization/normalized/report.json" | \
+            /usr/bin/cut -d' ' -f1)" = \
+            "$(/usr/bin/jq -er \
+                '.candidate.reproduction.normalization_report_sha256 | strings' \
+                "$verified_core/build-closure.json")"
+        /usr/bin/jq -e '
+            .candidate.reproduction.qualified_semantic_equal == true and
+            .candidate.reproduction.all_nonexception_file_bytes_identical == true and
+            .candidate.reproduction.order_normalized_exception_paths ==
+                ["compile_commands.json", "CMakeFiles/Makefile2"] and
+            .candidate.reproduction.compile_commands_exact_entry_count == 30 and
+            .candidate.reproduction.makefile2_exact_allowlisted_block_count == 4 and
+            .build_reproduction.candidate_timing_qualified_semantic_equal == true and
+            .build_reproduction.candidate_tests_raw_byte_identical == true and
+            .build_reproduction.baseline_raw_byte_identical == true and
+            .baseline.two_clean_builds_raw_byte_identical == true and
+            .build_reproduction.identical_absolute_source_and_build_paths == true and
+            .build_reproduction.objects_archives_binaries_link_recipes_cache_and_generated_inputs_raw_byte_identical == true and
+            .controllers.build_order_normalizer_origin ==
+                "embedded deterministic helper from committed wrapper" and
+            .audit_boundary ==
+                "independent campaign auditor covers retained campaign semantics; build-order qualification is separately recomputed by the frozen wrapper normalizer during durable verification"
+        ' "$verified_core/build-closure.json" >/dev/null
         /usr/bin/cmp \
             "$verified_core/build-closure/live-candidate-tests/leopard2_backend_failures_test" \
             "$verified_core/build-closure/replay-candidate-tests/leopard2_backend_failures_test"
@@ -586,7 +1424,7 @@ verify_envelope()
                 '.candidate_tests.prevalidated_batch_test_sha256 | strings' \
                 "$verified_core/build-closure.json")"
         test "$(/usr/bin/jq -er \
-            '.candidate_tests.two_clean_builds | booleans | tostring' \
+            '.candidate_tests.two_clean_builds_raw_byte_identical | booleans | tostring' \
             "$verified_core/build-closure.json")" = true
         test "$(/usr/bin/jq -er \
             '.candidate_tests.complete_object_link_cache_closure | booleans | tostring' \
@@ -603,7 +1441,7 @@ verify_envelope()
                 "generated/leopard2-benchmark-attestation/leopard2_benchmark_source_attestation.h",
                 "generated/leopard2-benchmark-attestation/leopard2_benchmark_build_configuration.txt"
             ] and
-            .candidate_tests.posttest_byte_identical == true and
+            .candidate_tests.posttest_raw_byte_identical == true and
             .candidate_tests.postcampaign_revalidation_required == true
         ' "$verified_core/build-closure.json" >/dev/null
         test "$(/usr/bin/jq -er '.schema | strings' \
@@ -628,7 +1466,7 @@ verify_envelope()
             "$status_file")" = "$promotion_value"
         test "$(/usr/bin/jq -er '.schema | strings' \
             "$verified_core/manifest.json")" = \
-            leopard2-v17-gfni-main-core-manifest/v1
+            leopard2-v17-gfni-main-core-manifest/v2
         test "$(/usr/bin/jq -er '.campaign_exit_status | numbers' \
             "$verified_core/manifest.json")" -eq 0
         test "$(/usr/bin/jq -er '.evidence_valid | booleans | tostring' \
@@ -668,6 +1506,26 @@ verify_envelope()
             /usr/bin/cut -d' ' -f1)" = \
             "$(/usr/bin/jq -er '.supervisor_sha256 | strings' \
                 "$verified_core/manifest.json")"
+        test "$(/usr/bin/sha256sum \
+            "$verified_core/build-order-normalizer.py" | \
+            /usr/bin/cut -d' ' -f1)" = \
+            "$(/usr/bin/jq -er '.build_order_normalizer_sha256 | strings' \
+                "$verified_core/manifest.json")"
+        test "$(/usr/bin/sha256sum \
+            "$verified_core/build-closure/candidate-timing-order-normalization/normalized/report.json" | \
+            /usr/bin/cut -d' ' -f1)" = \
+            "$(/usr/bin/jq -er \
+                '.candidate_timing_normalization_report_sha256 | strings' \
+                "$verified_core/manifest.json")"
+        /usr/bin/jq -e '
+            .build_reproduction.candidate_timing_qualified_semantic_equal == true and
+            (.build_reproduction.candidate_timing_raw_tree_file_bytes_identical |
+                type == "boolean") and
+            .build_reproduction.candidate_tests_raw_byte_identical == true and
+            .build_reproduction.baseline_raw_byte_identical == true and
+            .independent_auditor_scope ==
+                "campaign semantics only; build-order qualification is separately recomputed by the frozen wrapper normalizer"
+        ' "$verified_core/manifest.json" >/dev/null
         test "$(/usr/bin/sha256sum "$verified_core/manifest.json" | \
             /usr/bin/cut -d' ' -f1)" = \
             "$(/usr/bin/jq -er '.core_manifest_sha256 | strings' \
@@ -711,8 +1569,6 @@ verify_envelope()
             /usr/bin/cut -d' ' -f1)" = \
             "$(/usr/bin/jq -er '.postseal_audit_sha256 | strings' \
                 "$status_file")"
-        verifier_tmp="$(/usr/bin/mktemp -d \
-            /tmp/leopard-v17-gfni-main-verify.XXXXXX)"
         /usr/bin/python3 -I -S -B \
             "$verified_core/leopard2_affinity_supervisor.py" verify-report \
             --report "$verified_core/affinity-report.json" \
@@ -977,6 +1833,20 @@ next_stage pre_tool_closure
     'import json,sys; assert sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.flags.ignore_environment == 1 and sys.dont_write_bytecode; print(json.dumps({"executable":sys.executable,"flags":{"dont_write_bytecode":sys.dont_write_bytecode,"ignore_environment":sys.flags.ignore_environment,"isolated":sys.flags.isolated,"no_site":sys.flags.no_site,"no_user_site":sys.flags.no_user_site}},sort_keys=True,separators=(",",":")))' \
     > "$lane/python-isolation.json"
 
+next_stage build_order_normalizer_protocol_self_test
+install_build_order_normalizer "$lane/build-order-normalizer.py"
+normalizer_reconstruction_root="$(/usr/bin/mktemp -d \
+    /tmp/leopard-v17-normalizer-reconstruction.XXXXXX)"
+install_build_order_normalizer \
+    "$normalizer_reconstruction_root/build-order-normalizer.py"
+/usr/bin/cmp "$lane/build-order-normalizer.py" \
+    "$normalizer_reconstruction_root/build-order-normalizer.py"
+/usr/bin/python3 -I -S -B "$lane/build-order-normalizer.py" self-test \
+    > "$lane/build-order-normalizer-self-test.log" 2>&1
+/usr/bin/jq -n \
+    '{schema:"leopard2-v17-build-order-normalizer-reconstruction/v1",embedded_wrapper_reconstruction_byte_identical:true,self_test_passed:true,timing_performed:false}' \
+    > "$lane/build-order-normalizer-reconstruction.json"
+
 next_stage tree_metadata_protocol_self_test
 tree_self_test="$lane/tree-metadata-protocol-self-test"
 /usr/bin/mkdir -m 0700 "$tree_self_test"
@@ -1168,6 +2038,7 @@ for frozen_controller in \
     "$lane/git_capture.py" \
     "$lane/balanced_evidence_common.py" \
     "$lane/leopard2_build_provenance.py" \
+    "$lane/build-order-normalizer.py" \
     "$lane/leopard2_affinity_supervisor.py"; do
     test ! -L "$frozen_controller"
     test "$(/usr/bin/stat -c %h "$frozen_controller")" = 1
@@ -1524,10 +2395,29 @@ copy_timing_closure "$candidate_build" \
 copy_timing_closure "$baseline_build" \
     "$lane/build-closure/replay-baseline" baseline
 
-next_stage live_replay_byte_closure
-/usr/bin/diff -qr "$lane/build-closure/live-candidate" \
+next_stage freeze_candidate_timing_closure_inputs
+/usr/bin/find \
+    "$lane/build-closure/live-candidate" \
     "$lane/build-closure/replay-candidate" \
-    > "$lane/candidate-build-byte-diff.txt"
+    -type f -perm /222 -exec /usr/bin/chmod a-w {} +
+/usr/bin/find \
+    "$lane/build-closure/live-candidate" \
+    "$lane/build-closure/replay-candidate" \
+    -type d -perm /222 -exec /usr/bin/chmod a-w {} +
+
+next_stage live_replay_byte_closure
+compare_candidate_timing_build_closures \
+    "$lane/build-order-normalizer.py" \
+    "$lane/build-closure/live-candidate" \
+    "$lane/build-closure/replay-candidate" \
+    "$candidate_build" "$candidate_source" \
+    "$lane/build-closure/candidate-timing-order-normalization"
+/usr/bin/cp --reflink=never \
+    "$lane/build-closure/candidate-timing-order-normalization/raw-tree.diff" \
+    "$lane/candidate-build-byte-diff.txt"
+/usr/bin/cp --reflink=never \
+    "$lane/build-closure/candidate-timing-order-normalization/raw-tree.diff.status" \
+    "$lane/candidate-build-byte-diff.status"
 /usr/bin/diff -qr "$lane/build-closure/live-baseline" \
     "$lane/build-closure/replay-baseline" \
     > "$lane/baseline-build-byte-diff.txt"
@@ -1643,6 +2533,14 @@ supervisor_hash="$(/usr/bin/sha256sum \
     "$lane/leopard2_affinity_supervisor.py" | /usr/bin/cut -d' ' -f1)"
 wrapper_hash="$(/usr/bin/sha256sum "$lane/run-authoritative.sh" | \
     /usr/bin/cut -d' ' -f1)"
+build_order_normalizer_hash="$(/usr/bin/sha256sum \
+    "$lane/build-order-normalizer.py" | /usr/bin/cut -d' ' -f1)"
+candidate_timing_normalization_report_hash="$(/usr/bin/sha256sum \
+    "$lane/build-closure/candidate-timing-order-normalization/normalized/report.json" | \
+    /usr/bin/cut -d' ' -f1)"
+candidate_timing_raw_tree_byte_identical="$(/usr/bin/jq -er \
+    '.contract.raw_tree_file_bytes_identical | booleans | tostring' \
+    "$lane/build-closure/candidate-timing-order-normalization/normalized/report.json")"
 candidate_source_archive_hash="$(/usr/bin/sha256sum \
     "$lane/candidate-source.tar" | /usr/bin/cut -d' ' -f1)"
 baseline_source_archive_hash="$(/usr/bin/sha256sum \
@@ -1671,11 +2569,16 @@ sse2neon_source_archive_hash="$(/usr/bin/sha256sum \
     --arg auditor_sha256 "$auditor_hash" \
     --arg supervisor_sha256 "$supervisor_hash" \
     --arg wrapper_sha256 "$wrapper_hash" \
+    --arg build_order_normalizer_sha256 "$build_order_normalizer_hash" \
+    --arg candidate_timing_normalization_report_sha256 \
+        "$candidate_timing_normalization_report_hash" \
+    --argjson candidate_timing_raw_tree_byte_identical \
+        "$candidate_timing_raw_tree_byte_identical" \
     --arg candidate_source_archive_sha256 "$candidate_source_archive_hash" \
     --arg baseline_source_archive_sha256 "$baseline_source_archive_hash" \
     --arg sse2neon_commit "$candidate_submodule_commit" \
     --arg sse2neon_source_archive_sha256 "$sse2neon_source_archive_hash" \
-    '{schema:"leopard2-v17-gfni-main-build-closure/v1",candidate:{commit:$commit,tree:$tree,source:$candidate_source,build:$candidate_build,profile:"standard AUTO Release; tests off; benchmarks on; GF8/GF16 on",binary_sha256:$candidate_binary_sha256,archive_sha256:$candidate_archive_sha256,source_archive_sha256:$candidate_source_archive_sha256},candidate_tests:{build:$candidate_test_build,profile:"standard AUTO Release; tests and benchmarks on; GF8/GF16 on",selected_files:["bench_leopard2","bench_leopard2_prevalidated_batch","leopard2_auto_gf16_gfni_production_test","leopard2_backend_failures_test","leopard2_legacy_golden_test","libleopard.a","libleopard_test_hooks.a","generated/leopard2-benchmark-attestation/leopard2_benchmark_source_attestation.h","generated/leopard2-benchmark-attestation/leopard2_benchmark_build_configuration.txt"],selected_sha256sums_sha256:$candidate_test_selected_sha256sums_sha256,backend_failures_test_sha256:$backend_failures_test_sha256,prevalidated_batch_test_sha256:$prevalidated_batch_test_sha256,two_clean_builds:true,posttest_byte_identical:true,postcampaign_revalidation_required:true,complete_object_link_cache_closure:true},baseline:{commit:$main_commit,source:$baseline_source,build:$baseline_build,profile:"canonical Leopard1 native Release (-march=native; LEO_MAIN_PURE_AVX2=OFF)",binary_sha256:$baseline_binary_sha256,archive_sha256:$baseline_archive_sha256,source_archive_sha256:$baseline_source_archive_sha256},sse2neon:{commit:$sse2neon_commit,archive_prefix:"sse2neon-source/",source_archive_sha256:$sse2neon_source_archive_sha256,reproduced_from_candidate_and_baseline_clones:true},generator:"Unix Makefiles",compiler:"/usr/bin/c++",byte_identical:{candidate_two_clean_builds:true,candidate_test_two_clean_builds:true,baseline_two_clean_builds:true,identical_absolute_source_and_build_paths:true,selected_complete_object_link_cache_closure:true},controllers:{runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,supervisor_sha256:$supervisor_sha256,wrapper_sha256:$wrapper_sha256},canonical_lock:"/tmp/leopard-gf8-authoritative.lock",python_controller:["/usr/bin/python3","-I","-S","-B"]}' \
+    '{schema:"leopard2-v17-gfni-main-build-closure/v2",candidate:{commit:$commit,tree:$tree,source:$candidate_source,build:$candidate_build,profile:"standard AUTO Release; tests off; benchmarks on; GF8/GF16 on",binary_sha256:$candidate_binary_sha256,archive_sha256:$candidate_archive_sha256,source_archive_sha256:$candidate_source_archive_sha256,reproduction:{qualified_semantic_equal:true,raw_tree_file_bytes_identical:$candidate_timing_raw_tree_byte_identical,all_nonexception_file_bytes_identical:true,order_normalized_exception_paths:["compile_commands.json","CMakeFiles/Makefile2"],compile_commands_exact_entry_count:30,makefile2_exact_allowlisted_block_count:4,normalization_report_sha256:$candidate_timing_normalization_report_sha256}},candidate_tests:{build:$candidate_test_build,profile:"standard AUTO Release; tests and benchmarks on; GF8/GF16 on",selected_files:["bench_leopard2","bench_leopard2_prevalidated_batch","leopard2_auto_gf16_gfni_production_test","leopard2_backend_failures_test","leopard2_legacy_golden_test","libleopard.a","libleopard_test_hooks.a","generated/leopard2-benchmark-attestation/leopard2_benchmark_source_attestation.h","generated/leopard2-benchmark-attestation/leopard2_benchmark_build_configuration.txt"],selected_sha256sums_sha256:$candidate_test_selected_sha256sums_sha256,backend_failures_test_sha256:$backend_failures_test_sha256,prevalidated_batch_test_sha256:$prevalidated_batch_test_sha256,two_clean_builds_raw_byte_identical:true,posttest_raw_byte_identical:true,postcampaign_revalidation_required:true,complete_object_link_cache_closure:true},baseline:{commit:$main_commit,source:$baseline_source,build:$baseline_build,profile:"canonical Leopard1 native Release (-march=native; LEO_MAIN_PURE_AVX2=OFF)",binary_sha256:$baseline_binary_sha256,archive_sha256:$baseline_archive_sha256,source_archive_sha256:$baseline_source_archive_sha256,two_clean_builds_raw_byte_identical:true},sse2neon:{commit:$sse2neon_commit,archive_prefix:"sse2neon-source/",source_archive_sha256:$sse2neon_source_archive_sha256,reproduced_from_candidate_and_baseline_clones:true},generator:"Unix Makefiles",compiler:"/usr/bin/c++",build_reproduction:{candidate_timing_qualified_semantic_equal:true,candidate_timing_raw_tree_file_bytes_identical:$candidate_timing_raw_tree_byte_identical,candidate_tests_raw_byte_identical:true,baseline_raw_byte_identical:true,identical_absolute_source_and_build_paths:true,objects_archives_binaries_link_recipes_cache_and_generated_inputs_raw_byte_identical:true},controllers:{runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,supervisor_sha256:$supervisor_sha256,wrapper_sha256:$wrapper_sha256,build_order_normalizer_sha256:$build_order_normalizer_sha256,build_order_normalizer_origin:"embedded deterministic helper from committed wrapper"},audit_boundary:"independent campaign auditor covers retained campaign semantics; build-order qualification is separately recomputed by the frozen wrapper normalizer during durable verification",canonical_lock:"/tmp/leopard-gf8-authoritative.lock",python_controller:["/usr/bin/python3","-I","-S","-B"]}' \
     > "$lane/build-closure.json"
 
 next_stage freeze_build_and_source_inputs
@@ -1986,6 +2889,8 @@ test "$(/usr/bin/sha256sum "$lane/audit_v17_gfni_main_compare.py" | \
     /usr/bin/cut -d' ' -f1)" = "$auditor_hash"
 test "$(/usr/bin/sha256sum "$lane/leopard2_affinity_supervisor.py" | \
     /usr/bin/cut -d' ' -f1)" = "$supervisor_hash"
+test "$(/usr/bin/sha256sum "$lane/build-order-normalizer.py" | \
+    /usr/bin/cut -d' ' -f1)" = "$build_order_normalizer_hash"
 require_empty_output /usr/bin/git -C "$candidate_source" status \
     --porcelain=v1 --untracked-files=normal --ignore-submodules=none
 require_empty_output /usr/bin/git -C "$baseline_source" status \
@@ -2081,6 +2986,11 @@ next_stage final_core_manifest
     --arg auditor_sha256 "$auditor_hash" \
     --arg supervisor_sha256 "$supervisor_hash" \
     --arg wrapper_sha256 "$wrapper_hash" \
+    --arg build_order_normalizer_sha256 "$build_order_normalizer_hash" \
+    --arg candidate_timing_normalization_report_sha256 \
+        "$candidate_timing_normalization_report_hash" \
+    --argjson candidate_timing_raw_tree_byte_identical \
+        "$candidate_timing_raw_tree_byte_identical" \
     --arg campaign_manifest_sha256 "$campaign_manifest_hash" \
     --arg campaign_raw_sha256 "$campaign_raw_hash" \
     --arg affinity_report_sha256 "$affinity_report_hash" \
@@ -2088,7 +2998,7 @@ next_stage final_core_manifest
     --arg audit_sha256 "$audit_hash" \
     --arg sse2neon_commit "$candidate_submodule_commit" \
     --arg sse2neon_source_archive_sha256 "$sse2neon_source_archive_hash" \
-    '{schema:"leopard2-v17-gfni-main-core-manifest/v1",status:"complete",campaign_exit_status:$campaign_exit_status,evidence_valid:true,performance_gate_passed:$performance_gate_passed,promotion_passed:false,promotion_requires_completion_envelope:true,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,sse2neon_commit:$sse2neon_commit,sse2neon_source_archive_sha256:$sse2neon_source_archive_sha256,candidate_binary_sha256_pre_post:$candidate_binary_sha256,candidate_archive_sha256_pre_post:$candidate_archive_sha256,baseline_binary_sha256_pre_post:$baseline_binary_sha256,baseline_archive_sha256_pre_post:$baseline_archive_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,supervisor_sha256:$supervisor_sha256,wrapper_sha256:$wrapper_sha256,campaign_manifest_sha256:$campaign_manifest_sha256,campaign_raw_sha256:$campaign_raw_sha256,affinity_report_sha256:$affinity_report_sha256,affinity_binding_sha256:$affinity_binding_sha256,audit_sha256:$audit_sha256,build_replay_byte_identical:true,producer_verification_passed:true,independent_preseal_audit_passed:true,canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116,ratio_policy:{ordinary_and_one_shot_are_separate:true,ratios_are_separate_correlated_and_must_not_be_multiplied:true,combined_or_stacked_ratio_emitted:false,same_binary_ratio_is_another_campaign:true},postseal_policy:"promotion requires the enclosing COMPLETED.json written only after byte-identical independent pre/post audits, core SHA verification, clean-source recheck, and a zero campaign exit"}' \
+    '{schema:"leopard2-v17-gfni-main-core-manifest/v2",status:"complete",campaign_exit_status:$campaign_exit_status,evidence_valid:true,performance_gate_passed:$performance_gate_passed,promotion_passed:false,promotion_requires_completion_envelope:true,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,sse2neon_commit:$sse2neon_commit,sse2neon_source_archive_sha256:$sse2neon_source_archive_sha256,candidate_binary_sha256_pre_post:$candidate_binary_sha256,candidate_archive_sha256_pre_post:$candidate_archive_sha256,baseline_binary_sha256_pre_post:$baseline_binary_sha256,baseline_archive_sha256_pre_post:$baseline_archive_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,supervisor_sha256:$supervisor_sha256,wrapper_sha256:$wrapper_sha256,build_order_normalizer_sha256:$build_order_normalizer_sha256,candidate_timing_normalization_report_sha256:$candidate_timing_normalization_report_sha256,campaign_manifest_sha256:$campaign_manifest_sha256,campaign_raw_sha256:$campaign_raw_sha256,affinity_report_sha256:$affinity_report_sha256,affinity_binding_sha256:$affinity_binding_sha256,audit_sha256:$audit_sha256,build_reproduction:{candidate_timing_qualified_semantic_equal:true,candidate_timing_raw_tree_file_bytes_identical:$candidate_timing_raw_tree_byte_identical,candidate_tests_raw_byte_identical:true,baseline_raw_byte_identical:true},producer_verification_passed:true,independent_preseal_audit_passed:true,independent_auditor_scope:"campaign semantics only; build-order qualification is separately recomputed by the frozen wrapper normalizer",canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116,ratio_policy:{ordinary_and_one_shot_are_separate:true,ratios_are_separate_correlated_and_must_not_be_multiplied:true,combined_or_stacked_ratio_emitted:false,same_binary_ratio_is_another_campaign:true},postseal_policy:"promotion requires the enclosing COMPLETED.json written only after byte-identical independent pre/post audits, qualified-semantic build closure verification, core SHA verification, clean-source recheck, and a zero campaign exit"}' \
     > "$lane/manifest.json"
 
 next_stage seal_core
