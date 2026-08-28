@@ -50,6 +50,9 @@ EXACT_MANIFEST_SCHEMA_V12 = "leopard2-main-compare-manifest/v12"
 EXACT_MANIFEST_SCHEMA_V13 = "leopard2-main-compare-manifest/v13"
 EXACT_MANIFEST_SCHEMA_V14 = "leopard2-main-compare-manifest/v14"
 EXACT_MANIFEST_SCHEMA_V15 = "leopard2-main-compare-manifest/v15"
+# v17 is an encode-only GFNI campaign.  It cannot satisfy this decoder
+# promotion planner's paired decode evidence contract, so v16 remains the
+# newest admitted exact-main generation.
 EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v16"
 EXACT_MANIFEST_SCHEMAS = frozenset((
     EXACT_MANIFEST_SCHEMA_V5, EXACT_MANIFEST_SCHEMA_V6,
@@ -4063,7 +4066,7 @@ def canonical_candidate_build_identity(
     }
     try:
         provenance = runner.build_provenance(
-            "candidate", specification, runner.RAW_SCHEMA)
+            "candidate", specification, runner.RAW_SCHEMA_V16)
     except Exception as error:
         raise PlanError(
             f"canonical Release/AUTO build validation failed: {error}") from error
@@ -5934,11 +5937,11 @@ def self_test() -> None:
                 CANDIDATE_LIBRARY_SOURCES_V11 and
             tuple(exact_runner.CANDIDATE_LIBRARY_SOURCES_V12) ==
                 CANDIDATE_LIBRARY_SOURCES_V12 and
-            tuple(exact_runner.CANDIDATE_LIBRARY_SOURCES) ==
+            tuple(exact_runner.CANDIDATE_LIBRARY_SOURCES_V16) ==
                 CANDIDATE_LIBRARY_SOURCES and
             exact_runner.BASELINE_EXPECTED_COMPILE_COMMAND_COUNT ==
                 BASELINE_EXPECTED_COMPILE_COMMAND_COUNT and
-            exact_runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT ==
+            exact_runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT_V16 ==
                 CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT and
             len(exact_runner.CANDIDATE_LIBRARY_SOURCES_V11) == 13 and
             len(exact_runner.CANDIDATE_LIBRARY_SOURCES_V11) +
@@ -5961,7 +5964,8 @@ def self_test() -> None:
                 COMPILE_COMMANDS_SCHEMA_V10 and
             exact_runner.COMPILE_COMMANDS_SCHEMA_V11 ==
                 COMPILE_COMMANDS_SCHEMA_V11 and
-            exact_runner.COMPILE_COMMANDS_SCHEMA == COMPILE_COMMANDS_SCHEMA and
+            exact_runner.COMPILE_COMMANDS_SCHEMA_V12 ==
+                COMPILE_COMMANDS_SCHEMA and
             exact_runner.BASELINE_PURE_AVX2_COMPILE_PROFILE ==
                 BASELINE_PURE_AVX2_COMPILE_PROFILE and
             exact_runner.CANDIDATE_COMPILE_PROFILE_V2 ==
@@ -5976,7 +5980,7 @@ def self_test() -> None:
                 CANDIDATE_COMPILE_PROFILE_V6 and
             exact_runner.CANDIDATE_COMPILE_PROFILE_V7 ==
                 CANDIDATE_COMPILE_PROFILE_V7 and
-            exact_runner.CANDIDATE_COMPILE_PROFILE ==
+            exact_runner.CANDIDATE_COMPILE_PROFILE_V8 ==
                 CANDIDATE_COMPILE_PROFILE and
             exact_runner.candidate_isa_policy(exact_runner.RAW_SCHEMA_V9) ==
                 CANDIDATE_ISA_POLICY_V9 and
@@ -5990,9 +5994,9 @@ def self_test() -> None:
                 CANDIDATE_ISA_POLICY and
             exact_runner.candidate_isa_policy(exact_runner.RAW_SCHEMA_V15) ==
                 CANDIDATE_ISA_POLICY and
-            exact_runner.candidate_isa_policy(exact_runner.RAW_SCHEMA) ==
+            exact_runner.candidate_isa_policy(exact_runner.RAW_SCHEMA_V16) ==
                 CANDIDATE_ISA_POLICY and
-            tuple(exact_runner.BUILD_CONFIGURATION_VARIABLES) ==
+            tuple(exact_runner.BUILD_CONFIGURATION_VARIABLES_V9) ==
                 BUILD_CONFIGURATION_VARIABLES and
             tuple(exact_runner.BUILD_CONFIGURATION_VARIABLES_V6) ==
                 BUILD_CONFIGURATION_VARIABLES_V6 and
@@ -6006,7 +6010,7 @@ def self_test() -> None:
                 BUILD_CONFIGURATION_VARIABLES_V4 and
             tuple(exact_runner.BUILD_CONFIGURATION_VARIABLES_V3) ==
                 BUILD_CONFIGURATION_VARIABLES_V3 and
-            exact_runner.BUILD_CONFIGURATION_FILE_SCHEMA ==
+            exact_runner.BUILD_CONFIGURATION_FILE_SCHEMA_V9 ==
                 BUILD_CONFIGURATION_FILE_SCHEMA and
             exact_runner.BUILD_CONFIGURATION_FILE_SCHEMA_V6 ==
                 BUILD_CONFIGURATION_FILE_SCHEMA_V6 and
@@ -6020,7 +6024,7 @@ def self_test() -> None:
                 BUILD_CONFIGURATION_FILE_SCHEMA_V4 and
             exact_runner.BUILD_CONFIGURATION_FILE_SCHEMA_V3 ==
                 BUILD_CONFIGURATION_FILE_SCHEMA_V3 and
-            exact_runner.BUILD_CONFIGURATION_RECORD_SCHEMA ==
+            exact_runner.BUILD_CONFIGURATION_RECORD_SCHEMA_V9 ==
                 BUILD_CONFIGURATION_RECORD_SCHEMA and
             exact_runner.BUILD_CONFIGURATION_RECORD_SCHEMA_V6 ==
                 BUILD_CONFIGURATION_RECORD_SCHEMA_V6 and
@@ -6039,7 +6043,7 @@ def self_test() -> None:
             exact_runner.EVIDENCE_HELPER_RELATIVE_PATH ==
                 EVIDENCE_HELPER_RELATIVE_PATH,
             "balanced scope translation-unit contract drifted from its producer")
-    require(exact_runner.MANIFEST_SCHEMA == EXACT_MANIFEST_SCHEMA and
+    require(exact_runner.MANIFEST_SCHEMA_V16 == EXACT_MANIFEST_SCHEMA and
             exact_runner.MANIFEST_SCHEMA_V15 == EXACT_MANIFEST_SCHEMA_V15 and
             exact_runner.MANIFEST_SCHEMA_V14 == EXACT_MANIFEST_SCHEMA_V14 and
             exact_runner.MANIFEST_SCHEMA_V13 == EXACT_MANIFEST_SCHEMA_V13 and
@@ -6052,12 +6056,17 @@ def self_test() -> None:
             exact_runner.RAW_SCHEMA_V12 == EXACT_RAW_SCHEMA_V12 and
             exact_runner.RAW_SCHEMA_V11 == EXACT_RAW_SCHEMA_V11 and
             exact_runner.RAW_SCHEMA_V10 == EXACT_RAW_SCHEMA_V10 and
-            exact_runner.RAW_SCHEMA == EXACT_RAW_SCHEMA,
-            "balanced exact-main current schema drifted from its producer")
+            exact_runner.RAW_SCHEMA_V16 == EXACT_RAW_SCHEMA and
+            exact_runner.MANIFEST_SCHEMA != EXACT_MANIFEST_SCHEMA and
+            exact_runner.RAW_SCHEMA != EXACT_RAW_SCHEMA,
+            "balanced exact-main v16 schema freeze drifted from its producer")
     _validate_exact_schema_pair(
         {"schema": EXACT_MANIFEST_SCHEMA},
         {"schema": EXACT_RAW_SCHEMA})
     for manifest_schema, raw_schema in (
+        (exact_runner.MANIFEST_SCHEMA, exact_runner.RAW_SCHEMA),
+        (exact_runner.MANIFEST_SCHEMA, EXACT_RAW_SCHEMA),
+        (EXACT_MANIFEST_SCHEMA, exact_runner.RAW_SCHEMA),
         (EXACT_MANIFEST_SCHEMA_V15, EXACT_RAW_SCHEMA),
         (EXACT_MANIFEST_SCHEMA, EXACT_RAW_SCHEMA_V15),
         (EXACT_MANIFEST_SCHEMA_V14, EXACT_RAW_SCHEMA),

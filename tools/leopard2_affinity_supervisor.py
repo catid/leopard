@@ -58,20 +58,23 @@ REPORT_SCHEMA_V9 = "leopard2-affinity-supervisor/v9"
 REPORT_SCHEMA_V10 = "leopard2-affinity-supervisor/v10"
 REPORT_SCHEMA_V11 = "leopard2-affinity-supervisor/v11"
 REPORT_SCHEMA_V12 = "leopard2-affinity-supervisor/v12"
-REPORT_SCHEMA = "leopard2-affinity-supervisor/v13"
+REPORT_SCHEMA_V13 = "leopard2-affinity-supervisor/v13"
+REPORT_SCHEMA = "leopard2-affinity-supervisor/v14"
 ACCEPTANCE_SCHEMA = "leopard2-affinity-acceptance/v1"
 BINDING_SCHEMA_V2 = "leopard2-affinity-main-binding/v2"
 BINDING_SCHEMA_V3 = "leopard2-affinity-main-binding/v3"
 BINDING_SCHEMA_V4 = "leopard2-affinity-main-binding/v4"
 BINDING_SCHEMA_V5 = "leopard2-affinity-main-binding/v5"
 BINDING_SCHEMA_V6 = "leopard2-affinity-main-binding/v6"
-BINDING_SCHEMA = "leopard2-affinity-main-binding/v7"
+BINDING_SCHEMA_V7 = "leopard2-affinity-main-binding/v7"
+BINDING_SCHEMA = "leopard2-affinity-main-binding/v8"
 BINDING_TO_REPORT_SCHEMA = {
     BINDING_SCHEMA_V2: REPORT_SCHEMA_V8,
     BINDING_SCHEMA_V3: REPORT_SCHEMA_V9,
     BINDING_SCHEMA_V4: REPORT_SCHEMA_V10,
     BINDING_SCHEMA_V5: REPORT_SCHEMA_V11,
     BINDING_SCHEMA_V6: REPORT_SCHEMA_V12,
+    BINDING_SCHEMA_V7: REPORT_SCHEMA_V13,
     BINDING_SCHEMA: REPORT_SCHEMA,
 }
 REPORT_TO_BINDING_SCHEMA = {
@@ -89,7 +92,8 @@ MAIN_MANIFEST_SCHEMA_V12 = "leopard2-main-compare-manifest/v12"
 MAIN_MANIFEST_SCHEMA_V13 = "leopard2-main-compare-manifest/v13"
 MAIN_MANIFEST_SCHEMA_V14 = "leopard2-main-compare-manifest/v14"
 MAIN_MANIFEST_SCHEMA_V15 = "leopard2-main-compare-manifest/v15"
-MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v16"
+MAIN_MANIFEST_SCHEMA_V16 = "leopard2-main-compare-manifest/v16"
+MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v17"
 MAIN_RAW_SCHEMA_V5 = "leopard2-main-compare-raw/v5"
 MAIN_RAW_SCHEMA_V6 = "leopard2-main-compare-raw/v6"
 MAIN_RAW_SCHEMA_V7 = "leopard2-main-compare-raw/v7"
@@ -101,7 +105,8 @@ MAIN_RAW_SCHEMA_V12 = "leopard2-main-compare-raw/v12"
 MAIN_RAW_SCHEMA_V13 = "leopard2-main-compare-raw/v13"
 MAIN_RAW_SCHEMA_V14 = "leopard2-main-compare-raw/v14"
 MAIN_RAW_SCHEMA_V15 = "leopard2-main-compare-raw/v15"
-MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v16"
+MAIN_RAW_SCHEMA_V16 = "leopard2-main-compare-raw/v16"
+MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v17"
 MAIN_MANIFEST_TO_RAW_SCHEMA = {
     MAIN_MANIFEST_SCHEMA_V5: MAIN_RAW_SCHEMA_V5,
     MAIN_MANIFEST_SCHEMA_V6: MAIN_RAW_SCHEMA_V6,
@@ -114,6 +119,7 @@ MAIN_MANIFEST_TO_RAW_SCHEMA = {
     MAIN_MANIFEST_SCHEMA_V13: MAIN_RAW_SCHEMA_V13,
     MAIN_MANIFEST_SCHEMA_V14: MAIN_RAW_SCHEMA_V14,
     MAIN_MANIFEST_SCHEMA_V15: MAIN_RAW_SCHEMA_V15,
+    MAIN_MANIFEST_SCHEMA_V16: MAIN_RAW_SCHEMA_V16,
     MAIN_MANIFEST_SCHEMA: MAIN_RAW_SCHEMA,
 }
 PURE_AVX2_MAIN_MANIFEST_SCHEMAS = frozenset((
@@ -123,6 +129,9 @@ PURE_AVX2_MAIN_MANIFEST_SCHEMAS = frozenset((
     MAIN_MANIFEST_SCHEMA_V13,
     MAIN_MANIFEST_SCHEMA_V14,
     MAIN_MANIFEST_SCHEMA_V15,
+    MAIN_MANIFEST_SCHEMA_V16,
+))
+NATIVE_MAIN_MANIFEST_SCHEMAS = frozenset((
     MAIN_MANIFEST_SCHEMA,
 ))
 REPORT_TO_MAIN_MANIFEST_SCHEMAS = {
@@ -139,6 +148,7 @@ REPORT_TO_MAIN_MANIFEST_SCHEMAS = {
     REPORT_SCHEMA_V10: frozenset((MAIN_MANIFEST_SCHEMA_V13,)),
     REPORT_SCHEMA_V11: frozenset((MAIN_MANIFEST_SCHEMA_V14,)),
     REPORT_SCHEMA_V12: frozenset((MAIN_MANIFEST_SCHEMA_V15,)),
+    REPORT_SCHEMA_V13: frozenset((MAIN_MANIFEST_SCHEMA_V16,)),
     REPORT_SCHEMA: frozenset((MAIN_MANIFEST_SCHEMA,)),
 }
 MAIN_SUPERVISION_SCHEMA = "leopard2-main-supervision/v1"
@@ -260,6 +270,7 @@ REPORT_SCHEMA_ENVIRONMENTS = {
     REPORT_SCHEMA_V10: STRICT_BENCHMARK_ENVIRONMENT,
     REPORT_SCHEMA_V11: STRICT_BENCHMARK_ENVIRONMENT,
     REPORT_SCHEMA_V12: STRICT_BENCHMARK_ENVIRONMENT,
+    REPORT_SCHEMA_V13: STRICT_BENCHMARK_ENVIRONMENT,
     REPORT_SCHEMA: STRICT_BENCHMARK_ENVIRONMENT,
 }
 PID_NAMESPACE_KEYS = {"device", "inode"}
@@ -3558,7 +3569,7 @@ def parse_long_options(arguments):
         "--taskset", "--ldd", "--preset", "--cell", "--reuse", "--iterations",
         "--warmup", "--timeout",
     }
-    flags = {"--baseline-pure-avx2"}
+    flags = {"--baseline-native", "--baseline-pure-avx2"}
     values = {}
     index = 0
     while index < len(arguments):
@@ -3586,6 +3597,9 @@ def parse_long_options(arguments):
                                    "--candidate-mode"})
     require(required.issubset(values),
             "supervised main-comparison command omits required options")
+    require(not (values.get("--baseline-native") is True and
+                 values.get("--baseline-pure-avx2") is True),
+            "supervised command mixes native and pure-AVX2 baseline selectors")
     require(not ("--preset" in values and "--cell" in values),
             "supervised command mixes preset and custom cells")
     return values
@@ -3655,11 +3669,15 @@ def validate_main_manifest_binding(report, manifest_path):
             "supervised runner identity differs from the retained campaign")
     options = parse_long_options(command[3:])
     pure_avx2 = manifest["schema"] in PURE_AVX2_MAIN_MANIFEST_SCHEMAS
-    require((options.get("--baseline-pure-avx2") is True) == pure_avx2 and
-            ((specification.get("baseline_pure_avx2") is True)
+    native = manifest["schema"] in NATIVE_MAIN_MANIFEST_SCHEMAS
+    require((options.get("--baseline-native") is True) == native and
+            (options.get("--baseline-pure-avx2") is True) == pure_avx2 and
+            (specification.get("baseline_pure_avx2") is True
              if pure_avx2 else
+             specification.get("baseline_pure_avx2") is False
+             if native else
              specification.get("baseline_pure_avx2") in (None, False)),
-            "supervised pure-AVX2 baseline selector differs from the retained "
+            "supervised baseline selector differs from the retained "
             "main-comparison generation")
     cwd = identity["cwd"]["path"]
     path_options = {
@@ -5510,7 +5528,7 @@ def test_binding():
             "--baseline-source-root", str(root),
             "--candidate-source-root", str(root),
             "--candidate-commit", "0" * 40,
-            "--baseline-pure-avx2",
+            "--baseline-native",
             "--candidate-mode", "auto",
             "--reservation-file", str(root / "reservation.json"),
             "--output", str(evidence), "--cpu", "1",
@@ -5524,19 +5542,26 @@ def test_binding():
               transaction.report["execution"]["environment"] ==
               STRICT_BENCHMARK_ENVIRONMENT,
               "new report did not use the current schema/environment contract")
-        pre_t32_report = json.loads(json.dumps(transaction.report))
+        pre_gfni_report = json.loads(json.dumps(transaction.report))
+        pre_gfni_report["schema"] = REPORT_SCHEMA_V13
+        selector_index = pre_gfni_report["command"].index("--baseline-native")
+        pre_gfni_report["command"][selector_index] = "--baseline-pure-avx2"
+        pre_gfni_report["command_sha256"] = sha256_value(
+            pre_gfni_report["command"])
+        validate_report(pre_gfni_report)
+        pre_t32_report = json.loads(json.dumps(pre_gfni_report))
         pre_t32_report["schema"] = REPORT_SCHEMA_V12
         validate_report(pre_t32_report)
-        pre_locator_report = json.loads(json.dumps(transaction.report))
+        pre_locator_report = json.loads(json.dumps(pre_gfni_report))
         pre_locator_report["schema"] = REPORT_SCHEMA_V11
         validate_report(pre_locator_report)
-        pre_dual_report = json.loads(json.dumps(transaction.report))
+        pre_dual_report = json.loads(json.dumps(pre_gfni_report))
         pre_dual_report["schema"] = REPORT_SCHEMA_V10
         validate_report(pre_dual_report)
-        pre_k8_report = json.loads(json.dumps(transaction.report))
+        pre_k8_report = json.loads(json.dumps(pre_gfni_report))
         pre_k8_report["schema"] = REPORT_SCHEMA_V9
         validate_report(pre_k8_report)
-        historical_report = json.loads(json.dumps(transaction.report))
+        historical_report = json.loads(json.dumps(pre_gfni_report))
         historical_report["schema"] = REPORT_SCHEMA_V8
         historical_report["execution"]["environment"] = dict(
             STRICT_BENCHMARK_ENVIRONMENT_V8)
@@ -5591,7 +5616,7 @@ def test_binding():
                 "baseline_source_root": str(root),
                 "candidate_source_root": str(root),
                 "candidate_commit": "0" * 40,
-                "baseline_pure_avx2": True,
+                "baseline_pure_avx2": False,
                 "taskset": str(Path("/usr/bin/taskset").resolve()),
                 "ldd": str(Path("/usr/bin/ldd").resolve()),
             },
@@ -5651,20 +5676,37 @@ def test_binding():
         validate_binding(
             binding, binding_path, manifest_path,
             sha256_bytes(manifest_path.read_bytes()))
-        missing_pure_avx2 = json.loads(json.dumps(transaction.report))
-        missing_pure_avx2["command"].remove("--baseline-pure-avx2")
-        missing_pure_avx2["command_sha256"] = sha256_value(
-            missing_pure_avx2["command"])
+        missing_native = json.loads(json.dumps(transaction.report))
+        missing_native["command"].remove("--baseline-native")
+        missing_native["command_sha256"] = sha256_value(
+            missing_native["command"])
         expect_exception(
             IsolationError,
             lambda: validate_main_manifest_binding(
-                missing_pure_avx2, manifest_path),
-            "current command missing the pure-AVX2 baseline selector")
+                missing_native, manifest_path),
+            "current command missing the native baseline selector")
         expect_exception(
             IsolationError,
             lambda: parse_long_options([
-                "--baseline-pure-avx2", "--baseline-pure-avx2"]),
-            "duplicated pure-AVX2 baseline selector")
+                "--baseline-native", "--baseline-native"]),
+            "duplicated native baseline selector")
+        expect_exception(
+            IsolationError,
+            lambda: parse_long_options([
+                "--baseline-native", "--baseline-pure-avx2"]),
+            "mixed baseline selectors")
+        pure_selector_on_current = json.loads(json.dumps(transaction.report))
+        current_selector_index = pure_selector_on_current["command"].index(
+            "--baseline-native")
+        pure_selector_on_current["command"][current_selector_index] = \
+            "--baseline-pure-avx2"
+        pure_selector_on_current["command_sha256"] = sha256_value(
+            pure_selector_on_current["command"])
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                pure_selector_on_current, manifest_path),
+            "current generation with pure-AVX2 baseline selector")
         relabeled_binding = json.loads(json.dumps(binding))
         relabeled_binding["schema"] = BINDING_SCHEMA_V4
         relabeled_binding.pop("digest")
@@ -5717,12 +5759,29 @@ def test_binding():
             seal_value["digest"] = sha256_value(seal_value)
             atomic_json(acceptance_path(report_path), seal_value)
 
+        missing_v17_profile = json.loads(json.dumps(raw_payload))
+        missing_v17_profile["input_specification"].pop(
+            "baseline_pure_avx2")
+        null_v17_profile = json.loads(json.dumps(raw_payload))
+        null_v17_profile["input_specification"]["baseline_pure_avx2"] = None
+        for label, malformed_profile in (
+                ("missing", missing_v17_profile),
+                ("null", null_v17_profile)):
+            install_bundle(malformed_profile)
+            expect_exception(
+                IsolationError,
+                lambda: validate_main_manifest_binding(
+                    transaction.report, manifest_path),
+                "{} v17 baseline profile boolean".format(label))
+        install_bundle(raw_payload)
+
         check(BINDING_TO_REPORT_SCHEMA == {
                   BINDING_SCHEMA_V2: REPORT_SCHEMA_V8,
                   BINDING_SCHEMA_V3: REPORT_SCHEMA_V9,
                   BINDING_SCHEMA_V4: REPORT_SCHEMA_V10,
                   BINDING_SCHEMA_V5: REPORT_SCHEMA_V11,
                   BINDING_SCHEMA_V6: REPORT_SCHEMA_V12,
+                  BINDING_SCHEMA_V7: REPORT_SCHEMA_V13,
                   BINDING_SCHEMA: REPORT_SCHEMA,
               } and REPORT_TO_MAIN_MANIFEST_SCHEMAS == {
                   REPORT_SCHEMA_V8: frozenset((
@@ -5738,6 +5797,7 @@ def test_binding():
                   REPORT_SCHEMA_V10: frozenset((MAIN_MANIFEST_SCHEMA_V13,)),
                   REPORT_SCHEMA_V11: frozenset((MAIN_MANIFEST_SCHEMA_V14,)),
                   REPORT_SCHEMA_V12: frozenset((MAIN_MANIFEST_SCHEMA_V15,)),
+                  REPORT_SCHEMA_V13: frozenset((MAIN_MANIFEST_SCHEMA_V16,)),
                   REPORT_SCHEMA: frozenset((MAIN_MANIFEST_SCHEMA,)),
               }, "affinity report/binding generation matrix changed")
         check(MAIN_MANIFEST_TO_RAW_SCHEMA == {
@@ -5752,6 +5812,7 @@ def test_binding():
                   MAIN_MANIFEST_SCHEMA_V13: MAIN_RAW_SCHEMA_V13,
                   MAIN_MANIFEST_SCHEMA_V14: MAIN_RAW_SCHEMA_V14,
                   MAIN_MANIFEST_SCHEMA_V15: MAIN_RAW_SCHEMA_V15,
+                  MAIN_MANIFEST_SCHEMA_V16: MAIN_RAW_SCHEMA_V16,
                   MAIN_MANIFEST_SCHEMA: MAIN_RAW_SCHEMA,
               } and PURE_AVX2_MAIN_MANIFEST_SCHEMAS == frozenset((
                   MAIN_MANIFEST_SCHEMA_V10,
@@ -5760,18 +5821,23 @@ def test_binding():
                   MAIN_MANIFEST_SCHEMA_V13,
                   MAIN_MANIFEST_SCHEMA_V14,
                   MAIN_MANIFEST_SCHEMA_V15,
+                  MAIN_MANIFEST_SCHEMA_V16,
+              )) and NATIVE_MAIN_MANIFEST_SCHEMAS == frozenset((
                   MAIN_MANIFEST_SCHEMA,
               )), "main-comparison manifest/raw/ISA replay matrix changed")
 
-        pre_t32_raw = json.loads(json.dumps(raw_payload))
+        pre_gfni_raw = json.loads(json.dumps(raw_payload))
+        pre_gfni_raw["schema"] = MAIN_RAW_SCHEMA_V16
+        pre_gfni_raw["input_specification"]["baseline_pure_avx2"] = True
+        pre_t32_raw = json.loads(json.dumps(pre_gfni_raw))
         pre_t32_raw["schema"] = MAIN_RAW_SCHEMA_V15
-        pre_locator_raw = json.loads(json.dumps(raw_payload))
+        pre_locator_raw = json.loads(json.dumps(pre_gfni_raw))
         pre_locator_raw["schema"] = MAIN_RAW_SCHEMA_V14
-        pre_dual_raw = json.loads(json.dumps(raw_payload))
+        pre_dual_raw = json.loads(json.dumps(pre_gfni_raw))
         pre_dual_raw["schema"] = MAIN_RAW_SCHEMA_V13
-        pre_k8_raw = json.loads(json.dumps(raw_payload))
+        pre_k8_raw = json.loads(json.dumps(pre_gfni_raw))
         pre_k8_raw["schema"] = MAIN_RAW_SCHEMA_V12
-        historical_raw = json.loads(json.dumps(raw_payload))
+        historical_raw = json.loads(json.dumps(pre_gfni_raw))
         historical_raw["schema"] = MAIN_RAW_SCHEMA_V11
         historical_raw["campaign"]["child_environment"] = dict(
             STRICT_BENCHMARK_ENVIRONMENT_V8)
@@ -5791,6 +5857,13 @@ def test_binding():
             lambda: validate_main_manifest_binding(
                 transaction.report, manifest_path),
             "current binding with historical campaign environment")
+
+        install_bundle(pre_gfni_raw, MAIN_MANIFEST_SCHEMA_V16)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                transaction.report, manifest_path),
+            "current report with pre-GFNI manifest schema")
 
         install_bundle(pre_t32_raw, MAIN_MANIFEST_SCHEMA_V15)
         expect_exception(
@@ -5826,6 +5899,52 @@ def test_binding():
             lambda: validate_main_manifest_binding(
                 transaction.report, manifest_path),
             "current report with historical manifest schema")
+
+        install_accepted_report(pre_gfni_report)
+        install_bundle(raw_payload)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                pre_gfni_report, manifest_path),
+            "pre-GFNI report with current manifest schema")
+        install_bundle(pre_t32_raw, MAIN_MANIFEST_SCHEMA_V15)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                pre_gfni_report, manifest_path),
+            "pre-GFNI report with pre-T32-generated manifest schema")
+        install_bundle(pre_gfni_raw, MAIN_MANIFEST_SCHEMA_V16)
+        native_selector_on_pre_gfni = json.loads(json.dumps(pre_gfni_report))
+        pre_gfni_selector_index = native_selector_on_pre_gfni["command"].index(
+            "--baseline-pure-avx2")
+        native_selector_on_pre_gfni["command"][pre_gfni_selector_index] = \
+            "--baseline-native"
+        native_selector_on_pre_gfni["command_sha256"] = sha256_value(
+            native_selector_on_pre_gfni["command"])
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                native_selector_on_pre_gfni, manifest_path),
+            "pre-GFNI generation with native baseline selector")
+        pre_gfni_binding_path = evidence / "affinity-binding-v7.json"
+        create_binding(report_path, manifest_path, pre_gfni_binding_path)
+        pre_gfni_binding = load_json(
+            pre_gfni_binding_path, "pre-GFNI test binding")
+        check(pre_gfni_binding["schema"] == BINDING_SCHEMA_V7 and
+              pre_gfni_binding["report"]["schema"] == REPORT_SCHEMA_V13,
+              "pre-GFNI binding replay changed its schema pair")
+        validate_binding(
+            pre_gfni_binding, pre_gfni_binding_path, manifest_path,
+            sha256_bytes(manifest_path.read_bytes()))
+        upgraded_pre_gfni_binding = json.loads(json.dumps(pre_gfni_binding))
+        upgraded_pre_gfni_binding["schema"] = BINDING_SCHEMA
+        upgraded_pre_gfni_binding.pop("digest")
+        upgraded_pre_gfni_binding["digest"] = sha256_value(
+            upgraded_pre_gfni_binding)
+        expect_exception(
+            IsolationError,
+            lambda: validate_binding_structure_only(upgraded_pre_gfni_binding),
+            "pre-GFNI binding relabeled as current evidence")
 
         install_accepted_report(pre_t32_report)
         install_bundle(raw_payload)
