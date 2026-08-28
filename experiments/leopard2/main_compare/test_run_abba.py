@@ -838,9 +838,13 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
         actions = [(source, None) for source in sources]
     else:
         actions = sources
-    for source, target in actions:
+    # A source may appear in more than one compile action.  Materialize every
+    # unique source before any object so a later action cannot make an earlier
+    # target's object look stale to the production freshness validator.
+    for source in dict.fromkeys(source for source, unused_target in actions):
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text("// fixture source\n", encoding="utf-8")
+    for source, target in actions:
         output = runner.expected_compile_output(
             role, source, specification, candidate_target=target,
             raw_schema=runner.RAW_SCHEMA_V16)
@@ -5103,6 +5107,113 @@ class MainCompareRunnerTests(unittest.TestCase):
                  self.assertRaises(runner.link_common.EvidenceError):
                 runner.link_common.current_external_file_snapshot(
                     operand, "retarget race fixture")
+
+    def test_compile_commands_fixture_materializes_shared_sources_first(
+        self,
+    ) -> None:
+        actions = runner.candidate_compile_actions_for_raw_schema(
+            runner.RAW_SCHEMA_V16)
+        targets_by_source: dict[str, list[str]] = {}
+        for source, target in actions:
+            targets_by_source.setdefault(source, []).append(target)
+        self.assertEqual(
+            {
+                source: targets for source, targets in targets_by_source.items()
+                if len(targets) > 1
+            },
+            {
+                "bench/leopard2/benchmark.cpp": [
+                    "bench_leopard2.dir",
+                    "bench_leopard2_prevalidated_batch.dir",
+                ],
+            })
+
+        writes: list[tuple[str, Path]] = []
+        original_write_text = Path.write_text
+        original_write_bytes = Path.write_bytes
+        original_touch = Path.touch
+        original_utime = os.utime
+
+        def record_write_text(path: Path, *args, **kwargs):
+            writes.append(("text", path.resolve()))
+            return original_write_text(path, *args, **kwargs)
+
+        def record_write_bytes(path: Path, *args, **kwargs):
+            writes.append(("bytes", path.resolve()))
+            return original_write_bytes(path, *args, **kwargs)
+
+        def record_touch(path: Path, *args, **kwargs):
+            writes.append(("touch", path.resolve()))
+            return original_touch(path, *args, **kwargs)
+
+        def record_utime(path, *args, **kwargs):
+            writes.append(("utime", Path(path).resolve()))
+            return original_utime(path, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(Path, "write_text", record_write_text), \
+             mock.patch.object(Path, "write_bytes", record_write_bytes), \
+             mock.patch.object(Path, "touch", record_touch), \
+             mock.patch.object(os, "utime", record_utime):
+            compile_commands, specification, compiler = \
+                compile_commands_fixture(Path(directory), "candidate")
+            entries = json.loads(
+                compile_commands.read_text(encoding="utf-8"))
+            build = Path(specification["candidate_build_dir"])
+            sources = {Path(entry["file"]).resolve() for entry in entries}
+            objects = {
+                (build / entry["output"]).resolve() for entry in entries
+            }
+            source_mutations = [
+                (index, kind) for index, (kind, path) in enumerate(writes)
+                if kind in ("text", "touch", "utime") and path in sources
+            ]
+            object_writes = [
+                index for index, (kind, path) in enumerate(writes)
+                if kind == "bytes" and path in objects
+            ]
+            self.assertEqual(len(source_mutations), len(sources))
+            self.assertEqual(
+                {kind for unused_index, kind in source_mutations}, {"text"})
+            self.assertEqual(len(object_writes), len(entries))
+            self.assertLess(
+                max(index for index, unused_kind in source_mutations),
+                min(object_writes))
+            for entry in entries:
+                source = Path(entry["file"])
+                output = build / entry["output"]
+                self.assertGreaterEqual(
+                    output.stat().st_mtime_ns, source.stat().st_mtime_ns)
+            proof = runner.validate_compile_commands(
+                compile_commands, "candidate", specification, compiler,
+                compiler_invocation=str(compiler),
+                raw_schema=runner.RAW_SCHEMA_V16)
+            shared_pairs = [
+                pair for pair in proof["required_source_object_pairs"]
+                if pair["source"]["path"].endswith(
+                    "/bench/leopard2/benchmark.cpp")
+            ]
+            self.assertEqual(len(shared_pairs), 1)
+            shared_pair = shared_pairs[0]
+            shared_object_relative = Path(
+                shared_pair["object"]["path"]).relative_to(build).as_posix()
+            self.assertEqual(
+                shared_object_relative,
+                "CMakeFiles/bench_leopard2.dir/bench/leopard2/benchmark.cpp.o")
+
+            shared_source = Path(shared_pair["source"]["path"])
+            required_object = Path(shared_pair["object"]["path"])
+            source_stat = shared_source.stat()
+            original_utime(
+                shared_source,
+                ns=(source_stat.st_atime_ns,
+                    required_object.stat().st_mtime_ns + 2_000_000_000))
+            with self.assertRaisesRegex(
+                    runner.EvidenceError, "predates source"):
+                runner.validate_compile_commands(
+                    compile_commands, "candidate", specification, compiler,
+                    compiler_invocation=str(compiler),
+                    raw_schema=runner.RAW_SCHEMA_V16)
 
     def test_effective_release_and_executable_flags_fail_closed(self) -> None:
         for label, flags in (
