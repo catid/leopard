@@ -214,7 +214,9 @@ unrelated process. The sealed v4 envelope contains no campaign directory and
 no timing samples. Retrying the active supervisor while OBS is running is
 therefore neither safe nor useful.
 
-The same wrapper has an explicit, weaker acquisition generation:
+The same wrapper historically provided the following weaker v17 acquisition
+generation. This command is retained here only to identify the sealed contract;
+fresh use is now rejected because the live producer has advanced to v18:
 
     experiments/leopard2/main_compare/run_authoritative_v17_gfni_main_compare.sh \
         --passive-shared-host \
@@ -261,6 +263,131 @@ interval under shared-host load, not a quiet-host or causal performance
 guarantee. Any number from this path must be described as a host-, compiler-,
 API-, and workload-specific passive observation; promotion still requires a
 dedicated or safely isolated environment.
+
+The retained passive-v17 attempt at
+`.research/leopard-79h/2cc900f-v17-passive-main-v1` is a sealed, verified
+failure and supplies no ratio or confidence interval. All twelve children
+completed, but CPU116 accumulated 388 nonidle jiffies during the 2293-second
+runner interval. The retained child wall durations total only 50.755 seconds;
+even if the sibling gate had passed, CPU52 accumulated 155 more nonidle jiffies
+than the old aggregate child-wall ceiling, above the v17 limit of 16. Those
+samples are diagnostic only and must never be pooled, re-summarized, or reused
+by a successor campaign.
+
+The earlier active-v17 diagnostic envelopes are also retained as rejections:
+`.research/leopard-79h/b9167ad-v17-gfni-main-v1`,
+`.research/leopard-79h/4db018f-v17-gfni-main-v2`,
+`.research/leopard-79h/76b0cb4-v17-gfni-main-v3`, and
+`.research/leopard-79h/0319e39-v17-gfni-main-v4`. Together with the passive-v17
+envelope above, they must be cited but never imported into a v18 lane.
+
+### Version 18 prospective per-invocation passive screen
+
+Version 18 replaces the aggregate passive-v17 contamination screen with a
+prospectively fixed launch-through-reap screen around each of the twelve ABBA
+children. Each endpoint is one fresh read-to-EOF of `/proc/stat` containing
+both CPU52 and CPU116, with its read-start and read-finish monotonic boundaries
+retained. For invocation `i`, with child wall duration `d_i` nanoseconds, the
+contract is exact integer arithmetic:
+
+    cap_i = (d_i * 100) // 1000000000 + 1
+    excess_i = max(0, cpu52_nonidle_i - cap_i)
+    accept_i = (excess_i == 0 and cpu116_nonidle_i == 0)
+
+There is no tuned allowance in those expressions. For wall duration `d`, at
+most `floor(d * f) + 1` points of a frequency-`f` accounting lattice can fall
+inside the interval, independent of its phase. At Linux `SC_CLK_TCK=100`, that
+forces the CPU52 cap above; precise virtual CPU accounting is also bounded by
+wall time plus the same one-jiffy conversion allowance. The benchmark owns no
+work on CPU116, and one jiffy is the instrument's smallest positive value, so
+zero measurable sibling activity is the only non-arbitrary finite screen.
+Allowing one or more sibling jiffies would introduce a free policy parameter.
+
+Against the retained v17 failure, this is a tighter observed domain, not a
+post-hoc relaxation:
+
+| | gated window | aggregate allowance |
+|---|---:|---:|
+| v17 | 2,293.2 s | `ceil(sum(d_i) * 100 / 1e9) + 16` = 5,076 + 16 = **5,092** |
+| v18 | 50.755 s (**45.2 times smaller**) | `sum(floor(d_i * 100 / 1e9) + 1)` = **5,081** |
+
+Version 18 removes 11 jiffies of aggregate slack and 2,242 seconds of
+unmeasured exposure. The removed interval was not retained measurement time:
+each child path recomputed full Git identities for both source roots and build
+provenance for both build trees before and after the short benchmark, producing
+about 186 seconds of input-snapshot/hash dead time between child measurements.
+That diagnosed interval error, rather than either observed failure count, is why
+v18 changes the measured domain.
+
+A valid campaign requires all twelve `accept_i` values to be true. CPU52 and
+CPU116 whole-run deltas and their residuals outside the retained child windows
+are nonnegative structural/disclosure records, not contamination gates. The
+pre/post same-UID census remains a fail-closed endpoint safety check: no thread
+may be confined to the reserved pair and a persistent retained thread may not
+change affinity between endpoints. It is still non-atomic, does not record
+execution history, and does not establish exclusivity. The result remains a
+host-, compiler-, API-, and workload-specific passive nominal observation;
+`promotion_eligible`, `promotion_passed`, `cpu_pair_exclusive`, and
+`causal_performance_claim_eligible` are always false.
+
+The campaign procedure is preregistered in the same commit as the implementation:
+
+1. **Thresholds are frozen at commit time.**
+   `cap_i = floor(d_i * 100 / 1e9) + 1`, per-window CPU52 excess `== 0`, and
+   per-window CPU116 nonidle `== 0`. They may not be changed after any attempt.
+   If they are ever changed, every prior attempt is void and the campaign
+   restarts from a new preregistration commit.
+2. **Attempt budget `N_max = 3`.** The wrapper enforces
+   `--attempt n --attempt-budget 3`; the attempt and budget are recorded in the
+   core manifest and both terminal envelope kinds. Lanes are named
+   `.research/leopard-79h/<commit7>-v18-passive-main-a<N>`.
+3. **All attempts are retained and cited.** Any report of the observation must
+   state “attempt N of at most 3” and list every sealed envelope, including
+   `FAILED` ones. This keeps fail-fast from degenerating into retry-until-pass.
+4. **No host mutation.** No affinity change to any foreign process, no signals,
+   no renice, and no cgroup edits. The wrapper mutates only its own affinity and
+   its owned descendants (`affinity_mutation_scope` is unchanged).
+5. **If all three attempts reject, stop.** Do not retune. Either escalate to a
+   newly preregistered pre-flight pair-qualification screen, committed before it
+   is run, or to a dedicated/quiet host. Both require a fresh preregistration
+   commit and, where applicable, external authority.
+6. **Reporting language is fixed in advance.** This is a host-, compiler-, API-,
+   and workload-specific *passive nominal observation*; its clustered
+   three-round Student-t interval is reported as nominal under shared-host load;
+   the two ratios are correlated and must not be multiplied or stacked; there is
+   no exclusivity, causal, or promotion claim.
+7. The pre-existing v17 sealed envelopes, including
+   `.research/leopard-79h/2cc900f-v17-passive-main-v1`, are cited as prior
+   rejections. Their timing samples are not reused, re-summarized, or pooled with
+   any v18 result.
+
+For a committed source revision, attempt one is launched as:
+
+    experiments/leopard2/main_compare/run_authoritative_v17_gfni_main_compare.sh \
+        --passive-shared-host --attempt 1 --attempt-budget 3 \
+        /home/catid/leopard/.research/leopard-79h/<commit7>-v18-passive-main-a1
+
+The historical wrapper filename and `v17-gfni-encode` preset string are frozen
+workload identifiers; they do not imply a v17 evidence schema. Fresh active-v17
+acquisition is deliberately disabled because the live producer now emits the
+passive-only v18 contract. Existing active and passive v17 envelopes remain
+verifiable by the versioned replay branches.
+
+Version 18 uses `leopard2-main-compare-{raw,manifest,failure}/v18`, isolation
+schema `leopard2-main-compare-isolation/v2`, audit schema
+`leopard2-main-compare-v18-passive-independent-audit/v1`, census policy schema
+`leopard2-passive-shared-host-policy/v2`, result schema
+`leopard2-v18-gfni-main-passive-result-summary/v1`, core schema
+`leopard2-v18-gfni-main-passive-core-manifest/v1`, success-terminal schema
+`leopard2-v18-gfni-main-passive-not-promoted-envelope/v1`, and failure-terminal
+schema `leopard2-v18-gfni-main-failed-envelope/v1`. The four scalar counters in
+the core and success terminal bind the zero windowed CPU52 excess, zero windowed
+CPU116 nonidle count, and the two disclosed out-of-window nonidle residuals.
+Every v18 outcome also binds
+`leopard2-v18-gfni-main-attempt-lineage/v1`; early wrapper failures additionally
+retain `leopard2-v18-gfni-main-passive-wrapper-failure/v1`. The lineage commits
+to each earlier attempt's canonical path and outer `SHA256SUMS`, and durable
+verification reopens the complete failed-attempt chain.
 
 The fresh v16 producer enforces that boundary before capturing executables or
 starting timing: the Git-bound `leopard2.cpp` must contain exactly one selector

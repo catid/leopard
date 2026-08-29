@@ -50,7 +50,8 @@ EXACT_MANIFEST_SCHEMA_V12 = "leopard2-main-compare-manifest/v12"
 EXACT_MANIFEST_SCHEMA_V13 = "leopard2-main-compare-manifest/v13"
 EXACT_MANIFEST_SCHEMA_V14 = "leopard2-main-compare-manifest/v14"
 EXACT_MANIFEST_SCHEMA_V15 = "leopard2-main-compare-manifest/v15"
-# v17 is an encode-only GFNI campaign.  It cannot satisfy this decoder
+# v17 and passive-only v18 are encode-only GFNI campaigns.  Neither can
+# satisfy this decoder
 # promotion planner's paired decode evidence contract, so v16 remains the
 # newest admitted exact-main generation.
 EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v16"

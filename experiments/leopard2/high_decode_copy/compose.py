@@ -274,11 +274,14 @@ def compose(options: argparse.Namespace) -> int:
         manifest = json.loads(path.read_text(encoding="utf-8"))
         SUPPORT.verify_signature(manifest, f"exact-main {workspace} manifest")
         require(manifest.get("valid") is True and
-                manifest.get("schema") == SUPPORT.MANIFEST_SCHEMA,
-                f"exact-main {workspace} manifest must use current v6 evidence")
+                manifest.get("schema") == SUPPORT.MANIFEST_SCHEMA_V6,
+                f"exact-main {workspace} manifest must use frozen v6 evidence")
         exact_manifests[workspace] = manifest
-        exact_raws[workspace] = load_raw(
+        raw = load_raw(
             path, manifest, f"exact-main {workspace} manifest")
+        require(raw.get("schema") == SUPPORT.RAW_SCHEMA_V6,
+                f"exact-main {workspace} raw bundle must use frozen v6 evidence")
+        exact_raws[workspace] = raw
     cells = cross_validate(ab_raw, exact_raws)
     payload = SUPPORT.signed({
         "schema": SCHEMA,

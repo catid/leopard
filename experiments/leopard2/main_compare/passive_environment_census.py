@@ -23,7 +23,16 @@ from typing import Any, Mapping, Sequence
 
 
 SCHEMA = "leopard2-passive-same-uid-endpoint-census/v1"
-POLICY_SCHEMA = "leopard2-passive-shared-host-policy/v1"
+POLICY_SCHEMA_V1 = "leopard2-passive-shared-host-policy/v1"
+POLICY_SCHEMA_V2 = "leopard2-passive-shared-host-policy/v2"
+POLICY_SCHEMA = POLICY_SCHEMA_V1
+RAW_SCHEMA_V17 = "leopard2-main-compare-raw/v17"
+RAW_SCHEMA_V18 = "leopard2-main-compare-raw/v18"
+ISOLATION_SCHEMA_V1 = "leopard2-main-compare-isolation/v1"
+ISOLATION_SCHEMA_V2 = "leopard2-main-compare-isolation/v2"
+CPU_WINDOW_SCHEMA = "leopard2-main-compare-invocation-cpu-window/v1"
+CONTROLLER_SCHEMA_V17 = "leopard2-v17-passive-controller-affinity/v1"
+CONTROLLER_SCHEMA_V18 = "leopard2-v18-passive-controller-affinity/v1"
 SEMANTICS = "non-atomic-endpoint-affinity-eligibility"
 MUTATION_POLICY = "read-only; no affinity mutation, signal, or procfs write"
 MAX_CPU_ID = 1_048_575
@@ -31,7 +40,7 @@ MAX_STATUS_BYTES = 1 << 20
 MAX_STAT_BYTES = 1 << 20
 MAX_TASKS = 1_000_000
 CLOCK_TICKS_PER_SECOND = 100
-MAX_NONIDLE_EXCESS_OVER_CHILD_WALL_CEILING_JIFFIES = 16
+LEGACY_V17_CPU52_AGGREGATE_EXCESS_LIMIT_JIFFIES = 16
 EXPECTED_INVOCATION_COUNT = 12
 HEX256 = re.compile(r"^[0-9a-f]{64}$")
 BOOT_ID = re.compile(
@@ -57,6 +66,11 @@ def canonical_bytes(value: Any) -> bytes:
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         allow_nan=False,
     ).encode("ascii")
+
+
+def exact_json_equal(left: Any, right: Any) -> bool:
+    """Compare JSON values without Python's bool/int coercion."""
+    return canonical_bytes(left) == canonical_bytes(right)
 
 
 def digest_payload(value: Mapping[str, Any]) -> str:
@@ -373,7 +387,9 @@ def exact_keys(value: Any, keys: set[str], label: str) -> Mapping[str, Any]:
     return value
 
 
-def validate_snapshot(value: Any, phase: str) -> Mapping[str, Any]:
+def validate_snapshot(
+    value: Any, phase: str, *, require_no_confined_threads: bool = True,
+) -> Mapping[str, Any]:
     value = exact_keys(value, {
         "schema", "phase", "semantics", "mutation_policy", "uid", "boot_id",
         "namespaces", "clock_ticks_per_second", "reserved_cpus",
@@ -534,8 +550,9 @@ def validate_snapshot(value: Any, phase: str) -> Mapping[str, Any]:
         "vanished_record_count": len(vanished),
     }
     require(all(type(item) is int and item >= 0 for item in summary.values()) and
-            summary == expected_summary and
-            summary["confined_to_reserved_subset_thread_count"] == 0,
+            exact_json_equal(summary, expected_summary) and
+            (not require_no_confined_threads or
+             summary["confined_to_reserved_subset_thread_count"] == 0),
             f"{phase} census summary differs")
     return value
 
@@ -557,7 +574,7 @@ def cpu_delta(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, 
     }
 
 
-def validate_controller(value: Any) -> Mapping[str, Any]:
+def validate_controller(value: Any, raw_schema: str) -> Mapping[str, Any]:
     value = exact_keys(value, {
         "schema", "acquisition_generation", "wrapper_pid",
         "before_allowed_cpus", "after_allowed_cpus",
@@ -567,8 +584,12 @@ def validate_controller(value: Any) -> Mapping[str, Any]:
     before = value["before_allowed_cpus"]
     after = value["after_allowed_cpus"]
     launch = value["runner_launch_allowed_cpus"]
-    require(value["schema"] == "leopard2-v17-passive-controller-affinity/v1" and
-            value["acquisition_generation"] == "passive-v1" and
+    expected_schema, expected_generation = (
+        (CONTROLLER_SCHEMA_V18, "passive-v2")
+        if raw_schema == RAW_SCHEMA_V18 else
+        (CONTROLLER_SCHEMA_V17, "passive-v1"))
+    require(value["schema"] == expected_schema and
+            value["acquisition_generation"] == expected_generation and
             type(value["wrapper_pid"]) is int and value["wrapper_pid"] > 0 and
             type(before) is list and before == sorted(set(before)) and
             type(after) is list and after == sorted(set(after)) and after and
@@ -602,6 +623,285 @@ def raw_cpu_stat(value: Any, cpu: int, label: str) -> Mapping[str, Any]:
     return value
 
 
+def raw_isolation_delta(before: Any, after: Any, cpu: int,
+                        label: str) -> dict[str, Any]:
+    before = raw_cpu_stat(before, cpu, f"{label} before")
+    after = raw_cpu_stat(after, cpu, f"{label} after")
+    fields: dict[str, int] = {}
+    for name in CPU_FIELDS[:8]:
+        require(after["fields"][name] >= before["fields"][name],
+                f"{label} {name} counter regressed")
+        fields[name] = after["fields"][name] - before["fields"][name]
+    idle = fields["idle"] + fields["iowait"]
+    nonidle = sum(fields[name] for name in NONIDLE_FIELDS)
+    return {
+        "cpu": cpu,
+        "fields": fields,
+        "idle_jiffies": idle,
+        "nonidle_jiffies": nonidle,
+        "total_jiffies": idle + nonidle,
+    }
+
+
+def window_policy() -> dict[str, Any]:
+    return {
+        "benchmark_cpu_max_nonidle_excess_jiffies": 0,
+        "benchmark_cpu_tick_ceiling_formula":
+            "floor(child_wall_duration_ns * clock_ticks_per_second / "
+            "1000000000) + 1",
+        "counter_source": "/proc/stat",
+        "idle_fields": ["idle", "iowait"],
+        "interpretation":
+            "sampled 100 Hz rejection screen over the retained benchmark "
+            "window only; not process ownership attribution, not an "
+            "interference upper bound, and not proof of CPU exclusivity",
+        "nonidle_fields": list(NONIDLE_FIELDS),
+        "reserved_sibling_max_nonidle_jiffies": 0,
+    }
+
+
+def validate_window_endpoint(value: Any, label: str, *, before: bool
+                             ) -> Mapping[str, Any]:
+    value = exact_keys(value, {
+        "benchmark_cpu", "monotonic_ns", "read_finished_monotonic_ns",
+        "read_started_monotonic_ns", "reserved_sibling"}, label)
+    started = value["read_started_monotonic_ns"]
+    finished = value["read_finished_monotonic_ns"]
+    boundary = value["monotonic_ns"]
+    require(type(started) is int and type(finished) is int and
+            type(boundary) is int and 0 <= started <= finished and
+            boundary == (finished if before else started),
+            f"{label} read boundaries differ")
+    raw_cpu_stat(value["benchmark_cpu"], 52, f"{label} benchmark CPU")
+    raw_cpu_stat(value["reserved_sibling"], 116,
+                 f"{label} reserved sibling")
+    return value
+
+
+def validate_v18_window(value: Any, round_index: int, slot: int, role: str,
+                        duration_ns: int) -> Mapping[str, Any]:
+    label = f"v18 invocation {round_index}/{slot} CPU window"
+    value = exact_keys(value, {
+        "accepted", "after", "before", "benchmark_cpu",
+        "benchmark_cpu_nonidle_excess_jiffies",
+        "benchmark_cpu_tick_ceiling_jiffies", "cell_id",
+        "child_started_monotonic_ns", "child_wall_duration_ns",
+        "clock_ticks_per_second", "delta", "implementation", "policy",
+        "reserved_sibling", "reserved_sibling_nonidle_jiffies", "round",
+        "schema", "slot", "window_ns"}, label)
+    require(value["schema"] == CPU_WINDOW_SCHEMA and
+            value["cell_id"] == "gf16-high-full" and
+            type(value["round"]) is int and value["round"] == round_index and
+            type(value["slot"]) is int and value["slot"] == slot and
+            value["implementation"] == role and
+            type(value["benchmark_cpu"]) is int and
+            value["benchmark_cpu"] == 52 and
+            type(value["reserved_sibling"]) is int and
+            value["reserved_sibling"] == 116 and
+            type(value["clock_ticks_per_second"]) is int and
+            value["clock_ticks_per_second"] == CLOCK_TICKS_PER_SECOND and
+            type(value["child_started_monotonic_ns"]) is int and
+            value["child_started_monotonic_ns"] >= 0 and
+            type(value["child_wall_duration_ns"]) is int and
+            value["child_wall_duration_ns"] == duration_ns and duration_ns > 0,
+            f"{label} identity differs")
+    before = validate_window_endpoint(
+        value["before"], f"{label} before", before=True)
+    after = validate_window_endpoint(
+        value["after"], f"{label} after", before=False)
+    started = value["child_started_monotonic_ns"]
+    finished = started + duration_ns
+    before_ns = before["monotonic_ns"]
+    after_ns = after["monotonic_ns"]
+    benchmark = raw_isolation_delta(
+        before["benchmark_cpu"], after["benchmark_cpu"], 52,
+        f"{label} benchmark CPU")
+    sibling = raw_isolation_delta(
+        before["reserved_sibling"], after["reserved_sibling"], 116,
+        f"{label} reserved sibling")
+    ceiling = duration_ns * CLOCK_TICKS_PER_SECOND // 1_000_000_000 + 1
+    excess = max(0, benchmark["nonidle_jiffies"] - ceiling)
+    require(before_ns <= started < finished <= after_ns and
+            before["read_finished_monotonic_ns"] <= started and
+            finished <= after["read_started_monotonic_ns"] and
+            type(value["window_ns"]) is int and
+            value["window_ns"] == after_ns - before_ns and
+            value["window_ns"] >= duration_ns and
+            exact_json_equal(value["delta"], {
+                "benchmark_cpu": benchmark, "reserved_sibling": sibling}) and
+            exact_json_equal(value["policy"], window_policy()) and
+            type(value["benchmark_cpu_tick_ceiling_jiffies"]) is int and
+            value["benchmark_cpu_tick_ceiling_jiffies"] == ceiling and
+            type(value["benchmark_cpu_nonidle_excess_jiffies"]) is int and
+            value["benchmark_cpu_nonidle_excess_jiffies"] == excess and
+            type(value["reserved_sibling_nonidle_jiffies"]) is int and
+            value["reserved_sibling_nonidle_jiffies"] ==
+                sibling["nonidle_jiffies"] and
+            value["accepted"] is True and excess == 0 and
+            sibling["nonidle_jiffies"] == 0,
+            f"{label} rejection screen failed")
+    return value
+
+
+def validate_v18_counter_chain(
+    windows: Sequence[Mapping[str, Any]],
+    outer_before: Mapping[str, Any],
+    outer_after: Mapping[str, Any],
+) -> None:
+    """Independently nest every retained counter epoch in the outer pair."""
+    for endpoint, cpu in (("benchmark_cpu", 52),
+                          ("reserved_sibling", 116)):
+        previous = raw_cpu_stat(
+            outer_before[endpoint], cpu, f"outer {endpoint} before")
+        for index, window in enumerate(windows):
+            current_before = raw_cpu_stat(
+                window["before"][endpoint], cpu,
+                f"window {index} {endpoint} before")
+            current_after = raw_cpu_stat(
+                window["after"][endpoint], cpu,
+                f"window {index} {endpoint} after")
+            require(all(
+                previous["fields"][name] <=
+                current_before["fields"][name] <=
+                current_after["fields"][name]
+                for name in CPU_FIELDS[:8]),
+                "v18 per-invocation CPU counter epochs are not ordered")
+            previous = current_after
+        final = raw_cpu_stat(
+            outer_after[endpoint], cpu, f"outer {endpoint} after")
+        require(all(previous["fields"][name] <= final["fields"][name]
+                    for name in CPU_FIELDS[:8]),
+                "v18 per-invocation CPU counters escape outer endpoints")
+
+
+def validate_v18_isolation(value: Any, raw: Mapping[str, Any]
+                           ) -> Mapping[str, Any]:
+    value = exact_keys(value, {
+        "accepted", "after", "before", "benchmark_cpu", "delta",
+        "invocation_windows", "out_of_window", "pair_lease", "policy",
+        "reserved_sibling", "retained_window_count", "schema", "windowed",
+        "windows_schema"}, "v18 windowed isolation")
+    invocations = raw.get("invocations")
+    order = ("baseline", "candidate", "candidate", "baseline")
+    require(type(invocations) is list and len(invocations) == 12,
+            "v18 campaign invocation census differs")
+    windows: list[Mapping[str, Any]] = []
+    for index, invocation in enumerate(invocations):
+        round_index, slot = divmod(index, len(order))
+        role = order[slot]
+        require(type(invocation) is dict and
+                invocation.get("cell_id") == "gf16-high-full" and
+                type(invocation.get("round")) is int and
+                invocation["round"] == round_index and
+                type(invocation.get("slot")) is int and
+                invocation["slot"] == slot and
+                invocation.get("implementation") == role and
+                type(invocation.get("duration_ns")) is int and
+                invocation["duration_ns"] > 0,
+                f"v18 invocation {index} identity differs")
+        windows.append(validate_v18_window(
+            invocation.get("cpu_window"), round_index, slot, role,
+            invocation["duration_ns"]))
+    require(value["schema"] == ISOLATION_SCHEMA_V2 and
+            value["windows_schema"] == CPU_WINDOW_SCHEMA and
+            type(value["benchmark_cpu"]) is int and
+            value["benchmark_cpu"] == 52 and
+            type(value["reserved_sibling"]) is int and
+            value["reserved_sibling"] == 116 and
+            type(value["retained_window_count"]) is int and
+            value["retained_window_count"] == 12 and
+            exact_json_equal(value["invocation_windows"], windows) and
+            all(windows[index]["after"]["read_finished_monotonic_ns"] <=
+                windows[index + 1]["before"]["read_started_monotonic_ns"]
+                for index in range(11)),
+            "v18 isolation invocation-window closure differs")
+    before = exact_keys(value["before"], {
+        "benchmark_cpu", "monotonic_ns", "reserved_sibling"},
+        "v18 isolation before")
+    after = exact_keys(value["after"], {
+        "benchmark_cpu", "monotonic_ns", "reserved_sibling"},
+        "v18 isolation after")
+    require(type(before["monotonic_ns"]) is int and
+            type(after["monotonic_ns"]) is int and
+            0 <= before["monotonic_ns"] < after["monotonic_ns"] and
+            before["monotonic_ns"] <=
+                windows[0]["before"]["read_started_monotonic_ns"] and
+            windows[-1]["after"]["read_finished_monotonic_ns"] <=
+                after["monotonic_ns"],
+            "v18 isolation interval does not enclose retained windows")
+    validate_v18_counter_chain(windows, before, after)
+    benchmark = raw_isolation_delta(
+        before["benchmark_cpu"], after["benchmark_cpu"], 52,
+        "v18 global benchmark CPU")
+    sibling = raw_isolation_delta(
+        before["reserved_sibling"], after["reserved_sibling"], 116,
+        "v18 global reserved sibling")
+    benchmark_nonidle = sum(
+        window["delta"]["benchmark_cpu"]["nonidle_jiffies"]
+        for window in windows)
+    benchmark_ceiling = sum(
+        window["benchmark_cpu_tick_ceiling_jiffies"] for window in windows)
+    benchmark_excess = sum(
+        window["benchmark_cpu_nonidle_excess_jiffies"] for window in windows)
+    sibling_nonidle = sum(
+        window["reserved_sibling_nonidle_jiffies"] for window in windows)
+    child_duration = sum(window["child_wall_duration_ns"] for window in windows)
+    window_duration = sum(window["window_ns"] for window in windows)
+    expected_windowed = {
+        "benchmark_cpu_auxiliary_class_jiffies": {
+            name: sum(window["delta"]["benchmark_cpu"]["fields"][name]
+                      for window in windows)
+            for name in ("iowait", "irq", "nice", "softirq", "steal")},
+        "benchmark_cpu_nonidle_excess_jiffies": benchmark_excess,
+        "benchmark_cpu_nonidle_jiffies": benchmark_nonidle,
+        "benchmark_cpu_tick_ceiling_jiffies": benchmark_ceiling,
+        "child_wall_duration_total_ns": child_duration,
+        "clock_ticks_per_second": CLOCK_TICKS_PER_SECOND,
+        "reserved_sibling_nonidle_jiffies": sibling_nonidle,
+        "window_duration_total_ns": window_duration,
+    }
+    expected_out_of_window = {
+        "benchmark_cpu_nonidle_jiffies":
+            benchmark["nonidle_jiffies"] - benchmark_nonidle,
+        "duration_ns":
+            after["monotonic_ns"] - before["monotonic_ns"] - window_duration,
+        "gated": False,
+        "interpretation":
+            "runner overhead outside every retained benchmark window; "
+            "disclosed so the shared-host exposure is visible, deliberately "
+            "not gated because it contains no retained measurement",
+        "reserved_sibling_nonidle_jiffies":
+            sibling["nonidle_jiffies"] - sibling_nonidle,
+    }
+    require(exact_json_equal(value["delta"], {
+                "benchmark_cpu": benchmark, "reserved_sibling": sibling}) and
+            all(type(item) is int and item >= 0 for item in (
+                expected_out_of_window["benchmark_cpu_nonidle_jiffies"],
+                expected_out_of_window["duration_ns"],
+                expected_out_of_window["reserved_sibling_nonidle_jiffies"])) and
+            all(
+                benchmark["fields"][name] >= sum(
+                    window["delta"]["benchmark_cpu"]["fields"][name]
+                    for window in windows) and
+                sibling["fields"][name] >= sum(
+                    window["delta"]["reserved_sibling"]["fields"][name]
+                    for window in windows)
+                for name in CPU_FIELDS[:8]) and
+            exact_json_equal(value["windowed"], expected_windowed) and
+            exact_json_equal(value["out_of_window"], expected_out_of_window) and
+            exact_json_equal(value["policy"], {
+                **window_policy(),
+                "benchmark_cpu_max_nonidle_excess_jiffies": 0,
+                "reserved_sibling_campaign_nonidle_gated": False,
+                "windowed_gate": "per retained invocation"}) and
+            benchmark["nonidle_jiffies"] > 0 and
+            sibling["total_jiffies"] > 0 and
+            benchmark_excess == 0 and sibling_nonidle == 0 and
+            value["accepted"] is True,
+            "v18 isolation aggregate or rejection policy differs")
+    return value
+
+
 def endpoint_identity_key(entry: Mapping[str, Any]) -> tuple[int, ...]:
     process = entry["process_identity"]
     thread = entry["thread_identity"]
@@ -612,7 +912,7 @@ def endpoint_identity_key(entry: Mapping[str, Any]) -> tuple[int, ...]:
     )
 
 
-def child_wall_reference(raw: Mapping[str, Any]) -> dict[str, int]:
+def legacy_v17_child_wall_reference(raw: Mapping[str, Any]) -> dict[str, int]:
     """Return the descriptive wall-time reference for the CPU52 screen.
 
     This arithmetic does not attribute /proc/stat ticks to a process.  It only
@@ -657,15 +957,19 @@ def _unique_object(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
 def compare(pre: Mapping[str, Any], post: Mapping[str, Any],
             raw: Mapping[str, Any], controller: Mapping[str, Any]) \
         -> dict[str, Any]:
+    require(type(raw) is dict and raw.get("schema") in (
+                RAW_SCHEMA_V17, RAW_SCHEMA_V18),
+            "passive campaign raw schema differs")
+    raw_schema = raw["schema"]
     pre = validate_snapshot(pre, "pre")
     post = validate_snapshot(post, "post")
-    controller = validate_controller(controller)
+    controller = validate_controller(controller, raw_schema)
     require(pre["uid"] == post["uid"] and
             pre["boot_id"] == post["boot_id"] and
             pre["namespaces"] == post["namespaces"] and
             pre["reserved_cpus"] == post["reserved_cpus"],
             "passive census identity changed")
-    require(type(raw) is dict and "supervision" in raw and
+    require("supervision" in raw and
             raw["supervision"] is None,
             "passive campaign supervision is not null")
     campaign = raw.get("campaign")
@@ -678,17 +982,20 @@ def compare(pre: Mapping[str, Any], post: Mapping[str, Any],
             raw_launch_cpus == controller["runner_launch_allowed_cpus"],
             "passive runner launch affinity differs from the controller")
     isolation = raw.get("isolation")
-    require(type(isolation) is dict and
-            set(isolation) == {
-                "accepted", "after", "before", "benchmark_cpu", "delta",
-                "pair_lease", "policy", "reserved_sibling", "schema"} and
-            isolation.get("schema") == "leopard2-main-compare-isolation/v1" and
-            type(isolation.get("benchmark_cpu")) is int and
-            isolation.get("benchmark_cpu") == 52 and
-            type(isolation.get("reserved_sibling")) is int and
-            isolation.get("reserved_sibling") == 116 and
-            isolation.get("accepted") is True,
-            "passive campaign isolation was not accepted")
+    if raw_schema == RAW_SCHEMA_V18:
+        isolation = validate_v18_isolation(isolation, raw)
+    else:
+        require(type(isolation) is dict and
+                set(isolation) == {
+                    "accepted", "after", "before", "benchmark_cpu", "delta",
+                    "pair_lease", "policy", "reserved_sibling", "schema"} and
+                isolation.get("schema") == ISOLATION_SCHEMA_V1 and
+                type(isolation.get("benchmark_cpu")) is int and
+                isolation.get("benchmark_cpu") == 52 and
+                type(isolation.get("reserved_sibling")) is int and
+                isolation.get("reserved_sibling") == 116 and
+                isolation.get("accepted") is True,
+                "passive v17 campaign isolation was not accepted")
     isolation_before = exact_keys(isolation["before"], {
         "benchmark_cpu", "monotonic_ns", "reserved_sibling"},
         "raw isolation before")
@@ -722,42 +1029,46 @@ def compare(pre: Mapping[str, Any], post: Mapping[str, Any],
     }
     benchmark = outer[str(cpus[0])]
     sibling = outer[str(cpus[1])]
-    require(sibling["nonidle_jiffies"] == 0,
-            "outer passive sibling activity gate failed")
-    wall_reference = child_wall_reference(raw)
-    require(after_ns > before_ns and
-            wall_reference["child_wall_duration_total_ns"] <=
-                after_ns - before_ns,
-            "passive child wall durations escape the isolation interval")
-    observed = benchmark["nonidle_jiffies"]
-    excess = max(
-        0, observed - wall_reference["child_wall_time_ceiling_jiffies"])
-    require(
-        excess <= MAX_NONIDLE_EXCESS_OVER_CHILD_WALL_CEILING_JIFFIES,
-        "outer benchmark CPU nonidle excess rejection threshold exceeded")
-    outer_contamination = {
-        "clock_ticks_per_second": CLOCK_TICKS_PER_SECOND,
-        **wall_reference,
-        "benchmark_cpu_nonidle_jiffies": observed,
-        "benchmark_cpu_auxiliary_class_jiffies": {
-            name: benchmark["fields"][name]
-            for name in ("nice", "iowait", "irq", "softirq", "steal")
-        },
-        "benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies":
-            excess,
-        "policy_max_nonidle_excess_over_child_wall_ceiling_jiffies":
-            MAX_NONIDLE_EXCESS_OVER_CHILD_WALL_CEILING_JIFFIES,
-        "reserved_sibling_nonidle_jiffies": sibling["nonidle_jiffies"],
-        "auxiliary_class_policy": (
-            "nice, irq, softirq, and steal are included in aggregate nonidle; "
-            "iowait is disclosed as diagnostic idle accounting; no auxiliary "
-            "class has a separate zero-tolerance gate"
-        ),
-        "interpretation": (
-            "descriptive one-sided rejection screen only; the excess is not "
-            "process ownership attribution or an upper bound on interference"
-        ),
-    }
+    outer_contamination: dict[str, Any] | None = None
+    if raw_schema == RAW_SCHEMA_V17:
+        require(sibling["nonidle_jiffies"] == 0,
+                "outer passive sibling activity gate failed")
+        wall_reference = legacy_v17_child_wall_reference(raw)
+        require(after_ns > before_ns and
+                wall_reference["child_wall_duration_total_ns"] <=
+                    after_ns - before_ns,
+                "passive child wall durations escape the isolation interval")
+        observed = benchmark["nonidle_jiffies"]
+        excess = max(
+            0, observed - wall_reference["child_wall_time_ceiling_jiffies"])
+        require(
+            excess <=
+                LEGACY_V17_CPU52_AGGREGATE_EXCESS_LIMIT_JIFFIES,
+            "outer benchmark CPU nonidle excess rejection threshold exceeded")
+        outer_contamination = {
+            "clock_ticks_per_second": CLOCK_TICKS_PER_SECOND,
+            **wall_reference,
+            "benchmark_cpu_nonidle_jiffies": observed,
+            "benchmark_cpu_auxiliary_class_jiffies": {
+                name: benchmark["fields"][name]
+                for name in ("nice", "iowait", "irq", "softirq", "steal")
+            },
+            "benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies":
+                excess,
+            "policy_max_nonidle_excess_over_child_wall_ceiling_jiffies":
+                LEGACY_V17_CPU52_AGGREGATE_EXCESS_LIMIT_JIFFIES,
+            "reserved_sibling_nonidle_jiffies": sibling["nonidle_jiffies"],
+            "auxiliary_class_policy": (
+                "nice, irq, softirq, and steal are included in aggregate "
+                "nonidle; iowait is disclosed as diagnostic idle accounting; "
+                "no auxiliary class has a separate zero-tolerance gate"
+            ),
+            "interpretation": (
+                "descriptive one-sided rejection screen only; the excess is "
+                "not process ownership attribution or an upper bound on "
+                "interference"
+            ),
+        }
     pre_entries = {
         endpoint_identity_key(item): item
         for item in pre["same_uid_processes"]["entries"]
@@ -781,8 +1092,78 @@ def compare(pre: Mapping[str, Any], post: Mapping[str, Any],
                 controller["after_allowed_cpus"],
             "wrapper endpoint identity/affinity is not persistent")
     wrapper = pre_entries[wrapper_keys[0]]
+    if raw_schema == RAW_SCHEMA_V18:
+        return {
+            "schema": POLICY_SCHEMA_V2,
+            "status": "complete",
+            "acquisition_generation": "passive-v2",
+            "evidence_class": "passive-windowed-shared-host-observation/v1",
+            "policy_evaluation_complete": True,
+            "cpu_pair_exclusive": False,
+            "interval_complete_task_observation": False,
+            "foreign_cpu52_work_attributable": False,
+            "causal_performance_claim_eligible": False,
+            "promotion_eligible": False,
+            "promotion_passed": False,
+            "census_collector_foreign_process_affinity_mutation_performed": False,
+            "census_collector_foreign_process_signal_sent": False,
+            "campaign_supervision": None,
+            "windowed_contamination": {
+                "schema":
+                    "leopard2-v18-windowed-census-policy-observation/v1",
+                "gated": True,
+                "retained_window_count": isolation["retained_window_count"],
+                "windowed": isolation["windowed"],
+                "all_benchmark_cpu_excess_zero":
+                    isolation["windowed"][
+                        "benchmark_cpu_nonidle_excess_jiffies"] == 0,
+                "all_reserved_sibling_nonidle_zero":
+                    isolation["windowed"][
+                        "reserved_sibling_nonidle_jiffies"] == 0,
+                "policy": window_policy(),
+            },
+            "outer_disclosure": {
+                "gated": False,
+                "outer_cpu_activity": outer,
+                "isolation_out_of_window": isolation["out_of_window"],
+                "interpretation": (
+                    "endpoint and whole-campaign CPU counters are retained "
+                    "for shared-host disclosure only and do not affect v18 "
+                    "acceptance"
+                ),
+            },
+            "shared_host_exposure": {
+                phase: {
+                    name: census["same_uid_processes"]["summary"][name]
+                    for name in (
+                        "retained_process_count", "retained_thread_count",
+                        "pair_eligible_process_count",
+                        "pair_eligible_thread_count",
+                        "nonuniform_process_count",
+                        "confined_to_reserved_subset_process_count",
+                        "confined_to_reserved_subset_thread_count",
+                        "vanished_record_count")
+                }
+                for phase, census in (("pre", pre), ("post", post))
+            },
+            "persistent_same_uid_thread_count": len(persistent),
+            "wrapper_endpoint": {
+                "pid": wrapper_pid,
+                "process_identity": wrapper["process_identity"],
+                "thread_identity": wrapper["thread_identity"],
+                "cpus_allowed": wrapper["cpus_allowed"],
+            },
+            "interpretation": (
+                "only the twelve retained launch-through-reap windows are "
+                "screened; endpoint affinity eligibility and outer counters "
+                "do not establish CPU exclusivity or freedom from transient "
+                "interference"
+            ),
+        }
+    require(outer_contamination is not None,
+            "v17 outer contamination policy was not evaluated")
     return {
-        "schema": POLICY_SCHEMA,
+        "schema": POLICY_SCHEMA_V1,
         "status": "complete",
         "policy_evaluation_complete": True,
         "cpu_pair_exclusive": False,
@@ -868,6 +1249,9 @@ def main() -> int:
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--input", type=Path, required=True)
     verify_parser.add_argument("--phase", choices=("pre", "post"), required=True)
+    verify_parser.add_argument(
+        "--generation", choices=("passive-v1", "passive-v2"),
+        default="passive-v1")
     compare_parser = subparsers.add_parser("compare")
     compare_parser.add_argument("--pre", type=Path, required=True)
     compare_parser.add_argument("--post", type=Path, required=True)

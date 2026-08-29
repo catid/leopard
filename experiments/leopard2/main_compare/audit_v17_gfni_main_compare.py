@@ -29,11 +29,19 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-AUDIT_SCHEMA = "leopard2-main-compare-v17-independent-audit/v1"
-PASSIVE_AUDIT_SCHEMA = \
+AUDIT_SCHEMA_V17 = "leopard2-main-compare-v17-independent-audit/v1"
+PASSIVE_AUDIT_SCHEMA_V17 = \
     "leopard2-main-compare-v17-passive-independent-audit/v1"
-MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v17"
-RAW_SCHEMA = "leopard2-main-compare-raw/v17"
+PASSIVE_AUDIT_SCHEMA_V18 = \
+    "leopard2-main-compare-v18-passive-independent-audit/v1"
+AUDIT_SCHEMA = AUDIT_SCHEMA_V17
+PASSIVE_AUDIT_SCHEMA = PASSIVE_AUDIT_SCHEMA_V17
+MANIFEST_SCHEMA_V17 = "leopard2-main-compare-manifest/v17"
+MANIFEST_SCHEMA_V18 = "leopard2-main-compare-manifest/v18"
+RAW_SCHEMA_V17 = "leopard2-main-compare-raw/v17"
+RAW_SCHEMA_V18 = "leopard2-main-compare-raw/v18"
+MANIFEST_SCHEMA = MANIFEST_SCHEMA_V17
+RAW_SCHEMA = RAW_SCHEMA_V17
 BASELINE_SCHEMA = "leopard-main-benchmark-v1"
 CANDIDATE_SCHEMA = "leopard2-benchmark-v35"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
@@ -66,7 +74,10 @@ EXECUTABLE_ARTIFACT_KINDS = {
 }
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
-ISOLATION_SCHEMA = "leopard2-main-compare-isolation/v1"
+ISOLATION_SCHEMA_V1 = "leopard2-main-compare-isolation/v1"
+ISOLATION_SCHEMA_V2 = "leopard2-main-compare-isolation/v2"
+CPU_WINDOW_SCHEMA = "leopard2-main-compare-invocation-cpu-window/v1"
+ISOLATION_SCHEMA = ISOLATION_SCHEMA_V1
 SUPERVISION_SCHEMA = "leopard2-main-supervision/v1"
 GIT_CAPTURE_SCHEMA = "leopard2-git-source-capture/v2"
 GIT_EXECUTABLE_PROTOCOL = "linux-sealed-git-executable-memfd/v1"
@@ -108,7 +119,7 @@ CPU = 52
 SIBLING = 116
 TIMER_FLOOR_US = 20_000.0
 PASSIVE_CLOCK_TICKS = 100
-PASSIVE_MAX_NONIDLE_EXCESS_OVER_CHILD_WALL_CEILING_JIFFIES = 16
+LEGACY_V17_PASSIVE_CPU52_AGGREGATE_EXCESS_LIMIT_JIFFIES = 16
 T_CRITICAL_DF2 = 4.302652729911275
 CELL = {
     "identifier": "gf16-high-full",
@@ -303,6 +314,7 @@ INVOCATION_KEYS = {
     "normalized", "identity_before", "identity_after", "reservation_before",
     "reservation_after",
 }
+INVOCATION_V18_KEYS = {*INVOCATION_KEYS, "cpu_window"}
 INPUT_KEYS = {
     "runner", "taskset", "ldd", "baseline_executable", "candidate_executable",
     "baseline_archive", "candidate_archive", "baseline_build_dir",
@@ -341,7 +353,7 @@ MANIFEST_RAW_KEYS = {"path", "size", "sha256", "payload_digest"}
 CPU_STAT_FIELDS = (
     "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal",
 )
-CPU_IDLE_FIELDS = {"idle", "iowait"}
+CPU_IDLE_FIELDS = ("idle", "iowait")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{16}$")
 HEX256 = re.compile(r"^[0-9a-f]{64}$")
@@ -2649,6 +2661,257 @@ def validate_isolation(value: Any, campaign: Mapping[str, Any],
     return value
 
 
+def cpu_window_policy() -> dict[str, Any]:
+    return {
+        "benchmark_cpu_max_nonidle_excess_jiffies": 0,
+        "benchmark_cpu_tick_ceiling_formula":
+            "floor(child_wall_duration_ns * clock_ticks_per_second / "
+            "1000000000) + 1",
+        "counter_source": "/proc/stat",
+        "idle_fields": list(CPU_IDLE_FIELDS),
+        "interpretation":
+            "sampled 100 Hz rejection screen over the retained benchmark "
+            "window only; not process ownership attribution, not an "
+            "interference upper bound, and not proof of CPU exclusivity",
+        "nonidle_fields": [
+            name for name in CPU_STAT_FIELDS if name not in CPU_IDLE_FIELDS],
+        "reserved_sibling_max_nonidle_jiffies": 0,
+    }
+
+
+def validate_cpu_window_endpoint(value: Any, label: str, *, before: bool
+                                 ) -> dict[str, Any]:
+    value = exact_keys(value, {
+        "benchmark_cpu", "monotonic_ns", "read_finished_monotonic_ns",
+        "read_started_monotonic_ns", "reserved_sibling"}, label)
+    started = value["read_started_monotonic_ns"]
+    finished = value["read_finished_monotonic_ns"]
+    boundary = value["monotonic_ns"]
+    require(type(started) is int and type(finished) is int and
+            type(boundary) is int and
+            0 <= started <= finished and
+            boundary == (finished if before else started),
+            f"{label} read boundaries differ")
+    cpu_stat(value["benchmark_cpu"], CPU, f"{label} benchmark CPU")
+    cpu_stat(value["reserved_sibling"], SIBLING,
+             f"{label} reserved sibling")
+    return value
+
+
+def validate_cpu_window(value: Any, expected: tuple[int, int, str],
+                        duration_ns: int) -> dict[str, Any]:
+    round_index, slot, role = expected
+    label = f"invocation {round_index}/{slot} CPU window"
+    value = exact_keys(value, {
+        "accepted", "after", "before", "benchmark_cpu",
+        "benchmark_cpu_nonidle_excess_jiffies",
+        "benchmark_cpu_tick_ceiling_jiffies", "cell_id",
+        "child_started_monotonic_ns", "child_wall_duration_ns",
+        "clock_ticks_per_second", "delta", "implementation", "policy",
+        "reserved_sibling", "reserved_sibling_nonidle_jiffies", "round",
+        "schema", "slot", "window_ns"}, label)
+    require(value["schema"] == CPU_WINDOW_SCHEMA and
+            value["cell_id"] == CELL["identifier"] and
+            type(value["round"]) is int and value["round"] == round_index and
+            type(value["slot"]) is int and value["slot"] == slot and
+            value["implementation"] == role and
+            type(value["benchmark_cpu"]) is int and
+            value["benchmark_cpu"] == CPU and
+            type(value["reserved_sibling"]) is int and
+            value["reserved_sibling"] == SIBLING and
+            type(value["clock_ticks_per_second"]) is int and
+            value["clock_ticks_per_second"] == PASSIVE_CLOCK_TICKS and
+            type(value["child_started_monotonic_ns"]) is int and
+            value["child_started_monotonic_ns"] >= 0 and
+            type(value["child_wall_duration_ns"]) is int and
+            value["child_wall_duration_ns"] == duration_ns and
+            duration_ns > 0,
+            f"{label} identity differs")
+    before = validate_cpu_window_endpoint(
+        value["before"], f"{label} before", before=True)
+    after = validate_cpu_window_endpoint(
+        value["after"], f"{label} after", before=False)
+    started = value["child_started_monotonic_ns"]
+    finished = started + duration_ns
+    before_ns = before["monotonic_ns"]
+    after_ns = after["monotonic_ns"]
+    benchmark = cpu_delta(
+        before["benchmark_cpu"], after["benchmark_cpu"], CPU,
+        f"{label} benchmark CPU")
+    sibling = cpu_delta(
+        before["reserved_sibling"], after["reserved_sibling"], SIBLING,
+        f"{label} reserved sibling")
+    ceiling = duration_ns * PASSIVE_CLOCK_TICKS // 1_000_000_000 + 1
+    excess = max(0, benchmark["nonidle_jiffies"] - ceiling)
+    require(before_ns <= started < finished <= after_ns and
+            before["read_finished_monotonic_ns"] <= started and
+            finished <= after["read_started_monotonic_ns"] and
+            type(value["window_ns"]) is int and
+            value["window_ns"] == after_ns - before_ns and
+            value["window_ns"] >= duration_ns and
+            exact_json_equal(value["delta"], {
+                "benchmark_cpu": benchmark, "reserved_sibling": sibling}) and
+            exact_json_equal(value["policy"], cpu_window_policy()) and
+            type(value["benchmark_cpu_tick_ceiling_jiffies"]) is int and
+            value["benchmark_cpu_tick_ceiling_jiffies"] == ceiling and
+            type(value["benchmark_cpu_nonidle_excess_jiffies"]) is int and
+            value["benchmark_cpu_nonidle_excess_jiffies"] == excess and
+            type(value["reserved_sibling_nonidle_jiffies"]) is int and
+            value["reserved_sibling_nonidle_jiffies"] ==
+                sibling["nonidle_jiffies"] and
+            value["accepted"] is True and excess == 0 and
+            sibling["nonidle_jiffies"] == 0,
+            f"{label} rejection screen failed")
+    return value
+
+
+def validate_cpu_window_counter_chain(
+    windows: Sequence[Mapping[str, Any]],
+    outer_before: Mapping[str, Any],
+    outer_after: Mapping[str, Any],
+) -> None:
+    """Independently bind each retained counter epoch to the outer pair."""
+    for endpoint, cpu in (
+            ("benchmark_cpu", CPU), ("reserved_sibling", SIBLING)):
+        previous = cpu_stat(
+            outer_before[endpoint], cpu, f"outer {endpoint} before")
+        for index, window in enumerate(windows):
+            current_before = cpu_stat(
+                window["before"][endpoint], cpu,
+                f"window {index} {endpoint} before")
+            current_after = cpu_stat(
+                window["after"][endpoint], cpu,
+                f"window {index} {endpoint} after")
+            require(all(
+                previous["fields"][name] <=
+                current_before["fields"][name] <=
+                current_after["fields"][name]
+                for name in CPU_STAT_FIELDS),
+                "per-invocation CPU counter epochs are not ordered")
+            previous = current_after
+        final = cpu_stat(
+            outer_after[endpoint], cpu, f"outer {endpoint} after")
+        require(all(previous["fields"][name] <= final["fields"][name]
+                    for name in CPU_STAT_FIELDS),
+                "per-invocation CPU counters escape the campaign endpoints")
+
+
+def validate_isolation_v2(value: Any, windows: Sequence[Mapping[str, Any]]) \
+        -> dict[str, Any]:
+    value = exact_keys(value, {
+        "accepted", "after", "before", "benchmark_cpu", "delta",
+        "invocation_windows", "out_of_window", "pair_lease", "policy",
+        "reserved_sibling", "retained_window_count", "schema", "windowed",
+        "windows_schema"}, "windowed isolation")
+    require(value["schema"] == ISOLATION_SCHEMA_V2 and
+            value["windows_schema"] == CPU_WINDOW_SCHEMA and
+            type(value["benchmark_cpu"]) is int and
+            value["benchmark_cpu"] == CPU and
+            type(value["reserved_sibling"]) is int and
+            value["reserved_sibling"] == SIBLING and
+            type(value["retained_window_count"]) is int and
+            value["retained_window_count"] == len(windows) ==
+                ROUNDS * len(ORDER) and
+            exact_json_equal(value["invocation_windows"], list(windows)),
+            "windowed isolation identity or invocation closure differs")
+    require(all(
+        windows[index]["after"]["read_finished_monotonic_ns"] <=
+        windows[index + 1]["before"]["read_started_monotonic_ns"]
+        for index in range(len(windows) - 1)),
+        "per-invocation CPU windows overlap or are reordered")
+    before = exact_keys(value["before"], {
+        "benchmark_cpu", "monotonic_ns", "reserved_sibling"},
+        "windowed isolation before")
+    after = exact_keys(value["after"], {
+        "benchmark_cpu", "monotonic_ns", "reserved_sibling"},
+        "windowed isolation after")
+    require(type(before["monotonic_ns"]) is int and
+            type(after["monotonic_ns"]) is int and
+            0 <= before["monotonic_ns"] < after["monotonic_ns"] and
+            before["monotonic_ns"] <=
+                windows[0]["before"]["read_started_monotonic_ns"] and
+            windows[-1]["after"]["read_finished_monotonic_ns"] <=
+                after["monotonic_ns"],
+            "windowed isolation interval does not enclose retained windows")
+    validate_cpu_window_counter_chain(windows, before, after)
+    benchmark = cpu_delta(
+        before["benchmark_cpu"], after["benchmark_cpu"], CPU,
+        "windowed isolation benchmark CPU")
+    sibling = cpu_delta(
+        before["reserved_sibling"], after["reserved_sibling"], SIBLING,
+        "windowed isolation reserved sibling")
+    require(exact_json_equal(value["delta"], {
+        "benchmark_cpu": benchmark, "reserved_sibling": sibling}),
+        "windowed isolation aggregate deltas differ")
+    benchmark_nonidle = sum(
+        window["delta"]["benchmark_cpu"]["nonidle_jiffies"]
+        for window in windows)
+    benchmark_ceiling = sum(
+        window["benchmark_cpu_tick_ceiling_jiffies"] for window in windows)
+    benchmark_excess = sum(
+        window["benchmark_cpu_nonidle_excess_jiffies"] for window in windows)
+    sibling_nonidle = sum(
+        window["reserved_sibling_nonidle_jiffies"] for window in windows)
+    child_duration = sum(window["child_wall_duration_ns"] for window in windows)
+    window_duration = sum(window["window_ns"] for window in windows)
+    auxiliary = {
+        name: sum(window["delta"]["benchmark_cpu"]["fields"][name]
+                  for window in windows)
+        for name in ("iowait", "irq", "nice", "softirq", "steal")
+    }
+    expected_windowed = {
+        "benchmark_cpu_auxiliary_class_jiffies": auxiliary,
+        "benchmark_cpu_nonidle_excess_jiffies": benchmark_excess,
+        "benchmark_cpu_nonidle_jiffies": benchmark_nonidle,
+        "benchmark_cpu_tick_ceiling_jiffies": benchmark_ceiling,
+        "child_wall_duration_total_ns": child_duration,
+        "clock_ticks_per_second": PASSIVE_CLOCK_TICKS,
+        "reserved_sibling_nonidle_jiffies": sibling_nonidle,
+        "window_duration_total_ns": window_duration,
+    }
+    expected_out_of_window = {
+        "benchmark_cpu_nonidle_jiffies":
+            benchmark["nonidle_jiffies"] - benchmark_nonidle,
+        "duration_ns":
+            after["monotonic_ns"] - before["monotonic_ns"] - window_duration,
+        "gated": False,
+        "interpretation":
+            "runner overhead outside every retained benchmark window; "
+            "disclosed so the shared-host exposure is visible, deliberately "
+            "not gated because it contains no retained measurement",
+        "reserved_sibling_nonidle_jiffies":
+            sibling["nonidle_jiffies"] - sibling_nonidle,
+    }
+    require(all(type(item) is int and item >= 0 for item in (
+                expected_out_of_window["benchmark_cpu_nonidle_jiffies"],
+                expected_out_of_window["duration_ns"],
+                expected_out_of_window["reserved_sibling_nonidle_jiffies"])) and
+            all(
+                benchmark["fields"][name] >= sum(
+                    window["delta"]["benchmark_cpu"]["fields"][name]
+                    for window in windows) and
+                sibling["fields"][name] >= sum(
+                    window["delta"]["reserved_sibling"]["fields"][name]
+                    for window in windows)
+                for name in CPU_STAT_FIELDS) and
+            exact_json_equal(value["windowed"], expected_windowed) and
+            exact_json_equal(value["out_of_window"], expected_out_of_window) and
+            exact_json_equal(value["policy"], {
+                **cpu_window_policy(),
+                "benchmark_cpu_max_nonidle_excess_jiffies": 0,
+                "reserved_sibling_campaign_nonidle_gated": False,
+                "windowed_gate": "per retained invocation",
+            }) and
+            benchmark["nonidle_jiffies"] > 0 and
+            sibling["total_jiffies"] > 0 and
+            benchmark_excess == 0 and sibling_nonidle == 0 and
+            value["accepted"] is True and
+            all(window["accepted"] is True for window in windows),
+            "windowed isolation aggregate or rejection policy differs")
+    validate_pair_lease(value["pair_lease"])
+    return value
+
+
 def validate_supervision(value: Any, campaign: Mapping[str, Any],
                          reservation: Mapping[str, Any],
                          isolation: Mapping[str, Any]) -> dict[str, Any]:
@@ -2691,8 +2954,9 @@ def supervision_for_mode(value: Any, manifest_value: Any,
                          reservation: Mapping[str, Any],
                          isolation: Mapping[str, Any],
                          mode: str) -> dict[str, Any] | None:
-    require(mode in ("required", "absent"), "unknown supervision audit mode")
-    if mode == "absent":
+    require(mode in ("required", "absent", "windowed"),
+            "unknown supervision audit mode")
+    if mode in ("absent", "windowed"):
         require(value is None and manifest_value is None,
                 "passive audit requires null raw/manifest supervision")
         return None
@@ -2716,7 +2980,7 @@ def passive_contamination(isolation: Mapping[str, Any],
     excess = max(0, observed - self_max)
     require(
         excess <=
-            PASSIVE_MAX_NONIDLE_EXCESS_OVER_CHILD_WALL_CEILING_JIFFIES,
+            LEGACY_V17_PASSIVE_CPU52_AGGREGATE_EXCESS_LIMIT_JIFFIES,
         "benchmark CPU nonidle excess rejection threshold exceeded")
     return {
         "clock_ticks_per_second": PASSIVE_CLOCK_TICKS,
@@ -2730,7 +2994,7 @@ def passive_contamination(isolation: Mapping[str, Any],
         "benchmark_cpu_nonidle_excess_over_child_wall_ceiling_fraction": (
             excess / observed if observed else 0.0),
         "policy_max_nonidle_excess_over_child_wall_ceiling_jiffies":
-            PASSIVE_MAX_NONIDLE_EXCESS_OVER_CHILD_WALL_CEILING_JIFFIES,
+            LEGACY_V17_PASSIVE_CPU52_AGGREGATE_EXCESS_LIMIT_JIFFIES,
         "reserved_sibling_nonidle_jiffies": sibling["nonidle_jiffies"],
         "interpretation": (
             "descriptive one-sided rejection screen only; zero excess is not "
@@ -2740,10 +3004,49 @@ def passive_contamination(isolation: Mapping[str, Any],
     }
 
 
+def windowed_observation(isolation: Mapping[str, Any]) -> dict[str, Any]:
+    windows = isolation["invocation_windows"]
+    require(type(windows) is list and len(windows) == ROUNDS * len(ORDER),
+            "windowed audit lacks twelve retained observations")
+    return {
+        "schema": "leopard2-v18-windowed-cpu-observation/v1",
+        "clock_ticks_per_second": PASSIVE_CLOCK_TICKS,
+        "benchmark_cpu": CPU,
+        "reserved_sibling": SIBLING,
+        "retained_window_count": len(windows),
+        "per_invocation": [{
+            "index": index,
+            "cell_id": window["cell_id"],
+            "round": window["round"],
+            "slot": window["slot"],
+            "implementation": window["implementation"],
+            "child_wall_duration_ns": window["child_wall_duration_ns"],
+            "window_ns": window["window_ns"],
+            "benchmark_cpu_nonidle_jiffies":
+                window["delta"]["benchmark_cpu"]["nonidle_jiffies"],
+            "benchmark_cpu_tick_ceiling_jiffies":
+                window["benchmark_cpu_tick_ceiling_jiffies"],
+            "benchmark_cpu_nonidle_excess_jiffies":
+                window["benchmark_cpu_nonidle_excess_jiffies"],
+            "reserved_sibling_nonidle_jiffies":
+                window["reserved_sibling_nonidle_jiffies"],
+            "accepted": window["accepted"],
+        } for index, window in enumerate(windows)],
+        "windowed": dict(isolation["windowed"]),
+        "out_of_window": dict(isolation["out_of_window"]),
+        "interpretation": (
+            "prospectively fixed per-invocation 100 Hz rejection screen; "
+            "whole-campaign and out-of-window counters are disclosure only; "
+            "success does not establish process ownership, absence of "
+            "interference, CPU exclusivity, causality, or promotion evidence"
+        ),
+    }
+
+
 def audit_mode_result_fields(
         supervision_mode: str,
         contamination: Mapping[str, Any] | None) -> dict[str, Any]:
-    require(supervision_mode in ("required", "absent"),
+    require(supervision_mode in ("required", "absent", "windowed"),
             "invalid audit result supervision mode")
     if supervision_mode == "required":
         require(contamination is None,
@@ -2751,6 +3054,65 @@ def audit_mode_result_fields(
         return {"schema": AUDIT_SCHEMA}
     require(type(contamination) is dict,
             "passive audit lacks validated contamination")
+    if supervision_mode == "windowed":
+        windowed = contamination.get("windowed")
+        require(type(windowed) is dict and
+                windowed.get("benchmark_cpu_nonidle_excess_jiffies") == 0 and
+                windowed.get("reserved_sibling_nonidle_jiffies") == 0,
+                "windowed audit lacks exact zero rejection-screen totals")
+        return {
+            "schema": PASSIVE_AUDIT_SCHEMA_V18,
+            "audit_mode": "passive-windowed-shared-host-observation",
+            "acquisition_generation": "passive-v2",
+            "evidence_class": "passive-windowed-shared-host-observation/v1",
+            "affinity_supervisor_binding_verified": False,
+            "promotion_eligible": False,
+            "promotion_passed": False,
+            "causal_performance_claim_eligible": False,
+            "cpu_pair_exclusive": False,
+            "windowed_observation": dict(contamination),
+            "isolation_claim": {
+                "schema": "leopard2-v18-passive-windowed-isolation-claim/v1",
+                "mechanism": (
+                    "owned-process taskset pinning, reservation file, pair "
+                    "lease, and exact per-invocation CPU52/CPU116 jiffy "
+                    "rejection screens"
+                ),
+                "campaign_supervision": None,
+                "foreign_process_affinity_mutation_claimed": False,
+                "foreign_process_signalling_claimed": False,
+                "benchmark_cpu_exclusive_ownership_claimed": False,
+                "same_uid_pair_exclusion_certificate": False,
+                "cgroup_or_os_exclusive_certificate": False,
+                "every_retained_window_benchmark_cpu_excess_zero": True,
+                "every_retained_window_reserved_sibling_nonidle_zero": True,
+                "whole_campaign_and_out_of_window_activity_gated": False,
+                "windowed_screen": "per retained benchmark invocation",
+                "out_of_window_activity_gated": False,
+                "reserved_sibling_zero_nonidle_jiffies_in_every_retained_window":
+                    True,
+                "counter_resolution": (
+                    "frozen x86-64 Linux /proc/stat USER_HZ=100 contract"
+                ),
+                "interval_complete_task_observation": False,
+                "benchmark_cpu_foreign_work_attributable": False,
+                "causal_performance_claim_eligible": False,
+                "promotion_eligible": False,
+                "promotion_passed": False,
+                "unmitigated_confounders": [
+                    "foreign CPU52 work hidden below the owned-wall ceiling",
+                    "package boost and thermal residency",
+                    "shared LLC and memory bandwidth",
+                    "root-owned, other-UID, and kernel work",
+                    "sub-jiffy transient work",
+                ],
+                "scope": (
+                    "host, compiler, API, and workload specific; noncausal, "
+                    "nonexclusive, not generalizable, and never promotion "
+                    "evidence"
+                ),
+            },
+        }
     sibling_nonidle = contamination.get("reserved_sibling_nonidle_jiffies")
     require(type(sibling_nonidle) is int and sibling_nonidle == 0,
             "passive audit contamination lacks a zero sibling observation")
@@ -2877,8 +3239,14 @@ def validate_campaign(value: Any) -> dict[str, Any]:
 
 
 def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[str, Any]:
-    require(supervision_mode in ("required", "absent"),
+    require(supervision_mode in ("required", "absent", "windowed"),
             "invalid supervision audit mode")
+    windowed_mode = supervision_mode == "windowed"
+    expected_manifest_schema = (
+        MANIFEST_SCHEMA_V18 if windowed_mode else MANIFEST_SCHEMA_V17)
+    expected_raw_schema = RAW_SCHEMA_V18 if windowed_mode else RAW_SCHEMA_V17
+    expected_invocation_keys = (
+        INVOCATION_V18_KEYS if windowed_mode else INVOCATION_KEYS)
     manifest_path = canonical_existing_file(manifest_path)
     root = manifest_path.parent.resolve(strict=True)
     require(manifest_path.parent == root, "manifest parent is aliased")
@@ -2888,10 +3256,10 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
     manifest = exact_keys(manifest, MANIFEST_KEYS, "manifest")
     verify_signature(manifest, "manifest")
     validate_timestamp(manifest["created_utc"], "manifest created_utc")
-    require(manifest["schema"] == MANIFEST_SCHEMA and
+    require(manifest["schema"] == expected_manifest_schema and
             manifest["valid"] is True and
             manifest["validity_is_independent_of_speed"] is True,
-            "manifest is not valid v17 evidence")
+            "manifest does not match the requested audit generation")
     raw_info = exact_keys(manifest["raw"], MANIFEST_RAW_KEYS,
                           "manifest raw identity")
     require(raw_info["path"] == "raw.json", "manifest raw path changed")
@@ -2906,10 +3274,10 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
     raw = exact_keys(raw, RAW_KEYS, "raw bundle")
     verify_signature(raw, "raw bundle")
     validate_timestamp(raw["created_utc"], "raw created_utc")
-    require(raw["schema"] == RAW_SCHEMA and
+    require(raw["schema"] == expected_raw_schema and
             raw["validity_is_independent_of_speed"] is True and
             raw_info["payload_digest"] == raw["digest"],
-            "raw bundle is not signed v17 evidence")
+            "raw bundle does not match the requested audit generation")
     campaign = validate_campaign(raw["campaign"])
     require(type(raw["identities_initial"]) is dict and
             exact_json_equal(raw["identities_initial"], raw["identities_final"]),
@@ -2938,9 +3306,10 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
         "candidate_ordinary_encode": math.inf,
         "candidate_one_shot_encode": math.inf,
     }
+    cpu_windows: list[dict[str, Any]] = []
     for invocation, (round_index, slot, role) in zip(
             invocations, expected_sequence):
-        invocation = exact_keys(invocation, INVOCATION_KEYS,
+        invocation = exact_keys(invocation, expected_invocation_keys,
                                 f"invocation {round_index}/{slot}")
         require(invocation["cell_id"] == CELL["identifier"] and
                 type(invocation["round"]) is int and
@@ -2959,6 +3328,10 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
                 type(invocation["returncode"]) is int and
                 invocation["returncode"] == 0,
                 f"invocation {round_index}/{slot} contract differs")
+        if windowed_mode:
+            cpu_windows.append(validate_cpu_window(
+                invocation["cpu_window"], (round_index, slot, role),
+                invocation["duration_ns"]))
         validate_timestamp(
             invocation["started_utc"], f"invocation {round_index}/{slot} start")
         require(exact_json_equal(invocation["identity_before"], identities) and
@@ -3019,14 +3392,17 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
                 timer_minima["candidate_one_shot_encode"],
                 normalized["retained_timer_window_us"]["one_shot_encode"])
         accepted.append(dict(invocation, normalized=normalized))
-    isolation = validate_isolation(raw["isolation"], campaign, total_duration)
+    isolation = (
+        validate_isolation_v2(raw["isolation"], cpu_windows)
+        if windowed_mode else
+        validate_isolation(raw["isolation"], campaign, total_duration))
     supervision = supervision_for_mode(
         raw["supervision"], manifest["supervision"], campaign, reservation,
         isolation, supervision_mode)
     contamination = (
+        windowed_observation(isolation) if windowed_mode else
         passive_contamination(isolation, total_duration)
-        if supervision_mode == "absent" else None
-    )
+        if supervision_mode == "absent" else None)
     host_initial = validate_host(
         raw["host_initial"], "initial", campaign["allowed_cpu_set_at_launch"])
     host_final = validate_host(
@@ -3065,8 +3441,8 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
             "payload_digest": raw["digest"],
         },
         "contract": {
-            "manifest_schema": MANIFEST_SCHEMA,
-            "raw_schema": RAW_SCHEMA,
+            "manifest_schema": expected_manifest_schema,
+            "raw_schema": expected_raw_schema,
             "baseline_schema": BASELINE_SCHEMA,
             "candidate_schema": CANDIDATE_SCHEMA,
             "baseline_main_commit": MAIN_COMMIT,
@@ -3111,7 +3487,8 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
         },
         "gate_results": {
             "manifest_raw_digest_chain": True,
-            "v17_schema_and_contract": True,
+            ("v18_schema_and_contract" if windowed_mode
+             else "v17_schema_and_contract"): True,
             "native_exact_main_identity": True,
             "full_git_source_object_closure": True,
             "full_build_source_object_archive_link_closure": True,
@@ -3119,6 +3496,12 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
             "generated_attestation_and_configuration_bytes": True,
             "canonical_runtime_dependency_closure": True,
             **({
+                "reservation_pair_lease_null_supervision_windowed_closure": True,
+                "benchmark_cpu_nonidle_excess_zero_in_every_retained_window": True,
+                "reserved_sibling_nonidle_zero_in_every_retained_window": True,
+                "out_of_window_activity_disclosed_not_gated": True,
+                "benchmark_cpu_exclusivity_not_claimed": True,
+            } if windowed_mode else {
                 "reservation_pair_lease_null_supervision_closure": True,
                 "benchmark_cpu_nonidle_excess_over_child_wall_ceiling_"
                 "within_rejection_policy": True,
@@ -3129,7 +3512,9 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
             "complete_host_topology_identity": True,
             "candidate_gfni_route_all_six_children": True,
             "sealed_executable_identity": True,
-            "zero_reserved_sibling_nonidle_jiffies": True,
+            ("zero_reserved_sibling_nonidle_jiffies_in_retained_windows"
+             if windowed_mode else
+             "zero_reserved_sibling_nonidle_jiffies"): True,
             "workload_digest_identity": True,
             "retained_timer_window_floor": True,
             "wall_clock_encloses_validated_encode_and_setup_timer_work": True,
@@ -3149,7 +3534,12 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
                 "clustered_t_interval_reported_as_nominal_under_shared_"
                 "host_load": True,
                 "passive_observation_is_not_promotion_evidence": True,
-            } if supervision_mode == "absent" else {}),
+                **({
+                    "whole_campaign_and_out_of_window_activity_is_"
+                    "descriptive_only": True,
+                    "windowed_screen_is_noncausal_and_nonexclusive": True,
+                } if windowed_mode else {}),
+            } if supervision_mode in ("absent", "windowed") else {}),
         },
     }
 
@@ -3578,12 +3968,197 @@ def self_test() -> None:
             "passive contamination derivation failed")
     boundary_isolation = clone(isolation)
     boundary_isolation["delta"]["benchmark_cpu"]["nonidle_jiffies"] = (
-        1 + PASSIVE_MAX_NONIDLE_EXCESS_OVER_CHILD_WALL_CEILING_JIFFIES)
+        1 + LEGACY_V17_PASSIVE_CPU52_AGGREGATE_EXCESS_LIMIT_JIFFIES)
     passive_contamination(boundary_isolation, 1)
     over_boundary_isolation = clone(boundary_isolation)
     over_boundary_isolation["delta"]["benchmark_cpu"]["nonidle_jiffies"] += 1
     expect_failure(lambda: passive_contamination(over_boundary_isolation, 1),
                    "passive contamination beyond policy")
+
+    windows: list[dict[str, Any]] = []
+    window_sequence = [
+        (round_index, slot, role)
+        for round_index in range(ROUNDS)
+        for slot, role in enumerate(ORDER)]
+    for index, (round_index, slot, role) in enumerate(window_sequence):
+        before_ns = 100 + index * 100
+        before_benchmark_fields = {
+            **zero_fields, "idle": index, "user": index}
+        after_benchmark_fields = {
+            **zero_fields, "idle": index + 1, "user": index + 1}
+        before_sibling_fields = {**zero_fields, "idle": index}
+        after_sibling_fields = {**zero_fields, "idle": index + 1}
+        before_window = {
+            "benchmark_cpu": {
+                "cpu": CPU, "fields": before_benchmark_fields,
+                "total_jiffies": sum(before_benchmark_fields.values())},
+            "monotonic_ns": before_ns,
+            "read_finished_monotonic_ns": before_ns,
+            "read_started_monotonic_ns": before_ns - 2,
+            "reserved_sibling": {
+                "cpu": SIBLING, "fields": before_sibling_fields,
+                "total_jiffies": sum(before_sibling_fields.values())},
+        }
+        after_window = {
+            "benchmark_cpu": {
+                "cpu": CPU, "fields": after_benchmark_fields,
+                "total_jiffies": sum(after_benchmark_fields.values())},
+            "monotonic_ns": before_ns + 20,
+            "read_finished_monotonic_ns": before_ns + 22,
+            "read_started_monotonic_ns": before_ns + 20,
+            "reserved_sibling": {
+                "cpu": SIBLING, "fields": after_sibling_fields,
+                "total_jiffies": sum(after_sibling_fields.values())},
+        }
+        benchmark_window_delta = cpu_delta(
+            before_window["benchmark_cpu"], after_window["benchmark_cpu"],
+            CPU, "self-test window benchmark")
+        sibling_window_delta = cpu_delta(
+            before_window["reserved_sibling"],
+            after_window["reserved_sibling"], SIBLING,
+            "self-test window sibling")
+        window = {
+            "accepted": True,
+            "after": after_window,
+            "before": before_window,
+            "benchmark_cpu": CPU,
+            "benchmark_cpu_nonidle_excess_jiffies": 0,
+            "benchmark_cpu_tick_ceiling_jiffies": 1,
+            "cell_id": CELL["identifier"],
+            "child_started_monotonic_ns": before_ns + 10,
+            "child_wall_duration_ns": 1,
+            "clock_ticks_per_second": PASSIVE_CLOCK_TICKS,
+            "delta": {
+                "benchmark_cpu": benchmark_window_delta,
+                "reserved_sibling": sibling_window_delta,
+            },
+            "implementation": role,
+            "policy": cpu_window_policy(),
+            "reserved_sibling": SIBLING,
+            "reserved_sibling_nonidle_jiffies": 0,
+            "round": round_index,
+            "schema": CPU_WINDOW_SCHEMA,
+            "slot": slot,
+            "window_ns": 20,
+        }
+        validate_cpu_window(window, (round_index, slot, role), 1)
+        windows.append(window)
+    global_benchmark_after = {**zero_fields, "idle": 12, "user": 17}
+    global_sibling_after = {**zero_fields, "idle": 12, "user": 7}
+    global_benchmark_delta = cpu_delta(
+        {"cpu": CPU, "fields": zero_fields, "total_jiffies": 0},
+        {"cpu": CPU, "fields": global_benchmark_after,
+         "total_jiffies": sum(global_benchmark_after.values())},
+        CPU, "self-test global benchmark")
+    global_sibling_delta = cpu_delta(
+        {"cpu": SIBLING, "fields": zero_fields, "total_jiffies": 0},
+        {"cpu": SIBLING, "fields": global_sibling_after,
+         "total_jiffies": sum(global_sibling_after.values())},
+        SIBLING, "self-test global sibling")
+    windowed_isolation = {
+        "accepted": True,
+        "after": {
+            "benchmark_cpu": {
+                "cpu": CPU, "fields": global_benchmark_after,
+                "total_jiffies": sum(global_benchmark_after.values())},
+            "monotonic_ns": 1230,
+            "reserved_sibling": {
+                "cpu": SIBLING, "fields": global_sibling_after,
+                "total_jiffies": sum(global_sibling_after.values())},
+        },
+        "before": {
+            "benchmark_cpu": {
+                "cpu": CPU, "fields": zero_fields, "total_jiffies": 0},
+            "monotonic_ns": 90,
+            "reserved_sibling": {
+                "cpu": SIBLING, "fields": zero_fields, "total_jiffies": 0},
+        },
+        "benchmark_cpu": CPU,
+        "delta": {
+            "benchmark_cpu": global_benchmark_delta,
+            "reserved_sibling": global_sibling_delta,
+        },
+        "invocation_windows": windows,
+        "out_of_window": {
+            "benchmark_cpu_nonidle_jiffies": 5,
+            "duration_ns": 900,
+            "gated": False,
+            "interpretation": (
+                "runner overhead outside every retained benchmark window; "
+                "disclosed so the shared-host exposure is visible, "
+                "deliberately not gated because it contains no retained "
+                "measurement"
+            ),
+            "reserved_sibling_nonidle_jiffies": 7,
+        },
+        "pair_lease": pair_lease,
+        "policy": {
+            **cpu_window_policy(),
+            "benchmark_cpu_max_nonidle_excess_jiffies": 0,
+            "reserved_sibling_campaign_nonidle_gated": False,
+            "windowed_gate": "per retained invocation",
+        },
+        "reserved_sibling": SIBLING,
+        "retained_window_count": 12,
+        "schema": ISOLATION_SCHEMA_V2,
+        "windowed": {
+            "benchmark_cpu_auxiliary_class_jiffies": {
+                "iowait": 0, "irq": 0, "nice": 0,
+                "softirq": 0, "steal": 0},
+            "benchmark_cpu_nonidle_excess_jiffies": 0,
+            "benchmark_cpu_nonidle_jiffies": 12,
+            "benchmark_cpu_tick_ceiling_jiffies": 12,
+            "child_wall_duration_total_ns": 12,
+            "clock_ticks_per_second": PASSIVE_CLOCK_TICKS,
+            "reserved_sibling_nonidle_jiffies": 0,
+            "window_duration_total_ns": 240,
+        },
+        "windows_schema": CPU_WINDOW_SCHEMA,
+    }
+    validate_isolation_v2(windowed_isolation, windows)
+    windowed_result = audit_mode_result_fields(
+        "windowed", windowed_observation(windowed_isolation))
+    require(windowed_result["schema"] == PASSIVE_AUDIT_SCHEMA_V18 and
+            windowed_result["promotion_eligible"] is False and
+            windowed_result["causal_performance_claim_eligible"] is False and
+            windowed_result["cpu_pair_exclusive"] is False and
+            [item["index"] for item in
+             windowed_result["windowed_observation"]["per_invocation"]] ==
+                list(range(12)) and
+            windowed_result["isolation_claim"]["windowed_screen"] ==
+                "per retained benchmark invocation" and
+            windowed_result["isolation_claim"][
+                "out_of_window_activity_gated"] is False and
+            windowed_result["isolation_claim"][
+                "reserved_sibling_zero_nonidle_jiffies_in_every_retained_window"]
+                is True,
+            "windowed passive claim boundary differs")
+    over_cap = clone(windows[0])
+    over_cap["after"]["benchmark_cpu"]["fields"]["user"] += 1
+    over_cap["after"]["benchmark_cpu"]["total_jiffies"] += 1
+    over_cap["delta"]["benchmark_cpu"]["fields"]["user"] += 1
+    over_cap["delta"]["benchmark_cpu"]["nonidle_jiffies"] += 1
+    over_cap["delta"]["benchmark_cpu"]["total_jiffies"] += 1
+    over_cap["benchmark_cpu_nonidle_excess_jiffies"] = 1
+    over_cap["accepted"] = False
+    expect_failure(lambda: validate_cpu_window(
+        over_cap, (0, 0, "baseline"), 1), "coherent CPU52 cap excess")
+    dirty_sibling_window = clone(windows[0])
+    dirty_sibling_window["after"]["reserved_sibling"]["fields"]["system"] += 1
+    dirty_sibling_window["after"]["reserved_sibling"]["total_jiffies"] += 1
+    dirty_sibling_window["delta"]["reserved_sibling"]["fields"]["system"] += 1
+    dirty_sibling_window["delta"]["reserved_sibling"]["nonidle_jiffies"] += 1
+    dirty_sibling_window["delta"]["reserved_sibling"]["total_jiffies"] += 1
+    dirty_sibling_window["reserved_sibling_nonidle_jiffies"] = 1
+    dirty_sibling_window["accepted"] = False
+    expect_failure(lambda: validate_cpu_window(
+        dirty_sibling_window, (0, 0, "baseline"), 1),
+        "coherent CPU116 activity")
+    require(PASSIVE_AUDIT_SCHEMA_V18 not in {
+                AUDIT_SCHEMA_V17, PASSIVE_AUDIT_SCHEMA_V17} and
+            RAW_SCHEMA_V18 != RAW_SCHEMA_V17 and
+            MANIFEST_SCHEMA_V18 != MANIFEST_SCHEMA_V17,
+            "v17/v18 audit schemas collide")
     bad_supervision = clone(supervision)
     del bad_supervision["runner_pid"]
     expect_failure(lambda: validate_supervision(
@@ -3938,6 +4513,8 @@ def self_test() -> None:
                 "canonical output writer failed")
         expect_failure(lambda: write_canonical(output, {}),
                        "audit output overwrite")
+    # Preserve the frozen v17 self-test stdout contract even though the same
+    # routine now also exercises the strictly versioned v18 branch.
     print("v17 GFNI exact-main independent auditor self-test passed")
 
 
@@ -3950,9 +4527,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument(
-        "--supervision", choices=("required", "absent"), default="required",
+        "--supervision", choices=("required", "absent", "windowed"),
+        default="required",
         help=("require the existing supervisor handshake or explicitly require "
-              "JSON-null supervision for passive shared-host evidence"),
+              "JSON-null supervision under the historical aggregate passive "
+              "screen or the v18 per-invocation windowed screen"),
     )
     options = parser.parse_args()
     manifest = options.manifest if options.manifest is not None else options.report
@@ -3988,5 +4567,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (AuditError, UnicodeError, json.JSONDecodeError, OSError) as error:
-        print(f"v17 independent audit failed: {error}", file=sys.stderr)
+        print(f"v17/v18 independent audit failed: {error}", file=sys.stderr)
         raise SystemExit(1) from error

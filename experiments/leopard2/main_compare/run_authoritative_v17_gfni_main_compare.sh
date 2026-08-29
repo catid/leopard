@@ -28,9 +28,19 @@ fi
 shift
 
 passive_mode=false
+attempt=
+attempt_budget=
 if [[ ${1:-} == --passive-shared-host ]]; then
     passive_mode=true
     shift
+    if [[ ${1:-} != --attempt || ${3:-} != --attempt-budget ]]; then
+        /usr/bin/printf '%s requires --attempt N --attempt-budget 3\n' \
+            --passive-shared-host >&2
+        exit 2
+    fi
+    attempt=${2:-}
+    attempt_budget=${4:-}
+    shift 4
 fi
 
 for required_pair in \
@@ -90,6 +100,1712 @@ passive_timeout_argument_jq='.campaign.timeout_seconds
     | select(type == "number" and . == 600)
     | "600"'
 
+validate_attempt_contract()
+{
+    local observed_attempt=$1
+    local observed_budget=$2
+    [[ "$observed_attempt" =~ ^[1-3]$ ]] || return 1
+    test "$observed_budget" = 3
+}
+
+require_path_absent()
+{
+    test ! -e "$1" || return 1
+    test ! -L "$1" || return 1
+    return 0
+}
+
+v18_envelope_has_observational_output()
+{
+    local observed_envelope=$1
+    local observed_core="$observed_envelope/core"
+    local observed_path=
+    for observed_path in \
+        campaign/raw.json \
+        campaign/manifest.json \
+        campaign/.leopard2-evidence-pending-4f44a53c068755081419b7c7bc70e241854a1cc34ff9340529ccad707497f374 \
+        campaign/.leopard2-evidence-pending-ffa5b716b5a57837f7929dfcca4b4dfdeb97210a7fd5a12d2f1978846d6f1743 \
+        audit.json \
+        result-summary.json \
+        candidate-test-temporal-closure.json \
+        passive-environment-policy.json; do
+        if [[ -e "$observed_core/$observed_path" ||
+              -L "$observed_core/$observed_path" ]]; then
+            return 0
+        fi
+    done
+    if [[ -e "$observed_envelope/postseal-audit.json" ||
+          -L "$observed_envelope/postseal-audit.json" ]]; then
+        return 0
+    fi
+    if [[ -f "$observed_core/manifest.json" ]] &&
+       /usr/bin/jq -e -s '
+           length == 1 and
+           .[0].schema ==
+               "leopard2-v18-gfni-main-passive-core-manifest/v1" and
+           .[0].status == "complete" and .[0].evidence_valid == true
+       ' "$observed_core/manifest.json" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+validate_single_json_value()
+{
+    local json_path=$1
+    local expected_kind=$2
+    /usr/bin/python3 -I -S -B -c '
+import json
+import math
+import sys
+
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+def reject_constant(value):
+    raise ValueError(f"non-finite JSON number: {value}")
+
+def finite_float(token):
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError(f"non-finite JSON number: {token}")
+    return value
+
+limit = 16 * 1024 * 1024
+chunks = []
+size = 0
+with open(sys.argv[1], "rb", buffering=0) as stream:
+    while True:
+        chunk = stream.read(min(65536, limit + 1 - size))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+        if size > limit:
+            raise ValueError("wrapper-owned JSON exceeds the validation bound")
+data = b"".join(chunks)
+value = json.loads(
+    data.decode("utf-8"), object_pairs_hook=unique_object,
+    parse_constant=reject_constant, parse_float=finite_float)
+expected = {"object": dict, "array": list}.get(sys.argv[2])
+if expected is None or type(value) is not expected:
+    raise ValueError(f"wrapper-owned JSON is not one {sys.argv[2]}")
+' "$json_path" "$expected_kind" >/dev/null 2>&1 || return 1
+    return 0
+}
+
+validate_single_json_object()
+{
+    validate_single_json_value "$1" object
+}
+
+validate_single_json_array()
+{
+    validate_single_json_value "$1" array
+}
+
+validate_exact_json_schema()
+{
+    local json_path=$1
+    local expected_schema=$2
+    /usr/bin/jq -e --arg expected_schema "$expected_schema" \
+        '.schema == $expected_schema' "$json_path" >/dev/null
+}
+
+validate_v18_terminal_static()
+{
+    local status_path=$1
+    local generation=$2
+    validate_single_json_object "$status_path" || return 1
+    if [[ "$generation" == passive-v2 ]]; then
+        /usr/bin/jq -e '
+            .schema ==
+                "leopard2-v18-gfni-main-passive-not-promoted-envelope/v1" and
+            .status == "complete" and
+            .acquisition_generation == "passive-v2" and
+            (.attempt | type) == "number" and
+            .attempt == (.attempt | floor) and
+            .attempt >= 1 and .attempt <= 3 and .attempt_budget == 3 and
+            (.attempt_lineage_sha256 | type) == "string" and
+            (.attempt_lineage_sha256 | length) == 64 and
+            (.attempt_lineage_sha256 | test("^[0-9a-f]{64}$")) and
+            .promotion_passed == false and .campaign_exit_status == 0 and
+            (.source_commit | type) == "string" and
+            (.source_commit | length) == 40 and
+            (.source_commit | test("^[0-9a-f]{40}$")) and
+            (.source_tree | type) == "string" and
+            (.source_tree | length) == 40 and
+            (.source_tree | test("^[0-9a-f]{40}$")) and
+            .baseline_commit ==
+                "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198" and
+            all([.campaign_manifest_sha256,.audit_sha256,
+                .postseal_audit_sha256,.core_manifest_sha256,
+                .core_sha256sums_sha256][];
+                type == "string" and length == 64 and
+                test("^[0-9a-f]{64}$"))
+        ' "$status_path" >/dev/null || return 1
+    elif [[ "$generation" == failed-v2 ]]; then
+        /usr/bin/jq -e '
+            .schema == "leopard2-v18-gfni-main-failed-envelope/v1" and
+            .status == "failed" and .acquisition_generation == "passive-v2" and
+            (.attempt | type) == "number" and
+            .attempt == (.attempt | floor) and
+            .attempt >= 1 and .attempt <= 3 and .attempt_budget == 3 and
+            (.attempt_lineage_sha256 | type) == "string" and
+            (.attempt_lineage_sha256 | length) == 64 and
+            (.attempt_lineage_sha256 | test("^[0-9a-f]{64}$")) and
+            .promotion_passed == false and
+            (.campaign_exit_status | type) == "number" and
+            .campaign_exit_status == (.campaign_exit_status | floor) and
+            .campaign_exit_status >= 1 and .campaign_exit_status <= 255 and
+            (.source_commit | type) == "string" and
+            (.source_commit | length) == 40 and
+            (.source_commit | test("^[0-9a-f]{40}$")) and
+            (.source_tree | type) == "string" and
+            (.source_tree | length) == 40 and
+            (.source_tree | test("^[0-9a-f]{40}$")) and
+            (.core_sha256sums_sha256 | type) == "string" and
+            (.core_sha256sums_sha256 | length) == 64 and
+            (.core_sha256sums_sha256 | test("^[0-9a-f]{64}$"))
+        ' "$status_path" >/dev/null || return 1
+    else
+        return 1
+    fi
+    return 0
+}
+
+validate_v18_wrapper_failure_binding()
+{
+    local retained_failure=$1
+    local outer_failure=$2
+    validate_single_json_object "$retained_failure" || return 1
+    validate_single_json_object "$outer_failure" || return 1
+    /usr/bin/jq -e --slurpfile status "$outer_failure" '
+        ($status | length) == 1 and
+        keys == (["acquisition_generation","attempt","attempt_budget",
+            "attempt_lineage_sha256","exit_status","promotion_passed",
+            "schema","source_commit","source_tree","stage","status"] | sort) and
+        .schema ==
+            "leopard2-v18-gfni-main-passive-wrapper-failure/v1" and
+        .acquisition_generation == "passive-v2" and
+        (.attempt | type) == "number" and .attempt == (.attempt | floor) and
+        .attempt >= 1 and .attempt <= 3 and .attempt_budget == 3 and
+        (.attempt_lineage_sha256 | type) == "string" and
+        (.attempt_lineage_sha256 | length) == 64 and
+        (.attempt_lineage_sha256 | test("^[0-9a-f]{64}$")) and
+        .status == "failed" and .promotion_passed == false and
+        (.exit_status | type) == "number" and
+        .exit_status == (.exit_status | floor) and
+        .exit_status >= 1 and .exit_status <= 255 and
+        (.stage | type) == "string" and (.stage | length) > 0 and
+        (.source_commit | type) == "string" and
+        (.source_commit | length) == 40 and
+        (.source_commit | test("^[0-9a-f]{40}$")) and
+        (.source_tree | type) == "string" and
+        (.source_tree | length) == 40 and
+        (.source_tree | test("^[0-9a-f]{40}$")) and
+        .attempt == $status[0].attempt and
+        .attempt_budget == $status[0].attempt_budget and
+        .attempt_lineage_sha256 == $status[0].attempt_lineage_sha256 and
+        .exit_status == $status[0].campaign_exit_status and
+        .stage == $status[0].stage and
+        .source_commit == $status[0].source_commit and
+        .source_tree == $status[0].source_tree
+    ' "$retained_failure" >/dev/null
+}
+
+validate_v18_complete_core_static()
+{
+    validate_single_json_object "$1" || return 1
+    /usr/bin/jq -e '
+        keys == ([
+            "acquisition_generation", "active_affinity_supervisor_executed",
+            "attempt", "attempt_budget", "attempt_lineage_sha256",
+            "audit_sha256", "auditor_sha256",
+            "baseline_archive_sha256_pre_post",
+            "baseline_binary_sha256_pre_post", "baseline_commit",
+            "build_order_normalizer_sha256", "build_reproduction",
+            "campaign_exit_status", "campaign_manifest_sha256",
+            "campaign_raw_sha256", "candidate_archive_sha256_pre_post",
+            "candidate_binary_sha256_pre_post",
+            "candidate_test_normalization_report_sha256",
+            "candidate_timing_normalization_report_sha256",
+            "canonical_lock", "causal_performance_claim_eligible",
+            "controller_affinity_sha256", "cpu", "cpu_pair_exclusive",
+            "environment_census_post_sha256",
+            "environment_census_pre_sha256", "evidence_class",
+            "evidence_valid", "independent_auditor_scope",
+            "independent_auditor_supervision_mode",
+            "independent_preseal_audit_passed", "isolation_claim",
+            "passive_census_sha256", "passive_environment_policy_sha256",
+            "performance_gate_passed", "postseal_policy",
+            "producer_verification_mode", "producer_verification_passed",
+            "promotion_eligible", "promotion_passed", "ratio_policy",
+            "runner_sha256", "schema", "sibling", "source_commit",
+            "source_tree", "sse2neon_commit",
+            "sse2neon_source_archive_sha256", "status",
+            "supervisor_role", "supervisor_sha256",
+            "out_of_window_benchmark_cpu_nonidle_jiffies",
+            "out_of_window_reserved_sibling_nonidle_jiffies",
+            "windowed_benchmark_cpu_nonidle_excess_jiffies",
+            "windowed_reserved_sibling_nonidle_jiffies", "wrapper_sha256"
+        ] | sort) and
+        .schema == "leopard2-v18-gfni-main-passive-core-manifest/v1" and
+        .status == "complete" and .acquisition_generation == "passive-v2" and
+        (.attempt | type) == "number" and .attempt == (.attempt | floor) and
+        .attempt >= 1 and .attempt <= 3 and .attempt_budget == 3 and
+        (.attempt_lineage_sha256 | type) == "string" and
+        (.attempt_lineage_sha256 | length) == 64 and
+        (.attempt_lineage_sha256 | test("^[0-9a-f]{64}$")) and
+        .campaign_exit_status == 0 and .evidence_valid == true and
+        .evidence_class == "passive-windowed-shared-host-observation/v1" and
+        (.performance_gate_passed | type) == "boolean" and
+        .promotion_eligible == false and .promotion_passed == false and
+        .causal_performance_claim_eligible == false and
+        .cpu_pair_exclusive == false and
+        .windowed_benchmark_cpu_nonidle_excess_jiffies == 0 and
+        .windowed_reserved_sibling_nonidle_jiffies == 0 and
+        (.out_of_window_benchmark_cpu_nonidle_jiffies | type) == "number" and
+        .out_of_window_benchmark_cpu_nonidle_jiffies ==
+            (.out_of_window_benchmark_cpu_nonidle_jiffies | floor) and
+        .out_of_window_benchmark_cpu_nonidle_jiffies >= 0 and
+        (.out_of_window_reserved_sibling_nonidle_jiffies | type) == "number" and
+        .out_of_window_reserved_sibling_nonidle_jiffies ==
+            (.out_of_window_reserved_sibling_nonidle_jiffies | floor) and
+        .out_of_window_reserved_sibling_nonidle_jiffies >= 0 and
+        (.source_commit | type) == "string" and
+        (.source_commit | length) == 40 and
+        (.source_commit | test("^[0-9a-f]{40}$")) and
+        (.source_tree | type) == "string" and
+        (.source_tree | length) == 40 and
+        (.source_tree | test("^[0-9a-f]{40}$")) and
+        .baseline_commit == "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198" and
+        (.sse2neon_commit | type) == "string" and
+        (.sse2neon_commit | length) == 40 and
+        (.sse2neon_commit | test("^[0-9a-f]{40}$")) and
+        all([
+            .sse2neon_source_archive_sha256,
+            .candidate_binary_sha256_pre_post,
+            .candidate_archive_sha256_pre_post,
+            .baseline_binary_sha256_pre_post,
+            .baseline_archive_sha256_pre_post,
+            .runner_sha256, .auditor_sha256, .supervisor_sha256,
+            .passive_census_sha256, .wrapper_sha256,
+            .build_order_normalizer_sha256,
+            .candidate_timing_normalization_report_sha256,
+            .candidate_test_normalization_report_sha256,
+            .campaign_manifest_sha256, .campaign_raw_sha256, .audit_sha256,
+            .controller_affinity_sha256, .environment_census_pre_sha256,
+            .environment_census_post_sha256,
+            .passive_environment_policy_sha256
+        ][]; type == "string" and length == 64 and
+            test("^[0-9a-f]{64}$")) and
+        .isolation_claim == {
+            schema:"leopard2-v18-passive-windowed-isolation-claim/v1",
+            mechanism:(
+                "owned-process taskset pinning, reservation file, pair " +
+                "lease, and exact per-invocation CPU52/CPU116 jiffy " +
+                "rejection screens"
+            ),
+            campaign_supervision:null,
+            foreign_process_affinity_mutation_claimed:false,
+            foreign_process_signalling_claimed:false,
+            benchmark_cpu_exclusive_ownership_claimed:false,
+            same_uid_pair_exclusion_certificate:false,
+            cgroup_or_os_exclusive_certificate:false,
+            every_retained_window_benchmark_cpu_excess_zero:true,
+            every_retained_window_reserved_sibling_nonidle_zero:true,
+            whole_campaign_and_out_of_window_activity_gated:false,
+            windowed_screen:"per retained benchmark invocation",
+            out_of_window_activity_gated:false,
+            reserved_sibling_zero_nonidle_jiffies_in_every_retained_window:true,
+            counter_resolution:(
+                "frozen x86-64 Linux /proc/stat USER_HZ=100 contract"
+            ),
+            interval_complete_task_observation:false,
+            benchmark_cpu_foreign_work_attributable:false,
+            causal_performance_claim_eligible:false,
+            promotion_eligible:false,
+            promotion_passed:false,
+            unmitigated_confounders:[
+                "foreign CPU52 work hidden below the owned-wall ceiling",
+                "package boost and thermal residency",
+                "shared LLC and memory bandwidth",
+                "root-owned, other-UID, and kernel work",
+                "sub-jiffy transient work"
+            ],
+            scope:(
+                "host, compiler, API, and workload specific; noncausal, " +
+                "nonexclusive, not generalizable, and never promotion " +
+                "evidence"
+            )
+        } and
+        .build_reproduction == {
+            candidate_timing_qualified_semantic_equal:true,
+            candidate_timing_raw_tree_file_bytes_identical:
+                .build_reproduction.candidate_timing_raw_tree_file_bytes_identical,
+            candidate_tests_qualified_semantic_equal:true,
+            candidate_tests_raw_tree_file_bytes_identical:
+                .build_reproduction.candidate_tests_raw_tree_file_bytes_identical,
+            baseline_raw_byte_identical:true
+        } and
+        (.build_reproduction.candidate_timing_raw_tree_file_bytes_identical |
+            type) == "boolean" and
+        (.build_reproduction.candidate_tests_raw_tree_file_bytes_identical |
+            type) == "boolean" and
+        .producer_verification_passed == true and
+        .producer_verification_mode == "manifest-without-affinity-binding" and
+        .independent_preseal_audit_passed == true and
+        .independent_auditor_supervision_mode == "windowed" and
+        .independent_auditor_scope ==
+            "campaign semantics only; build-order qualification is separately recomputed by the frozen wrapper normalizer" and
+        .canonical_lock == "/tmp/leopard-gf8-authoritative.lock" and
+        .cpu == 52 and .sibling == 116 and
+        .supervisor_role == "retained-active-v1-verifier-only" and
+        .active_affinity_supervisor_executed == false and
+        .ratio_policy == {
+            ordinary_and_one_shot_are_separate:true,
+            ratios_are_separate_correlated_and_must_not_be_multiplied:true,
+            combined_or_stacked_ratio_emitted:false,
+            same_binary_ratio_is_another_campaign:true,
+            clustered_t_interval_reported_as_nominal_under_shared_host_load:true
+        } and
+        .postseal_policy ==
+            "passive-v2 shared-host observations always publish NOT_PROMOTED.json, independent of the observed speed gate; at most three preregistered attempts and every outcome is retained"
+    ' "$1" >/dev/null
+}
+
+validate_v18_failed_core_static()
+{
+    validate_single_json_object "$1" || return 1
+    /usr/bin/jq -e '
+        keys == (["acquisition_generation","attempt","attempt_budget",
+            "attempt_lineage_sha256","baseline_binary_sha256",
+            "baseline_commit","campaign_exit_status",
+            "candidate_binary_sha256","canonical_lock","cpu",
+            "failure_sha256","failure_verified","failure_verify_status",
+            "promotion_passed","schema","sibling","source_commit",
+            "source_tree","status"] | sort) and
+        .schema ==
+            "leopard2-v18-gfni-main-passive-failed-core-manifest/v1" and
+        .status == "failed" and .acquisition_generation == "passive-v2" and
+        (.attempt | type) == "number" and .attempt == (.attempt | floor) and
+        .attempt >= 1 and .attempt <= 3 and .attempt_budget == 3 and
+        (.attempt_lineage_sha256 | type) == "string" and
+        (.attempt_lineage_sha256 | length) == 64 and
+        (.attempt_lineage_sha256 | test("^[0-9a-f]{64}$")) and
+        .promotion_passed == false and
+        (.campaign_exit_status | type) == "number" and
+        .campaign_exit_status == (.campaign_exit_status | floor) and
+        .campaign_exit_status >= 1 and .campaign_exit_status <= 255 and
+        (.failure_verify_status | type) == "number" and
+        .failure_verify_status == (.failure_verify_status | floor) and
+        .failure_verify_status >= 0 and .failure_verify_status <= 255 and
+        (.failure_verified | type) == "boolean" and
+        .failure_verified == (.failure_verify_status == 0) and
+        (.source_commit | type) == "string" and
+        (.source_commit | length) == 40 and
+        (.source_commit | test("^[0-9a-f]{40}$")) and
+        (.source_tree | type) == "string" and
+        (.source_tree | length) == 40 and
+        (.source_tree | test("^[0-9a-f]{40}$")) and
+        .baseline_commit == "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198" and
+        all([.candidate_binary_sha256,.baseline_binary_sha256][];
+            type == "string" and length == 64 and
+            test("^[0-9a-f]{64}$")) and
+        ((.failure_sha256 == null and .failure_verify_status == 1 and
+             .failure_verified == false) or
+            ((.failure_sha256 | type) == "string" and
+             (.failure_sha256 | length) == 64 and
+             (.failure_sha256 | test("^[0-9a-f]{64}$")))) and
+        .canonical_lock == "/tmp/leopard-gf8-authoritative.lock" and
+        .cpu == 52 and .sibling == 116
+    ' "$1" >/dev/null
+}
+
+v18_failed_core_static_self_test()
+(
+    local self_test_root=
+    local self_test_manifest=
+    local command_status=0
+    self_test_root="$(/usr/bin/mktemp -d \
+        /tmp/leopard-v18-failed-core-static-self-test.XXXXXX)" || exit 1
+    self_test_manifest="$self_test_root/manifest.json"
+    cleanup_failed_core_static_self_test()
+    {
+        command_status=$?
+        trap - EXIT
+        if ! /usr/bin/find "$self_test_root" -depth -delete; then
+            command_status=1
+        fi
+        exit "$command_status"
+    }
+    trap cleanup_failed_core_static_self_test EXIT
+    /usr/bin/jq -n \
+        '{schema:"leopard2-v18-gfni-main-passive-failed-core-manifest/v1",status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,campaign_exit_status:7,failure_verify_status:1,failure_verified:false,source_commit:("a" * 40),source_tree:("b" * 40),baseline_commit:"6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",candidate_binary_sha256:("c" * 64),baseline_binary_sha256:("e" * 64),failure_sha256:null,canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116}' \
+        > "$self_test_manifest" || exit 1
+    validate_v18_failed_core_static "$self_test_manifest" || exit 1
+    /usr/bin/jq -n \
+        '{schema:"leopard2-v18-gfni-main-passive-failed-core-manifest/v1",status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,campaign_exit_status:7,failure_verify_status:0,failure_verified:true,source_commit:("a" * 40),source_tree:("b" * 40),baseline_commit:"6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",candidate_binary_sha256:("c" * 64),baseline_binary_sha256:("e" * 64),failure_sha256:("f" * 64),canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116}' \
+        > "$self_test_manifest" || exit 1
+    validate_v18_failed_core_static "$self_test_manifest" || exit 1
+    /usr/bin/jq -n \
+        '{schema:"leopard2-v18-gfni-main-passive-failed-core-manifest/v1",status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,campaign_exit_status:7,failure_verify_status:0,failure_verified:true,source_commit:("a" * 40),source_tree:("b" * 40),baseline_commit:"6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",candidate_binary_sha256:("c" * 64),baseline_binary_sha256:("e" * 64),failure_sha256:null,canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116}' \
+        > "$self_test_manifest" || exit 1
+    if validate_v18_failed_core_static "$self_test_manifest"; then
+        exit 1
+    fi
+    /usr/bin/jq -n \
+        '{schema:"leopard2-v18-gfni-main-passive-failed-core-manifest/v1",status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,campaign_exit_status:7,failure_verify_status:255,failure_verified:false,source_commit:("a" * 40),source_tree:("b" * 40),baseline_commit:"6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",candidate_binary_sha256:("c" * 64),baseline_binary_sha256:("e" * 64),failure_sha256:null,canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116}' \
+        > "$self_test_manifest" || exit 1
+    if validate_v18_failed_core_static "$self_test_manifest"; then
+        exit 1
+    fi
+    exit 0
+)
+
+v18_observational_output_self_test()
+(
+    local self_test_root=
+    local command_status=0
+    self_test_root="$(/usr/bin/mktemp -d \
+        /tmp/leopard-v18-observational-output-self-test.XXXXXX)" || exit 1
+    cleanup_observational_output_self_test()
+    {
+        command_status=$?
+        trap - EXIT
+        if ! /usr/bin/find "$self_test_root" -depth -delete; then
+            command_status=1
+        fi
+        exit "$command_status"
+    }
+    trap cleanup_observational_output_self_test EXIT
+    /usr/bin/mkdir -p "$self_test_root/core/campaign" || exit 1
+    if v18_envelope_has_observational_output "$self_test_root"; then
+        exit 1
+    fi
+    /usr/bin/printf '%s\n' '{"diagnostic":"raw"}' \
+        > "$self_test_root/core/campaign/raw.json" || exit 1
+    v18_envelope_has_observational_output "$self_test_root" || exit 1
+    /usr/bin/rm "$self_test_root/core/campaign/raw.json" || exit 1
+    /usr/bin/printf '%s\n' '{"diagnostic":"pending raw"}' \
+        > "$self_test_root/core/campaign/.leopard2-evidence-pending-4f44a53c068755081419b7c7bc70e241854a1cc34ff9340529ccad707497f374" || \
+        exit 1
+    v18_envelope_has_observational_output "$self_test_root" || exit 1
+    /usr/bin/rm \
+        "$self_test_root/core/campaign/.leopard2-evidence-pending-4f44a53c068755081419b7c7bc70e241854a1cc34ff9340529ccad707497f374" || \
+        exit 1
+    /usr/bin/printf '%s\n' \
+        '{"schema":"leopard2-v18-gfni-main-passive-core-manifest/v1","status":"complete","evidence_valid":true}' \
+        > "$self_test_root/core/manifest.json" || exit 1
+    v18_envelope_has_observational_output "$self_test_root" || exit 1
+    exit 0
+)
+
+verify_core_file_at_source_commit()
+{
+    local core_path=$1
+    local source_commit=$2
+    local relative_path=$3
+    local expected_hash=
+    local observed_hash=
+    [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+    test -f "$core_path" || return 1
+    test ! -L "$core_path" || return 1
+    expected_hash="$(/usr/bin/env \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        /usr/bin/git -C "$repo" cat-file blob \
+        "$source_commit:$relative_path" | /usr/bin/sha256sum | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    observed_hash="$(/usr/bin/sha256sum "$core_path" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    test "$observed_hash" = "$expected_hash" || return 1
+    return 0
+}
+
+verify_source_tree_at_commit()
+{
+    local source_commit=$1
+    local source_tree=$2
+    local observed_commit=
+    local observed_tree=
+    [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+    [[ "$source_tree" =~ ^[0-9a-f]{40}$ ]] || return 1
+    observed_commit="$(/usr/bin/env \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        /usr/bin/git -C "$repo" rev-parse --verify \
+        "$source_commit^{commit}")" || return 1
+    test "$observed_commit" = "$source_commit" || return 1
+    observed_tree="$(/usr/bin/env \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        /usr/bin/git -C "$repo" rev-parse --verify \
+        "$source_commit^{tree}")" || return 1
+    test "$observed_tree" = "$source_tree" || return 1
+    return 0
+}
+
+canonical_git_archive_stream()
+(
+    local source_repo=$1
+    local source_commit=$2
+    local archive_prefix=$3
+    local archive_root=
+    local source_common_dir=
+    local source_objects=
+    local observed_commit=
+    local command_status=0
+    [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || exit 1
+    case "$archive_prefix" in
+        candidate-source|leopard1-source|sse2neon-source) ;;
+        *) exit 1 ;;
+    esac
+    test -d "$source_repo" || exit 1
+    archive_root="$(/usr/bin/mktemp -d \
+        /tmp/leopard-canonical-git-archive.XXXXXX)" || exit 1
+    cleanup_canonical_archive()
+    {
+        command_status=$?
+        trap - EXIT
+        if ! /usr/bin/find "$archive_root" -depth -delete; then
+            command_status=1
+        fi
+        exit "$command_status"
+    }
+    trap cleanup_canonical_archive EXIT
+    /usr/bin/mkdir "$archive_root/empty-template" || exit 1
+    source_common_dir="$(/usr/bin/env \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        GIT_ATTR_NOSYSTEM=1 \
+        /usr/bin/git -C "$source_repo" rev-parse \
+        --path-format=absolute --git-common-dir)" || exit 1
+    source_objects="$(/usr/bin/readlink -f \
+        "$source_common_dir/objects")" || exit 1
+    test -d "$source_objects" || exit 1
+    case "$source_objects" in
+        *:*) exit 1 ;;
+    esac
+    /usr/bin/env \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        GIT_ATTR_NOSYSTEM=1 \
+        /usr/bin/git init --bare --quiet \
+        --template="$archive_root/empty-template" \
+        "$archive_root/repository.git" || exit 1
+    require_path_absent \
+        "$archive_root/repository.git/info/attributes" || exit 1
+    observed_commit="$(/usr/bin/env \
+        GIT_DIR="$archive_root/repository.git" \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES="$source_objects" \
+        GIT_ATTR_SOURCE="$source_commit" \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        GIT_ATTR_NOSYSTEM=1 \
+        /usr/bin/git -c core.attributesFile=/dev/null \
+        -c tar.umask=0002 rev-parse --verify \
+        "$source_commit^{commit}")" || exit 1
+    test "$observed_commit" = "$source_commit" || exit 1
+    /usr/bin/env \
+        GIT_DIR="$archive_root/repository.git" \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES="$source_objects" \
+        GIT_ATTR_SOURCE="$source_commit" \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        GIT_ATTR_NOSYSTEM=1 \
+        /usr/bin/git -c core.attributesFile=/dev/null \
+        -c tar.umask=0002 archive --format=tar \
+        --prefix="$archive_prefix/" "$source_commit"
+)
+
+write_canonical_git_archive()
+{
+    local source_repo=$1
+    local source_commit=$2
+    local archive_prefix=$3
+    local archive_path=$4
+    local archive_parent=
+    local archive_root=
+    local staged_archive=
+    [[ "$archive_path" == /* ]] || return 1
+    archive_parent=${archive_path%/*}
+    test -d "$archive_parent" || return 1
+    test ! -L "$archive_parent" || return 1
+    require_path_absent "$archive_path" || return 1
+    archive_root="$(/usr/bin/mktemp -d \
+        "$archive_parent/.leopard-canonical-git-archive-output.XXXXXX")" || \
+        return 1
+    staged_archive="$archive_root/archive.tar"
+    if ! canonical_git_archive_stream \
+            "$source_repo" "$source_commit" "$archive_prefix" \
+            > "$staged_archive"; then
+        /usr/bin/find "$archive_root" -depth -delete || true
+        return 1
+    fi
+    require_path_absent "$archive_path" || {
+        /usr/bin/find "$archive_root" -depth -delete || true
+        return 1
+    }
+    if ! /usr/bin/mv -T -- "$staged_archive" "$archive_path"; then
+        /usr/bin/find "$archive_root" -depth -delete || true
+        return 1
+    fi
+    /usr/bin/find "$archive_root" -depth -delete || return 1
+    return 0
+}
+
+verify_source_archive_at_commit()
+{
+    local source_repo=$1
+    local source_commit=$2
+    local archive_prefix=$3
+    local archive_path=$4
+    local expected_hash=
+    local observed_hash=
+    test -f "$archive_path" || return 1
+    test ! -L "$archive_path" || return 1
+    expected_hash="$(canonical_git_archive_stream \
+        "$source_repo" "$source_commit" "$archive_prefix" | \
+        /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1)" || return 1
+    observed_hash="$(/usr/bin/sha256sum "$archive_path" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    test "$observed_hash" = "$expected_hash" || return 1
+    return 0
+}
+
+canonical_git_archive_self_test()
+(
+    local source_commit=$1
+    local self_test_root=
+    local source_common_dir=
+    local source_objects=
+    local clean_hash=
+    local poisoned_hash=
+    local isolated_hash=
+    local command_status=0
+    [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || exit 1
+    self_test_root="$(/usr/bin/mktemp -d \
+        /tmp/leopard-canonical-git-archive-self-test.XXXXXX)" || exit 1
+    cleanup_canonical_archive_self_test()
+    {
+        command_status=$?
+        trap - EXIT
+        if ! /usr/bin/find "$self_test_root" -depth -delete; then
+            command_status=1
+        fi
+        exit "$command_status"
+    }
+    trap cleanup_canonical_archive_self_test EXIT
+    /usr/bin/mkdir "$self_test_root/empty-template" || exit 1
+    source_common_dir="$(/usr/bin/env \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        GIT_ATTR_NOSYSTEM=1 \
+        /usr/bin/git -C "$repo" rev-parse \
+        --path-format=absolute --git-common-dir)" || exit 1
+    source_objects="$(/usr/bin/readlink -f \
+        "$source_common_dir/objects")" || exit 1
+    test -d "$source_objects" || exit 1
+    /usr/bin/env \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        GIT_ATTR_NOSYSTEM=1 \
+        /usr/bin/git init --bare --quiet \
+        --template="$self_test_root/empty-template" \
+        "$self_test_root/poisoned.git" || exit 1
+    /usr/bin/mkdir -p "$self_test_root/poisoned.git/info" \
+        "$self_test_root/poisoned.git/objects/info" || exit 1
+    /usr/bin/printf '%s\n' "$source_objects" \
+        > "$self_test_root/poisoned.git/objects/info/alternates" || exit 1
+    /usr/bin/git --git-dir="$self_test_root/poisoned.git" \
+        config tar.umask 0077 || exit 1
+    /usr/bin/printf '%s\n' '* export-ignore' \
+        > "$self_test_root/poisoned.git/info/attributes" || exit 1
+    clean_hash="$(canonical_git_archive_stream \
+        "$repo" "$source_commit" candidate-source | \
+        /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1)" || exit 1
+    poisoned_hash="$(/usr/bin/env \
+        GIT_DIR="$self_test_root/poisoned.git" \
+        GIT_ATTR_SOURCE="$source_commit" \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        GIT_ATTR_NOSYSTEM=1 \
+        /usr/bin/git -c core.attributesFile=/dev/null \
+        archive --format=tar --prefix=candidate-source/ \
+        "$source_commit" | /usr/bin/sha256sum | \
+        /usr/bin/cut -d' ' -f1)" || exit 1
+    test "$poisoned_hash" != "$clean_hash" || exit 1
+    isolated_hash="$(canonical_git_archive_stream \
+        "$self_test_root/poisoned.git" "$source_commit" candidate-source | \
+        /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1)" || exit 1
+    test "$isolated_hash" = "$clean_hash" || exit 1
+    /usr/bin/mkdir "$self_test_root/output" || exit 1
+    write_canonical_git_archive "$self_test_root/poisoned.git" \
+        "$source_commit" candidate-source \
+        "$self_test_root/output/archive.tar" || exit 1
+    test "$(/usr/bin/sha256sum "$self_test_root/output/archive.tar" | \
+        /usr/bin/cut -d' ' -f1)" = "$clean_hash" || exit 1
+    test -z "$(/usr/bin/find "$self_test_root/output" -maxdepth 1 \
+        -name '.leopard-canonical-git-archive-output.*' -print)" || exit 1
+    if canonical_git_archive_stream \
+            "$repo" "$source_commit" bad-prefix >/dev/null 2>&1; then
+        exit 1
+    fi
+    exit 0
+)
+
+verify_submodule_gitlink_at_commit()
+{
+    local source_commit=$1
+    local submodule_path=$2
+    local submodule_commit=$3
+    local observed_record=
+    [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+    [[ "$submodule_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+    observed_record="$(/usr/bin/env \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_OPTIONAL_LOCKS=0 \
+        /usr/bin/git -C "$repo" ls-tree "$source_commit" -- \
+        "$submodule_path")" || return 1
+    test "$observed_record" = \
+        "160000 commit $submodule_commit"$'\t'"$submodule_path" || return 1
+    return 0
+}
+
+verify_v18_complete_core_claim_bindings_preflight()
+{
+    local verified_core=$1
+    local hash_binding=
+    local hash_field=
+    local hash_path=
+    local expected_hash=
+    local observed_hash=
+    local performance_gate=
+    local source_commit=
+    local source_tree=
+    local sse2neon_commit=
+    local candidate_source_archive_hash=
+    local baseline_source_archive_hash=
+    validate_v18_complete_core_static \
+        "$verified_core/manifest.json" || return 1
+    for hash_path in \
+        build-closure.json \
+        build-order-normalizer-reconstruction.json \
+        candidate-test-temporal-closure.json \
+        result-summary.json \
+        wrapper-launch-affinity.json; do
+        validate_single_json_object \
+            "$verified_core/$hash_path" || return 1
+    done
+    validate_single_json_array \
+        "$verified_core/campaign-command.json" || return 1
+    source_commit="$(/usr/bin/jq -er '.source_commit | strings' \
+        "$verified_core/manifest.json")" || return 1
+    source_tree="$(/usr/bin/jq -er '.source_tree | strings' \
+        "$verified_core/manifest.json")" || return 1
+    sse2neon_commit="$(/usr/bin/jq -er '.sse2neon_commit | strings' \
+        "$verified_core/manifest.json")" || return 1
+    verify_source_tree_at_commit "$source_commit" "$source_tree" || return 1
+    verify_submodule_gitlink_at_commit \
+        "$source_commit" sse2neon "$sse2neon_commit" || return 1
+    verify_submodule_gitlink_at_commit \
+        "$main_commit" sse2neon "$sse2neon_commit" || return 1
+    verify_source_archive_at_commit "$repo" "$source_commit" \
+        candidate-source "$verified_core/candidate-source.tar" || return 1
+    verify_source_archive_at_commit "$repo" "$main_commit" \
+        leopard1-source "$verified_core/leopard1-source.tar" || return 1
+    verify_source_archive_at_commit "$repo/sse2neon" "$sse2neon_commit" \
+        sse2neon-source "$verified_core/sse2neon-source.tar" || return 1
+    candidate_source_archive_hash="$(/usr/bin/sha256sum \
+        "$verified_core/candidate-source.tar" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    baseline_source_archive_hash="$(/usr/bin/sha256sum \
+        "$verified_core/leopard1-source.tar" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    /usr/bin/diff -qr \
+        "$verified_core/build-closure/live-baseline" \
+        "$verified_core/build-closure/replay-baseline" \
+        >/dev/null || return 1
+    for hash_binding in \
+        run_abba.py:"$relative_runner" \
+        audit_v17_gfni_main_compare.py:"$relative_auditor" \
+        passive_environment_census.py:"$relative_census" \
+        leopard2_affinity_supervisor.py:"$relative_supervisor" \
+        run-authoritative.sh:"$relative_wrapper" \
+        git_capture.py:"$relative_git_capture" \
+        balanced_evidence_common.py:"$relative_helper" \
+        leopard2_build_provenance.py:"$relative_build_provenance"; do
+        verify_core_file_at_source_commit \
+            "$verified_core/${hash_binding%%:*}" "$source_commit" \
+            "${hash_binding#*:}" || return 1
+    done
+    for hash_binding in \
+        attempt_lineage_sha256:attempt-lineage.json \
+        sse2neon_source_archive_sha256:sse2neon-source.tar \
+        candidate_binary_sha256_pre_post:build-closure/replay-candidate/bench_leopard2 \
+        candidate_archive_sha256_pre_post:build-closure/replay-candidate/libleopard.a \
+        baseline_binary_sha256_pre_post:build-closure/replay-baseline/leopard_main_benchmark \
+        baseline_archive_sha256_pre_post:build-closure/replay-baseline/libleopard_main_exact.a \
+        runner_sha256:run_abba.py \
+        auditor_sha256:audit_v17_gfni_main_compare.py \
+        supervisor_sha256:leopard2_affinity_supervisor.py \
+        passive_census_sha256:passive_environment_census.py \
+        wrapper_sha256:run-authoritative.sh \
+        build_order_normalizer_sha256:build-order-normalizer.py \
+        candidate_timing_normalization_report_sha256:build-closure/candidate-timing-order-normalization/normalized/report.json \
+        candidate_test_normalization_report_sha256:build-closure/candidate-test-order-normalization/normalized/report.json \
+        campaign_manifest_sha256:campaign/manifest.json \
+        campaign_raw_sha256:campaign/raw.json \
+        audit_sha256:audit.json \
+        controller_affinity_sha256:controller-affinity.json \
+        environment_census_pre_sha256:environment-census-pre.json \
+        environment_census_post_sha256:environment-census-post.json \
+        passive_environment_policy_sha256:passive-environment-policy.json; do
+        hash_field=${hash_binding%%:*}
+        hash_path=${hash_binding#*:}
+        test -f "$verified_core/$hash_path" || return 1
+        expected_hash="$(/usr/bin/jq -er --arg field "$hash_field" \
+            '.[$field] | strings |
+                select(length == 64 and test("^[0-9a-f]{64}$"))' \
+            "$verified_core/manifest.json")" || return 1
+        observed_hash="$(/usr/bin/sha256sum "$verified_core/$hash_path" | \
+            /usr/bin/cut -d' ' -f1)" || return 1
+        test "$observed_hash" = "$expected_hash" || return 1
+    done
+    performance_gate="$(/usr/bin/jq -er '
+        [
+            .analysis["gf16-high-full"].encode
+                .promotion_lower_bound_at_least_1_05,
+            .analysis["gf16-high-full"].one_shot_encode
+                .promotion_lower_bound_at_least_1_05
+        ] |
+        if all(.[]; type == "boolean") then all
+        else error("invalid gates") end | tostring
+    ' "$verified_core/campaign/manifest.json")" || return 1
+    /usr/bin/jq -e \
+        --slurpfile closure "$verified_core/build-closure.json" \
+        --slurpfile campaign "$verified_core/campaign/manifest.json" \
+        --slurpfile audit "$verified_core/audit.json" \
+        --slurpfile policy "$verified_core/passive-environment-policy.json" \
+        --slurpfile temporal \
+            "$verified_core/candidate-test-temporal-closure.json" \
+        --arg main_commit "$main_commit" --argjson gate "$performance_gate" \
+        --arg candidate_source_archive_hash \
+            "$candidate_source_archive_hash" \
+        --arg baseline_source_archive_hash \
+            "$baseline_source_archive_hash" '
+        ($closure | length) == 1 and ($campaign | length) == 1 and
+        ($audit | length) == 1 and ($policy | length) == 1 and
+        ($temporal | length) == 1 and
+        $closure[0].schema ==
+            "leopard2-v17-gfni-main-build-closure/v3" and
+        $campaign[0].schema == "leopard2-main-compare-manifest/v18" and
+        $audit[0].schema ==
+            "leopard2-main-compare-v18-passive-independent-audit/v1" and
+        $policy[0].schema == "leopard2-passive-shared-host-policy/v2" and
+        $temporal[0].schema ==
+            "leopard2-v17-gfni-main-candidate-test-temporal-closure/v2" and
+        .source_commit == $closure[0].candidate.commit and
+        .source_commit == $campaign[0].identities.candidate_source.head and
+        .source_tree == $closure[0].candidate.tree and
+        .source_tree == $campaign[0].identities.candidate_source.tree and
+        .baseline_commit == $main_commit and
+        .baseline_commit == $closure[0].baseline.commit and
+        .baseline_commit == $campaign[0].identities.baseline_source.head and
+        .baseline_commit == $audit[0].contract.baseline_main_commit and
+        .sse2neon_commit == $closure[0].sse2neon.commit and
+        .sse2neon_source_archive_sha256 ==
+            $closure[0].sse2neon.source_archive_sha256 and
+        $candidate_source_archive_hash ==
+            $closure[0].candidate.source_archive_sha256 and
+        $baseline_source_archive_hash ==
+            $closure[0].baseline.source_archive_sha256 and
+        .candidate_binary_sha256_pre_post ==
+            $closure[0].candidate.binary_sha256 and
+        .candidate_binary_sha256_pre_post ==
+            $campaign[0].identities.candidate_executable.sha256 and
+        .candidate_archive_sha256_pre_post ==
+            $closure[0].candidate.archive_sha256 and
+        .candidate_archive_sha256_pre_post ==
+            $campaign[0].identities.candidate_archive.sha256 and
+        .baseline_binary_sha256_pre_post ==
+            $closure[0].baseline.binary_sha256 and
+        .baseline_binary_sha256_pre_post ==
+            $campaign[0].identities.baseline_executable.sha256 and
+        .baseline_archive_sha256_pre_post ==
+            $closure[0].baseline.archive_sha256 and
+        .baseline_archive_sha256_pre_post ==
+            $campaign[0].identities.baseline_archive.sha256 and
+        .campaign_raw_sha256 == $campaign[0].raw.sha256 and
+        .campaign_raw_sha256 == $audit[0].raw.sha256 and
+        .campaign_manifest_sha256 == $audit[0].manifest.sha256 and
+        .auditor_sha256 == $audit[0].auditor.sha256 and
+        .runner_sha256 == $closure[0].controllers.runner_sha256 and
+        .auditor_sha256 == $closure[0].controllers.auditor_sha256 and
+        .supervisor_sha256 == $closure[0].controllers.supervisor_sha256 and
+        .wrapper_sha256 == $closure[0].controllers.wrapper_sha256 and
+        .build_order_normalizer_sha256 ==
+            $closure[0].controllers.build_order_normalizer_sha256 and
+        .candidate_timing_normalization_report_sha256 ==
+            $closure[0].candidate.reproduction.normalization_report_sha256 and
+        .candidate_test_normalization_report_sha256 ==
+            $closure[0].candidate_tests.reproduction.normalization_report_sha256 and
+        .candidate_test_normalization_report_sha256 ==
+            $temporal[0].normalization_report_sha256 and
+        .performance_gate_passed == $gate and
+        .build_reproduction == {
+            candidate_timing_qualified_semantic_equal:
+                $closure[0].build_reproduction.candidate_timing_qualified_semantic_equal,
+            candidate_timing_raw_tree_file_bytes_identical:
+                $closure[0].build_reproduction.candidate_timing_raw_tree_file_bytes_identical,
+            candidate_tests_qualified_semantic_equal:
+                $closure[0].build_reproduction.candidate_tests_qualified_semantic_equal,
+            candidate_tests_raw_tree_file_bytes_identical:
+                $closure[0].build_reproduction.candidate_tests_raw_tree_file_bytes_identical,
+            baseline_raw_byte_identical:
+                $closure[0].build_reproduction.baseline_raw_byte_identical
+        } and
+        .isolation_claim == $audit[0].isolation_claim and
+        .windowed_benchmark_cpu_nonidle_excess_jiffies ==
+            $audit[0].windowed_observation.windowed
+                .benchmark_cpu_nonidle_excess_jiffies and
+        .windowed_benchmark_cpu_nonidle_excess_jiffies ==
+            $policy[0].windowed_contamination.windowed
+                .benchmark_cpu_nonidle_excess_jiffies and
+        .windowed_reserved_sibling_nonidle_jiffies ==
+            $audit[0].windowed_observation.windowed
+                .reserved_sibling_nonidle_jiffies and
+        .windowed_reserved_sibling_nonidle_jiffies ==
+            $policy[0].windowed_contamination.windowed
+                .reserved_sibling_nonidle_jiffies and
+        .out_of_window_benchmark_cpu_nonidle_jiffies ==
+            $audit[0].windowed_observation.out_of_window
+                .benchmark_cpu_nonidle_jiffies and
+        .out_of_window_benchmark_cpu_nonidle_jiffies ==
+            $policy[0].outer_disclosure.isolation_out_of_window
+                .benchmark_cpu_nonidle_jiffies and
+        .out_of_window_reserved_sibling_nonidle_jiffies ==
+            $audit[0].windowed_observation.out_of_window
+                .reserved_sibling_nonidle_jiffies and
+        .out_of_window_reserved_sibling_nonidle_jiffies ==
+            $policy[0].outer_disclosure.isolation_out_of_window
+                .reserved_sibling_nonidle_jiffies
+    ' "$verified_core/manifest.json" >/dev/null || return 1
+    return 0
+}
+
+verify_v18_complete_core_claim_bindings()
+{
+    local verified_core=$1
+    local semantic_root=
+    local semantic_envelope=
+    local semantic_core=
+    local campaign_manifest_hash=
+    local audit_hash=
+    local postseal_audit_hash=
+    local core_manifest_hash=
+    local core_sha256sums_hash=
+    verify_v18_complete_core_claim_bindings_preflight \
+        "$verified_core" || return 1
+
+    # A checksum-valid complete core reached only through a later post-seal
+    # failure must satisfy exactly the same semantic verifier as an ordinary
+    # NOT_PROMOTED result.  Synthesize only the missing success terminal and
+    # post-seal audit views, then delegate against the original canonical core
+    # path in a fresh shell.  This avoids maintaining a weaker second
+    # implementation of the runner, auditor, census, and build-normalization
+    # replay contract.
+    semantic_root="$(/usr/bin/mktemp -d \
+        /tmp/leopard-v18-complete-core-replay.XXXXXX)" || return 1
+    semantic_envelope=${verified_core%/core}
+    semantic_core=$verified_core
+    test "$semantic_envelope/core" = "$verified_core" || return 1
+    /usr/bin/cp --reflink=never "$semantic_core/audit.json" \
+        "$semantic_root/postseal-audit.json" || return 1
+
+    campaign_manifest_hash="$(/usr/bin/sha256sum \
+        "$semantic_core/campaign/manifest.json" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    audit_hash="$(/usr/bin/sha256sum "$semantic_core/audit.json" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    postseal_audit_hash="$(/usr/bin/sha256sum \
+        "$semantic_root/postseal-audit.json" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    core_manifest_hash="$(/usr/bin/sha256sum \
+        "$semantic_core/manifest.json" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    core_sha256sums_hash="$(/usr/bin/sha256sum \
+        "$semantic_core/SHA256SUMS" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    test "$audit_hash" = "$postseal_audit_hash" || return 1
+
+    /usr/bin/jq -n \
+        --slurpfile core "$semantic_core/manifest.json" \
+        --arg campaign_manifest_sha256 "$campaign_manifest_hash" \
+        --arg audit_sha256 "$audit_hash" \
+        --arg postseal_audit_sha256 "$postseal_audit_hash" \
+        --arg core_manifest_sha256 "$core_manifest_hash" \
+        --arg core_sha256sums_sha256 "$core_sha256sums_hash" '
+        ($core | length) == 1 or error("complete core count differs") |
+        $core[0] as $core |
+        {
+            schema:
+                "leopard2-v18-gfni-main-passive-not-promoted-envelope/v1",
+            status:"complete",
+            acquisition_generation:"passive-v2",
+            attempt:$core.attempt,
+            attempt_budget:$core.attempt_budget,
+            attempt_lineage_sha256:$core.attempt_lineage_sha256,
+            evidence_class:$core.evidence_class,
+            promotion_eligible:false,
+            promotion_passed:false,
+            causal_performance_claim_eligible:false,
+            cpu_pair_exclusive:false,
+            windowed_benchmark_cpu_nonidle_excess_jiffies:
+                $core.windowed_benchmark_cpu_nonidle_excess_jiffies,
+            windowed_reserved_sibling_nonidle_jiffies:
+                $core.windowed_reserved_sibling_nonidle_jiffies,
+            out_of_window_benchmark_cpu_nonidle_jiffies:
+                $core.out_of_window_benchmark_cpu_nonidle_jiffies,
+            out_of_window_reserved_sibling_nonidle_jiffies:
+                $core.out_of_window_reserved_sibling_nonidle_jiffies,
+            performance_gate_passed:$core.performance_gate_passed,
+            evidence_valid:true,
+            campaign_exit_status:0,
+            preseal_audit_passed:true,
+            postseal_audit_passed:true,
+            postseal_audit_byte_identical:true,
+            source_commit:$core.source_commit,
+            source_tree:$core.source_tree,
+            baseline_commit:$core.baseline_commit,
+            campaign_manifest_sha256:$campaign_manifest_sha256,
+            audit_sha256:$audit_sha256,
+            postseal_audit_sha256:$postseal_audit_sha256,
+            core_manifest_sha256:$core_manifest_sha256,
+            core_sha256sums_sha256:$core_sha256sums_sha256,
+            isolation_claim:$core.isolation_claim
+        }
+    ' > "$semantic_root/NOT_PROMOTED.json" || return 1
+    /usr/bin/chmod 0400 "$semantic_root/NOT_PROMOTED.json" \
+        "$semantic_root/postseal-audit.json" || return 1
+    /usr/bin/bash "$0" --verify-v18-complete-core-semantics \
+        "$semantic_envelope" "$semantic_root/NOT_PROMOTED.json" \
+        "$semantic_root/postseal-audit.json" \
+        > "$semantic_root/verification.log" \
+        2> "$semantic_root/verification-stderr.log" || return 1
+    return 0
+}
+
+verify_v18_failed_core_claim_bindings()
+(
+    local verified_core=$1
+    local controller_binding=
+    local controller_field=
+    local controller_path=
+    local controller_hash=
+    local expected_controller_hash=
+    local candidate_hash=
+    local candidate_archive_hash=
+    local candidate_source_archive_hash=
+    local baseline_hash=
+    local baseline_archive_hash=
+    local baseline_source_archive_hash=
+    local runner_hash=
+    local evidence_helper_hash=
+    local expected_candidate_hash=
+    local expected_baseline_hash=
+    local expected_lineage_hash=
+    local observed_lineage_hash=
+    local retained_failure_hash=
+    local expected_failure_hash=
+    local replay_root=
+    local replay_controller_root=
+    local replay_runner=
+    local replay_status=0
+    local reconstructed_normalizer_root=
+    local reconstructed_normalizer=
+    local recorded_verify_status=
+    local source_commit=
+    local source_tree=
+    local sse2neon_commit=
+    local sse2neon_source_archive_hash=
+    local cleanup_status=0
+    cleanup_v18_failed_core_claim_bindings()
+    {
+        cleanup_status=$?
+        trap - EXIT
+        for controller_path in "$replay_root" \
+                "$reconstructed_normalizer_root"; do
+            if [[ -n "$controller_path" && -e "$controller_path" ]] &&
+               ! /usr/bin/find "$controller_path" -depth -delete; then
+                cleanup_status=1
+            fi
+        done
+        exit "$cleanup_status"
+    }
+    trap cleanup_v18_failed_core_claim_bindings EXIT
+    validate_v18_failed_core_static \
+        "$verified_core/manifest.json" || return 1
+    for controller_path in \
+        audit.json \
+        result-summary.json \
+        candidate-test-temporal-closure.json \
+        passive-environment-policy.json; do
+        require_path_absent "$verified_core/$controller_path" || return 1
+    done
+    for controller_path in \
+        campaign/raw.json \
+        campaign/manifest.json \
+        campaign/.leopard2-evidence-pending-4f44a53c068755081419b7c7bc70e241854a1cc34ff9340529ccad707497f374 \
+        campaign/.leopard2-evidence-pending-ffa5b716b5a57837f7929dfcca4b4dfdeb97210a7fd5a12d2f1978846d6f1743; do
+        if [[ -e "$verified_core/$controller_path" ||
+              -L "$verified_core/$controller_path" ]]; then
+            test -f "$verified_core/$controller_path" || return 1
+            test ! -L "$verified_core/$controller_path" || return 1
+        fi
+    done
+    if [[ -e "$verified_core/campaign/manifest.json" ]]; then
+        test -f "$verified_core/campaign/raw.json" || return 1
+        test ! -L "$verified_core/campaign/raw.json" || return 1
+        require_path_absent \
+            "$verified_core/campaign/.leopard2-evidence-pending-ffa5b716b5a57837f7929dfcca4b4dfdeb97210a7fd5a12d2f1978846d6f1743" || \
+            return 1
+    fi
+    if [[ -e "$verified_core/campaign/raw.json" ]]; then
+        require_path_absent \
+            "$verified_core/campaign/.leopard2-evidence-pending-4f44a53c068755081419b7c7bc70e241854a1cc34ff9340529ccad707497f374" || \
+            return 1
+    fi
+    if [[ -e "$verified_core/campaign/.leopard2-evidence-pending-4f44a53c068755081419b7c7bc70e241854a1cc34ff9340529ccad707497f374" ]]; then
+        require_path_absent \
+            "$verified_core/campaign/raw.json" || return 1
+        require_path_absent \
+            "$verified_core/campaign/manifest.json" || return 1
+        require_path_absent \
+            "$verified_core/campaign/.leopard2-evidence-pending-ffa5b716b5a57837f7929dfcca4b4dfdeb97210a7fd5a12d2f1978846d6f1743" || \
+            return 1
+    fi
+    if [[ -e "$verified_core/campaign/.leopard2-evidence-pending-ffa5b716b5a57837f7929dfcca4b4dfdeb97210a7fd5a12d2f1978846d6f1743" ]]; then
+        test -f "$verified_core/campaign/raw.json" || return 1
+        test ! -L "$verified_core/campaign/raw.json" || return 1
+        require_path_absent \
+            "$verified_core/campaign/manifest.json" || return 1
+        require_path_absent \
+            "$verified_core/campaign/.leopard2-evidence-pending-4f44a53c068755081419b7c7bc70e241854a1cc34ff9340529ccad707497f374" || \
+            return 1
+    fi
+    validate_single_json_object \
+        "$verified_core/build-closure.json" || return 1
+    /usr/bin/jq -e -s '
+        length == 1 and
+        .[0].schema == "leopard2-v17-gfni-main-build-closure/v3"
+    ' "$verified_core/build-closure.json" >/dev/null || return 1
+    source_commit="$(/usr/bin/jq -er '.source_commit | strings' \
+        "$verified_core/manifest.json")" || return 1
+    source_tree="$(/usr/bin/jq -er '.source_tree | strings' \
+        "$verified_core/manifest.json")" || return 1
+    sse2neon_commit="$(/usr/bin/jq -er \
+        '.sse2neon.commit | strings |
+            select(length == 40 and test("^[0-9a-f]{40}$"))' \
+        "$verified_core/build-closure.json")" || return 1
+    verify_source_tree_at_commit "$source_commit" "$source_tree" || return 1
+    verify_submodule_gitlink_at_commit \
+        "$source_commit" sse2neon "$sse2neon_commit" || return 1
+    verify_submodule_gitlink_at_commit \
+        "$main_commit" sse2neon "$sse2neon_commit" || return 1
+    verify_source_archive_at_commit "$repo" "$source_commit" \
+        candidate-source "$verified_core/candidate-source.tar" || return 1
+    verify_source_archive_at_commit "$repo" "$main_commit" \
+        leopard1-source "$verified_core/leopard1-source.tar" || return 1
+    verify_source_archive_at_commit "$repo/sse2neon" "$sse2neon_commit" \
+        sse2neon-source "$verified_core/sse2neon-source.tar" || return 1
+    for controller_binding in \
+        run_abba.py:"$relative_runner" \
+        audit_v17_gfni_main_compare.py:"$relative_auditor" \
+        passive_environment_census.py:"$relative_census" \
+        leopard2_affinity_supervisor.py:"$relative_supervisor" \
+        git_capture.py:"$relative_git_capture" \
+        balanced_evidence_common.py:"$relative_helper" \
+        leopard2_build_provenance.py:"$relative_build_provenance" \
+        run-authoritative.sh:"$relative_wrapper"; do
+        verify_core_file_at_source_commit \
+            "$verified_core/${controller_binding%%:*}" "$source_commit" \
+            "${controller_binding#*:}" || return 1
+    done
+    reconstructed_normalizer_root="$(/usr/bin/mktemp -d \
+        /tmp/leopard-v18-failed-normalizer.XXXXXX)" || return 1
+    reconstructed_normalizer="$reconstructed_normalizer_root/normalizer.py"
+    install_build_order_normalizer "$reconstructed_normalizer" || return 1
+    /usr/bin/cmp "$verified_core/build-order-normalizer.py" \
+        "$reconstructed_normalizer" || return 1
+    for controller_binding in \
+        runner_sha256:run_abba.py \
+        auditor_sha256:audit_v17_gfni_main_compare.py \
+        supervisor_sha256:leopard2_affinity_supervisor.py \
+        wrapper_sha256:run-authoritative.sh \
+        build_order_normalizer_sha256:build-order-normalizer.py; do
+        controller_field=${controller_binding%%:*}
+        controller_path=${controller_binding#*:}
+        controller_hash="$(/usr/bin/sha256sum \
+            "$verified_core/$controller_path" | \
+            /usr/bin/cut -d' ' -f1)" || return 1
+        expected_controller_hash="$(/usr/bin/jq -er \
+            --arg field "$controller_field" \
+            '.controllers[$field] | strings |
+                select(length == 64 and test("^[0-9a-f]{64}$"))' \
+            "$verified_core/build-closure.json")" || return 1
+        test "$controller_hash" = "$expected_controller_hash" || return 1
+    done
+    candidate_hash="$(/usr/bin/sha256sum \
+        "$verified_core/build-closure/replay-candidate/bench_leopard2" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    baseline_hash="$(/usr/bin/sha256sum \
+        "$verified_core/build-closure/replay-baseline/leopard_main_benchmark" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    candidate_archive_hash="$(/usr/bin/sha256sum \
+        "$verified_core/build-closure/replay-candidate/libleopard.a" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    candidate_source_archive_hash="$(/usr/bin/sha256sum \
+        "$verified_core/candidate-source.tar" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    baseline_archive_hash="$(/usr/bin/sha256sum \
+        "$verified_core/build-closure/replay-baseline/libleopard_main_exact.a" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    baseline_source_archive_hash="$(/usr/bin/sha256sum \
+        "$verified_core/leopard1-source.tar" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    sse2neon_source_archive_hash="$(/usr/bin/sha256sum \
+        "$verified_core/sse2neon-source.tar" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    runner_hash="$(/usr/bin/sha256sum "$verified_core/run_abba.py" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    evidence_helper_hash="$(/usr/bin/sha256sum \
+        "$verified_core/balanced_evidence_common.py" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    expected_candidate_hash="$(/usr/bin/jq -er \
+        '.candidate_binary_sha256 | strings' \
+        "$verified_core/manifest.json")" || return 1
+    expected_baseline_hash="$(/usr/bin/jq -er \
+        '.baseline_binary_sha256 | strings' \
+        "$verified_core/manifest.json")" || return 1
+    test "$candidate_hash" = "$expected_candidate_hash" || return 1
+    test "$baseline_hash" = "$expected_baseline_hash" || return 1
+    observed_lineage_hash="$(/usr/bin/sha256sum \
+        "$verified_core/attempt-lineage.json" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    expected_lineage_hash="$(/usr/bin/jq -er \
+        '.attempt_lineage_sha256 | strings' \
+        "$verified_core/manifest.json")" || return 1
+    test "$observed_lineage_hash" = "$expected_lineage_hash" || return 1
+    /usr/bin/jq -e --slurpfile closure "$verified_core/build-closure.json" \
+        --arg main_commit "$main_commit" \
+        --arg candidate_archive_hash "$candidate_archive_hash" \
+        --arg candidate_source_archive_hash \
+            "$candidate_source_archive_hash" \
+        --arg baseline_archive_hash "$baseline_archive_hash" \
+        --arg baseline_source_archive_hash \
+            "$baseline_source_archive_hash" \
+        --arg sse2neon_commit "$sse2neon_commit" \
+        --arg sse2neon_source_archive_hash \
+            "$sse2neon_source_archive_hash" \
+        --arg runner_hash "$runner_hash" '
+        ($closure | length) == 1 and
+        $closure[0].schema ==
+            "leopard2-v17-gfni-main-build-closure/v3" and
+        .source_commit == $closure[0].candidate.commit and
+        .source_tree == $closure[0].candidate.tree and
+        .baseline_commit == $main_commit and
+        .baseline_commit == $closure[0].baseline.commit and
+        .candidate_binary_sha256 == $closure[0].candidate.binary_sha256 and
+        .baseline_binary_sha256 == $closure[0].baseline.binary_sha256 and
+        $candidate_archive_hash == $closure[0].candidate.archive_sha256 and
+        $candidate_source_archive_hash ==
+            $closure[0].candidate.source_archive_sha256 and
+        $baseline_archive_hash == $closure[0].baseline.archive_sha256 and
+        $baseline_source_archive_hash ==
+            $closure[0].baseline.source_archive_sha256 and
+        $sse2neon_commit == $closure[0].sse2neon.commit and
+        $closure[0].sse2neon.archive_prefix == "sse2neon-source/" and
+        $closure[0].sse2neon.reproduced_from_candidate_and_baseline_clones ==
+            true and
+        $sse2neon_source_archive_hash ==
+            $closure[0].sse2neon.source_archive_sha256 and
+        $runner_hash == $closure[0].controllers.runner_sha256
+    ' "$verified_core/manifest.json" >/dev/null || return 1
+    if [[ -f "$verified_core/campaign/failure.json" ||
+          -f "$verified_core/campaign/raw.json" ||
+          -f "$verified_core/campaign/manifest.json" ]]; then
+        replay_root="$(/usr/bin/mktemp -d \
+            /tmp/leopard-v18-failed-claim-replay.XXXXXX)" || return 1
+        reconstruct_owner_only_campaign_tree "$verified_core/campaign" \
+            "$replay_root/campaign" || return 1
+        replay_controller_root="$replay_root/controller"
+        /usr/bin/mkdir -p \
+            "$replay_controller_root/experiments/leopard2/main_compare" \
+            "$replay_controller_root/experiments/leopard2/decoder_dispatch" \
+            "$replay_controller_root/tools" || return 1
+        /usr/bin/cp --reflink=never "$verified_core/run_abba.py" \
+            "$replay_controller_root/experiments/leopard2/main_compare/run_abba.py" || \
+            return 1
+        /usr/bin/cp --reflink=never "$verified_core/git_capture.py" \
+            "$replay_controller_root/experiments/leopard2/main_compare/git_capture.py" || \
+            return 1
+        /usr/bin/cp --reflink=never \
+            "$verified_core/balanced_evidence_common.py" \
+            "$replay_controller_root/experiments/leopard2/decoder_dispatch/balanced_evidence_common.py" || \
+            return 1
+        /usr/bin/cp --reflink=never \
+            "$verified_core/leopard2_build_provenance.py" \
+            "$replay_controller_root/tools/leopard2_build_provenance.py" || \
+            return 1
+        /usr/bin/find "$replay_controller_root" -type d \
+            -exec /usr/bin/chmod 0700 {} + || return 1
+        /usr/bin/find "$replay_controller_root" -type f \
+            -exec /usr/bin/chmod 0600 {} + || return 1
+        replay_runner=
+        replay_runner+="$replay_controller_root/experiments/leopard2/"
+        replay_runner+=main_compare/run_abba.py
+    fi
+    if [[ -f "$verified_core/campaign/failure.json" ]]; then
+        retained_failure_hash="$(/usr/bin/sha256sum \
+            "$verified_core/campaign/failure.json" | \
+            /usr/bin/cut -d' ' -f1)" || return 1
+        expected_failure_hash="$(/usr/bin/jq -er \
+            '.failure_sha256 | strings |
+                select(length == 64 and test("^[0-9a-f]{64}$"))' \
+            "$verified_core/manifest.json")" || return 1
+        test "$retained_failure_hash" = "$expected_failure_hash" || return 1
+        recorded_verify_status="$(/usr/bin/jq -er \
+            '.failure_verify_status | numbers' \
+            "$verified_core/manifest.json")" || return 1
+        if [[ "$recorded_verify_status" -eq 0 ]]; then
+            /usr/bin/jq -e --slurpfile failure \
+                "$verified_core/campaign/failure.json" \
+                --arg runner_hash "$runner_hash" \
+                --arg evidence_helper_hash "$evidence_helper_hash" \
+                --arg candidate_archive_hash "$candidate_archive_hash" \
+                --arg baseline_archive_hash "$baseline_archive_hash" '
+            ($failure | length) == 1 and
+            $failure[0].schema ==
+                "leopard2-main-compare-failure/v18" and
+            $failure[0].evidence_contract ==
+                "leopard2-main-compare-failure-evidence-contract/v18" and
+            .source_commit ==
+                $failure[0].input_specification.candidate_commit and
+            .cpu == $failure[0].campaign.benchmark_cpu and
+            .sibling == $failure[0].campaign.reserved_sibling and
+            (if ($failure[0].identities_initial | type) == "object" then
+                .source_commit ==
+                    $failure[0].identities_initial.candidate_source.head and
+                .source_tree ==
+                    $failure[0].identities_initial.candidate_source.tree and
+                .baseline_commit ==
+                    $failure[0].identities_initial.baseline_source.head and
+                .candidate_binary_sha256 ==
+                    $failure[0].identities_initial.candidate_executable.sha256 and
+                .baseline_binary_sha256 ==
+                    $failure[0].identities_initial.baseline_executable.sha256 and
+                $candidate_archive_hash ==
+                    $failure[0].identities_initial.candidate_archive.sha256 and
+                $baseline_archive_hash ==
+                    $failure[0].identities_initial.baseline_archive.sha256 and
+                $runner_hash ==
+                    $failure[0].identities_initial.runner.sha256 and
+                $evidence_helper_hash ==
+                    $failure[0].identities_initial.evidence_helper.sha256
+            else
+                $failure[0].identities_initial == null
+            end)
+            ' "$verified_core/manifest.json" >/dev/null || return 1
+        fi
+        if /usr/bin/python3 -I -S -B \
+                "$replay_runner" \
+                verify-failure \
+                --failure "$replay_root/campaign/failure.json" \
+                >/dev/null 2>&1; then
+            replay_status=0
+        else
+            replay_status=$?
+        fi
+        test "$replay_status" -eq "$recorded_verify_status" || return 1
+    else
+        require_path_absent \
+            "$verified_core/campaign/failure.json" || return 1
+        test "$(/usr/bin/jq -er \
+            '.failure_sha256 == null and .failure_verify_status == 1 and
+             .failure_verified == false' \
+            "$verified_core/manifest.json")" = true || return 1
+    fi
+    if [[ -f "$verified_core/campaign/raw.json" ]]; then
+        /usr/bin/python3 -I -S -B -c '
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+import run_abba
+
+raw_path = Path(sys.argv[2])
+directory = run_abba.EvidenceDirectory.open_existing(raw_path.parent)
+try:
+    _, raw_bytes = directory.snapshot(
+        raw_path.name, run_abba.MAX_IDENTITY_FILE_BYTES)
+    raw = run_abba.strict_json_loads(raw_bytes, "retained v18 raw diagnostic")
+    run_abba.require(
+        isinstance(raw, dict) and raw.get("schema") == run_abba.RAW_SCHEMA_V18,
+        "failed v18 campaign retained a non-v18 raw diagnostic")
+    run_abba.validate_raw(
+        raw, raw_path.parent, check_files=True,
+        check_current_inputs=False, evidence_directory=directory)
+finally:
+    directory.close()
+' "${replay_runner%/*}" "$replay_root/campaign/raw.json" \
+            >/dev/null 2>&1 || return 1
+    fi
+    if [[ -f "$verified_core/campaign/manifest.json" ]]; then
+        /usr/bin/python3 -I -S -B "$replay_runner" verify \
+            --manifest "$replay_root/campaign/manifest.json" \
+            --no-current-input-check >/dev/null 2>&1 || return 1
+    fi
+    return 0
+)
+
+write_v18_attempt_lineage()
+{
+    local lineage_path="$lane/attempt-lineage.json"
+    test -n "$attempt_lineage_json" || return 1
+    if [[ ! -e "$lineage_path" ]]; then
+        /usr/bin/printf '%s\n' "$attempt_lineage_json" > "$lineage_path" || \
+            return 1
+    fi
+    test -f "$lineage_path" || return 1
+    test ! -L "$lineage_path" || return 1
+    test "$(/usr/bin/cat "$lineage_path")" = "$attempt_lineage_json" || \
+        return 1
+    attempt_lineage_sha256="$(/usr/bin/sha256sum "$lineage_path" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    [[ "$attempt_lineage_sha256" =~ ^[0-9a-f]{64}$ ]] || return 1
+    return 0
+}
+
+validate_v18_attempt_lineage_shape()
+{
+    local lineage=$1
+    local current_status=$2
+    validate_single_json_object "$lineage" || return 1
+    validate_single_json_object "$current_status" || return 1
+    /usr/bin/jq -e --arg repo "$repo" --slurpfile status "$current_status" '
+        . as $lineage |
+        keys == (["acquisition_generation","attempt","attempt_budget",
+            "prior_attempts","schema","source_commit","source_tree"] | sort) and
+        .schema == "leopard2-v18-gfni-main-attempt-lineage/v1" and
+        .acquisition_generation == "passive-v2" and
+        (.attempt | type) == "number" and .attempt == (.attempt | floor) and
+        .attempt >= 1 and .attempt <= 3 and .attempt_budget == 3 and
+        (.source_commit | type) == "string" and
+        (.source_commit | length) == 40 and
+        (.source_commit | test("^[0-9a-f]{40}$")) and
+        (.source_tree | type) == "string" and
+        (.source_tree | length) == 40 and
+        (.source_tree | test("^[0-9a-f]{40}$")) and
+        .attempt == $status[0].attempt and
+        .attempt_budget == $status[0].attempt_budget and
+        .source_commit == $status[0].source_commit and
+        .source_tree == $status[0].source_tree and
+        (.prior_attempts | type) == "array" and
+        (.prior_attempts | length) == (.attempt - 1) and
+        [.prior_attempts[].attempt] == [range(1; $lineage.attempt)] and
+        all(.prior_attempts[];
+            keys == (["attempt","envelope","envelope_sha256sums_sha256",
+                "terminal","terminal_schema"] | sort) and
+            (.attempt | type) == "number" and .attempt == (.attempt | floor) and
+            (.envelope | type) == "string" and
+            .terminal == "FAILED.json" and
+            .terminal_schema == "leopard2-v18-gfni-main-failed-envelope/v1" and
+            (.envelope_sha256sums_sha256 | type) == "string" and
+            (.envelope_sha256sums_sha256 | length) == 64 and
+            (.envelope_sha256sums_sha256 | test("^[0-9a-f]{64}$"))) and
+        all(range(0; $lineage.attempt - 1);
+            . as $index |
+            $lineage.prior_attempts[$index].envelope ==
+                ($repo + "/.research/leopard-79h/" +
+                 $lineage.source_commit[0:7] +
+                 "-v18-passive-main-a" + (($index + 1) | tostring)))
+    ' "$lineage" >/dev/null
+}
+
+validate_v18_attempt_lineage()
+{
+    local current_envelope=$1
+    local current_core=$2
+    local current_status=$3
+    local lineage="$current_core/attempt-lineage.json"
+    local current_attempt=
+    local current_commit=
+    local current_tree=
+    local prior_index=
+    local prior_path=
+    local expected_prior_path=
+    local prior_sha_before=
+    local prior_sha_after=
+    local recorded_prior_sha=
+    local observed_lineage_sha=
+    local recorded_lineage_sha=
+    test -f "$lineage" || return 1
+    test ! -L "$lineage" || return 1
+    observed_lineage_sha="$(/usr/bin/sha256sum "$lineage" | \
+        /usr/bin/cut -d' ' -f1)" || return 1
+    recorded_lineage_sha="$(/usr/bin/jq -er \
+        '.attempt_lineage_sha256 | strings |
+            select(length == 64 and test("^[0-9a-f]{64}$"))' \
+        "$current_status")" || return 1
+    test "$observed_lineage_sha" = "$recorded_lineage_sha" || return 1
+    validate_v18_attempt_lineage_shape "$lineage" "$current_status" || return 1
+    current_attempt="$(/usr/bin/jq -er '.attempt | numbers' "$lineage")" || \
+        return 1
+    current_commit="$(/usr/bin/jq -er '.source_commit | strings' "$lineage")" || \
+        return 1
+    current_tree="$(/usr/bin/jq -er '.source_tree | strings' "$lineage")" || \
+        return 1
+    for ((prior_index = 1; prior_index < current_attempt; ++prior_index)); do
+        prior_path="$(/usr/bin/jq -er --argjson index "$prior_index" \
+            '.prior_attempts[$index - 1].envelope | strings' "$lineage")" || \
+            return 1
+        expected_prior_path="$repo/.research/leopard-79h/${current_commit:0:7}-v18-passive-main-a${prior_index}"
+        test "$prior_path" = "$expected_prior_path" || return 1
+        test "$prior_path" != "$current_envelope" || return 1
+        test -f "$prior_path/FAILED.json" || return 1
+        test ! -e "$prior_path/COMPLETED.json" || return 1
+        test ! -e "$prior_path/NOT_PROMOTED.json" || return 1
+        recorded_prior_sha="$(/usr/bin/jq -er --argjson index "$prior_index" \
+            '.prior_attempts[$index - 1].envelope_sha256sums_sha256 | strings' \
+            "$lineage")" || return 1
+        prior_sha_before="$(/usr/bin/sha256sum "$prior_path/SHA256SUMS" | \
+            /usr/bin/cut -d' ' -f1)" || return 1
+        test "$prior_sha_before" = "$recorded_prior_sha" || return 1
+        /usr/bin/cmp "$prior_path/core/run-authoritative.sh" \
+            "$current_core/run-authoritative.sh" || return 1
+        /usr/bin/cmp "$current_core/run-authoritative.sh" "$0" || return 1
+        /usr/bin/jq -e \
+            --argjson attempt "$prior_index" \
+            --arg commit "$current_commit" --arg tree "$current_tree" '
+            .schema == "leopard2-v18-gfni-main-failed-envelope/v1" and
+            .acquisition_generation == "passive-v2" and
+            .attempt == $attempt and .attempt_budget == 3 and
+            .source_commit == $commit and .source_tree == $tree
+        ' "$prior_path/FAILED.json" >/dev/null || return 1
+        /usr/bin/bash "$0" \
+            --verify "$prior_path" >/dev/null || return 1
+        if v18_envelope_has_observational_output "$prior_path"; then
+            return 1
+        fi
+        prior_sha_after="$(/usr/bin/sha256sum "$prior_path/SHA256SUMS" | \
+            /usr/bin/cut -d' ' -f1)" || return 1
+        test "$prior_sha_after" = "$prior_sha_before" || return 1
+    done
+    return 0
+}
+
+v18_attempt_lineage_self_test()
+{
+    local failure_schema=$1
+    local self_test_root=
+    local self_test_core=
+    local lineage_hash=
+    self_test_root="$(/usr/bin/mktemp -d \
+        /tmp/leopard-v18-attempt-lineage-self-test.XXXXXX)"
+    self_test_core="$self_test_root/core"
+    /usr/bin/mkdir -m 0700 "$self_test_core"
+    /usr/bin/cp --reflink=never "$repo/$relative_wrapper" \
+        "$self_test_core/run-authoritative.sh"
+    /usr/bin/jq -cS -n \
+        '{schema:"leopard2-v18-gfni-main-attempt-lineage/v1",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,source_commit:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",prior_attempts:[]}' \
+        > "$self_test_core/attempt-lineage.json"
+    lineage_hash="$(/usr/bin/sha256sum \
+        "$self_test_core/attempt-lineage.json" | /usr/bin/cut -d' ' -f1)"
+    /usr/bin/jq -n --arg schema "$failure_schema" \
+        --arg lineage_hash "$lineage_hash" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:$lineage_hash,promotion_passed:false,campaign_exit_status:7,stage:"fixture",source_commit:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",core_sha256sums_sha256:("c" * 64)}' \
+        > "$self_test_root/FAILED.json"
+    validate_v18_attempt_lineage \
+        "$self_test_root" "$self_test_core" "$self_test_root/FAILED.json"
+    /usr/bin/jq -n --arg schema "$failure_schema" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("e" * 64),promotion_passed:false,campaign_exit_status:7,stage:"fixture",source_commit:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",core_sha256sums_sha256:("c" * 64)}' \
+        > "$self_test_root/BAD-FAILED.json"
+    if validate_v18_attempt_lineage \
+            "$self_test_root" "$self_test_core" \
+            "$self_test_root/BAD-FAILED.json"; then
+        return 1
+    fi
+    /usr/bin/jq -cS -n \
+        '{schema:"leopard2-v18-gfni-main-attempt-lineage/v1",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,source_commit:(("a" * 40) + "\n"),source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",prior_attempts:[]}' \
+        > "$self_test_core/attempt-lineage.json"
+    lineage_hash="$(/usr/bin/sha256sum \
+        "$self_test_core/attempt-lineage.json" | /usr/bin/cut -d' ' -f1)"
+    /usr/bin/jq -n --arg schema "$failure_schema" \
+        --arg lineage_hash "$lineage_hash" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:$lineage_hash,promotion_passed:false,campaign_exit_status:7,stage:"fixture",source_commit:(("a" * 40) + "\n"),source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",core_sha256sums_sha256:("c" * 64)}' \
+        > "$self_test_root/BAD-NEWLINE-FAILED.json"
+    if validate_v18_attempt_lineage \
+            "$self_test_root" "$self_test_core" \
+            "$self_test_root/BAD-NEWLINE-FAILED.json"; then
+        return 1
+    fi
+    /usr/bin/jq -cS -n \
+        --arg envelope \
+            "$repo/.research/leopard-79h/aaaaaaa-v18-passive-main-a1" \
+        '{schema:"leopard2-v18-gfni-main-attempt-lineage/v1",acquisition_generation:"passive-v2",attempt:2,attempt_budget:3,source_commit:("a" * 40),source_tree:("b" * 40),prior_attempts:[{attempt:1,envelope:($envelope + "\n"),terminal:"FAILED.json",terminal_schema:"leopard2-v18-gfni-main-failed-envelope/v1",envelope_sha256sums_sha256:("c" * 64)}]}' \
+        > "$self_test_core/BAD-PATH-LINEAGE.json"
+    /usr/bin/jq -n --arg schema "$failure_schema" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:2,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,campaign_exit_status:7,stage:"fixture",source_commit:("a" * 40),source_tree:("b" * 40),core_sha256sums_sha256:("c" * 64)}' \
+        > "$self_test_root/BAD-PATH-FAILED.json"
+    if validate_v18_attempt_lineage_shape \
+            "$self_test_core/BAD-PATH-LINEAGE.json" \
+            "$self_test_root/BAD-PATH-FAILED.json"; then
+        return 1
+    fi
+    /usr/bin/rm -rf -- "$self_test_root"
+}
+
 tools_to_hash=(
     /usr/bin/bash /usr/bin/env /usr/bin/c++ /usr/bin/cc /usr/bin/ld
     /usr/bin/ar /usr/bin/ranlib /usr/bin/cmake /usr/bin/gmake /usr/bin/git
@@ -99,7 +1815,7 @@ tools_to_hash=(
     /usr/bin/stat /usr/bin/chmod /usr/bin/sort /usr/bin/xargs /usr/bin/cut
     /usr/bin/tee /usr/bin/ctest /usr/bin/cat /usr/bin/dirname /usr/bin/lscpu
     /usr/bin/mkdir /usr/bin/mktemp /usr/bin/printf /usr/bin/readlink
-    /usr/bin/uname /usr/bin/mv /usr/bin/diff
+    /usr/bin/uname /usr/bin/mv /usr/bin/diff /usr/bin/rm
 )
 
 require_empty_output()
@@ -113,6 +1829,35 @@ passive_contract_self_test()
 {
     local observed_housekeeping=
     local observed_timeout_argument=
+    local expected_core_schema=leopard2-v18-gfni-main-
+    local expected_terminal_schema=leopard2-v18-gfni-main-
+    local expected_result_schema=leopard2-v18-gfni-main-
+    local expected_failure_schema=leopard2-v18-gfni-main-
+    local expected_wrapper_failure_schema=leopard2-v18-gfni-main-
+    local absence_self_test_root=
+    local validation_self_test_root=
+    local self_test_commit=
+    local self_test_tree=
+    expected_core_schema+=passive-core-manifest/v1
+    expected_terminal_schema+=passive-not-promoted-envelope/v1
+    expected_result_schema+=passive-result-summary/v1
+    expected_failure_schema+=failed-envelope/v1
+    expected_wrapper_failure_schema+=passive-wrapper-failure/v1
+    self_test_commit="$(/usr/bin/git -C "$repo" rev-parse HEAD)" || return 1
+    self_test_tree="$(/usr/bin/git -C "$repo" rev-parse 'HEAD^{tree}')" || \
+        return 1
+    verify_source_tree_at_commit "$self_test_commit" "$self_test_tree" || \
+        return 1
+    canonical_git_archive_self_test "$self_test_commit" || return 1
+    if verify_source_tree_at_commit "$self_test_tree" "$self_test_tree" \
+            >/dev/null 2>&1; then
+        return 1
+    fi
+    if verify_source_tree_at_commit "$self_test_commit" \
+            0000000000000000000000000000000000000000 \
+            >/dev/null 2>&1; then
+        return 1
+    fi
     observed_housekeeping="$(/usr/bin/printf '%s\n' \
         '{"allowed_cpus":[0,1,52,116]}' | \
         /usr/bin/jq -er "$passive_housekeeping_jq")" || return 1
@@ -131,13 +1876,138 @@ passive_contract_self_test()
                 >/dev/null 2>&1; then
         return 1
     fi
-    /usr/bin/printf 'v17 passive wrapper contract self-test passed\n'
+    validate_attempt_contract 1 3
+    validate_attempt_contract 2 3
+    validate_attempt_contract 3 3
+    local bad_attempt=
+    local bad_budget=
+    for bad_attempt in 0 4 01 -1 true ''; do
+        if validate_attempt_contract "$bad_attempt" 3; then
+            return 1
+        fi
+    done
+    for bad_budget in 0 2 4 03 true ''; do
+        if validate_attempt_contract 1 "$bad_budget"; then
+            return 1
+        fi
+    done
+    absence_self_test_root="$(/usr/bin/mktemp -d \
+        /tmp/leopard-v18-absence-self-test.XXXXXX)" || return 1
+    /usr/bin/python3 -I -S -B -c \
+        'import os, sys; os.symlink("missing", sys.argv[1])' \
+        "$absence_self_test_root/dangling" || return 1
+    if require_path_absent "$absence_self_test_root/dangling"; then
+        return 1
+    fi
+    /usr/bin/find "$absence_self_test_root" -depth -delete || return 1
+    validate_single_json_object \
+        <(/usr/bin/printf '%s\n' '{"schema":"fixture"}') || return 1
+    if validate_single_json_object \
+            <(/usr/bin/printf '%s\n%s\n' '{}' \
+                '{"schema":"fixture"}'); then
+        return 1
+    fi
+    if validate_single_json_object \
+            <(/usr/bin/printf '%s\n' \
+                '{"schema":"first","schema":"second"}'); then
+        return 1
+    fi
+    if validate_single_json_object \
+            <(/usr/bin/printf '%s\n' '{"value":NaN}'); then
+        return 1
+    fi
+    if validate_single_json_object \
+            <(/usr/bin/printf '%s\n' '{"value":1e309}'); then
+        return 1
+    fi
+    validate_single_json_array \
+        <(/usr/bin/printf '%s\n' '[]') || return 1
+    if validate_single_json_array \
+            <(/usr/bin/printf '%s\n' '{}'); then
+        return 1
+    fi
+    validate_exact_json_schema \
+        <(/usr/bin/jq -n --arg schema "$expected_terminal_schema" \
+            '{schema:$schema}') "$expected_terminal_schema"
+    if validate_exact_json_schema \
+            <(/usr/bin/jq -n \
+                --arg schema "${expected_terminal_schema}"$'\n' \
+                '{schema:$schema}') "$expected_terminal_schema"; then
+        return 1
+    fi
+    validation_self_test_root="$(/usr/bin/mktemp -d \
+        /tmp/leopard-v18-validation-self-test.XXXXXX)" || return 1
+    /usr/bin/jq -n --arg schema "$expected_failure_schema" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,campaign_exit_status:7,source_commit:("a" * 40),source_tree:("b" * 40),core_sha256sums_sha256:("c" * 64)}' \
+        > "$validation_self_test_root/terminal.json" || return 1
+    validate_v18_terminal_static \
+        "$validation_self_test_root/terminal.json" failed-v2 || return 1
+    /usr/bin/jq -n --arg schema "$expected_failure_schema" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,campaign_exit_status:7,source_commit:("a" * 40),source_tree:("b" * 40),core_sha256sums_sha256:(("c" * 64) + "\n")}' \
+        > "$validation_self_test_root/terminal.json" || return 1
+    if validate_v18_terminal_static \
+            "$validation_self_test_root/terminal.json" failed-v2; then
+        return 1
+    fi
+    /usr/bin/jq -n --arg schema "$expected_terminal_schema" \
+        '{schema:$schema,status:"complete",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,campaign_exit_status:0,source_commit:("a" * 40),source_tree:("b" * 40),baseline_commit:"6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",campaign_manifest_sha256:("c" * 64),audit_sha256:("e" * 64),postseal_audit_sha256:("f" * 64),core_manifest_sha256:("1" * 64),core_sha256sums_sha256:("2" * 64)}' \
+        > "$validation_self_test_root/terminal.json" || return 1
+    validate_v18_terminal_static \
+        "$validation_self_test_root/terminal.json" passive-v2 || return 1
+    /usr/bin/jq -n --arg schema "$expected_terminal_schema" \
+        '{schema:$schema,status:"complete",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,campaign_exit_status:0,source_commit:("a" * 40),source_tree:("b" * 40),baseline_commit:"6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",campaign_manifest_sha256:(("c" * 64) + "\n"),audit_sha256:("e" * 64),postseal_audit_sha256:("f" * 64),core_manifest_sha256:("1" * 64),core_sha256sums_sha256:("2" * 64)}' \
+        > "$validation_self_test_root/terminal.json" || return 1
+    if validate_v18_terminal_static \
+            "$validation_self_test_root/terminal.json" passive-v2; then
+        return 1
+    fi
+    /usr/bin/jq -n --arg schema "$expected_wrapper_failure_schema" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,stage:"fixture",exit_status:7,source_commit:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}' \
+        > "$validation_self_test_root/wrapper.json" || return 1
+    /usr/bin/jq -n --arg schema "$expected_failure_schema" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,campaign_exit_status:7,stage:"fixture",source_commit:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",core_sha256sums_sha256:("c" * 64)}' \
+        > "$validation_self_test_root/status.json" || return 1
+    validate_v18_wrapper_failure_binding \
+        "$validation_self_test_root/wrapper.json" \
+        "$validation_self_test_root/status.json" || return 1
+    /usr/bin/jq -n --arg schema "$expected_failure_schema" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:2,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,campaign_exit_status:7,stage:"fixture",source_commit:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",core_sha256sums_sha256:("c" * 64)}' \
+        > "$validation_self_test_root/status.json" || return 1
+    if validate_v18_wrapper_failure_binding \
+            "$validation_self_test_root/wrapper.json" \
+            "$validation_self_test_root/status.json"; then
+        return 1
+    fi
+    /usr/bin/jq -n --arg schema "$expected_wrapper_failure_schema" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,stage:"fixture",exit_status:7,source_commit:(("a" * 40) + "\n"),source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}' \
+        > "$validation_self_test_root/wrapper.json" || return 1
+    /usr/bin/jq -n --arg schema "$expected_failure_schema" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("d" * 64),promotion_passed:false,campaign_exit_status:7,stage:"fixture",source_commit:(("a" * 40) + "\n"),source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",core_sha256sums_sha256:("c" * 64)}' \
+        > "$validation_self_test_root/status.json" || return 1
+    if validate_v18_wrapper_failure_binding \
+            "$validation_self_test_root/wrapper.json" \
+            "$validation_self_test_root/status.json"; then
+        return 1
+    fi
+    /usr/bin/find "$validation_self_test_root" -depth -delete || return 1
+    v18_attempt_lineage_self_test "$expected_failure_schema"
+    v18_failed_core_static_self_test
+    v18_observational_output_self_test
+    /usr/bin/grep -Fq "$expected_core_schema" \
+        "$repo/$relative_wrapper" || return 1
+    /usr/bin/grep -Fq "$expected_terminal_schema" \
+        "$repo/$relative_wrapper" || return 1
+    /usr/bin/grep -Fq "$expected_result_schema" \
+        "$repo/$relative_wrapper" || return 1
+    /usr/bin/grep -Fq "$expected_failure_schema" \
+        "$repo/$relative_wrapper" || return 1
+    /usr/bin/printf 'v18 passive wrapper contract self-test passed\n'
 }
 
 install_build_order_normalizer()
 {
     local normalizer_output=$1
-    test ! -e "$normalizer_output"
+    test ! -e "$normalizer_output" || return 1
     /usr/bin/tee "$normalizer_output" >/dev/null <<'PY'
 #!/usr/bin/python3
 import argparse
@@ -1399,7 +3269,9 @@ def main():
 if __name__ == "__main__":
     raise SystemExit(main())
 PY
-    /usr/bin/chmod 0400 "$normalizer_output"
+    test "${PIPESTATUS[0]}" -eq 0 || return 1
+    /usr/bin/chmod 0400 "$normalizer_output" || return 1
+    return 0
 }
 
 capture_allowed_diff()
@@ -2021,7 +3893,10 @@ PY
 verify_envelope()
 {
     local verified_envelope=$1
+    local semantic_complete_status=${2:-}
+    local semantic_postseal_audit=${3:-}
     local verified_core="$verified_envelope/core"
+    local verified_postseal_audit="$verified_envelope/postseal-audit.json"
     local status_file=
     local status_schema=
     local evidence_generation=
@@ -2055,7 +3930,11 @@ verify_envelope()
     local replay_failure_status=
     local failed_core_schema=
     local verified_timeout_argument=
+    local controller_schema=
+    local controller_generation=
+    local observed_core_sha256sums_verified=false
     local -a audit_replay_args=()
+    local -a census_verify_args=()
 
     test -d "$verified_envelope"
     test ! -L "$verified_envelope"
@@ -2075,7 +3954,57 @@ verify_envelope()
     verify_sealed_tree "$verified_envelope"
     verify_tree_metadata_manifest "$verified_envelope"
 
-    if [[ -f "$verified_envelope/COMPLETED.json" ]]; then
+    if [[ -n "$semantic_complete_status" || \
+          -n "$semantic_postseal_audit" ]]; then
+        test -n "$semantic_complete_status"
+        test -n "$semantic_postseal_audit"
+        test "${semantic_complete_status##*/}" = NOT_PROMOTED.json
+        test "$semantic_complete_status" = \
+            "$(/usr/bin/readlink -f "$semantic_complete_status")"
+        test "$semantic_postseal_audit" = \
+            "$(/usr/bin/readlink -f "$semantic_postseal_audit")"
+        test -f "$semantic_complete_status"
+        test ! -L "$semantic_complete_status"
+        test -f "$semantic_postseal_audit"
+        test ! -L "$semantic_postseal_audit"
+        test -f "$verified_envelope/FAILED.json"
+        test ! -e "$verified_envelope/COMPLETED.json"
+        test ! -e "$verified_envelope/NOT_PROMOTED.json"
+        validate_v18_terminal_static \
+            "$verified_envelope/FAILED.json" failed-v2
+        /usr/bin/jq -e '
+            keys == (["acquisition_generation","attempt","attempt_budget",
+                "attempt_lineage_sha256","baseline_commit",
+                "campaign_exit_status","core_sha256sums_sha256",
+                "core_sha256sums_verified","promotion_passed","schema",
+                "source_commit","source_tree","stage","status"] | sort) and
+            .schema == "leopard2-v18-gfni-main-failed-envelope/v1" and
+            .status == "failed" and
+            .acquisition_generation == "passive-v2" and
+            .core_sha256sums_verified == true and
+            (.stage as $stage |
+                ["seal_core", "independent_postseal_audit",
+                 "publish_not_promoted_envelope"] |
+                index($stage) != null)
+        ' "$verified_envelope/FAILED.json" >/dev/null
+        /usr/bin/jq -e \
+            --slurpfile failed "$verified_envelope/FAILED.json" '
+            ($failed | length) == 1 and
+            .attempt == $failed[0].attempt and
+            .attempt_budget == $failed[0].attempt_budget and
+            .attempt_lineage_sha256 ==
+                $failed[0].attempt_lineage_sha256 and
+            .source_commit == $failed[0].source_commit and
+            .source_tree == $failed[0].source_tree and
+            .baseline_commit == $failed[0].baseline_commit and
+            .core_sha256sums_sha256 ==
+                $failed[0].core_sha256sums_sha256
+        ' "$semantic_complete_status" >/dev/null
+        status_file="$semantic_complete_status"
+        status_value=complete
+        promotion_value=false
+        verified_postseal_audit="$semantic_postseal_audit"
+    elif [[ -f "$verified_envelope/COMPLETED.json" ]]; then
         test ! -e "$verified_envelope/NOT_PROMOTED.json"
         test ! -e "$verified_envelope/FAILED.json"
         status_file="$verified_envelope/COMPLETED.json"
@@ -2112,24 +4041,40 @@ verify_envelope()
             core_schema=leopard2-v17-gfni-main-passive-core-manifest/v4
             audit_schema=leopard2-main-compare-v17-passive-independent-audit/v1
             ;;
+        NOT_PROMOTED.json:leopard2-v18-gfni-main-passive-not-promoted-envelope/v1)
+            evidence_generation=passive-v2
+            core_schema=leopard2-v18-gfni-main-passive-core-manifest/v1
+            audit_schema=leopard2-main-compare-v18-passive-independent-audit/v1
+            ;;
         FAILED.json:leopard2-v17-gfni-main-failed-envelope/v1)
             evidence_generation=failed-v1
+            ;;
+        FAILED.json:leopard2-v18-gfni-main-failed-envelope/v1)
+            evidence_generation=failed-v2
             ;;
         *)
             return 1
             ;;
     esac
-    if [[ "$evidence_generation" == failed-v1 ]] && \
-       /usr/bin/jq -e \
-           'has("core_sha256sums_verified") and
-            .core_sha256sums_verified == false' \
+    if [[ "$evidence_generation" == passive-v2 ||
+          "$evidence_generation" == failed-v2 ]]; then
+        validate_v18_terminal_static "$status_file" "$evidence_generation"
+    fi
+    if (
+        cd "$verified_core"
+        /usr/bin/sha256sum -c SHA256SUMS
+    ) >/dev/null 2>&1; then
+        observed_core_sha256sums_verified=true
+    fi
+    if [[ "$evidence_generation" == failed-* ]] && \
+       /usr/bin/jq -e 'has("core_sha256sums_verified")' \
            "$status_file" >/dev/null; then
-        : # The outer manifest authenticates a diagnosed corrupt core verbatim.
+        test "$observed_core_sha256sums_verified" = \
+            "$(/usr/bin/jq -er \
+                '.core_sha256sums_verified | booleans | tostring' \
+                "$status_file")"
     else
-        (
-            cd "$verified_core"
-            /usr/bin/sha256sum -c SHA256SUMS
-        ) >/dev/null
+        test "$observed_core_sha256sums_verified" = true
     fi
     test "$(/usr/bin/jq -er '.status | strings' "$status_file")" = \
         "$status_value"
@@ -2167,6 +4112,64 @@ verify_envelope()
                 .benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies and
             .benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies >= 0
         ' "$status_file" >/dev/null
+    elif [[ "$evidence_generation" == passive-v2 ]]; then
+        /usr/bin/jq -e '
+            keys == ([
+                "acquisition_generation", "attempt", "attempt_budget",
+                "attempt_lineage_sha256",
+                "audit_sha256", "baseline_commit", "campaign_exit_status",
+                "campaign_manifest_sha256",
+                "causal_performance_claim_eligible", "core_manifest_sha256",
+                "core_sha256sums_sha256", "cpu_pair_exclusive",
+                "evidence_class", "evidence_valid", "isolation_claim",
+                "performance_gate_passed", "postseal_audit_byte_identical",
+                "postseal_audit_passed", "postseal_audit_sha256",
+                "preseal_audit_passed", "promotion_eligible",
+                "promotion_passed", "schema", "source_commit", "source_tree",
+                "out_of_window_benchmark_cpu_nonidle_jiffies",
+                "out_of_window_reserved_sibling_nonidle_jiffies", "status",
+                "windowed_benchmark_cpu_nonidle_excess_jiffies",
+                "windowed_reserved_sibling_nonidle_jiffies"
+            ] | sort) and
+            .acquisition_generation == "passive-v2" and
+            (.attempt | type) == "number" and .attempt == (.attempt | floor) and
+            .attempt >= 1 and .attempt <= 3 and .attempt_budget == 3 and
+            .evidence_class == "passive-windowed-shared-host-observation/v1" and
+            .promotion_eligible == false and .promotion_passed == false and
+            .causal_performance_claim_eligible == false and
+            .cpu_pair_exclusive == false and .evidence_valid == true and
+            .preseal_audit_passed == true and
+            .postseal_audit_passed == true and
+            .postseal_audit_byte_identical == true and
+            (.performance_gate_passed | type) == "boolean" and
+            .windowed_benchmark_cpu_nonidle_excess_jiffies == 0 and
+            .windowed_reserved_sibling_nonidle_jiffies == 0 and
+            (.out_of_window_benchmark_cpu_nonidle_jiffies | type) == "number" and
+            .out_of_window_benchmark_cpu_nonidle_jiffies ==
+                (.out_of_window_benchmark_cpu_nonidle_jiffies | floor) and
+            .out_of_window_benchmark_cpu_nonidle_jiffies >= 0 and
+            (.out_of_window_reserved_sibling_nonidle_jiffies | type) == "number" and
+            .out_of_window_reserved_sibling_nonidle_jiffies ==
+                (.out_of_window_reserved_sibling_nonidle_jiffies | floor) and
+            .out_of_window_reserved_sibling_nonidle_jiffies >= 0
+        ' "$status_file" >/dev/null
+        test "$verified_envelope" = \
+            "$repo/.research/leopard-79h/$(/usr/bin/jq -er '.source_commit | strings' "$status_file" | /usr/bin/cut -c1-7)-v18-passive-main-a$(/usr/bin/jq -er '.attempt | numbers' "$status_file")"
+    fi
+    if [[ "$evidence_generation" == failed-v2 ]]; then
+        /usr/bin/jq -e '
+            .acquisition_generation == "passive-v2" and
+            (.attempt | type) == "number" and
+            .attempt == (.attempt | floor) and
+            .attempt >= 1 and .attempt <= 3 and .attempt_budget == 3
+        ' "$status_file" >/dev/null
+        test "$verified_envelope" = \
+            "$repo/.research/leopard-79h/$(/usr/bin/jq -er '.source_commit | strings' "$status_file" | /usr/bin/cut -c1-7)-v18-passive-main-a$(/usr/bin/jq -er '.attempt | numbers' "$status_file")"
+    fi
+    if [[ "$evidence_generation" == passive-v2 ||
+          "$evidence_generation" == failed-v2 ]]; then
+        validate_v18_attempt_lineage \
+            "$verified_envelope" "$verified_core" "$status_file"
     fi
     campaign_exit_value="$(/usr/bin/jq -er \
         '.campaign_exit_status | numbers' "$status_file")"
@@ -2199,11 +4202,13 @@ verify_envelope()
                 passive-environment-policy.json controller-affinity.json \
                 passive-census-self-test.log passive-auditor-self-test.log \
                 passive-controller-taskset.log \
+                attempt-lineage.json \
                 build-closure/committed-passive-census.py; do
                 test ! -e "$verified_core/$passive_only_artifact"
             done
         else
-            test "$evidence_generation" = passive-v1
+            test "$evidence_generation" = passive-v1 ||
+                test "$evidence_generation" = passive-v2
             for active_only_artifact in \
                 affinity-report.json affinity-binding.json \
                 affinity-report.json.accepted.json \
@@ -2223,6 +4228,11 @@ verify_envelope()
             test -f "$verified_core/passive-census-self-test.log"
             test -f "$verified_core/campaign-command.json"
             test -f "$verified_core/wrapper-launch-affinity.json"
+            if [[ "$evidence_generation" == passive-v2 ]]; then
+                test -f "$verified_core/attempt-lineage.json"
+            else
+                test ! -e "$verified_core/attempt-lineage.json"
+            fi
             test -f \
                 "$verified_core/build-closure/committed-passive-census.py"
             /usr/bin/cmp "$verified_core/passive_environment_census.py" \
@@ -2254,10 +4264,10 @@ verify_envelope()
             "$verified_core/build-closure/live-candidate-tests/bench_leopard2_prevalidated_batch"
         test -f \
             "$verified_core/build-closure/replay-candidate-tests/bench_leopard2_prevalidated_batch"
-        test -f "$verified_envelope/postseal-audit.json"
+        test -f "$verified_postseal_audit"
         test -f "$verified_core/audit_v17_gfni_main_compare.py"
         /usr/bin/cmp "$verified_core/audit.json" \
-            "$verified_envelope/postseal-audit.json"
+            "$verified_postseal_audit"
         /usr/bin/cmp "$verified_core/run-authoritative.sh" \
             "$verified_core/build-closure/committed-wrapper.sh"
         /usr/bin/cmp "$verified_core/audit_v17_gfni_main_compare.py" \
@@ -2636,7 +4646,7 @@ verify_envelope()
             test "$(/usr/bin/jq -er \
                 '.promotion_requires_completion_envelope | booleans | tostring' \
                 "$verified_core/manifest.json")" = true
-        else
+        elif [[ "$evidence_generation" == passive-v1 ]]; then
             /usr/bin/jq -e '
                 keys == ([
                     "acquisition_generation", "active_affinity_supervisor_executed",
@@ -2689,6 +4699,94 @@ verify_envelope()
                 .postseal_policy ==
                     "passive shared-host observations always publish NOT_PROMOTED.json, independent of the observed speed gate"
             ' "$verified_core/manifest.json" >/dev/null
+        else
+            test "$evidence_generation" = passive-v2
+            validate_v18_complete_core_static "$verified_core/manifest.json"
+            if [[ -z "$semantic_complete_status" ]]; then
+                verify_v18_complete_core_claim_bindings_preflight \
+                    "$verified_core"
+            fi
+            /usr/bin/jq -e --slurpfile status "$status_file" '
+                keys == ([
+                    "acquisition_generation", "active_affinity_supervisor_executed",
+                    "attempt", "attempt_budget", "attempt_lineage_sha256",
+                    "audit_sha256", "auditor_sha256",
+                    "baseline_archive_sha256_pre_post",
+                    "baseline_binary_sha256_pre_post", "baseline_commit",
+                    "build_order_normalizer_sha256", "build_reproduction",
+                    "campaign_exit_status", "campaign_manifest_sha256",
+                    "campaign_raw_sha256", "candidate_archive_sha256_pre_post",
+                    "candidate_binary_sha256_pre_post",
+                    "candidate_test_normalization_report_sha256",
+                    "candidate_timing_normalization_report_sha256",
+                    "canonical_lock", "causal_performance_claim_eligible",
+                    "controller_affinity_sha256", "cpu", "cpu_pair_exclusive",
+                    "environment_census_post_sha256",
+                    "environment_census_pre_sha256", "evidence_class",
+                    "evidence_valid", "independent_auditor_scope",
+                    "independent_auditor_supervision_mode",
+                    "independent_preseal_audit_passed", "isolation_claim",
+                    "passive_census_sha256", "passive_environment_policy_sha256",
+                    "performance_gate_passed", "postseal_policy",
+                    "producer_verification_mode", "producer_verification_passed",
+                    "promotion_eligible", "promotion_passed", "ratio_policy",
+                    "runner_sha256", "schema", "sibling", "source_commit",
+                    "source_tree", "sse2neon_commit",
+                    "sse2neon_source_archive_sha256", "status",
+                    "supervisor_role", "supervisor_sha256",
+                    "out_of_window_benchmark_cpu_nonidle_jiffies",
+                    "out_of_window_reserved_sibling_nonidle_jiffies",
+                    "windowed_benchmark_cpu_nonidle_excess_jiffies",
+                    "windowed_reserved_sibling_nonidle_jiffies", "wrapper_sha256"
+                ] | sort) and
+                .acquisition_generation == "passive-v2" and
+                .attempt == $status[0].attempt and
+                .attempt_budget == $status[0].attempt_budget and
+                .attempt_lineage_sha256 ==
+                    $status[0].attempt_lineage_sha256 and
+                .attempt_budget == 3 and
+                .evidence_class ==
+                    "passive-windowed-shared-host-observation/v1" and
+                .promotion_eligible == false and .promotion_passed == false and
+                .causal_performance_claim_eligible == false and
+                .cpu_pair_exclusive == false and .status == "complete" and
+                .campaign_exit_status == 0 and .evidence_valid == true and
+                .active_affinity_supervisor_executed == false and
+                .supervisor_role == "retained-active-v1-verifier-only" and
+                .producer_verification_passed == true and
+                .producer_verification_mode == "manifest-without-affinity-binding" and
+                .independent_preseal_audit_passed == true and
+                .independent_auditor_supervision_mode == "windowed" and
+                .canonical_lock == "/tmp/leopard-gf8-authoritative.lock" and
+                .cpu == 52 and .sibling == 116 and
+                .windowed_benchmark_cpu_nonidle_excess_jiffies == 0 and
+                .windowed_benchmark_cpu_nonidle_excess_jiffies ==
+                    $status[0].windowed_benchmark_cpu_nonidle_excess_jiffies and
+                .windowed_reserved_sibling_nonidle_jiffies == 0 and
+                .windowed_reserved_sibling_nonidle_jiffies ==
+                    $status[0].windowed_reserved_sibling_nonidle_jiffies and
+                (.out_of_window_benchmark_cpu_nonidle_jiffies | type) == "number" and
+                .out_of_window_benchmark_cpu_nonidle_jiffies ==
+                    (.out_of_window_benchmark_cpu_nonidle_jiffies | floor) and
+                .out_of_window_benchmark_cpu_nonidle_jiffies >= 0 and
+                .out_of_window_benchmark_cpu_nonidle_jiffies ==
+                    $status[0].out_of_window_benchmark_cpu_nonidle_jiffies and
+                (.out_of_window_reserved_sibling_nonidle_jiffies | type) == "number" and
+                .out_of_window_reserved_sibling_nonidle_jiffies ==
+                    (.out_of_window_reserved_sibling_nonidle_jiffies | floor) and
+                .out_of_window_reserved_sibling_nonidle_jiffies >= 0 and
+                .out_of_window_reserved_sibling_nonidle_jiffies ==
+                    $status[0].out_of_window_reserved_sibling_nonidle_jiffies and
+                .ratio_policy == {
+                    ordinary_and_one_shot_are_separate:true,
+                    ratios_are_separate_correlated_and_must_not_be_multiplied:true,
+                    combined_or_stacked_ratio_emitted:false,
+                    same_binary_ratio_is_another_campaign:true,
+                    clustered_t_interval_reported_as_nominal_under_shared_host_load:true
+                } and
+                .postseal_policy ==
+                    "passive-v2 shared-host observations always publish NOT_PROMOTED.json, independent of the observed speed gate; at most three preregistered attempts and every outcome is retained"
+            ' "$verified_core/manifest.json" >/dev/null
         fi
         for artifact_hash_binding in \
             candidate_binary_sha256_pre_post:build-closure/replay-candidate/bench_leopard2 \
@@ -2700,7 +4798,8 @@ verify_envelope()
             artifact_hash_path=${artifact_hash_binding#*:}
             artifact_hash_expected="$(/usr/bin/jq -er \
                 --arg field "$artifact_hash_field" \
-                '.[$field] | strings | select(test("^[0-9a-f]{64}$"))' \
+                '.[$field] | strings |
+                    select(length == 64 and test("^[0-9a-f]{64}$"))' \
                 "$verified_core/manifest.json")" || return 1
             test "$(/usr/bin/sha256sum \
                 "$verified_core/$artifact_hash_path" | \
@@ -2745,6 +4844,7 @@ verify_envelope()
             .performance_gate_passed == $gate and
             $status[0].performance_gate_passed == $gate and
             (.source_tree | type) == "string" and
+            (.source_tree | length) == 40 and
             (.source_tree | test("^[0-9a-f]{40}$")) and
             .source_tree == $closure[0].candidate.tree and
             .source_tree == $campaign[0].identities.candidate_source.tree and
@@ -2805,7 +4905,8 @@ verify_envelope()
             /usr/bin/cut -d' ' -f1)" = \
             "$(/usr/bin/jq -er '.supervisor_sha256 | strings' \
                 "$verified_core/manifest.json")"
-        if [[ "$evidence_generation" == passive-v1 ]]; then
+        if [[ "$evidence_generation" == passive-v1 ||
+              "$evidence_generation" == passive-v2 ]]; then
             test "$(/usr/bin/sha256sum \
                 "$verified_core/passive_environment_census.py" | \
                 /usr/bin/cut -d' ' -f1)" = \
@@ -2823,7 +4924,8 @@ verify_envelope()
                     "$(/usr/bin/jq -er --arg field "$passive_field" \
                         '.[$field] | strings' "$verified_core/manifest.json")"
             done
-            /usr/bin/jq -e --slurpfile audit "$verified_core/audit.json" \
+            if [[ "$evidence_generation" == passive-v1 ]]; then
+                /usr/bin/jq -e --slurpfile audit "$verified_core/audit.json" \
                 --slurpfile status "$status_file" \
                 --slurpfile census_pre \
                     "$verified_core/environment-census-pre.json" \
@@ -2862,7 +4964,62 @@ verify_envelope()
                     $status[0].benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies and
                 .isolation_claim == $audit[0].isolation_claim and
                 .isolation_claim == $status[0].isolation_claim
-            ' "$verified_core/manifest.json" >/dev/null
+                ' "$verified_core/manifest.json" >/dev/null
+            else
+                /usr/bin/jq -e \
+                    --slurpfile audit "$verified_core/audit.json" \
+                    --slurpfile status "$status_file" \
+                    --slurpfile policy \
+                        "$verified_core/passive-environment-policy.json" '
+                    .acquisition_generation == "passive-v2" and
+                    .acquisition_generation == $audit[0].acquisition_generation and
+                    .acquisition_generation == $status[0].acquisition_generation and
+                    .acquisition_generation == $policy[0].acquisition_generation and
+                    .attempt == $status[0].attempt and
+                    .attempt_budget == $status[0].attempt_budget and
+                    .evidence_class ==
+                        "passive-windowed-shared-host-observation/v1" and
+                    .evidence_class == $audit[0].evidence_class and
+                    .evidence_class == $status[0].evidence_class and
+                    .evidence_class == $policy[0].evidence_class and
+                    .active_affinity_supervisor_executed == false and
+                    .promotion_eligible == false and
+                    .promotion_eligible == $audit[0].promotion_eligible and
+                    .promotion_eligible == $status[0].promotion_eligible and
+                    .promotion_eligible == $policy[0].promotion_eligible and
+                    .promotion_passed == false and
+                    .causal_performance_claim_eligible == false and
+                    .cpu_pair_exclusive == false and
+                    .windowed_benchmark_cpu_nonidle_excess_jiffies ==
+                        $audit[0].windowed_observation.windowed.benchmark_cpu_nonidle_excess_jiffies and
+                    .windowed_benchmark_cpu_nonidle_excess_jiffies ==
+                        $policy[0].windowed_contamination.windowed.benchmark_cpu_nonidle_excess_jiffies and
+                    .windowed_benchmark_cpu_nonidle_excess_jiffies ==
+                        $status[0].windowed_benchmark_cpu_nonidle_excess_jiffies and
+                    .windowed_benchmark_cpu_nonidle_excess_jiffies == 0 and
+                    .windowed_reserved_sibling_nonidle_jiffies ==
+                        $audit[0].windowed_observation.windowed.reserved_sibling_nonidle_jiffies and
+                    .windowed_reserved_sibling_nonidle_jiffies ==
+                        $policy[0].windowed_contamination.windowed.reserved_sibling_nonidle_jiffies and
+                    .windowed_reserved_sibling_nonidle_jiffies ==
+                        $status[0].windowed_reserved_sibling_nonidle_jiffies and
+                    .windowed_reserved_sibling_nonidle_jiffies == 0 and
+                    .out_of_window_benchmark_cpu_nonidle_jiffies ==
+                        $audit[0].windowed_observation.out_of_window.benchmark_cpu_nonidle_jiffies and
+                    .out_of_window_benchmark_cpu_nonidle_jiffies ==
+                        $policy[0].outer_disclosure.isolation_out_of_window.benchmark_cpu_nonidle_jiffies and
+                    .out_of_window_benchmark_cpu_nonidle_jiffies ==
+                        $status[0].out_of_window_benchmark_cpu_nonidle_jiffies and
+                    .out_of_window_reserved_sibling_nonidle_jiffies ==
+                        $audit[0].windowed_observation.out_of_window.reserved_sibling_nonidle_jiffies and
+                    .out_of_window_reserved_sibling_nonidle_jiffies ==
+                        $policy[0].outer_disclosure.isolation_out_of_window.reserved_sibling_nonidle_jiffies and
+                    .out_of_window_reserved_sibling_nonidle_jiffies ==
+                        $status[0].out_of_window_reserved_sibling_nonidle_jiffies and
+                    .isolation_claim == $audit[0].isolation_claim and
+                    .isolation_claim == $status[0].isolation_claim
+                ' "$verified_core/manifest.json" >/dev/null
+            fi
         fi
         test "$(/usr/bin/sha256sum \
             "$verified_core/build-order-normalizer.py" | \
@@ -2973,13 +5130,71 @@ verify_envelope()
                 .outer_contamination == $policy[0].outer_contamination and
                 .isolation_claim == $audit[0].isolation_claim
             ' "$verified_core/result-summary.json" >/dev/null
+        elif [[ "$evidence_generation" == passive-v2 ]]; then
+            test "$(/usr/bin/jq -er '.schema | strings' \
+                "$verified_core/result-summary.json")" = \
+                leopard2-v18-gfni-main-passive-result-summary/v1
+            /usr/bin/jq -e --slurpfile audit "$verified_core/audit.json" \
+                --slurpfile core "$verified_core/manifest.json" \
+                --slurpfile status "$status_file" \
+                --slurpfile lineage "$verified_core/attempt-lineage.json" \
+                --slurpfile policy \
+                    "$verified_core/passive-environment-policy.json" '
+                keys == ([
+                    "acquisition_generation", "active_affinity_supervisor_executed",
+                    "attempt", "attempt_budget", "attempt_lineage_sha256",
+                    "attempt_statement",
+                    "causal_performance_claim_eligible",
+                    "clustered_t_interval_reported_as_nominal_under_shared_host_load",
+                    "cpu_pair_exclusive", "evidence_class", "isolation_claim",
+                    "one_shot_encode", "ordinary_one_item_batch",
+                    "outer_disclosure", "promotion_eligible", "promotion_passed",
+                    "ratio_orientation",
+                    "ratios_are_separate_correlated_and_must_not_be_multiplied",
+                    "same_binary_gfni_over_avx2_is_a_separate_campaign", "schema",
+                    "sealed_attempt_envelopes", "shared_host_exposure",
+                    "windowed_observation"
+                ] | sort) and
+                .schema ==
+                    "leopard2-v18-gfni-main-passive-result-summary/v1" and
+                .acquisition_generation == "passive-v2" and
+                .attempt == $core[0].attempt and .attempt == $status[0].attempt and
+                .attempt_budget == 3 and
+                .attempt_budget == $core[0].attempt_budget and
+                .attempt_budget == $status[0].attempt_budget and
+                .attempt_lineage_sha256 ==
+                    $core[0].attempt_lineage_sha256 and
+                .attempt_lineage_sha256 ==
+                    $status[0].attempt_lineage_sha256 and
+                .attempt_statement ==
+                    ("attempt \(.attempt) of at most \(.attempt_budget)") and
+                .sealed_attempt_envelopes ==
+                    ([$lineage[0].prior_attempts[].envelope] + [
+                        "/home/catid/leopard/.research/leopard-79h/\($status[0].source_commit[0:7])-v18-passive-main-a\(.attempt)"
+                    ]) and
+                .active_affinity_supervisor_executed == false and
+                .evidence_class ==
+                    "passive-windowed-shared-host-observation/v1" and
+                .promotion_eligible == false and .promotion_passed == false and
+                .causal_performance_claim_eligible == false and
+                .cpu_pair_exclusive == false and
+                .ratio_orientation ==
+                    "exact_leopard1_native_time_over_leopard2_candidate_time" and
+                .ratios_are_separate_correlated_and_must_not_be_multiplied == true and
+                .clustered_t_interval_reported_as_nominal_under_shared_host_load == true and
+                .same_binary_gfni_over_avx2_is_a_separate_campaign == true and
+                .windowed_observation == $audit[0].windowed_observation and
+                .outer_disclosure == $policy[0].outer_disclosure and
+                .shared_host_exposure == $policy[0].shared_host_exposure and
+                .isolation_claim == $audit[0].isolation_claim
+            ' "$verified_core/result-summary.json" >/dev/null
         else
             test "$(/usr/bin/jq -er '.schema | strings' \
                 "$verified_core/result-summary.json")" = \
                 leopard2-v17-gfni-main-result-summary/v1
         fi
         test "$(/usr/bin/sha256sum \
-            "$verified_envelope/postseal-audit.json" | \
+            "$verified_postseal_audit" | \
             /usr/bin/cut -d' ' -f1)" = \
             "$(/usr/bin/jq -er '.postseal_audit_sha256 | strings' \
                 "$status_file")"
@@ -3011,12 +5226,22 @@ verify_envelope()
                 "$verified_core/campaign/manifest.json")" = true
             test "$(/usr/bin/jq -er '.supervision == null' \
                 "$verified_core/campaign/raw.json")" = true
+            census_verify_args=()
+            controller_schema=leopard2-v17-passive-controller-affinity/v1
+            controller_generation=passive-v1
+            if [[ "$evidence_generation" == passive-v2 ]]; then
+                census_verify_args=(--generation passive-v2)
+                controller_schema=leopard2-v18-passive-controller-affinity/v1
+                controller_generation=passive-v2
+            fi
             /usr/bin/python3 -I -S -B \
                 "$verified_core/passive_environment_census.py" verify \
-                --input "$verified_core/environment-census-pre.json" --phase pre
+                --input "$verified_core/environment-census-pre.json" --phase pre \
+                "${census_verify_args[@]}"
             /usr/bin/python3 -I -S -B \
                 "$verified_core/passive_environment_census.py" verify \
-                --input "$verified_core/environment-census-post.json" --phase post
+                --input "$verified_core/environment-census-post.json" --phase post \
+                "${census_verify_args[@]}"
             /usr/bin/python3 -I -S -B \
                 "$verified_core/passive_environment_census.py" compare \
                 --pre "$verified_core/environment-census-pre.json" \
@@ -3026,16 +5251,36 @@ verify_envelope()
                 --output "$verifier_tmp/passive-environment-policy.json"
             /usr/bin/cmp "$verified_core/passive-environment-policy.json" \
                 "$verifier_tmp/passive-environment-policy.json"
+            if [[ "$evidence_generation" == passive-v2 ]]; then
+                /usr/bin/jq -e '
+                    .schema == "leopard2-passive-shared-host-policy/v2" and
+                    .status == "complete" and
+                    .acquisition_generation == "passive-v2" and
+                    .evidence_class ==
+                        "passive-windowed-shared-host-observation/v1" and
+                    .policy_evaluation_complete == true and
+                    .promotion_eligible == false and .promotion_passed == false and
+                    .causal_performance_claim_eligible == false and
+                    .cpu_pair_exclusive == false and
+                    .windowed_contamination.gated == true and
+                    .windowed_contamination.retained_window_count == 12 and
+                    .windowed_contamination.all_benchmark_cpu_excess_zero == true and
+                    .windowed_contamination.all_reserved_sibling_nonidle_zero == true and
+                    .outer_disclosure.gated == false
+                ' "$verified_core/passive-environment-policy.json" >/dev/null
+            fi
             test "$(/usr/bin/jq -er \
                 '.promotion_eligible | booleans | tostring' \
                 "$verified_core/passive-environment-policy.json")" = false
             test "$(/usr/bin/jq -er \
                 '.cpu_pair_exclusive | booleans | tostring' \
                 "$verified_core/passive-environment-policy.json")" = false
-            /usr/bin/jq -e '
+            /usr/bin/jq -e \
+                --arg controller_schema "$controller_schema" \
+                --arg controller_generation "$controller_generation" '
                 keys == (["acquisition_generation","active_affinity_supervisor_executed","affinity_mutation_scope","after_allowed_cpus","before_allowed_cpus","benchmark_cpu","runner_launch_allowed_cpus","schema","reserved_sibling","wrapper_pid"] | sort) and
-                .schema == "leopard2-v17-passive-controller-affinity/v1" and
-                .acquisition_generation == "passive-v1" and
+                .schema == $controller_schema and
+                .acquisition_generation == $controller_generation and
                 .active_affinity_supervisor_executed == false and
                 .affinity_mutation_scope ==
                     "wrapper-process-and-owned-descendants-only" and
@@ -3156,6 +5401,8 @@ verify_envelope()
         audit_replay_args=()
         if [[ "$evidence_generation" == passive-v1 ]]; then
             audit_replay_args=(--supervision absent)
+        elif [[ "$evidence_generation" == passive-v2 ]]; then
+            audit_replay_args=(--supervision windowed)
         fi
         /usr/bin/python3 -I -S -B \
             "$verified_core/audit_v17_gfni_main_compare.py" \
@@ -3177,27 +5424,56 @@ verify_envelope()
         verify_tree_metadata_manifest "$verified_envelope"
     else
         test "$campaign_exit_value" -ne 0
+        if [[ "$evidence_generation" == failed-v1 ]]; then
+            test ! -e "$verified_core/attempt-lineage.json"
+        fi
         if /usr/bin/jq -e \
                 'has("stage") and (has("core_sha256sums_verified") | not)' \
                 "$status_file" >/dev/null; then
-            /usr/bin/jq -e '
-                keys == (["campaign_exit_status","core_sha256sums_sha256",
-                    "promotion_passed","schema","source_commit","source_tree",
-                    "stage","status"] | sort) and
-                .schema == "leopard2-v17-gfni-main-failed-envelope/v1" and
-                .status == "failed" and .promotion_passed == false and
-                (.campaign_exit_status | type == "number") and
-                .campaign_exit_status != 0 and
-                (.stage | type == "string" and length > 0)
-            ' "$status_file" >/dev/null
+            if [[ "$evidence_generation" == failed-v1 ]]; then
+                /usr/bin/jq -e '
+                    keys == (["campaign_exit_status","core_sha256sums_sha256",
+                        "promotion_passed","schema","source_commit","source_tree",
+                        "stage","status"] | sort) and
+                    .schema == "leopard2-v17-gfni-main-failed-envelope/v1" and
+                    .status == "failed" and .promotion_passed == false and
+                    (.campaign_exit_status | type == "number") and
+                    .campaign_exit_status != 0 and
+                    (.stage | type == "string" and length > 0)
+                ' "$status_file" >/dev/null
+            else
+                /usr/bin/jq -e '
+                    keys == (["acquisition_generation","attempt","attempt_budget",
+                        "attempt_lineage_sha256",
+                        "campaign_exit_status","core_sha256sums_sha256",
+                        "promotion_passed","schema","source_commit","source_tree",
+                        "stage","status"] | sort) and
+                    .schema ==
+                        "leopard2-v18-gfni-main-failed-envelope/v1" and
+                    .acquisition_generation == "passive-v2" and
+                    (.attempt | type) == "number" and
+                    .attempt == (.attempt | floor) and
+                    .attempt >= 1 and .attempt <= 3 and .attempt_budget == 3 and
+                    .status == "failed" and .promotion_passed == false and
+                    (.campaign_exit_status | type) == "number" and
+                    .campaign_exit_status == (.campaign_exit_status | floor) and
+                    .campaign_exit_status >= 1 and
+                    .campaign_exit_status <= 255 and
+                    (.stage | type) == "string" and (.stage | length) > 0
+                ' "$status_file" >/dev/null
+                test -f "$verified_core/WRAPPER_FAILURE.json"
+                validate_v18_wrapper_failure_binding \
+                    "$verified_core/WRAPPER_FAILURE.json" "$status_file"
+            fi
         else
             if /usr/bin/jq -e 'has("failure_verified")' \
                     "$status_file" >/dev/null; then
                 test -f "$verified_core/manifest.json"
-                test "$(/usr/bin/jq -er '.schema | strings' \
-                    "$verified_core/manifest.json")" = \
-                    leopard2-v17-gfni-main-failed-core-manifest/v1
-                /usr/bin/jq -e --slurpfile status "$status_file" '
+                if [[ "$evidence_generation" == failed-v1 ]]; then
+                    test "$(/usr/bin/jq -er '.schema | strings' \
+                        "$verified_core/manifest.json")" = \
+                        leopard2-v17-gfni-main-failed-core-manifest/v1
+                    /usr/bin/jq -e --slurpfile status "$status_file" '
                     keys == (["baseline_binary_sha256","baseline_commit",
                         "campaign_exit_status","candidate_binary_sha256",
                         "canonical_lock","cpu","failure_sha256",
@@ -3216,15 +5492,76 @@ verify_envelope()
                     .baseline_commit ==
                         "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198" and
                     .cpu == 52 and .sibling == 116
-                ' "$verified_core/manifest.json" >/dev/null
-                /usr/bin/jq -e '
+                    ' "$verified_core/manifest.json" >/dev/null
+                    /usr/bin/jq -e '
                     keys == (["campaign_exit_status","core_sha256sums_sha256",
                         "failure_verified","promotion_passed","schema",
                         "source_commit","source_tree","status"] | sort) and
                     .status == "failed" and .promotion_passed == false and
                     .campaign_exit_status != 0 and
                     (.failure_verified | type == "boolean")
-                ' "$status_file" >/dev/null
+                    ' "$status_file" >/dev/null
+                else
+                    test "$(/usr/bin/jq -er '.schema | strings' \
+                        "$verified_core/manifest.json")" = \
+                        leopard2-v18-gfni-main-passive-failed-core-manifest/v1
+                    validate_v18_failed_core_static \
+                        "$verified_core/manifest.json"
+                    /usr/bin/jq -e --slurpfile status "$status_file" '
+                        keys == (["acquisition_generation","attempt","attempt_budget",
+                            "attempt_lineage_sha256",
+                            "baseline_binary_sha256","baseline_commit",
+                            "campaign_exit_status","candidate_binary_sha256",
+                            "canonical_lock","cpu","failure_sha256",
+                            "failure_verified","failure_verify_status",
+                            "promotion_passed","schema","sibling","source_commit",
+                            "source_tree","status"] | sort) and
+                        .acquisition_generation == "passive-v2" and
+                        .attempt == $status[0].attempt and
+                        .attempt_budget == $status[0].attempt_budget and
+                        .attempt_lineage_sha256 ==
+                            $status[0].attempt_lineage_sha256 and
+                        .attempt_budget == 3 and .status == "failed" and
+                        .promotion_passed == false and
+                        (.campaign_exit_status | type) == "number" and
+                        .campaign_exit_status ==
+                            (.campaign_exit_status | floor) and
+                        .campaign_exit_status >= 1 and
+                        .campaign_exit_status <= 255 and
+                        (.failure_verify_status | type) == "number" and
+                        .failure_verify_status ==
+                            (.failure_verify_status | floor) and
+                        .failure_verify_status >= 0 and
+                        .failure_verify_status <= 255 and
+                        (.failure_verified | type) == "boolean" and
+                        .failure_verified == (.failure_verify_status == 0) and
+                        .failure_verified == $status[0].failure_verified and
+                        .source_commit == $status[0].source_commit and
+                        .source_tree == $status[0].source_tree and
+                        .campaign_exit_status == $status[0].campaign_exit_status and
+                        .canonical_lock == "/tmp/leopard-gf8-authoritative.lock" and
+                        .baseline_commit ==
+                            "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198" and
+                        .cpu == 52 and .sibling == 116
+                    ' "$verified_core/manifest.json" >/dev/null
+                    /usr/bin/jq -e '
+                        keys == (["acquisition_generation","attempt","attempt_budget",
+                            "attempt_lineage_sha256",
+                            "campaign_exit_status","core_sha256sums_sha256",
+                            "failure_verified","promotion_passed","schema",
+                            "source_commit","source_tree","status"] | sort) and
+                        .acquisition_generation == "passive-v2" and
+                        .attempt_budget == 3 and .status == "failed" and
+                        .promotion_passed == false and
+                        (.campaign_exit_status | type) == "number" and
+                        .campaign_exit_status ==
+                            (.campaign_exit_status | floor) and
+                        .campaign_exit_status >= 1 and
+                        .campaign_exit_status <= 255 and
+                        (.failure_verified | type) == "boolean"
+                    ' "$status_file" >/dev/null
+                    verify_v18_failed_core_claim_bindings "$verified_core"
+                fi
                 test "$(/usr/bin/sha256sum \
                     "$verified_core/build-closure/replay-candidate/bench_leopard2" | \
                     /usr/bin/cut -d' ' -f1)" = \
@@ -3289,10 +5626,11 @@ verify_envelope()
                         '.failure_verified | booleans | tostring' \
                         "$verified_core/manifest.json")" = false
                     test "$(/usr/bin/jq -er '.failure_verify_status | numbers' \
-                        "$verified_core/manifest.json")" -ne 0
+                        "$verified_core/manifest.json")" -eq 1
                 fi
             else
-                /usr/bin/jq -e '
+                if [[ "$evidence_generation" == failed-v1 ]]; then
+                    /usr/bin/jq -e '
                     keys == (["baseline_commit","campaign_exit_status",
                         "core_sha256sums_sha256","core_sha256sums_verified",
                         "promotion_passed","schema","source_commit","source_tree",
@@ -3301,19 +5639,78 @@ verify_envelope()
                     .campaign_exit_status != 0 and
                     (.core_sha256sums_verified | type == "boolean") and
                     (.stage | type == "string" and length > 0)
-                ' "$status_file" >/dev/null
+                    ' "$status_file" >/dev/null
+                else
+                    /usr/bin/jq -e '
+                        keys == (["acquisition_generation","attempt","attempt_budget",
+                            "attempt_lineage_sha256",
+                            "baseline_commit","campaign_exit_status",
+                            "core_sha256sums_sha256","core_sha256sums_verified",
+                            "promotion_passed","schema","source_commit","source_tree",
+                            "stage","status"] | sort) and
+                        .acquisition_generation == "passive-v2" and
+                        .attempt_budget == 3 and .status == "failed" and
+                        .promotion_passed == false and
+                        (.campaign_exit_status | type) == "number" and
+                        .campaign_exit_status ==
+                            (.campaign_exit_status | floor) and
+                        .campaign_exit_status >= 1 and
+                        .campaign_exit_status <= 255 and
+                        .baseline_commit ==
+                            "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198" and
+                        (.core_sha256sums_verified | type) == "boolean" and
+                        (.stage | type) == "string" and (.stage | length) > 0
+                    ' "$status_file" >/dev/null
+                fi
                 if [[ "$(/usr/bin/jq -er \
                         '.core_sha256sums_verified | booleans | tostring' \
                         "$status_file")" == true ]]; then
                     test -f "$verified_core/manifest.json"
                     failed_core_schema="$(/usr/bin/jq -er '.schema | strings' \
                         "$verified_core/manifest.json")"
-                    test "$failed_core_schema" = \
-                        leopard2-v17-gfni-main-core-manifest/v3 || \
-                    test "$failed_core_schema" = \
-                        leopard2-v17-gfni-main-passive-core-manifest/v4 || \
-                    test "$failed_core_schema" = \
-                        leopard2-v17-gfni-main-failed-core-manifest/v1
+                    if [[ "$evidence_generation" == failed-v1 ]]; then
+                        test "$failed_core_schema" = \
+                            leopard2-v17-gfni-main-core-manifest/v3 || \
+                        test "$failed_core_schema" = \
+                            leopard2-v17-gfni-main-passive-core-manifest/v4 || \
+                        test "$failed_core_schema" = \
+                            leopard2-v17-gfni-main-failed-core-manifest/v1
+                    else
+                        test "$failed_core_schema" = \
+                            leopard2-v18-gfni-main-passive-core-manifest/v1 || \
+                        test "$failed_core_schema" = \
+                            leopard2-v18-gfni-main-passive-failed-core-manifest/v1
+                        if [[ "$failed_core_schema" == \
+                                leopard2-v18-gfni-main-passive-core-manifest/v1 ]]; then
+                            /usr/bin/jq -e '
+                                .stage as $stage |
+                                ["seal_core", "independent_postseal_audit",
+                                 "publish_not_promoted_envelope"] |
+                                index($stage) != null
+                            ' "$status_file" >/dev/null
+                            verify_v18_complete_core_claim_bindings \
+                                "$verified_core"
+                        else
+                            /usr/bin/jq -e \
+                                '.stage == "verify_and_seal_failed_campaign"' \
+                                "$status_file" >/dev/null
+                            verify_v18_failed_core_claim_bindings \
+                                "$verified_core"
+                        fi
+                        /usr/bin/jq -e --slurpfile status "$status_file" '
+                            .acquisition_generation == "passive-v2" and
+                            (.attempt | type) == "number" and
+                            .attempt == (.attempt | floor) and
+                            .attempt >= 1 and .attempt <= 3 and
+                            .attempt == $status[0].attempt and
+                            .attempt_budget == 3 and
+                            .attempt_budget == $status[0].attempt_budget and
+                            .attempt_lineage_sha256 ==
+                                $status[0].attempt_lineage_sha256 and
+                            .baseline_commit ==
+                                "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+                        ' "$verified_core/manifest.json" >/dev/null
+                    fi
                     test "$(/usr/bin/jq -er '.source_commit | strings' \
                         "$verified_core/manifest.json")" = \
                         "$(/usr/bin/jq -er '.source_commit | strings' \
@@ -3326,13 +5723,23 @@ verify_envelope()
             fi
         fi
     fi
-    /usr/bin/printf 'authoritative v17 envelope verified: %s\n' \
+    /usr/bin/printf 'authoritative v17/v18 envelope verified: %s\n' \
         "$verified_envelope"
 }
 
 if [[ $# -eq 1 && $1 == --self-test-passive-contract ]]; then
     test "$passive_mode" = false
     passive_contract_self_test
+    exit 0
+fi
+
+if [[ $# -eq 4 && $1 == --verify-v18-complete-core-semantics &&
+      $2 == /* &&
+      $3 == /tmp/leopard-v18-complete-core-replay.*/NOT_PROMOTED.json &&
+      $4 == /tmp/leopard-v18-complete-core-replay.*/postseal-audit.json ]]; then
+    test "$passive_mode" = false
+    verify_v18_complete_core_claim_bindings_preflight "$2/core"
+    verify_envelope "$2" "$3" "$4"
     exit 0
 fi
 
@@ -3348,13 +5755,21 @@ if [[ $# -eq 2 && $1 == --verify && $2 == /* ]]; then
 fi
 
 if [[ $# -ne 1 || $1 != /* ]]; then
-    /usr/bin/printf 'usage: %s /absolute/repository/.research/envelope\n' \
-        "$0" >&2
-    /usr/bin/printf '       %s --passive-shared-host /absolute/repository/.research/envelope\n' \
+    /usr/bin/printf 'usage: %s --passive-shared-host --attempt N --attempt-budget 3 /absolute/repository/.research/envelope\n' \
         "$0" >&2
     /usr/bin/printf '       %s --verify /absolute/repository/.research/envelope\n' \
         "$0" >&2
     /usr/bin/printf '       %s --self-test-passive-contract\n' "$0" >&2
+    exit 2
+fi
+if [[ "$passive_mode" != true ]]; then
+    /usr/bin/printf \
+        'fresh active-v17 acquisition is disabled because the live runner now emits passive-only v18 evidence; retained v17 envelopes remain verifiable\n' >&2
+    exit 2
+fi
+if ! validate_attempt_contract "$attempt" "$attempt_budget"; then
+    /usr/bin/printf \
+        'passive v18 acquisition requires --attempt N (1..3) and --attempt-budget 3\n' >&2
     exit 2
 fi
 envelope=$1
@@ -3384,6 +5799,8 @@ stage=initialization
 lane=
 commit=unknown
 tree=unknown
+attempt_lineage_json=
+attempt_lineage_sha256=
 
 next_stage()
 {
@@ -3395,15 +5812,37 @@ next_stage()
 failure_record()
 {
     local status=$?
+    local lineage_ready=false
+    local failed_verification=
+    local failed_verification_status=1
     trap - ERR
     set +e
-    if [[ -n "$lane" && -d "$lane" && -w "$lane" ]]; then
+    if [[ -n "$lane" && -d "$envelope" ]]; then
+        /usr/bin/chmod u+w "$envelope" 2>/dev/null
+        if [[ ! -d "$lane" ]]; then
+            /usr/bin/mkdir -m 0700 "$lane" 2>/dev/null
+        fi
+        /usr/bin/chmod u+w "$lane" 2>/dev/null
+        if [[ ! -f "$lane/run-authoritative.sh" ]]; then
+            /usr/bin/cp --reflink=never "$0" \
+                "$lane/run-authoritative.sh" 2>/dev/null
+            /usr/bin/chmod 0555 "$lane/run-authoritative.sh" 2>/dev/null
+        fi
+        if write_v18_attempt_lineage; then
+            lineage_ready=true
+        fi
+    fi
+    if [[ -n "$lane" && -d "$lane" && -w "$lane" &&
+          -f "$lane/attempt-lineage.json" && "$lineage_ready" == true ]]; then
         /usr/bin/jq -n \
             --arg stage "$stage" \
             --argjson exit_status "$status" \
+            --argjson attempt "$attempt" \
+            --argjson attempt_budget "$attempt_budget" \
             --arg commit "$commit" \
             --arg tree "$tree" \
-            '{schema:"leopard2-v17-gfni-main-wrapper-failure/v1",status:"failed",promotion_passed:false,stage:$stage,exit_status:$exit_status,source_commit:$commit,source_tree:$tree}' \
+            --arg attempt_lineage_sha256 "$attempt_lineage_sha256" \
+            '{schema:"leopard2-v18-gfni-main-passive-wrapper-failure/v1",status:"failed",acquisition_generation:"passive-v2",attempt:$attempt,attempt_budget:$attempt_budget,attempt_lineage_sha256:$attempt_lineage_sha256,promotion_passed:false,stage:$stage,exit_status:$exit_status,source_commit:$commit,source_tree:$tree}' \
             > "$lane/WRAPPER_FAILURE.json"
         (
             cd "$lane" || exit
@@ -3420,10 +5859,13 @@ failure_record()
         /usr/bin/jq -n \
             --argjson exit_status "$status" \
             --arg stage "$stage" \
+            --argjson attempt "$attempt" \
+            --argjson attempt_budget "$attempt_budget" \
             --arg commit "$commit" \
             --arg tree "$tree" \
+            --arg attempt_lineage_sha256 "$attempt_lineage_sha256" \
             --arg core_sha256sums_sha256 "$core_sha" \
-            '{schema:"leopard2-v17-gfni-main-failed-envelope/v1",status:"failed",promotion_passed:false,campaign_exit_status:$exit_status,stage:$stage,source_commit:$commit,source_tree:$tree,core_sha256sums_sha256:$core_sha256sums_sha256}' \
+            '{schema:"leopard2-v18-gfni-main-failed-envelope/v1",status:"failed",acquisition_generation:"passive-v2",attempt:$attempt,attempt_budget:$attempt_budget,attempt_lineage_sha256:$attempt_lineage_sha256,promotion_passed:false,campaign_exit_status:$exit_status,stage:$stage,source_commit:$commit,source_tree:$tree,core_sha256sums_sha256:$core_sha256sums_sha256}' \
             > "$envelope/FAILED.json"
         /usr/bin/printf '' > "$envelope/SHA256SUMS"
         write_tree_metadata_manifest "$envelope"
@@ -3437,6 +5879,21 @@ failure_record()
             -exec /usr/bin/chmod a-w {} +
         /usr/bin/find "$envelope" -type d -perm /222 \
             -exec /usr/bin/chmod a-w {} +
+        failed_verification="$(/usr/bin/mktemp -d \
+            /tmp/leopard-v18-wrapper-failed-verify.XXXXXX)"
+        /usr/bin/bash "$lane/run-authoritative.sh" --verify "$envelope" \
+            > "$failed_verification/verification.txt" \
+            2> "$failed_verification/verification-stderr.log"
+        failed_verification_status=$?
+        if [[ "$failed_verification_status" -eq 0 ]]; then
+            /usr/bin/printf \
+                'sealed_failed_envelope=%s\nexternal_verification=%s\n' \
+                "$envelope" "$failed_verification"
+        else
+            /usr/bin/printf \
+                'sealed FAILED envelope did not verify; diagnostic=%s\n' \
+                "$failed_verification" >&2
+        fi
     fi
     /usr/bin/printf 'authoritative wrapper failed in stage %s with status %s\n' \
         "$stage" "$status" >&2
@@ -3449,6 +5906,8 @@ postseal_failure_record()
     local failed_core_sha=
     local failed_core_verified=false
     local displaced_status=
+    local failed_verification=
+    local failed_verification_status=1
     trap - ERR
     set +e
     exec 8>&-
@@ -3465,6 +5924,8 @@ postseal_failure_record()
         fi
         failed_core_sha="$(/usr/bin/sha256sum "$lane/SHA256SUMS" | \
             /usr/bin/cut -d' ' -f1)"
+        attempt_lineage_sha256="$(/usr/bin/sha256sum \
+            "$lane/attempt-lineage.json" | /usr/bin/cut -d' ' -f1)"
         for displaced_status in \
             COMPLETED.json NOT_PROMOTED.json FAILED.json TREE-METADATA.json; do
             if [[ -e "$envelope/$displaced_status" ]]; then
@@ -3475,12 +5936,15 @@ postseal_failure_record()
         /usr/bin/jq -n \
             --argjson exit_status "$status" \
             --argjson core_sha256sums_verified "$failed_core_verified" \
+            --argjson attempt "$attempt" \
+            --argjson attempt_budget "$attempt_budget" \
             --arg stage "$stage" \
             --arg commit "$commit" \
             --arg tree "$tree" \
             --arg baseline_commit "$main_commit" \
+            --arg attempt_lineage_sha256 "$attempt_lineage_sha256" \
             --arg core_sha256sums_sha256 "$failed_core_sha" \
-            '{schema:"leopard2-v17-gfni-main-failed-envelope/v1",status:"failed",promotion_passed:false,campaign_exit_status:$exit_status,stage:$stage,source_commit:$commit,source_tree:$tree,baseline_commit:$baseline_commit,core_sha256sums_verified:$core_sha256sums_verified,core_sha256sums_sha256:$core_sha256sums_sha256}' \
+            '{schema:"leopard2-v18-gfni-main-failed-envelope/v1",status:"failed",acquisition_generation:"passive-v2",attempt:$attempt,attempt_budget:$attempt_budget,attempt_lineage_sha256:$attempt_lineage_sha256,promotion_passed:false,campaign_exit_status:$exit_status,stage:$stage,source_commit:$commit,source_tree:$tree,baseline_commit:$baseline_commit,core_sha256sums_verified:$core_sha256sums_verified,core_sha256sums_sha256:$core_sha256sums_sha256}' \
             > "$envelope/FAILED.json"
         /usr/bin/printf '' > "$envelope/SHA256SUMS"
         write_tree_metadata_manifest "$envelope"
@@ -3494,6 +5958,21 @@ postseal_failure_record()
             -exec /usr/bin/chmod a-w {} +
         /usr/bin/find "$envelope" -type d -perm /222 \
             -exec /usr/bin/chmod a-w {} +
+        failed_verification="$(/usr/bin/mktemp -d \
+            /tmp/leopard-v18-postseal-failed-verify.XXXXXX)"
+        /usr/bin/bash "$lane/run-authoritative.sh" --verify "$envelope" \
+            > "$failed_verification/verification.txt" \
+            2> "$failed_verification/verification-stderr.log"
+        failed_verification_status=$?
+        if [[ "$failed_verification_status" -eq 0 ]]; then
+            /usr/bin/printf \
+                'sealed_failed_envelope=%s\nexternal_verification=%s\n' \
+                "$envelope" "$failed_verification"
+        else
+            /usr/bin/printf \
+                'postseal FAILED envelope did not verify; diagnostic=%s\n' \
+                "$failed_verification" >&2
+        fi
     fi
     /usr/bin/printf \
         'authoritative wrapper failed after core sealing in stage %s with status %s\n' \
@@ -3501,7 +5980,77 @@ postseal_failure_record()
     exit "$status"
 }
 
-if [[ -e "$envelope" ]]; then
+preregistered_commit="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+preregistered_tree="$(/usr/bin/git -C "$repo" rev-parse 'HEAD^{tree}')"
+[[ "$preregistered_commit" =~ ^[0-9a-f]{40}$ ]]
+[[ "$preregistered_tree" =~ ^[0-9a-f]{40}$ ]]
+require_empty_output /usr/bin/git -C "$repo" status \
+    --porcelain=v1 --untracked-files=normal
+require_empty_output /usr/bin/git -C "$repo" status \
+    --porcelain=v1 --untracked-files=normal --ignore-submodules=none
+test "$repo/$relative_wrapper" -ef "$0"
+commit=$preregistered_commit
+tree=$preregistered_tree
+expected_attempt_envelope="$repo/.research/leopard-79h/${preregistered_commit:0:7}-v18-passive-main-a${attempt}"
+if [[ "$envelope" != "$expected_attempt_envelope" ]]; then
+    /usr/bin/printf \
+        'passive v18 attempt envelope must be exactly %s\n' \
+        "$expected_attempt_envelope" >&2
+    exit 2
+fi
+prior_attempt_records='[]'
+if (( attempt > 1 )); then
+    for ((prior_attempt = 1; prior_attempt < attempt; ++prior_attempt)); do
+        prior_envelope="$repo/.research/leopard-79h/${preregistered_commit:0:7}-v18-passive-main-a${prior_attempt}"
+        test -d "$prior_envelope"
+        prior_sha_before="$(/usr/bin/sha256sum \
+            "$prior_envelope/SHA256SUMS" | /usr/bin/cut -d' ' -f1)"
+        verify_envelope "$prior_envelope"
+        prior_sha_after="$(/usr/bin/sha256sum \
+            "$prior_envelope/SHA256SUMS" | /usr/bin/cut -d' ' -f1)"
+        test "$prior_sha_after" = "$prior_sha_before"
+        if [[ ! -f "$prior_envelope/FAILED.json" ]]; then
+            /usr/bin/printf \
+                'refusing attempt %s because prior attempt %s produced valid observational evidence\n' \
+                "$attempt" "$prior_attempt" >&2
+            exit 2
+        fi
+        if v18_envelope_has_observational_output "$prior_envelope"; then
+            /usr/bin/printf \
+                'refusing attempt %s because prior attempt %s reached observational output before its later failure\n' \
+                "$attempt" "$prior_attempt" >&2
+            exit 2
+        fi
+        /usr/bin/jq -e --argjson prior_attempt "$prior_attempt" '
+            .schema == "leopard2-v18-gfni-main-failed-envelope/v1" and
+            .acquisition_generation == "passive-v2" and
+            .attempt == $prior_attempt and .attempt_budget == 3
+        ' "$prior_envelope/FAILED.json" >/dev/null
+        test "$(/usr/bin/jq -er '.source_commit | strings' \
+            "$prior_envelope/FAILED.json")" = "$preregistered_commit"
+        test "$(/usr/bin/jq -er '.source_tree | strings' \
+            "$prior_envelope/FAILED.json")" = "$preregistered_tree"
+        /usr/bin/cmp "$prior_envelope/core/run-authoritative.sh" \
+            "$repo/$relative_wrapper"
+        prior_attempt_records="$(/usr/bin/jq -cS -n \
+            --argjson records "$prior_attempt_records" \
+            --argjson prior_attempt "$prior_attempt" \
+            --arg prior_envelope "$prior_envelope" \
+            --arg prior_sha "$prior_sha_before" \
+            '$records + [{attempt:$prior_attempt,envelope:$prior_envelope,terminal:"FAILED.json",terminal_schema:"leopard2-v18-gfni-main-failed-envelope/v1",envelope_sha256sums_sha256:$prior_sha}]')"
+    done
+fi
+for ((future_attempt = attempt + 1; future_attempt <= attempt_budget; \
+        ++future_attempt)); do
+    future_envelope="$repo/.research/leopard-79h/${preregistered_commit:0:7}-v18-passive-main-a${future_attempt}"
+    require_path_absent "$future_envelope"
+done
+attempt_lineage_json="$(/usr/bin/jq -cS -n \
+    --argjson attempt "$attempt" --argjson attempt_budget "$attempt_budget" \
+    --arg commit "$preregistered_commit" --arg tree "$preregistered_tree" \
+    --argjson prior_attempts "$prior_attempt_records" \
+    '{schema:"leopard2-v18-gfni-main-attempt-lineage/v1",acquisition_generation:"passive-v2",attempt:$attempt,attempt_budget:$attempt_budget,source_commit:$commit,source_tree:$tree,prior_attempts:$prior_attempts}')"
+if ! require_path_absent "$envelope"; then
     /usr/bin/printf 'refusing to reuse artifact envelope: %s\n' \
         "$envelope" >&2
     exit 2
@@ -3510,14 +6059,15 @@ fi
 test "$(/usr/bin/readlink -f "$(/usr/bin/dirname "$envelope")")" = \
     "$(/usr/bin/dirname "$envelope")"
 /usr/bin/mkdir -m 0700 "$envelope"
-test "$(/usr/bin/readlink -f "$envelope")" = "$envelope"
 lane="$envelope/core"
+trap failure_record ERR
+test "$(/usr/bin/readlink -f "$envelope")" = "$envelope"
 /usr/bin/mkdir -m 0700 "$lane"
+write_v18_attempt_lineage
 /usr/bin/cp --reflink=never "$0" "$lane/run-authoritative.sh"
 /usr/bin/chmod 0555 "$lane/run-authoritative.sh"
 test ! -L "$lane/run-authoritative.sh"
 test "$(/usr/bin/stat -c %h "$lane/run-authoritative.sh")" = 1
-trap failure_record ERR
 
 next_stage canonical_lock
 exec 9>> "$lock"
@@ -3577,6 +6127,7 @@ verify_tree_metadata_manifest "$tree_self_test"
 next_stage clean_source_preflight
 commit="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 tree="$(/usr/bin/git -C "$repo" rev-parse 'HEAD^{tree}')"
+test "$commit" = "$preregistered_commit"
 test "${#commit}" = 40
 test "${#tree}" = 40
 test "$(/usr/bin/git -C "$repo" rev-parse --show-toplevel)" = "$repo"
@@ -3679,32 +6230,27 @@ test "$(/usr/bin/grep -Fxc \
     "$candidate_source/leopard2.cpp")" = 1
 
 next_stage canonical_source_archives
-/usr/bin/git -C "$repo" archive --format=tar \
-    --prefix=candidate-source/ --output="$lane/candidate-source.tar" "$commit"
-/usr/bin/git -C "$candidate_source" archive --format=tar \
-    --prefix=candidate-source/ \
-    --output="$work_root/replayed-candidate-source.tar" "$commit"
+write_canonical_git_archive "$repo" "$commit" candidate-source \
+    "$lane/candidate-source.tar"
+write_canonical_git_archive "$candidate_source" "$commit" candidate-source \
+    "$work_root/replayed-candidate-source.tar"
 /usr/bin/cmp "$lane/candidate-source.tar" \
     "$work_root/replayed-candidate-source.tar"
-/usr/bin/git -C "$repo" archive --format=tar \
-    --prefix=leopard1-source/ --output="$lane/leopard1-source.tar" \
-    "$main_commit"
-/usr/bin/git -C "$baseline_source" archive --format=tar \
-    --prefix=leopard1-source/ \
-    --output="$work_root/replayed-leopard1-source.tar" "$main_commit"
+write_canonical_git_archive "$repo" "$main_commit" leopard1-source \
+    "$lane/leopard1-source.tar"
+write_canonical_git_archive "$baseline_source" "$main_commit" \
+    leopard1-source "$work_root/replayed-leopard1-source.tar"
 /usr/bin/cmp "$lane/leopard1-source.tar" \
     "$work_root/replayed-leopard1-source.tar"
-/usr/bin/git -C "$repo/sse2neon" archive --format=tar \
-    --prefix=sse2neon-source/ --output="$lane/sse2neon-source.tar" \
-    "$candidate_submodule_commit"
-/usr/bin/git -C "$candidate_source/sse2neon" archive --format=tar \
-    --prefix=sse2neon-source/ \
-    --output="$work_root/replayed-candidate-sse2neon-source.tar" \
-    "$candidate_submodule_commit"
-/usr/bin/git -C "$baseline_source/sse2neon" archive --format=tar \
-    --prefix=sse2neon-source/ \
-    --output="$work_root/replayed-baseline-sse2neon-source.tar" \
-    "$baseline_submodule_commit"
+write_canonical_git_archive "$repo/sse2neon" \
+    "$candidate_submodule_commit" sse2neon-source \
+    "$lane/sse2neon-source.tar"
+write_canonical_git_archive "$candidate_source/sse2neon" \
+    "$candidate_submodule_commit" sse2neon-source \
+    "$work_root/replayed-candidate-sse2neon-source.tar"
+write_canonical_git_archive "$baseline_source/sse2neon" \
+    "$baseline_submodule_commit" sse2neon-source \
+    "$work_root/replayed-baseline-sse2neon-source.tar"
 /usr/bin/cmp "$lane/sse2neon-source.tar" \
     "$work_root/replayed-candidate-sse2neon-source.tar"
 /usr/bin/cmp "$lane/sse2neon-source.tar" \
@@ -4482,7 +7028,7 @@ path = sys.argv[1]
 payload = {
     "benchmark_cpu": 52,
     "nonce": os.urandom(32).hex(),
-    "owner": "v17 exact-main authoritative wrapper",
+    "owner": f"v18 passive exact-main authoritative wrapper attempt {sys.argv[2]}/{sys.argv[3]}",
     "reserved_sibling": 116,
     "schema": "leopard2-cpu-reservation/v1",
     "status": "held",
@@ -4504,7 +7050,7 @@ try:
     os.fsync(parent)
 finally:
     os.close(parent)
-' "$reservation"
+' "$reservation" "$attempt" "$attempt_budget"
 test "$(/usr/bin/stat -c %a "$reservation")" = 600
 
 original_allowed_csv=
@@ -4543,8 +7089,8 @@ require(after == parse(housekeeping_csv), "housekeeping affinity differs")
 require(52 not in after and 116 not in after and bool(after),
         "housekeeping affinity includes the reserved pair or is empty")
 payload = {
-    "schema": "leopard2-v17-passive-controller-affinity/v1",
-    "acquisition_generation": "passive-v1",
+    "schema": "leopard2-v18-passive-controller-affinity/v1",
+    "acquisition_generation": "passive-v2",
     "wrapper_pid": int(wrapper_pid),
     "before_allowed_cpus": before,
     "after_allowed_cpus": after,
@@ -4576,10 +7122,13 @@ finally:
     /usr/bin/python3 -I -S -B "$lane/passive_environment_census.py" capture \
         --phase pre --reserved-cpus 52,116 \
         --output "$lane/environment-census-pre.json"
+    /usr/bin/python3 -I -S -B "$lane/passive_environment_census.py" verify \
+        --input "$lane/environment-census-pre.json" --phase pre \
+        --generation passive-v2
 fi
 
 if [[ "$passive_mode" == true ]]; then
-    next_stage passive_campaign
+    next_stage passive_v18_windowed_campaign
 else
     next_stage supervised_campaign
 fi
@@ -4640,18 +7189,31 @@ campaign_status=$?
 set -e
 trap failure_record ERR
 
-if [[ "$passive_mode" == true && "$campaign_status" -eq 0 ]]; then
+if [[ "$passive_mode" == true ]]; then
     next_stage passive_environment_census_post
     /usr/bin/python3 -I -S -B "$lane/passive_environment_census.py" capture \
         --phase post --reserved-cpus 52,116 \
         --output "$lane/environment-census-post.json"
-    next_stage passive_environment_policy
+fi
+if [[ "$passive_mode" == true && "$campaign_status" -eq 0 ]]; then
+    next_stage passive_environment_policy_v2
     /usr/bin/python3 -I -S -B "$lane/passive_environment_census.py" compare \
         --pre "$lane/environment-census-pre.json" \
         --post "$lane/environment-census-post.json" \
         --raw "$campaign_dir/raw.json" \
         --controller "$lane/controller-affinity.json" \
         --output "$lane/passive-environment-policy.json"
+    next_stage passive_windowed_contamination_gate
+    /usr/bin/jq -e '
+        .schema == "leopard2-passive-shared-host-policy/v2" and
+        .windowed_contamination.gated == true and
+        .windowed_contamination.retained_window_count == 12 and
+        .windowed_contamination.all_benchmark_cpu_excess_zero == true and
+        .windowed_contamination.all_reserved_sibling_nonidle_zero == true and
+        .windowed_contamination.windowed.benchmark_cpu_nonidle_excess_jiffies == 0 and
+        .windowed_contamination.windowed.reserved_sibling_nonidle_jiffies == 0 and
+        .outer_disclosure.gated == false
+    ' "$lane/passive-environment-policy.json" >/dev/null
 fi
 
 if [[ "$campaign_status" -ne 0 ]]; then
@@ -4682,13 +7244,16 @@ if [[ "$campaign_status" -ne 0 ]]; then
         --argjson campaign_exit_status "$campaign_status" \
         --argjson failure_verify_status "$failure_verify_status" \
         --argjson failure_verified "$failure_verified" \
+        --argjson attempt "$attempt" \
+        --argjson attempt_budget "$attempt_budget" \
+        --arg attempt_lineage_sha256 "$attempt_lineage_sha256" \
         --arg commit "$commit" \
         --arg tree "$tree" \
         --arg main_commit "$main_commit" \
         --arg candidate_binary_sha256 "$candidate_binary_hash" \
         --arg baseline_binary_sha256 "$baseline_binary_hash" \
         --arg failure_sha256 "$failure_sha" \
-        '{schema:"leopard2-v17-gfni-main-failed-core-manifest/v1",status:"failed",promotion_passed:false,campaign_exit_status:$campaign_exit_status,failure_verify_status:$failure_verify_status,failure_verified:$failure_verified,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,candidate_binary_sha256:$candidate_binary_sha256,baseline_binary_sha256:$baseline_binary_sha256,failure_sha256:($failure_sha256 | if . == "null" then null else . end),canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116}' \
+        '{schema:"leopard2-v18-gfni-main-passive-failed-core-manifest/v1",status:"failed",acquisition_generation:"passive-v2",attempt:$attempt,attempt_budget:$attempt_budget,attempt_lineage_sha256:$attempt_lineage_sha256,promotion_passed:false,campaign_exit_status:$campaign_exit_status,failure_verify_status:$failure_verify_status,failure_verified:$failure_verified,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,candidate_binary_sha256:$candidate_binary_sha256,baseline_binary_sha256:$baseline_binary_sha256,failure_sha256:($failure_sha256 | if . == "null" then null else . end),canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116}' \
         > "$lane/manifest.json"
     (
         cd "$lane"
@@ -4706,10 +7271,13 @@ if [[ "$campaign_status" -ne 0 ]]; then
     /usr/bin/jq -n \
         --argjson campaign_exit_status "$campaign_status" \
         --argjson failure_verified "$failure_verified" \
+        --argjson attempt "$attempt" \
+        --argjson attempt_budget "$attempt_budget" \
+        --arg attempt_lineage_sha256 "$attempt_lineage_sha256" \
         --arg commit "$commit" \
         --arg tree "$tree" \
         --arg core_sha256sums_sha256 "$failed_core_sha" \
-        '{schema:"leopard2-v17-gfni-main-failed-envelope/v1",status:"failed",promotion_passed:false,campaign_exit_status:$campaign_exit_status,failure_verified:$failure_verified,source_commit:$commit,source_tree:$tree,core_sha256sums_sha256:$core_sha256sums_sha256}' \
+        '{schema:"leopard2-v18-gfni-main-failed-envelope/v1",status:"failed",acquisition_generation:"passive-v2",attempt:$attempt,attempt_budget:$attempt_budget,attempt_lineage_sha256:$attempt_lineage_sha256,promotion_passed:false,campaign_exit_status:$campaign_exit_status,failure_verified:$failure_verified,source_commit:$commit,source_tree:$tree,core_sha256sums_sha256:$core_sha256sums_sha256}' \
         > "$envelope/FAILED.json"
     /usr/bin/printf '' > "$envelope/SHA256SUMS"
     write_tree_metadata_manifest "$envelope"
@@ -4810,7 +7378,7 @@ audit_args=(
     --manifest "$campaign_dir/manifest.json"
 )
 if [[ "$passive_mode" == true ]]; then
-    audit_args+=(--supervision absent)
+    audit_args+=(--supervision windowed)
 fi
 "${audit_args[@]}" \
     --output "$lane/audit.json" \
@@ -4826,11 +7394,11 @@ test "$(/usr/bin/jq -er \
     "$lane/audit.json")" = false
 if [[ "$passive_mode" == true ]]; then
     test "$(/usr/bin/jq -er '.schema | strings' "$lane/audit.json")" = \
-        leopard2-main-compare-v17-passive-independent-audit/v1
+        leopard2-main-compare-v18-passive-independent-audit/v1
     /usr/bin/jq -e '
-        .audit_mode == "passive-shared-host-observation" and
-        .acquisition_generation == "passive-v1" and
-        .evidence_class == "passive-shared-host-observation/v1" and
+        .audit_mode == "passive-windowed-shared-host-observation" and
+        .acquisition_generation == "passive-v2" and
+        .evidence_class == "passive-windowed-shared-host-observation/v1" and
         .affinity_supervisor_binding_verified == false and
         .promotion_eligible == false and .promotion_passed == false and
         .causal_performance_claim_eligible == false and
@@ -4838,10 +7406,23 @@ if [[ "$passive_mode" == true ]]; then
         .isolation_claim.benchmark_cpu_exclusive_ownership_claimed == false and
         .isolation_claim.foreign_process_affinity_mutation_claimed == false and
         .isolation_claim.foreign_process_signalling_claimed == false and
+        .isolation_claim.every_retained_window_benchmark_cpu_excess_zero == true and
+        .isolation_claim.every_retained_window_reserved_sibling_nonidle_zero == true and
+        .isolation_claim.whole_campaign_and_out_of_window_activity_gated == false and
+        .isolation_claim.windowed_screen ==
+            "per retained benchmark invocation" and
+        .isolation_claim.out_of_window_activity_gated == false and
+        .isolation_claim.reserved_sibling_zero_nonidle_jiffies_in_every_retained_window == true and
         .isolation_claim.promotion_eligible == false and
         .isolation_claim.promotion_passed == false and
-        .gate_results.reservation_pair_lease_null_supervision_closure == true and
-        .gate_results.benchmark_cpu_nonidle_excess_over_child_wall_ceiling_within_rejection_policy == true and
+        .windowed_observation.retained_window_count == 12 and
+        .windowed_observation.windowed.benchmark_cpu_nonidle_excess_jiffies == 0 and
+        .windowed_observation.windowed.reserved_sibling_nonidle_jiffies == 0 and
+        .windowed_observation.out_of_window.gated == false and
+        .gate_results.reservation_pair_lease_null_supervision_windowed_closure == true and
+        .gate_results.benchmark_cpu_nonidle_excess_zero_in_every_retained_window == true and
+        .gate_results.reserved_sibling_nonidle_zero_in_every_retained_window == true and
+        .gate_results.out_of_window_activity_disclosed_not_gated == true and
         .gate_results.benchmark_cpu_exclusivity_not_claimed == true
     ' "$lane/audit.json" >/dev/null
 fi
@@ -4931,20 +7512,16 @@ require_empty_output /usr/bin/git -C "$baseline_source" status \
 test "$(/usr/bin/git -C "$candidate_source" rev-parse HEAD)" = "$commit"
 test "$(/usr/bin/git -C "$candidate_source" rev-parse 'HEAD^{tree}')" = "$tree"
 test "$(/usr/bin/git -C "$baseline_source" rev-parse HEAD)" = "$main_commit"
-/usr/bin/git -C "$candidate_source" archive --format=tar \
-    --prefix=candidate-source/ \
-    --output="$work_root/post-candidate-source.tar" "$commit"
-/usr/bin/git -C "$baseline_source" archive --format=tar \
-    --prefix=leopard1-source/ \
-    --output="$work_root/post-leopard1-source.tar" "$main_commit"
-/usr/bin/git -C "$candidate_source/sse2neon" archive --format=tar \
-    --prefix=sse2neon-source/ \
-    --output="$work_root/post-candidate-sse2neon-source.tar" \
-    "$candidate_submodule_commit"
-/usr/bin/git -C "$baseline_source/sse2neon" archive --format=tar \
-    --prefix=sse2neon-source/ \
-    --output="$work_root/post-baseline-sse2neon-source.tar" \
-    "$baseline_submodule_commit"
+write_canonical_git_archive "$candidate_source" "$commit" candidate-source \
+    "$work_root/post-candidate-source.tar"
+write_canonical_git_archive "$baseline_source" "$main_commit" \
+    leopard1-source "$work_root/post-leopard1-source.tar"
+write_canonical_git_archive "$candidate_source/sse2neon" \
+    "$candidate_submodule_commit" sse2neon-source \
+    "$work_root/post-candidate-sse2neon-source.tar"
+write_canonical_git_archive "$baseline_source/sse2neon" \
+    "$baseline_submodule_commit" sse2neon-source \
+    "$work_root/post-baseline-sse2neon-source.tar"
 /usr/bin/cmp "$lane/candidate-source.tar" \
     "$work_root/post-candidate-source.tar"
 /usr/bin/cmp "$lane/leopard1-source.tar" \
@@ -4970,7 +7547,7 @@ test "$(/usr/bin/sha256sum "$lane/sse2neon-source.tar" | \
 
 next_stage result_policy
 test "$(/usr/bin/jq -er '.schema | strings' \
-    "$campaign_dir/manifest.json")" = leopard2-main-compare-manifest/v17
+    "$campaign_dir/manifest.json")" = leopard2-main-compare-manifest/v18
 test "$(/usr/bin/jq -er '.valid | booleans | tostring' \
     "$campaign_dir/manifest.json")" = true
 performance_gate_passed="$(/usr/bin/jq -er '
@@ -4985,11 +7562,21 @@ performance_gate_passed="$(/usr/bin/jq -er '
 ' "$campaign_dir/manifest.json")"
 if [[ "$passive_mode" == true ]]; then
     /usr/bin/jq --slurpfile audit "$lane/audit.json" \
-        --slurpfile policy "$lane/passive-environment-policy.json" '{
-        schema:"leopard2-v17-gfni-main-passive-result-summary/v2",
-        acquisition_generation:"passive-v1",
+        --slurpfile lineage "$lane/attempt-lineage.json" \
+        --slurpfile policy "$lane/passive-environment-policy.json" \
+        --argjson attempt "$attempt" --argjson attempt_budget "$attempt_budget" \
+        --arg attempt_lineage_sha256 "$attempt_lineage_sha256" \
+        --arg current_envelope "$envelope" '{
+        schema:"leopard2-v18-gfni-main-passive-result-summary/v1",
+        acquisition_generation:"passive-v2",
+        attempt:$attempt,
+        attempt_budget:$attempt_budget,
+        attempt_lineage_sha256:$attempt_lineage_sha256,
+        attempt_statement:("attempt \($attempt) of at most \($attempt_budget)"),
+        sealed_attempt_envelopes:
+            ([$lineage[0].prior_attempts[].envelope] + [$current_envelope]),
         active_affinity_supervisor_executed:false,
-        evidence_class:"passive-shared-host-observation/v1",
+        evidence_class:"passive-windowed-shared-host-observation/v1",
         promotion_eligible:false,
         promotion_passed:false,
         causal_performance_claim_eligible:false,
@@ -5000,8 +7587,9 @@ if [[ "$passive_mode" == true ]]; then
         clustered_t_interval_reported_as_nominal_under_shared_host_load:true,
         same_binary_gfni_over_avx2_is_a_separate_campaign:true,
         isolation_claim:$audit[0].isolation_claim,
-        contamination:$audit[0].contamination,
-        outer_contamination:$policy[0].outer_contamination,
+        windowed_observation:$audit[0].windowed_observation,
+        outer_disclosure:$policy[0].outer_disclosure,
+        shared_host_exposure:$policy[0].shared_host_exposure,
         ordinary_one_item_batch:.analysis["gf16-high-full"].encode,
         one_shot_encode:.analysis["gf16-high-full"].one_shot_encode
     }' "$campaign_dir/manifest.json" > "$lane/result-summary.json"
@@ -5045,6 +7633,9 @@ if [[ "$passive_mode" == true ]]; then
     /usr/bin/jq -n --slurpfile audit "$lane/audit.json" \
         --argjson campaign_exit_status "$campaign_status" \
         --argjson performance_gate_passed "$performance_gate_passed" \
+        --argjson attempt "$attempt" \
+        --argjson attempt_budget "$attempt_budget" \
+        --arg attempt_lineage_sha256 "$attempt_lineage_sha256" \
         --arg commit "$commit" \
         --arg tree "$tree" \
         --arg main_commit "$main_commit" \
@@ -5075,7 +7666,7 @@ if [[ "$passive_mode" == true ]]; then
         --arg passive_environment_policy_sha256 "$passive_policy_hash" \
         --arg sse2neon_commit "$candidate_submodule_commit" \
         --arg sse2neon_source_archive_sha256 "$sse2neon_source_archive_hash" \
-        '{schema:"leopard2-v17-gfni-main-passive-core-manifest/v4",status:"complete",acquisition_generation:"passive-v1",campaign_exit_status:$campaign_exit_status,evidence_valid:true,evidence_class:"passive-shared-host-observation/v1",performance_gate_passed:$performance_gate_passed,promotion_eligible:false,promotion_passed:false,causal_performance_claim_eligible:false,cpu_pair_exclusive:false,benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies:$audit[0].contamination.benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,sse2neon_commit:$sse2neon_commit,sse2neon_source_archive_sha256:$sse2neon_source_archive_sha256,candidate_binary_sha256_pre_post:$candidate_binary_sha256,candidate_archive_sha256_pre_post:$candidate_archive_sha256,baseline_binary_sha256_pre_post:$baseline_binary_sha256,baseline_archive_sha256_pre_post:$baseline_archive_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,supervisor_sha256:$supervisor_sha256,supervisor_role:"retained-active-v1-verifier-only",active_affinity_supervisor_executed:false,passive_census_sha256:$passive_census_sha256,wrapper_sha256:$wrapper_sha256,build_order_normalizer_sha256:$build_order_normalizer_sha256,candidate_timing_normalization_report_sha256:$candidate_timing_normalization_report_sha256,candidate_test_normalization_report_sha256:$candidate_test_normalization_report_sha256,campaign_manifest_sha256:$campaign_manifest_sha256,campaign_raw_sha256:$campaign_raw_sha256,audit_sha256:$audit_sha256,controller_affinity_sha256:$controller_affinity_sha256,environment_census_pre_sha256:$environment_census_pre_sha256,environment_census_post_sha256:$environment_census_post_sha256,passive_environment_policy_sha256:$passive_environment_policy_sha256,isolation_claim:$audit[0].isolation_claim,build_reproduction:{candidate_timing_qualified_semantic_equal:true,candidate_timing_raw_tree_file_bytes_identical:$candidate_timing_raw_tree_byte_identical,candidate_tests_qualified_semantic_equal:true,candidate_tests_raw_tree_file_bytes_identical:$candidate_test_raw_tree_byte_identical,baseline_raw_byte_identical:true},producer_verification_passed:true,producer_verification_mode:"manifest-without-affinity-binding",independent_preseal_audit_passed:true,independent_auditor_supervision_mode:"absent",independent_auditor_scope:"campaign semantics only; build-order qualification is separately recomputed by the frozen wrapper normalizer",canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116,ratio_policy:{ordinary_and_one_shot_are_separate:true,ratios_are_separate_correlated_and_must_not_be_multiplied:true,combined_or_stacked_ratio_emitted:false,same_binary_ratio_is_another_campaign:true,clustered_t_interval_reported_as_nominal_under_shared_host_load:true},postseal_policy:"passive shared-host observations always publish NOT_PROMOTED.json, independent of the observed speed gate"}' \
+        '{schema:"leopard2-v18-gfni-main-passive-core-manifest/v1",status:"complete",acquisition_generation:"passive-v2",attempt:$attempt,attempt_budget:$attempt_budget,attempt_lineage_sha256:$attempt_lineage_sha256,campaign_exit_status:$campaign_exit_status,evidence_valid:true,evidence_class:"passive-windowed-shared-host-observation/v1",performance_gate_passed:$performance_gate_passed,promotion_eligible:false,promotion_passed:false,causal_performance_claim_eligible:false,cpu_pair_exclusive:false,windowed_benchmark_cpu_nonidle_excess_jiffies:$audit[0].windowed_observation.windowed.benchmark_cpu_nonidle_excess_jiffies,windowed_reserved_sibling_nonidle_jiffies:$audit[0].windowed_observation.windowed.reserved_sibling_nonidle_jiffies,out_of_window_benchmark_cpu_nonidle_jiffies:$audit[0].windowed_observation.out_of_window.benchmark_cpu_nonidle_jiffies,out_of_window_reserved_sibling_nonidle_jiffies:$audit[0].windowed_observation.out_of_window.reserved_sibling_nonidle_jiffies,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,sse2neon_commit:$sse2neon_commit,sse2neon_source_archive_sha256:$sse2neon_source_archive_sha256,candidate_binary_sha256_pre_post:$candidate_binary_sha256,candidate_archive_sha256_pre_post:$candidate_archive_sha256,baseline_binary_sha256_pre_post:$baseline_binary_sha256,baseline_archive_sha256_pre_post:$baseline_archive_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,supervisor_sha256:$supervisor_sha256,supervisor_role:"retained-active-v1-verifier-only",active_affinity_supervisor_executed:false,passive_census_sha256:$passive_census_sha256,wrapper_sha256:$wrapper_sha256,build_order_normalizer_sha256:$build_order_normalizer_sha256,candidate_timing_normalization_report_sha256:$candidate_timing_normalization_report_sha256,candidate_test_normalization_report_sha256:$candidate_test_normalization_report_sha256,campaign_manifest_sha256:$campaign_manifest_sha256,campaign_raw_sha256:$campaign_raw_sha256,audit_sha256:$audit_sha256,controller_affinity_sha256:$controller_affinity_sha256,environment_census_pre_sha256:$environment_census_pre_sha256,environment_census_post_sha256:$environment_census_post_sha256,passive_environment_policy_sha256:$passive_environment_policy_sha256,isolation_claim:$audit[0].isolation_claim,build_reproduction:{candidate_timing_qualified_semantic_equal:true,candidate_timing_raw_tree_file_bytes_identical:$candidate_timing_raw_tree_byte_identical,candidate_tests_qualified_semantic_equal:true,candidate_tests_raw_tree_file_bytes_identical:$candidate_test_raw_tree_byte_identical,baseline_raw_byte_identical:true},producer_verification_passed:true,producer_verification_mode:"manifest-without-affinity-binding",independent_preseal_audit_passed:true,independent_auditor_supervision_mode:"windowed",independent_auditor_scope:"campaign semantics only; build-order qualification is separately recomputed by the frozen wrapper normalizer",canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116,ratio_policy:{ordinary_and_one_shot_are_separate:true,ratios_are_separate_correlated_and_must_not_be_multiplied:true,combined_or_stacked_ratio_emitted:false,same_binary_ratio_is_another_campaign:true,clustered_t_interval_reported_as_nominal_under_shared_host_load:true},postseal_policy:"passive-v2 shared-host observations always publish NOT_PROMOTED.json, independent of the observed speed gate; at most three preregistered attempts and every outcome is retained"}' \
         > "$lane/manifest.json"
 else
 /usr/bin/jq -n \
@@ -5138,7 +7729,7 @@ postseal_audit_args=(
     --manifest "$campaign_dir/manifest.json"
 )
 if [[ "$passive_mode" == true ]]; then
-    postseal_audit_args+=(--supervision absent)
+    postseal_audit_args+=(--supervision windowed)
 fi
 "${postseal_audit_args[@]}" \
     --output "$envelope/postseal-audit.json" \
@@ -5165,6 +7756,9 @@ if [[ "$passive_mode" == true || "$performance_gate_passed" != true ]]; then
         /usr/bin/jq -n --slurpfile audit "$lane/audit.json" \
             --argjson campaign_exit_status "$campaign_status" \
             --argjson performance_gate_passed "$performance_gate_passed" \
+            --argjson attempt "$attempt" \
+            --argjson attempt_budget "$attempt_budget" \
+            --arg attempt_lineage_sha256 "$attempt_lineage_sha256" \
             --arg commit "$commit" \
             --arg tree "$tree" \
             --arg main_commit "$main_commit" \
@@ -5173,7 +7767,7 @@ if [[ "$passive_mode" == true || "$performance_gate_passed" != true ]]; then
             --arg postseal_audit_sha256 "$postseal_audit_sha" \
             --arg core_manifest_sha256 "$core_manifest_sha" \
             --arg core_sha256sums_sha256 "$core_sha256sums_sha" \
-            '{schema:"leopard2-v17-gfni-main-passive-not-promoted-envelope/v2",status:"complete",acquisition_generation:"passive-v1",evidence_class:"passive-shared-host-observation/v1",promotion_eligible:false,promotion_passed:false,causal_performance_claim_eligible:false,cpu_pair_exclusive:false,benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies:$audit[0].contamination.benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies,performance_gate_passed:$performance_gate_passed,evidence_valid:true,campaign_exit_status:$campaign_exit_status,preseal_audit_passed:true,postseal_audit_passed:true,postseal_audit_byte_identical:true,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,campaign_manifest_sha256:$campaign_manifest_sha256,audit_sha256:$audit_sha256,postseal_audit_sha256:$postseal_audit_sha256,core_manifest_sha256:$core_manifest_sha256,core_sha256sums_sha256:$core_sha256sums_sha256,isolation_claim:$audit[0].isolation_claim}' \
+            '{schema:"leopard2-v18-gfni-main-passive-not-promoted-envelope/v1",status:"complete",acquisition_generation:"passive-v2",attempt:$attempt,attempt_budget:$attempt_budget,attempt_lineage_sha256:$attempt_lineage_sha256,evidence_class:"passive-windowed-shared-host-observation/v1",promotion_eligible:false,promotion_passed:false,causal_performance_claim_eligible:false,cpu_pair_exclusive:false,windowed_benchmark_cpu_nonidle_excess_jiffies:$audit[0].windowed_observation.windowed.benchmark_cpu_nonidle_excess_jiffies,windowed_reserved_sibling_nonidle_jiffies:$audit[0].windowed_observation.windowed.reserved_sibling_nonidle_jiffies,out_of_window_benchmark_cpu_nonidle_jiffies:$audit[0].windowed_observation.out_of_window.benchmark_cpu_nonidle_jiffies,out_of_window_reserved_sibling_nonidle_jiffies:$audit[0].windowed_observation.out_of_window.reserved_sibling_nonidle_jiffies,performance_gate_passed:$performance_gate_passed,evidence_valid:true,campaign_exit_status:$campaign_exit_status,preseal_audit_passed:true,postseal_audit_passed:true,postseal_audit_byte_identical:true,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,campaign_manifest_sha256:$campaign_manifest_sha256,audit_sha256:$audit_sha256,postseal_audit_sha256:$postseal_audit_sha256,core_manifest_sha256:$core_manifest_sha256,core_sha256sums_sha256:$core_sha256sums_sha256,isolation_claim:$audit[0].isolation_claim}' \
             > "$envelope/NOT_PROMOTED.json"
     else
     /usr/bin/jq -n \

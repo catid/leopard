@@ -446,7 +446,7 @@ def baseline_result(
     campaign: Mapping[str, object] = CAMPAIGN,
 ) -> dict:
     sample_count = int(campaign["iterations"])
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         encode_samples = [4000.0 * scale + index for index in range(sample_count)]
         decode_samples = [5000.0 * scale + index for index in range(sample_count)]
     else:
@@ -469,7 +469,7 @@ def baseline_result(
     if raw_schema in (
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
             runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
         parameters["logical_shard_bytes"] = cell.shard_bytes
         resolved.update({
             "padded_application_bytes": False,
@@ -482,7 +482,7 @@ def baseline_result(
             "main_source_commit": runner.MAIN_COMMIT,
             "cplusplus": 201103,
             **({"pure_avx2": False}
-               if raw_schema == runner.RAW_SCHEMA else {}),
+               if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS else {}),
         },
         "parameters": parameters,
         "resolved": resolved,
@@ -507,7 +507,7 @@ def candidate_result(
     parameters.update({
         "requested_profile": "legacy_high_v1",
         "requested_field": (
-            "gf16" if raw_schema == runner.RAW_SCHEMA else "auto"),
+            "gf16" if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS else "auto"),
         "requested_backend": "auto",
         "skip_legacy": True,
         "retain_samples": True,
@@ -518,7 +518,7 @@ def candidate_result(
             runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
             runner.RAW_SCHEMA_V16):
         parameters["measure_one_shot_decode"] = True
-    elif raw_schema == runner.RAW_SCHEMA:
+    elif raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         parameters.update({
             "attest_source": True,
             "measure_one_shot_encode": True,
@@ -534,7 +534,7 @@ def candidate_result(
         parameters.update({name: flags[name] for name in (
             "force_tiled_decode", "force_materialized_decode")})
     sample_count = int(campaign["iterations"])
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         codec_samples = [3.0 + index / 10.0 for index in range(sample_count)]
         plan_samples = [4.0 + index / 10.0 for index in range(sample_count)]
         encode_samples = [4000.0 * scale + index for index in range(sample_count)]
@@ -565,7 +565,7 @@ def candidate_result(
         plan["median_us"] / int(campaign["reuse"])
     result = {
         "schema": ("leopard2-benchmark-v35"
-                   if raw_schema == runner.RAW_SCHEMA else
+                   if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS else
                    "leopard2-benchmark-v9"
                    if raw_schema in (
                        runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
@@ -591,7 +591,7 @@ def candidate_result(
             "source_commit": CANDIDATE_COMMIT,
             "source_tree": CANDIDATE_TREE,
             "source_tracked_dirty": False,
-        } if raw_schema == runner.RAW_SCHEMA else {
+        } if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS else {
             "compiler": "fixture",
             "one_shot_equal_rounded_direct_enabled": True,
             "cauchy_log_reuse_enabled": True,
@@ -603,12 +603,12 @@ def candidate_result(
         "parameters": parameters,
         "resolved": {
             "profile": "legacy_high_v1",
-            "field": "gf16" if raw_schema == runner.RAW_SCHEMA else "gf8",
+            "field": "gf16" if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS else "gf8",
             "backend": "avx2", "thread_count": 1,
-            "parent_count": (2048 if raw_schema == runner.RAW_SCHEMA else 16),
-            "padded_side": (256 if raw_schema == runner.RAW_SCHEMA else 4),
+            "parent_count": (2048 if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS else 16),
+            "padded_side": (256 if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS else 4),
             **({"encode_backend": "avx2-gfni"}
-               if raw_schema == runner.RAW_SCHEMA else {}),
+               if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS else {}),
         },
         "correctness": {"leopard2_round_trip": True, "legacy_comparison": None},
         "workload_digests": copy.deepcopy(DIGESTS),
@@ -644,7 +644,7 @@ def candidate_result(
         }
         result["metrics"]["one_shot_decode_including_setup"] = \
             one_shot_decode
-    elif raw_schema == runner.RAW_SCHEMA:
+    elif raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         result["metrics"]["one_shot_encode"] = one_shot_encode
         result["memory"] = {
             "scratch_alignment": 64,
@@ -882,9 +882,9 @@ def complete_build_fixture(
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
             runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
         specification.pop("baseline_pure_avx2", None)
-    elif raw_schema == runner.RAW_SCHEMA:
+    elif raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         specification["baseline_pure_avx2"] = False
     build_dir = specification[f"{role}_build_dir"]
     source_root = specification[f"{role}_source_root"]
@@ -907,12 +907,12 @@ def complete_build_fixture(
                 runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
                 runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
                 runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-                runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
+                runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
             cache.update({
                 "LEO_MAIN_PURE_AVX2": (
-                    "OFF" if raw_schema == runner.RAW_SCHEMA else "ON"),
+                    "OFF" if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS else "ON"),
             })
-            if raw_schema != runner.RAW_SCHEMA:
+            if raw_schema not in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
                 cache.update({
                     "LEO_MAIN_HAS_MARCH_X86_64": "1",
                     "LEO_MAIN_HAS_MTUNE_GENERIC": "1",
@@ -1175,7 +1175,7 @@ def complete_build_fixture(
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
             runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
         if baseline:
             compile_identity["generated_attestation_header"] = None
         else:
@@ -1294,7 +1294,7 @@ def complete_runtime_fixture(
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
             runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
         result["canonical_ldd_output"] = runner.canonical_ldd_output(
             raw, "fixture raw ldd output")
     else:
@@ -1522,9 +1522,9 @@ def cmake_fixture_identity(
                 runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
                 runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
                 runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-                runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
+                runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
             specification.pop("baseline_pure_avx2", None)
-        elif raw_schema == runner.RAW_SCHEMA:
+        elif raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
             specification["baseline_pure_avx2"] = False
         specification.update({
             "baseline_executable": baseline_executable["path"],
@@ -1588,9 +1588,9 @@ def cmake_fixture_identity(
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
             runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
         specification.pop("baseline_pure_avx2", None)
-    elif raw_schema == runner.RAW_SCHEMA:
+    elif raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         specification["baseline_pure_avx2"] = False
     specification["candidate_archive"] = archive_path
     return identity, specification
@@ -1627,9 +1627,9 @@ def synthetic_raw(
     executable_snapshots = (
         sealed_executable_fixtures(identity)
         if raw_schema in runner.SEALED_EXECUTABLE_SCHEMAS else None)
-    cell = runner.V17_CELLS[0] if raw_schema == runner.RAW_SCHEMA else CELL
+    cell = runner.V17_CELLS[0] if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS else CELL
     campaign = copy.deepcopy(CAMPAIGN)
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         campaign.update({
             "cells": [asdict(cell)],
             "reuse": 8,
@@ -1647,9 +1647,11 @@ def synthetic_raw(
         campaign["candidate_mode"] = candidate_mode
     else:
         campaign.pop("candidate_mode", None)
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         host, reservation, isolation, supervision = \
             v17_execution_fixtures(campaign)
+        if raw_schema == runner.RAW_SCHEMA_V18:
+            supervision = None
     else:
         host, reservation, isolation = HOST, RESERVATION, ISOLATION
         supervision = runner.supervision_record(
@@ -1694,11 +1696,50 @@ def synthetic_raw(
                 "reservation_before": reservation,
                 "reservation_after": reservation,
             })
+            if raw_schema == runner.RAW_SCHEMA_V18:
+                index = len(invocations) - 1
+                before_ns = 10_000 + index * 100
+                before_window = {
+                    "benchmark_cpu": cpu_stat(
+                        campaign["benchmark_cpu"],
+                        user=100 + index, idle=100 + index),
+                    "monotonic_ns": before_ns,
+                    "read_finished_monotonic_ns": before_ns,
+                    "read_started_monotonic_ns": before_ns - 2,
+                    "reserved_sibling": cpu_stat(
+                        campaign["reserved_sibling"],
+                        user=100, idle=100 + 2 * index),
+                }
+                after_window = {
+                    "benchmark_cpu": cpu_stat(
+                        campaign["benchmark_cpu"],
+                        user=101 + index, idle=101 + index),
+                    "monotonic_ns": before_ns + 20,
+                    "read_finished_monotonic_ns": before_ns + 22,
+                    "read_started_monotonic_ns": before_ns + 20,
+                    "reserved_sibling": cpu_stat(
+                        campaign["reserved_sibling"],
+                        user=100, idle=102 + 2 * index),
+                }
+                invocations[-1]["cpu_window"] = runner.cpu_window_record(
+                    campaign["benchmark_cpu"], campaign["reserved_sibling"],
+                    cell.identifier, round_index, slot, implementation,
+                    before_window, after_window, before_ns + 10, 1)
             if executable_snapshots is not None:
                 invocations[-1]["execution_protocol"] = \
                     runner.SEALED_EXECUTABLE_PROTOCOL
                 invocations[-1]["executable_snapshot"] = copy.deepcopy(
                     executable_snapshots[implementation])
+    if raw_schema == runner.RAW_SCHEMA_V18:
+        windows = [invocation["cpu_window"] for invocation in invocations]
+        first = windows[0]["before"]
+        last = windows[-1]["after"]
+        isolation = runner.isolation_record_v2(
+            campaign["benchmark_cpu"], campaign["reserved_sibling"],
+            isolation["pair_lease"], first["monotonic_ns"] - 10,
+            last["monotonic_ns"] + 10, first["benchmark_cpu"],
+            last["benchmark_cpu"], first["reserved_sibling"],
+            last["reserved_sibling"], windows)
     analysis = runner.analyze(invocations, campaign, raw_schema)
     payload = {
         "schema": raw_schema,
@@ -1750,7 +1791,7 @@ def write_complete_evidence_bundle(
                 runner.MANIFEST_SCHEMA_V11, runner.MANIFEST_SCHEMA_V12,
                 runner.MANIFEST_SCHEMA_V13, runner.MANIFEST_SCHEMA_V14,
                 runner.MANIFEST_SCHEMA_V15, runner.MANIFEST_SCHEMA_V16,
-                runner.MANIFEST_SCHEMA):
+                runner.MANIFEST_SCHEMA_V17, runner.MANIFEST_SCHEMA_V18):
             stdout_path.chmod(0o600)
             stderr_path.chmod(0o600)
         invocation["stdout"] = {
@@ -1791,7 +1832,7 @@ def write_complete_evidence_bundle(
         runner.MANIFEST_SCHEMA_V11, runner.MANIFEST_SCHEMA_V12,
         runner.MANIFEST_SCHEMA_V13, runner.MANIFEST_SCHEMA_V14,
         runner.MANIFEST_SCHEMA_V15, runner.MANIFEST_SCHEMA_V16,
-        runner.MANIFEST_SCHEMA,
+        runner.MANIFEST_SCHEMA_V17, runner.MANIFEST_SCHEMA_V18,
     ):
         manifest_payload["supervision"] = value["supervision"]
     if manifest_schema in (
@@ -1799,7 +1840,7 @@ def write_complete_evidence_bundle(
             runner.MANIFEST_SCHEMA_V10, runner.MANIFEST_SCHEMA_V11,
             runner.MANIFEST_SCHEMA_V12, runner.MANIFEST_SCHEMA_V13,
             runner.MANIFEST_SCHEMA_V14, runner.MANIFEST_SCHEMA_V15,
-            runner.MANIFEST_SCHEMA_V16, runner.MANIFEST_SCHEMA):
+            runner.MANIFEST_SCHEMA_V16, runner.MANIFEST_SCHEMA_V17, runner.MANIFEST_SCHEMA_V18):
         manifest_payload["executable_snapshots"] = \
             value["executable_snapshots"]
     manifest = runner.signed(manifest_payload)
@@ -1888,8 +1929,20 @@ def synthetic_failure(raw_schema: str) -> dict:
         runner.RAW_SCHEMA_V14: runner.FAILURE_SCHEMA_V14,
         runner.RAW_SCHEMA_V15: runner.FAILURE_SCHEMA_V15,
         runner.RAW_SCHEMA_V16: runner.FAILURE_SCHEMA_V16,
-        runner.RAW_SCHEMA: runner.FAILURE_SCHEMA,
+        runner.RAW_SCHEMA_V17: runner.FAILURE_SCHEMA_V17,
+        runner.RAW_SCHEMA_V18: runner.FAILURE_SCHEMA_V18,
     }[raw_schema]
+    failure_isolation = copy.deepcopy(raw["isolation"])
+    if raw_schema == runner.RAW_SCHEMA_V18:
+        before = failure_isolation["before"]
+        after = failure_isolation["after"]
+        failure_isolation = runner.isolation_record_v2(
+            raw["campaign"]["benchmark_cpu"],
+            raw["campaign"]["reserved_sibling"],
+            failure_isolation["pair_lease"], before["monotonic_ns"],
+            after["monotonic_ns"], before["benchmark_cpu"],
+            after["benchmark_cpu"], before["reserved_sibling"],
+            after["reserved_sibling"], [])
     payload = {
         "schema": failure_schema,
         "created_utc": "2026-07-16T00:00:00Z",
@@ -1901,7 +1954,7 @@ def synthetic_failure(raw_schema: str) -> dict:
         "host_initial": copy.deepcopy(raw["host_initial"]),
         "reservation": copy.deepcopy(raw["reservation"]),
         "pair_lease": copy.deepcopy(raw["isolation"]["pair_lease"]),
-        "isolation": copy.deepcopy(raw["isolation"]),
+        "isolation": failure_isolation,
         "input_specification": copy.deepcopy(raw["input_specification"]),
         "identities_initial": copy.deepcopy(raw["identities_initial"]),
         "invocations": [],
@@ -1924,8 +1977,10 @@ def synthetic_failure(raw_schema: str) -> dict:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V15
     elif raw_schema == runner.RAW_SCHEMA_V16:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V16
-    elif raw_schema == runner.RAW_SCHEMA:
-        payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT
+    elif raw_schema == runner.RAW_SCHEMA_V17:
+        payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V17
+    elif raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
+        payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V18
     if raw_schema in runner.SUPERVISION_SCHEMAS:
         payload["supervision"] = copy.deepcopy(raw["supervision"])
     if raw_schema in runner.SEALED_EXECUTABLE_SCHEMAS:
@@ -6350,8 +6405,8 @@ class MainCompareRunnerTests(unittest.TestCase):
                 runner.run_child(
                     "baseline", CELL, 0, 0, CAMPAIGN,
                     {"taskset": "/usr/bin/taskset"}, {}, RESERVATION,
-                    Path("/unused"), mock.Mock(), 0, 1.0,
-                    {"baseline": retained_snapshot}, owner)
+                    Path("/unused"), mock.Mock(), 0, 1, 1.0,
+                    {"baseline": retained_snapshot}, owner, [])
             with self.assertRaises(OSError):
                 os.fstat(execution_descriptor)
             os.fstat(retained_descriptor)
@@ -7814,7 +7869,7 @@ class MainCompareRunnerTests(unittest.TestCase):
 
     def test_v16_replays_before_v17_native_gfni_encode_contract(self) -> None:
         historical = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V16)
-        current = synthetic_raw(raw_schema=runner.RAW_SCHEMA)
+        current = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V17)
         runner.validate_raw(
             historical, None, check_files=False, check_current_inputs=False)
         runner.validate_raw(
@@ -7872,7 +7927,7 @@ class MainCompareRunnerTests(unittest.TestCase):
         self.assertNotIn("--measure-one-shot-decode", command)
 
         upgraded = copy.deepcopy(historical)
-        upgraded["schema"] = runner.RAW_SCHEMA
+        upgraded["schema"] = runner.RAW_SCHEMA_V17
         self.assert_rejected(upgraded)
         downgraded = copy.deepcopy(current)
         downgraded["schema"] = runner.RAW_SCHEMA_V16
@@ -7882,9 +7937,9 @@ class MainCompareRunnerTests(unittest.TestCase):
             synthetic_failure(runner.RAW_SCHEMA_V16), Path("/unused"),
             check_files=False)
         runner.validate_failure(
-            synthetic_failure(runner.RAW_SCHEMA), Path("/unused"),
+            synthetic_failure(runner.RAW_SCHEMA_V17), Path("/unused"),
             check_files=False)
-        relabeled_failure = synthetic_failure(runner.RAW_SCHEMA)
+        relabeled_failure = synthetic_failure(runner.RAW_SCHEMA_V17)
         relabeled_failure["schema"] = runner.FAILURE_SCHEMA_V16
         with self.assertRaises(runner.EvidenceError):
             runner.validate_failure(
@@ -7892,8 +7947,8 @@ class MainCompareRunnerTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             manifest_path = write_complete_evidence_bundle(
-                Path(directory), synthetic_raw(raw_schema=runner.RAW_SCHEMA),
-                runner.MANIFEST_SCHEMA)
+                Path(directory), synthetic_raw(raw_schema=runner.RAW_SCHEMA_V17),
+                runner.MANIFEST_SCHEMA_V17)
             manifest, raw, analysis, unused_snapshot = \
                 runner.verified_campaign_bundle(
                     manifest_path, no_current_input_check=True)
@@ -7901,7 +7956,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             self.assertEqual(
                 (manifest["schema"], raw["schema"], set(next(
                     value for value in analysis.values()))),
-                (runner.MANIFEST_SCHEMA, runner.RAW_SCHEMA,
+                (runner.MANIFEST_SCHEMA_V17, runner.RAW_SCHEMA_V17,
                  {"encode", "one_shot_encode"}))
 
     def test_v17_source_guard_requires_unique_default_on_blob(self) -> None:
@@ -7945,8 +8000,654 @@ class MainCompareRunnerTests(unittest.TestCase):
                             specification, source_identity(
                                 data, object_id=object_id, records=records))
 
+    def test_v17_replays_before_v18_windowed_isolation_contract(self) -> None:
+        historical = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V17)
+        current = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V18)
+        runner.validate_raw(historical, None, False, False)
+        runner.validate_raw(current, None, False, False)
+        self.assertEqual(historical["isolation"]["schema"],
+                         runner.ISOLATION_SCHEMA_V1)
+        self.assertEqual(current["isolation"]["schema"],
+                         runner.ISOLATION_SCHEMA_V2)
+        self.assertNotIn("cpu_window", historical["invocations"][0])
+        self.assertEqual(
+            len(current["isolation"]["invocation_windows"]), 12)
+        self.assertTrue(all(
+            invocation["cpu_window"]["accepted"] is True
+            for invocation in current["invocations"]))
+        self.assertIsInstance(historical["supervision"], dict)
+        self.assertIsNone(current["supervision"])
+
+        upgraded = copy.deepcopy(historical)
+        upgraded["schema"] = runner.RAW_SCHEMA_V18
+        self.assert_rejected(upgraded)
+        downgraded = copy.deepcopy(current)
+        downgraded["schema"] = runner.RAW_SCHEMA_V17
+        self.assert_rejected(downgraded)
+
+        historical_failure = synthetic_failure(runner.RAW_SCHEMA_V17)
+        current_failure = synthetic_failure(runner.RAW_SCHEMA_V18)
+        runner.validate_failure(
+            historical_failure, Path("/unused"), check_files=False)
+        runner.validate_failure(
+            current_failure, Path("/unused"), check_files=False)
+        for retained, replacement in (
+                (historical_failure, runner.FAILURE_SCHEMA_V18),
+                (current_failure, runner.FAILURE_SCHEMA_V17)):
+            with self.subTest(failure_relabel=replacement):
+                relabeled = copy.deepcopy(retained)
+                relabeled["schema"] = replacement
+                with self.assertRaises(runner.EvidenceError):
+                    runner.validate_failure(
+                        resign(relabeled), Path("/unused"), check_files=False)
+
+        for retained, manifest_schema, replacement in (
+                (historical, runner.MANIFEST_SCHEMA_V17,
+                 runner.MANIFEST_SCHEMA_V18),
+                (current, runner.MANIFEST_SCHEMA_V18,
+                 runner.MANIFEST_SCHEMA_V17)):
+            with self.subTest(manifest_relabel=replacement), \
+                 tempfile.TemporaryDirectory() as directory:
+                manifest_path = write_complete_evidence_bundle(
+                    Path(directory), copy.deepcopy(retained), manifest_schema)
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["schema"] = replacement
+                manifest_path.write_bytes(
+                    runner.canonical_bytes(resign(manifest)) + b"\n")
+                with self.assertRaises(runner.EvidenceError):
+                    runner.verified_campaign_bundle(
+                        manifest_path, no_current_input_check=True)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = write_complete_evidence_bundle(
+                root, current, runner.MANIFEST_SCHEMA_V18)
+            manifest, raw, analysis, unused_snapshot = \
+                runner.verified_campaign_bundle(
+                    manifest_path, no_current_input_check=True)
+            del unused_snapshot
+            self.assertEqual(
+                (manifest["schema"], raw["schema"],
+                 set(next(iter(analysis.values())))),
+                (runner.MANIFEST_SCHEMA_V18, runner.RAW_SCHEMA_V18,
+                 {"encode", "one_shot_encode"}))
+
+    def test_v17_frozen_semantic_projection_is_unchanged(self) -> None:
+        raw = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V17)
+        objects = {
+            "statistics": runner.statistics_policy(runner.RAW_SCHEMA_V17),
+            "environment": runner.child_environment_for_raw_schema(
+                runner.RAW_SCHEMA_V17),
+            "baseline_arguments": runner.benchmark_arguments(
+                "baseline", Path("/baseline"), runner.V17_CELLS[0],
+                raw["campaign"], runner.RAW_SCHEMA_V17),
+            "candidate_arguments": runner.benchmark_arguments(
+                "candidate", Path("/candidate"), runner.V17_CELLS[0],
+                raw["campaign"], runner.RAW_SCHEMA_V17),
+            "isolation": raw["isolation"],
+        }
+        expected = {
+            "statistics":
+                "5a9c20a31349eaa719a90f67830f4f6352851c172a7addc6a7ffbaa1911ac7e2",
+            "environment":
+                "640af10cf3358938b4827bb73f4e2eab51829db8305e8f83060a718e15407aae",
+            "baseline_arguments":
+                "8d06019fbef1aa38aa08362849f2a66633967f3cba3c7b0db8b4d532f2eb24ee",
+            "candidate_arguments":
+                "c8098b91d88afe2b75c12dc857f5814da2d9075c29983b7ff5a039e2096b56da",
+            "isolation":
+                "bb9a83b010114f6d4da299b65d618184f9dbdd6c3dbc04e2eace550f154a0252",
+        }
+        self.assertEqual({
+            name: runner.sha256_bytes(runner.canonical_bytes(value))
+            for name, value in objects.items()
+        }, expected)
+
+    def test_decoder_promotion_excludes_encode_only_v17_and_v18(self) -> None:
+        plan = load_plan_runner()
+        for generation in (17, 18):
+            manifest_schema = f"leopard2-main-compare-manifest/v{generation}"
+            raw_schema = f"leopard2-main-compare-raw/v{generation}"
+            with self.subTest(generation=generation):
+                self.assertNotIn(manifest_schema, plan.EXACT_MANIFEST_SCHEMAS)
+                self.assertNotIn(raw_schema, plan.EXACT_RAW_SCHEMAS)
+                self.assertNotIn(
+                    (manifest_schema, raw_schema), plan.EXACT_SCHEMA_PAIRS)
+
+    def test_v18_cpu_window_and_failure_prefix_are_fail_closed(self) -> None:
+        raw = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V18)
+        window = raw["invocations"][0]["cpu_window"]
+        self.assertEqual(window["benchmark_cpu_tick_ceiling_jiffies"], 1)
+        self.assertEqual(window["benchmark_cpu_nonidle_excess_jiffies"], 0)
+        self.assertTrue(window["accepted"])
+
+        for path, replacement in (
+            (("after", "benchmark_cpu", "fields", "user"), 102),
+            (("after", "reserved_sibling", "fields", "user"), 101),
+            (("child_wall_duration_ns",), 2),
+            (("round",), 2),
+            (("accepted",), False),
+        ):
+            with self.subTest(path=path):
+                edited = copy.deepcopy(raw)
+                target = edited["invocations"][0]["cpu_window"]
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = replacement
+                self.assert_rejected(edited)
+
+        edited = copy.deepcopy(raw)
+        edited["isolation"]["invocation_windows"][0], \
+            edited["isolation"]["invocation_windows"][1] = (
+                edited["isolation"]["invocation_windows"][1],
+                edited["isolation"]["invocation_windows"][0])
+        self.assert_rejected(edited)
+
+        malformed_failure = synthetic_failure(runner.RAW_SCHEMA_V18)
+        del malformed_failure["isolation"]["pair_lease"]
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(malformed_failure), Path("/unused"), check_files=False)
+
+        attempted = copy.deepcopy(window)
+        after = copy.deepcopy(attempted["after"])
+        after["reserved_sibling"]["fields"]["user"] += 1
+        after["reserved_sibling"]["total_jiffies"] += 1
+        attempted = runner.cpu_window_record(
+            attempted["benchmark_cpu"], attempted["reserved_sibling"],
+            attempted["cell_id"], attempted["round"], attempted["slot"],
+            attempted["implementation"], attempted["before"], after,
+            attempted["child_started_monotonic_ns"],
+            attempted["child_wall_duration_ns"])
+        self.assertFalse(attempted["accepted"])
+        failure = synthetic_failure(runner.RAW_SCHEMA_V18)
+        isolation = failure["isolation"]
+        failure["isolation"] = runner.isolation_record_v2(
+            failure["campaign"]["benchmark_cpu"],
+            failure["campaign"]["reserved_sibling"],
+            isolation["pair_lease"],
+            attempted["before"]["read_started_monotonic_ns"] - 1,
+            attempted["after"]["read_finished_monotonic_ns"] + 1,
+            attempted["before"]["benchmark_cpu"],
+            attempted["after"]["benchmark_cpu"],
+            attempted["before"]["reserved_sibling"],
+            attempted["after"]["reserved_sibling"], [attempted])
+        runner.validate_failure(
+            resign(failure), Path("/unused"), check_files=False)
+        failure["isolation"]["invocation_windows"].append(
+            copy.deepcopy(attempted))
+        failure["isolation"]["retained_window_count"] += 1
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(failure), Path("/unused"), check_files=False)
+
+    def test_v18_pair_snapshot_reads_both_cpus_once_per_endpoint(self) -> None:
+        before_text = (
+            "cpu52 1 0 2 3 0 0 0 0\n"
+            "cpu116 4 0 5 6 0 0 0 0\n")
+        after_text = (
+            "cpu52 7 0 8 9 0 0 0 0\n"
+            "cpu116 10 0 11 12 0 0 0 0\n")
+        with mock.patch.object(
+                runner.Path, "read_text",
+                side_effect=(before_text, after_text)) as read_text, \
+             mock.patch.object(
+                 runner.time, "monotonic_ns",
+                 side_effect=(10, 11, 20, 21)):
+            before = runner.cpu_pair_snapshot_before(52, 116)
+            after = runner.cpu_pair_snapshot_after(52, 116)
+        self.assertEqual(read_text.call_count, 2)
+        self.assertEqual(before["monotonic_ns"], 11)
+        self.assertEqual(before["read_started_monotonic_ns"], 10)
+        self.assertEqual(before["benchmark_cpu"]["fields"]["user"], 1)
+        self.assertEqual(before["reserved_sibling"]["fields"]["user"], 4)
+        self.assertEqual(after["monotonic_ns"], 20)
+        self.assertEqual(after["read_finished_monotonic_ns"], 21)
+        self.assertEqual(after["benchmark_cpu"]["fields"]["user"], 7)
+        self.assertEqual(after["reserved_sibling"]["fields"]["user"], 10)
+
+    def test_v18_coherent_window_and_outer_disclosure_boundaries(self) -> None:
+        raw = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V18)
+        window = raw["invocations"][0]["cpu_window"]
+        runner.validate_cpu_window(window, 52, 116)
+
+        child_before_window = runner.cpu_window_record(
+            52, 116, window["cell_id"], window["round"], window["slot"],
+            window["implementation"], window["before"], window["after"],
+            window["before"]["monotonic_ns"] - 1,
+            window["child_wall_duration_ns"])
+        self.assertFalse(child_before_window["accepted"])
+        runner.validate_cpu_window(
+            child_before_window, 52, 116, require_accepted=False)
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_cpu_window(child_before_window, 52, 116)
+
+        child_finishes_after_window = runner.cpu_window_record(
+            52, 116, window["cell_id"], window["round"], window["slot"],
+            window["implementation"], window["before"], window["after"],
+            window["child_started_monotonic_ns"],
+            window["after"]["monotonic_ns"]
+            - window["child_started_monotonic_ns"] + 1)
+        self.assertFalse(child_finishes_after_window["accepted"])
+        runner.validate_cpu_window(
+            child_finishes_after_window, 52, 116,
+            require_accepted=False)
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_cpu_window(
+                child_finishes_after_window, 52, 116)
+
+        window_shorter_than_child = runner.cpu_window_record(
+            52, 116, window["cell_id"], window["round"], window["slot"],
+            window["implementation"], window["before"], window["after"],
+            window["before"]["monotonic_ns"],
+            window["after"]["monotonic_ns"]
+            - window["before"]["monotonic_ns"] + 1)
+        self.assertFalse(window_shorter_than_child["accepted"])
+        runner.validate_cpu_window(
+            window_shorter_than_child, 52, 116,
+            require_accepted=False)
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_cpu_window(
+                window_shorter_than_child, 52, 116)
+
+        extra_key = copy.deepcopy(window["before"])
+        extra_key["benchmark_cpu"]["unexpected"] = 0
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "snapshot is malformed"):
+            runner.cpu_window_record(
+                52, 116, window["cell_id"], window["round"], window["slot"],
+                window["implementation"], extra_key, window["after"],
+                window["child_started_monotonic_ns"],
+                window["child_wall_duration_ns"])
+
+        boolean_total = copy.deepcopy(window["before"])
+        boolean_total["benchmark_cpu"]["fields"] = {
+            name: 0 for name in runner.CPU_STAT_FIELDS}
+        boolean_total["benchmark_cpu"]["total_jiffies"] = False
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "snapshot is malformed"):
+            runner.cpu_window_record(
+                52, 116, window["cell_id"], window["round"], window["slot"],
+                window["implementation"], boolean_total, window["after"],
+                window["child_started_monotonic_ns"],
+                window["child_wall_duration_ns"])
+
+        for cpu_name, field_name in (
+                ("benchmark_cpu", "benchmark CPU"),
+                ("reserved_sibling", "reserved sibling")):
+            with self.subTest(rejection=field_name):
+                after = copy.deepcopy(window["after"])
+                after[cpu_name]["fields"]["user"] += 1
+                after[cpu_name]["total_jiffies"] += 1
+                rejected = runner.cpu_window_record(
+                    52, 116, window["cell_id"], window["round"],
+                    window["slot"], window["implementation"],
+                    window["before"], after,
+                    window["child_started_monotonic_ns"],
+                    window["child_wall_duration_ns"])
+                self.assertFalse(rejected["accepted"])
+                runner.validate_cpu_window(
+                    rejected, 52, 116, require_accepted=False)
+                with self.assertRaises(runner.EvidenceError):
+                    runner.validate_cpu_window(rejected, 52, 116)
+
+        isolation = raw["isolation"]
+        windows = copy.deepcopy(isolation["invocation_windows"])
+        pair_lease = isolation["pair_lease"]
+        before = isolation["before"]
+        after = isolation["after"]
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "escape the campaign isolation"):
+            runner.isolation_record_v2(
+                52, 116, pair_lease,
+                windows[0]["before"]["read_started_monotonic_ns"] + 1,
+                after["monotonic_ns"], before["benchmark_cpu"],
+                after["benchmark_cpu"], before["reserved_sibling"],
+                after["reserved_sibling"], windows)
+
+        overlapped = copy.deepcopy(windows)
+        second = overlapped[1]
+        second_before = copy.deepcopy(second["before"])
+        previous_finished = overlapped[0]["after"][
+            "read_finished_monotonic_ns"]
+        second_before["read_started_monotonic_ns"] = previous_finished - 1
+        second_before["read_finished_monotonic_ns"] = previous_finished + 1
+        second_before["monotonic_ns"] = previous_finished + 1
+        overlapped[1] = runner.cpu_window_record(
+            52, 116, second["cell_id"], second["round"], second["slot"],
+            second["implementation"], second_before, second["after"],
+            second["child_started_monotonic_ns"],
+            second["child_wall_duration_ns"])
+        self.assertTrue(overlapped[1]["accepted"])
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "not strictly ordered"):
+            runner.isolation_record_v2(
+                52, 116, pair_lease, before["monotonic_ns"],
+                after["monotonic_ns"], before["benchmark_cpu"],
+                after["benchmark_cpu"], before["reserved_sibling"],
+                after["reserved_sibling"], overlapped)
+
+        negative_after = copy.deepcopy(after["benchmark_cpu"])
+        negative_after["fields"]["user"] -= 1
+        negative_after["total_jiffies"] -= 1
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "escape the campaign isolation"):
+            runner.isolation_record_v2(
+                52, 116, pair_lease, before["monotonic_ns"],
+                after["monotonic_ns"], before["benchmark_cpu"],
+                negative_after, before["reserved_sibling"],
+                after["reserved_sibling"], windows)
+
+        disclosed_benchmark = copy.deepcopy(after["benchmark_cpu"])
+        disclosed_benchmark["fields"]["user"] += 5
+        disclosed_benchmark["total_jiffies"] += 5
+        disclosed_sibling = copy.deepcopy(after["reserved_sibling"])
+        disclosed_sibling["fields"]["user"] += 7
+        disclosed_sibling["total_jiffies"] += 7
+        disclosed = runner.isolation_record_v2(
+            52, 116, pair_lease, before["monotonic_ns"],
+            after["monotonic_ns"], before["benchmark_cpu"],
+            disclosed_benchmark, before["reserved_sibling"],
+            disclosed_sibling, windows)
+        self.assertTrue(disclosed["accepted"])
+        self.assertEqual(disclosed["out_of_window"][
+            "benchmark_cpu_nonidle_jiffies"], 5)
+        self.assertEqual(disclosed["out_of_window"][
+            "reserved_sibling_nonidle_jiffies"], 7)
+        self.assertFalse(disclosed["out_of_window"]["gated"])
+        runner.validate_isolation_v2(disclosed, 52, 116, windows)
+        raw["isolation"] = disclosed
+        runner.validate_raw(
+            resign(raw), None, check_files=False, check_current_inputs=False)
+
+        shifted_windows = []
+        for retained in windows:
+            shifted_before = copy.deepcopy(retained["before"])
+            shifted_after = copy.deepcopy(retained["after"])
+            for endpoint in ("benchmark_cpu", "reserved_sibling"):
+                shifted_before[endpoint]["fields"]["user"] += 1000
+                shifted_before[endpoint]["total_jiffies"] += 1000
+                shifted_after[endpoint]["fields"]["user"] += 1000
+                shifted_after[endpoint]["total_jiffies"] += 1000
+            shifted_windows.append(runner.cpu_window_record(
+                52, 116, retained["cell_id"], retained["round"],
+                retained["slot"], retained["implementation"],
+                shifted_before, shifted_after,
+                retained["child_started_monotonic_ns"],
+                retained["child_wall_duration_ns"]))
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "escape the campaign isolation"):
+            runner.isolation_record_v2(
+                52, 116, pair_lease, before["monotonic_ns"],
+                after["monotonic_ns"], before["benchmark_cpu"],
+                after["benchmark_cpu"], before["reserved_sibling"],
+                after["reserved_sibling"], shifted_windows)
+
+    def test_v18_failure_nonzero_prefix_allows_only_one_attempted_window(
+            self) -> None:
+        raw = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V18)
+        failure = synthetic_failure(runner.RAW_SCHEMA_V18)
+        failure["invocations"] = copy.deepcopy(raw["invocations"][:2])
+        failure["retained_files"] = [copy.deepcopy(
+            failure["invocations"][0]["stdout"])]
+        all_windows = raw["isolation"]["invocation_windows"]
+
+        def prefix_isolation(count: int) -> dict:
+            retained = copy.deepcopy(all_windows[:count])
+            return isolation_for(retained)
+
+        def isolation_for(retained: list[dict]) -> dict:
+            return runner.isolation_record_v2(
+                52, 116, raw["isolation"]["pair_lease"],
+                retained[0]["before"]["read_started_monotonic_ns"] - 1,
+                retained[-1]["after"]["read_finished_monotonic_ns"] + 1,
+                retained[0]["before"]["benchmark_cpu"],
+                retained[-1]["after"]["benchmark_cpu"],
+                retained[0]["before"]["reserved_sibling"],
+                retained[-1]["after"]["reserved_sibling"], retained)
+
+        for count in (2, 3):
+            with self.subTest(retained_window_count=count):
+                edited = copy.deepcopy(failure)
+                edited["isolation"] = prefix_isolation(count)
+                runner.validate_failure(
+                    resign(edited), Path("/unused"), check_files=False)
+
+        without_isolation = copy.deepcopy(failure)
+        without_isolation["isolation"] = None
+        runner.validate_failure(
+            resign(without_isolation), Path("/unused"), check_files=False)
+
+        final_rejected = copy.deepcopy(failure)
+        rejected_final_window = final_rejected["invocations"][1]["cpu_window"]
+        rejected_final_after = copy.deepcopy(rejected_final_window["after"])
+        rejected_final_after["reserved_sibling"]["fields"]["user"] += 1
+        rejected_final_after["reserved_sibling"]["total_jiffies"] += 1
+        rejected_final_window = runner.cpu_window_record(
+            52, 116, rejected_final_window["cell_id"],
+            rejected_final_window["round"], rejected_final_window["slot"],
+            rejected_final_window["implementation"],
+            rejected_final_window["before"], rejected_final_after,
+            rejected_final_window["child_started_monotonic_ns"],
+            rejected_final_window["child_wall_duration_ns"])
+        self.assertFalse(rejected_final_window["accepted"])
+        final_rejected["invocations"][1]["cpu_window"] = \
+            rejected_final_window
+        final_rejected["isolation"] = None
+        runner.validate_failure(
+            resign(final_rejected), Path("/unused"), check_files=False)
+
+        final_rejected_with_isolation = copy.deepcopy(final_rejected)
+        final_rejected_with_isolation["isolation"] = isolation_for([
+            copy.deepcopy(final_rejected["invocations"][0]["cpu_window"]),
+            copy.deepcopy(rejected_final_window),
+        ])
+        runner.validate_failure(
+            resign(final_rejected_with_isolation), Path("/unused"),
+            check_files=False)
+
+        rejected_attempt = copy.deepcopy(all_windows[2])
+        rejected_attempt_after = copy.deepcopy(rejected_attempt["after"])
+        rejected_attempt_after["reserved_sibling"]["fields"]["user"] += 1
+        rejected_attempt_after["reserved_sibling"]["total_jiffies"] += 1
+        rejected_attempt = runner.cpu_window_record(
+            52, 116, rejected_attempt["cell_id"], rejected_attempt["round"],
+            rejected_attempt["slot"], rejected_attempt["implementation"],
+            rejected_attempt["before"], rejected_attempt_after,
+            rejected_attempt["child_started_monotonic_ns"],
+            rejected_attempt["child_wall_duration_ns"])
+        self.assertFalse(rejected_attempt["accepted"])
+        attempted_failure = copy.deepcopy(failure)
+        attempted_failure["isolation"] = isolation_for([
+            copy.deepcopy(all_windows[0]), copy.deepcopy(all_windows[1]),
+            rejected_attempt,
+        ])
+        runner.validate_failure(
+            resign(attempted_failure), Path("/unused"), check_files=False)
+
+        unreachable_after_rejected = copy.deepcopy(final_rejected)
+        shifted_attempt = copy.deepcopy(all_windows[2])
+        for phase in ("before", "after"):
+            shifted_attempt[phase]["reserved_sibling"]["fields"]["user"] += 1
+            shifted_attempt[phase]["reserved_sibling"]["total_jiffies"] += 1
+        shifted_attempt = runner.cpu_window_record(
+            52, 116, shifted_attempt["cell_id"], shifted_attempt["round"],
+            shifted_attempt["slot"], shifted_attempt["implementation"],
+            shifted_attempt["before"], shifted_attempt["after"],
+            shifted_attempt["child_started_monotonic_ns"],
+            shifted_attempt["child_wall_duration_ns"])
+        unreachable_after_rejected["isolation"] = isolation_for([
+            copy.deepcopy(unreachable_after_rejected["invocations"][0]
+                          ["cpu_window"]),
+            copy.deepcopy(rejected_final_window), shifted_attempt,
+        ])
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "accepted prefix"):
+            runner.validate_failure(
+                resign(unreachable_after_rejected), Path("/unused"),
+                check_files=False)
+        edited = copy.deepcopy(failure)
+        edited["isolation"] = prefix_isolation(4)
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(edited), Path("/unused"), check_files=False)
+
+        overlapped = copy.deepcopy(failure)
+        overlapped["isolation"] = None
+        first_window = overlapped["invocations"][0]["cpu_window"]
+        second_window = overlapped["invocations"][1]["cpu_window"]
+        overlapped_before = copy.deepcopy(second_window["before"])
+        previous_finished = first_window["after"][
+            "read_finished_monotonic_ns"]
+        overlapped_before["read_started_monotonic_ns"] = previous_finished - 1
+        overlapped_before["read_finished_monotonic_ns"] = previous_finished + 1
+        overlapped_before["monotonic_ns"] = previous_finished + 1
+        overlapped_second = runner.cpu_window_record(
+            52, 116, second_window["cell_id"], second_window["round"],
+            second_window["slot"], second_window["implementation"],
+            overlapped_before, second_window["after"],
+            second_window["child_started_monotonic_ns"],
+            second_window["child_wall_duration_ns"])
+        overlapped["invocations"][1]["cpu_window"] = overlapped_second
+        overlapped["invocations"][1]["duration_ns"] = \
+            overlapped_second["child_wall_duration_ns"]
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "not strictly ordered"):
+            runner.validate_failure(
+                resign(overlapped), Path("/unused"), check_files=False)
+
+        counter_reordered = copy.deepcopy(failure)
+        counter_reordered["isolation"] = None
+        second_window = counter_reordered["invocations"][1]["cpu_window"]
+        second_before = copy.deepcopy(second_window["before"])
+        second_after = copy.deepcopy(second_window["after"])
+        second_before["benchmark_cpu"]["fields"]["user"] -= 1
+        second_before["benchmark_cpu"]["total_jiffies"] -= 1
+        second_after["benchmark_cpu"]["fields"]["user"] -= 1
+        second_after["benchmark_cpu"]["total_jiffies"] -= 1
+        counter_reordered["invocations"][1]["cpu_window"] = \
+            runner.cpu_window_record(
+                52, 116, second_window["cell_id"], second_window["round"],
+                second_window["slot"], second_window["implementation"],
+                second_before, second_after,
+                second_window["child_started_monotonic_ns"],
+                second_window["child_wall_duration_ns"])
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "counter epochs are not ordered"):
+            runner.validate_failure(
+                resign(counter_reordered), Path("/unused"),
+                check_files=False)
+
+        rejected_then_accepted = copy.deepcopy(failure)
+        rejected_then_accepted["isolation"] = None
+        rejected_first = copy.deepcopy(
+            rejected_then_accepted["invocations"][0]["cpu_window"])
+        rejected_after = copy.deepcopy(rejected_first["after"])
+        rejected_after["reserved_sibling"]["fields"]["user"] += 1
+        rejected_after["reserved_sibling"]["total_jiffies"] += 1
+        rejected_first = runner.cpu_window_record(
+            52, 116, rejected_first["cell_id"], rejected_first["round"],
+            rejected_first["slot"], rejected_first["implementation"],
+            rejected_first["before"], rejected_after,
+            rejected_first["child_started_monotonic_ns"],
+            rejected_first["child_wall_duration_ns"])
+        self.assertFalse(rejected_first["accepted"])
+        rejected_then_accepted["invocations"][0]["cpu_window"] = rejected_first
+        accepted_second = rejected_then_accepted["invocations"][1][
+            "cpu_window"]
+        accepted_second_before = copy.deepcopy(accepted_second["before"])
+        accepted_second_after = copy.deepcopy(accepted_second["after"])
+        for endpoint in (accepted_second_before, accepted_second_after):
+            endpoint["reserved_sibling"]["fields"]["user"] += 1
+            endpoint["reserved_sibling"]["total_jiffies"] += 1
+        rejected_then_accepted["invocations"][1]["cpu_window"] = \
+            runner.cpu_window_record(
+                52, 116, accepted_second["cell_id"],
+                accepted_second["round"], accepted_second["slot"],
+                accepted_second["implementation"], accepted_second_before,
+                accepted_second_after,
+                accepted_second["child_started_monotonic_ns"],
+                accepted_second["child_wall_duration_ns"])
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "accepted prefix"):
+            runner.validate_failure(
+                resign(rejected_then_accepted), Path("/unused"),
+                check_files=False)
+
+        missing_launch_identity = copy.deepcopy(failure)
+        missing_launch_identity["isolation"] = None
+        missing_launch_identity["pair_lease"] = None
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "lacks launch identity"):
+            runner.validate_failure(
+                resign(missing_launch_identity), Path("/unused"),
+                check_files=False)
+
+    def test_v18_campaign_aggregate_structural_gates(self) -> None:
+        raw = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V18)
+        isolation = raw["isolation"]
+
+        def zero_stat(cpu: int) -> dict:
+            return {
+                "cpu": cpu,
+                "fields": {name: 0 for name in runner.CPU_STAT_FIELDS},
+                "total_jiffies": 0,
+            }
+
+        def zero_endpoint_cpu(endpoint_name: str, cpu: int) -> tuple[list, dict]:
+            windows = []
+            for original in isolation["invocation_windows"]:
+                before = copy.deepcopy(original["before"])
+                after = copy.deepcopy(original["after"])
+                before[endpoint_name] = zero_stat(cpu)
+                after[endpoint_name] = zero_stat(cpu)
+                windows.append(runner.cpu_window_record(
+                    52, 116, original["cell_id"], original["round"],
+                    original["slot"], original["implementation"], before,
+                    after, original["child_started_monotonic_ns"],
+                    original["child_wall_duration_ns"]))
+            aggregate_before = copy.deepcopy(isolation["before"])
+            aggregate_after = copy.deepcopy(isolation["after"])
+            aggregate_before[endpoint_name] = zero_stat(cpu)
+            aggregate_after[endpoint_name] = zero_stat(cpu)
+            rebuilt = runner.isolation_record_v2(
+                52, 116, isolation["pair_lease"],
+                aggregate_before["monotonic_ns"],
+                aggregate_after["monotonic_ns"],
+                aggregate_before["benchmark_cpu"],
+                aggregate_after["benchmark_cpu"],
+                aggregate_before["reserved_sibling"],
+                aggregate_after["reserved_sibling"], windows)
+            return windows, rebuilt
+
+        for endpoint_name, cpu in (
+                ("benchmark_cpu", 52), ("reserved_sibling", 116)):
+            with self.subTest(zero_aggregate=endpoint_name):
+                windows, rebuilt = zero_endpoint_cpu(endpoint_name, cpu)
+                self.assertTrue(all(window["accepted"] for window in windows))
+                self.assertFalse(rebuilt["accepted"])
+                runner.validate_isolation_v2(
+                    rebuilt, 52, 116, windows, require_accepted=False)
+                with self.assertRaises(runner.EvidenceError):
+                    runner.validate_isolation_v2(rebuilt, 52, 116, windows)
+
+        eleven = copy.deepcopy(isolation["invocation_windows"][:11])
+        short = runner.isolation_record_v2(
+            52, 116, isolation["pair_lease"],
+            isolation["before"]["monotonic_ns"],
+            isolation["after"]["monotonic_ns"],
+            isolation["before"]["benchmark_cpu"],
+            isolation["after"]["benchmark_cpu"],
+            isolation["before"]["reserved_sibling"],
+            isolation["after"]["reserved_sibling"], eleven)
+        self.assertFalse(short["accepted"])
+        runner.validate_isolation_v2(
+            short, 52, 116, eleven, require_accepted=False)
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_isolation_v2(short, 52, 116, eleven)
+
     def test_v17_route_native_and_timer_gates_fail_closed(self) -> None:
-        raw = synthetic_raw(raw_schema=runner.RAW_SCHEMA)
+        raw = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V17)
         cell = runner.V17_CELLS[0]
         campaign = raw["campaign"]
         candidate = next(
@@ -7970,7 +8671,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 with self.assertRaises(runner.EvidenceError):
                     runner.validate_result(
                         "candidate", edited, cell, campaign,
-                        runner.RAW_SCHEMA)
+                        runner.RAW_SCHEMA_V17)
         for section, field, replacement in (
             ("resolved", "backend", "avx2-gfni"),
             ("resolved", "encode_backend", "avx2"),
@@ -7983,7 +8684,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 with self.assertRaises(runner.EvidenceError):
                     runner.validate_result(
                         "candidate", edited, cell, campaign,
-                        runner.RAW_SCHEMA)
+                        runner.RAW_SCHEMA_V17)
         for section, replacement in (("build", None), ("correctness", [])):
             with self.subTest(malformed_candidate_section=section):
                 edited = copy.deepcopy(candidate)
@@ -7991,7 +8692,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 with self.assertRaises(runner.EvidenceError):
                     runner.validate_result(
                         "candidate", edited, cell, campaign,
-                        runner.RAW_SCHEMA)
+                        runner.RAW_SCHEMA_V17)
 
         baseline = next(
             invocation["result"] for invocation in raw["invocations"]
@@ -7999,7 +8700,7 @@ class MainCompareRunnerTests(unittest.TestCase):
         baseline["build"]["pure_avx2"] = True
         with self.assertRaises(runner.EvidenceError):
             runner.validate_result(
-                "baseline", baseline, cell, campaign, runner.RAW_SCHEMA)
+                "baseline", baseline, cell, campaign, runner.RAW_SCHEMA_V17)
         for section, replacement in (("build", None), ("correctness", [])):
             with self.subTest(malformed_baseline_section=section):
                 edited = copy.deepcopy(baseline)
@@ -8007,7 +8708,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 with self.assertRaises(runner.EvidenceError):
                     runner.validate_result(
                         "baseline", edited, cell, campaign,
-                        runner.RAW_SCHEMA)
+                        runner.RAW_SCHEMA_V17)
 
         too_short = copy.deepcopy(candidate)
         for metric in ("encode_execution", "one_shot_encode"):
@@ -8016,9 +8717,9 @@ class MainCompareRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(
                 runner.EvidenceError, "timer window is too short"):
             runner.validate_result(
-                "candidate", too_short, cell, campaign, runner.RAW_SCHEMA)
+                "candidate", too_short, cell, campaign, runner.RAW_SCHEMA_V17)
 
-        analysis_mutation = synthetic_raw(raw_schema=runner.RAW_SCHEMA)
+        analysis_mutation = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V17)
         analysis_mutation["analysis"][cell.identifier]["decode_first_use"] = \
             copy.deepcopy(analysis_mutation["analysis"][cell.identifier]["encode"])
         self.assert_rejected(analysis_mutation)
@@ -8026,7 +8727,7 @@ class MainCompareRunnerTests(unittest.TestCase):
         v16 = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V16)
         runner.validate_raw(v16, None, False, False)
 
-    def test_v17_cli_requires_native_exact_preset_before_lane_creation(self) -> None:
+    def test_v18_cli_requires_native_exact_preset_before_lane_creation(self) -> None:
         base = [
             "run", "--baseline", "/b", "--candidate", "/c",
             "--baseline-archive", "/ba", "--candidate-archive", "/ca",
@@ -8039,16 +8740,27 @@ class MainCompareRunnerTests(unittest.TestCase):
         native = runner.parser().parse_args([*base, "--baseline-native"])
         self.assertTrue(native.baseline_native)
         self.assertFalse(native.baseline_pure_avx2)
-        runner.validate_fresh_v17_options(native)
+        runner.validate_fresh_v18_options(native)
         pure = runner.parser().parse_args([*base, "--baseline-pure-avx2"])
         with self.assertRaisesRegex(
                 runner.EvidenceError, "requires --baseline-native"):
-            runner.validate_fresh_v17_options(pure)
+            runner.validate_fresh_v18_options(pure)
         wrong = runner.parser().parse_args([
             *base, "--baseline-native", "--preset", "smoke"])
         with self.assertRaisesRegex(
-                runner.EvidenceError, "exact v17 GF16 encode preset"):
-            runner.validate_fresh_v17_options(wrong)
+                runner.EvidenceError, "exact GF16 encode preset"):
+            runner.validate_fresh_v18_options(wrong)
+
+        with mock.patch.dict(
+                os.environ,
+                {runner.SUPERVISION_NONCE_ENV: "b" * 64}, clear=False):
+            with self.assertRaisesRegex(
+                    runner.EvidenceError, "requires null supervision"):
+                runner.validate_fresh_v18_options(native)
+        with mock.patch.object(runner.os, "sysconf", return_value=250):
+            with self.assertRaisesRegex(
+                    runner.EvidenceError, "requires SC_CLK_TCK=100"):
+                runner.validate_fresh_v18_options(native)
 
     def _assert_logical_tail_contract(
         self, raw_schema: str, logical: int, physical: int,

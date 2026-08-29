@@ -93,7 +93,8 @@ MAIN_MANIFEST_SCHEMA_V13 = "leopard2-main-compare-manifest/v13"
 MAIN_MANIFEST_SCHEMA_V14 = "leopard2-main-compare-manifest/v14"
 MAIN_MANIFEST_SCHEMA_V15 = "leopard2-main-compare-manifest/v15"
 MAIN_MANIFEST_SCHEMA_V16 = "leopard2-main-compare-manifest/v16"
-MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v17"
+MAIN_MANIFEST_SCHEMA_V17 = "leopard2-main-compare-manifest/v17"
+MAIN_MANIFEST_SCHEMA = MAIN_MANIFEST_SCHEMA_V17
 MAIN_RAW_SCHEMA_V5 = "leopard2-main-compare-raw/v5"
 MAIN_RAW_SCHEMA_V6 = "leopard2-main-compare-raw/v6"
 MAIN_RAW_SCHEMA_V7 = "leopard2-main-compare-raw/v7"
@@ -106,7 +107,8 @@ MAIN_RAW_SCHEMA_V13 = "leopard2-main-compare-raw/v13"
 MAIN_RAW_SCHEMA_V14 = "leopard2-main-compare-raw/v14"
 MAIN_RAW_SCHEMA_V15 = "leopard2-main-compare-raw/v15"
 MAIN_RAW_SCHEMA_V16 = "leopard2-main-compare-raw/v16"
-MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v17"
+MAIN_RAW_SCHEMA_V17 = "leopard2-main-compare-raw/v17"
+MAIN_RAW_SCHEMA = MAIN_RAW_SCHEMA_V17
 MAIN_MANIFEST_TO_RAW_SCHEMA = {
     MAIN_MANIFEST_SCHEMA_V5: MAIN_RAW_SCHEMA_V5,
     MAIN_MANIFEST_SCHEMA_V6: MAIN_RAW_SCHEMA_V6,
@@ -120,7 +122,7 @@ MAIN_MANIFEST_TO_RAW_SCHEMA = {
     MAIN_MANIFEST_SCHEMA_V14: MAIN_RAW_SCHEMA_V14,
     MAIN_MANIFEST_SCHEMA_V15: MAIN_RAW_SCHEMA_V15,
     MAIN_MANIFEST_SCHEMA_V16: MAIN_RAW_SCHEMA_V16,
-    MAIN_MANIFEST_SCHEMA: MAIN_RAW_SCHEMA,
+    MAIN_MANIFEST_SCHEMA_V17: MAIN_RAW_SCHEMA_V17,
 }
 PURE_AVX2_MAIN_MANIFEST_SCHEMAS = frozenset((
     MAIN_MANIFEST_SCHEMA_V10,
@@ -132,7 +134,7 @@ PURE_AVX2_MAIN_MANIFEST_SCHEMAS = frozenset((
     MAIN_MANIFEST_SCHEMA_V16,
 ))
 NATIVE_MAIN_MANIFEST_SCHEMAS = frozenset((
-    MAIN_MANIFEST_SCHEMA,
+    MAIN_MANIFEST_SCHEMA_V17,
 ))
 REPORT_TO_MAIN_MANIFEST_SCHEMAS = {
     REPORT_SCHEMA_V8: frozenset((
@@ -149,7 +151,7 @@ REPORT_TO_MAIN_MANIFEST_SCHEMAS = {
     REPORT_SCHEMA_V11: frozenset((MAIN_MANIFEST_SCHEMA_V14,)),
     REPORT_SCHEMA_V12: frozenset((MAIN_MANIFEST_SCHEMA_V15,)),
     REPORT_SCHEMA_V13: frozenset((MAIN_MANIFEST_SCHEMA_V16,)),
-    REPORT_SCHEMA: frozenset((MAIN_MANIFEST_SCHEMA,)),
+    REPORT_SCHEMA: frozenset((MAIN_MANIFEST_SCHEMA_V17,)),
 }
 MAIN_SUPERVISION_SCHEMA = "leopard2-main-supervision/v1"
 DEFAULT_POLL_MS = 25
@@ -5814,7 +5816,14 @@ def test_binding():
                   MAIN_MANIFEST_SCHEMA_V15: MAIN_RAW_SCHEMA_V15,
                   MAIN_MANIFEST_SCHEMA_V16: MAIN_RAW_SCHEMA_V16,
                   MAIN_MANIFEST_SCHEMA: MAIN_RAW_SCHEMA,
-              } and PURE_AVX2_MAIN_MANIFEST_SCHEMAS == frozenset((
+              } and
+              "leopard2-main-compare-manifest/v18" not in
+                  MAIN_MANIFEST_TO_RAW_SCHEMA and
+              "leopard2-main-compare-raw/v18" not in
+                  MAIN_MANIFEST_TO_RAW_SCHEMA.values() and
+              all("leopard2-main-compare-manifest/v18" not in schemas
+                  for schemas in REPORT_TO_MAIN_MANIFEST_SCHEMAS.values()) and
+              PURE_AVX2_MAIN_MANIFEST_SCHEMAS == frozenset((
                   MAIN_MANIFEST_SCHEMA_V10,
                   MAIN_MANIFEST_SCHEMA_V11,
                   MAIN_MANIFEST_SCHEMA_V12,

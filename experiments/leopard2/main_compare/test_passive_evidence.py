@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = ROOT / "experiments/leopard2/main_compare" / \
@@ -37,6 +38,10 @@ census = load_module(
     "passive_environment_census",
     ROOT / "experiments/leopard2/main_compare" /
     "passive_environment_census.py",
+)
+runner_fixtures = load_module(
+    "passive_evidence_runner_fixtures",
+    ROOT / "experiments/leopard2/main_compare" / "test_run_abba.py",
 )
 
 
@@ -77,8 +82,83 @@ def controller() -> dict:
     }
 
 
+def v18_controller() -> dict:
+    return {
+        **controller(),
+        "schema": "leopard2-v18-passive-controller-affinity/v1",
+        "acquisition_generation": "passive-v2",
+        "before_allowed_cpus": [0, 52, 116],
+        "after_allowed_cpus": [0],
+        "runner_launch_allowed_cpus": [0, 52, 116],
+    }
+
+
+def census_cpu_from_raw(value: dict, *, extra_user: int = 0) -> dict:
+    fields = {name: 0 for name in census.CPU_FIELDS}
+    fields.update(value["fields"])
+    fields["user"] += extra_user
+    return {
+        "cpu": value["cpu"],
+        "fields": fields,
+        "total_jiffies": sum(fields[name] for name in census.CPU_FIELDS[:8]),
+        "nonidle_jiffies": sum(fields[name] for name in census.NONIDLE_FIELDS),
+    }
+
+
+def v18_snapshot(raw: dict, phase: str, *, cpu52_extra: int = 0,
+                 cpu116_extra: int = 0,
+                 include_pair_eligible: bool = True) -> dict:
+    value = snapshot(phase)
+    isolation = raw["isolation"]
+    if phase == "pre":
+        outer = isolation["before"]
+        boundary = outer["monotonic_ns"] - 1
+        value["scan_started_monotonic_ns"] = boundary - 2
+        value["scan_finished_monotonic_ns"] = boundary - 1
+    else:
+        outer = isolation["after"]
+        boundary = outer["monotonic_ns"] + 1
+        value["scan_started_monotonic_ns"] = boundary + 1
+        value["scan_finished_monotonic_ns"] = boundary + 2
+    value["activity_boundary_monotonic_ns"] = boundary
+    value["proc_stat"] = {
+        "52": census_cpu_from_raw(
+            outer["benchmark_cpu"], extra_user=cpu52_extra),
+        "116": census_cpu_from_raw(
+            outer["reserved_sibling"], extra_user=cpu116_extra),
+    }
+    wrapper = value["same_uid_processes"]["entries"][0]
+    wrapper["cpus_allowed"] = [0]
+    wrapper["reserved_pair_intersection"] = []
+    if include_pair_eligible:
+        pair_eligible = copy.deepcopy(wrapper)
+        pair_eligible.update({
+            "pid": 101,
+            "tid": 101,
+            "process_identity": {
+                "device": 1, "inode": 5, "starttime_ticks": 4},
+            "thread_identity": {
+                "device": 1, "inode": 6, "starttime_ticks": 4},
+            "comm_sha256": "b" * 64,
+            "cpus_allowed": [0, 52],
+            "reserved_pair_intersection": [52],
+        })
+        value["same_uid_processes"]["entries"].append(pair_eligible)
+        value["same_uid_processes"]["summary"].update({
+            "retained_process_count": 2,
+            "retained_thread_count": 2,
+            "pair_eligible_process_count": 1,
+            "pair_eligible_thread_count": 1,
+            "confined_to_reserved_subset_process_count": 0,
+            "confined_to_reserved_subset_thread_count": 0,
+        })
+    reseal_snapshot(value)
+    return value
+
+
 def raw_evidence() -> dict:
     return {
+        "schema": census.RAW_SCHEMA_V17,
         "supervision": None,
         "campaign": {"allowed_cpu_set_at_launch": [0, 1, 52, 116]},
         "invocations": [
@@ -189,6 +269,177 @@ class PassiveEvidenceTests(unittest.TestCase):
         self.assertFalse(policy["foreign_cpu52_work_attributable"])
         self.assertFalse(policy["promotion_eligible"])
         self.assertFalse(policy["promotion_passed"])
+
+    def test_v18_policy_gates_only_retained_windows_and_discloses_endpoints(
+            self) -> None:
+        raw = runner_fixtures.synthetic_raw(
+            raw_schema=runner_fixtures.runner.RAW_SCHEMA_V18)
+        pre = v18_snapshot(raw, "pre")
+        post = v18_snapshot(
+            raw, "post", cpu52_extra=5, cpu116_extra=7)
+        policy = census.compare(pre, post, raw, v18_controller())
+        self.assertEqual(policy["schema"], census.POLICY_SCHEMA_V2)
+        self.assertEqual(policy["acquisition_generation"], "passive-v2")
+        self.assertEqual(
+            policy["windowed_contamination"]["schema"],
+            "leopard2-v18-windowed-census-policy-observation/v1")
+        self.assertTrue(policy["windowed_contamination"][
+            "all_benchmark_cpu_excess_zero"])
+        self.assertTrue(policy["windowed_contamination"][
+            "all_reserved_sibling_nonidle_zero"])
+        self.assertFalse(policy["outer_disclosure"]["gated"])
+        self.assertGreater(
+            policy["outer_disclosure"]["outer_cpu_activity"]["52"]
+            ["nonidle_jiffies"], 5)
+        self.assertGreaterEqual(
+            policy["outer_disclosure"]["outer_cpu_activity"]["116"]
+            ["nonidle_jiffies"], 7)
+        self.assertEqual(policy["shared_host_exposure"]["pre"]
+                         ["confined_to_reserved_subset_thread_count"], 0)
+        self.assertEqual(policy["shared_host_exposure"]["post"]
+                         ["confined_to_reserved_subset_thread_count"], 0)
+        self.assertEqual(policy["shared_host_exposure"]["pre"]
+                         ["pair_eligible_thread_count"], 1)
+        self.assertEqual(policy["shared_host_exposure"]["post"]
+                         ["pair_eligible_thread_count"], 1)
+        self.assertFalse(policy["promotion_eligible"])
+        self.assertFalse(policy["promotion_passed"])
+        self.assertFalse(policy["causal_performance_claim_eligible"])
+        self.assertFalse(policy["cpu_pair_exclusive"])
+
+    def test_v18_policy_rejects_confined_thread_and_persistent_affinity_change(
+            self) -> None:
+        raw = runner_fixtures.synthetic_raw(
+            raw_schema=runner_fixtures.runner.RAW_SCHEMA_V18)
+        pre = v18_snapshot(raw, "pre")
+        post = v18_snapshot(raw, "post")
+        for value in (pre, post):
+            entry = value["same_uid_processes"]["entries"][1]
+            entry["cpus_allowed"] = [52]
+            entry["reserved_pair_intersection"] = [52]
+            value["same_uid_processes"]["summary"].update({
+                "confined_to_reserved_subset_process_count": 1,
+                "confined_to_reserved_subset_thread_count": 1,
+            })
+            reseal_snapshot(value)
+        with self.assertRaises(census.CensusError):
+            census.compare(pre, post, raw, v18_controller())
+
+        pre = v18_snapshot(raw, "pre")
+        post = v18_snapshot(raw, "post")
+        post_entry = post["same_uid_processes"]["entries"][1]
+        post_entry["cpus_allowed"] = [0, 116]
+        post_entry["reserved_pair_intersection"] = [116]
+        reseal_snapshot(post)
+        with self.assertRaises(census.CensusError):
+            census.compare(pre, post, raw, v18_controller())
+
+    def test_v18_census_rejects_bool_as_integer_in_window_closure(self) -> None:
+        raw = runner_fixtures.synthetic_raw(
+            raw_schema=runner_fixtures.runner.RAW_SCHEMA_V18)
+        raw["invocations"][0]["cpu_window"]["delta"]["benchmark_cpu"] \
+            ["fields"]["nice"] = False
+        raw["isolation"]["invocation_windows"][0]["delta"] \
+            ["benchmark_cpu"]["fields"]["nice"] = False
+        with self.assertRaises(census.CensusError):
+            census.compare(
+                v18_snapshot(raw, "pre", include_pair_eligible=False),
+                v18_snapshot(raw, "post", include_pair_eligible=False),
+                raw, v18_controller())
+
+    def test_v18_counter_epochs_must_fit_campaign_endpoints_everywhere(
+            self) -> None:
+        raw = runner_fixtures.synthetic_raw(
+            raw_schema=runner_fixtures.runner.RAW_SCHEMA_V18)
+        for invocation, retained in zip(
+                raw["invocations"],
+                raw["isolation"]["invocation_windows"]):
+            for window in (invocation["cpu_window"], retained):
+                for phase in ("before", "after"):
+                    for endpoint in ("benchmark_cpu", "reserved_sibling"):
+                        window[phase][endpoint]["fields"]["user"] += 1000
+                        window[phase][endpoint]["total_jiffies"] += 1000
+        raw = runner_fixtures.resign(raw)
+        windows = [invocation["cpu_window"]
+                   for invocation in raw["invocations"]]
+        with self.assertRaises(runner_fixtures.runner.EvidenceError):
+            runner_fixtures.runner.validate_raw(
+                raw, None, check_files=False, check_current_inputs=False)
+        with self.assertRaises(audit.AuditError):
+            audit.validate_isolation_v2(raw["isolation"], windows)
+        with self.assertRaises(census.CensusError):
+            census.compare(
+                v18_snapshot(raw, "pre", include_pair_eligible=False),
+                v18_snapshot(raw, "post", include_pair_eligible=False),
+                raw, v18_controller())
+
+    def test_v18_zero_thresholds_do_not_reuse_legacy_allowance(self) -> None:
+        runner_policy = runner_fixtures.runner.cpu_window_policy()
+        audit_policy = audit.cpu_window_policy()
+        census_policy = census.window_policy()
+        for policy in (runner_policy, audit_policy, census_policy):
+            self.assertEqual(
+                policy["benchmark_cpu_max_nonidle_excess_jiffies"], 0)
+            self.assertEqual(
+                policy["reserved_sibling_max_nonidle_jiffies"], 0)
+        self.assertEqual(
+            census.
+            LEGACY_V17_CPU52_AGGREGATE_EXCESS_LIMIT_JIFFIES,
+            16)
+        raw = runner_fixtures.synthetic_raw(
+            raw_schema=runner_fixtures.runner.RAW_SCHEMA_V18)
+        arguments = (
+            v18_snapshot(raw, "pre", include_pair_eligible=False),
+            v18_snapshot(raw, "post", include_pair_eligible=False),
+            raw, v18_controller())
+        expected = census.compare(*arguments)
+        with mock.patch.object(
+                census,
+                "LEGACY_V17_CPU52_AGGREGATE_EXCESS_LIMIT_JIFFIES",
+                10_000):
+            self.assertEqual(census.compare(*arguments), expected)
+        forbidden_legacy_literal = (
+            "MAX_NONIDLE_EXCESS_OVER_CHILD_WALL_CEILING_JIFFIES")
+        for path in (
+                ROOT / "experiments/leopard2/main_compare" /
+                "passive_environment_census.py",
+                ROOT / "experiments/leopard2/main_compare" /
+                "audit_v17_gfni_main_compare.py"):
+            with self.subTest(path=path):
+                self.assertNotIn(
+                    forbidden_legacy_literal,
+                    path.read_text(encoding="utf-8"))
+
+    def test_v18_auditor_self_test_covers_window_boundaries(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-S", "-B", str(
+                ROOT / "experiments/leopard2/main_compare" /
+                "audit_v17_gfni_main_compare.py"), "--self-test"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            completed.stdout,
+            "v17 GFNI exact-main independent auditor self-test passed\n")
+
+    def test_v18_audit_claim_preserves_planned_window_fields(self) -> None:
+        raw = runner_fixtures.synthetic_raw(
+            raw_schema=runner_fixtures.runner.RAW_SCHEMA_V18)
+        observation = audit.windowed_observation(raw["isolation"])
+        fields = audit.audit_mode_result_fields("windowed", observation)
+        self.assertEqual(
+            [item["index"] for item in observation["per_invocation"]],
+            list(range(12)))
+        claim = fields["isolation_claim"]
+        self.assertEqual(
+            claim["windowed_screen"],
+            "per retained benchmark invocation")
+        self.assertIs(claim["out_of_window_activity_gated"], False)
+        self.assertIs(
+            claim[
+                "reserved_sibling_zero_nonidle_jiffies_in_every_retained_window"],
+            True)
 
     def test_persistent_affinity_change_rejects(self) -> None:
         pre, post = snapshot("pre"), snapshot("post")
@@ -333,7 +584,8 @@ class PassiveEvidenceTests(unittest.TestCase):
         controller_value["runner_launch_allowed_cpus"] = [
             0.0, 1.0, 52.0, 116.0]
         with self.assertRaises(census.CensusError):
-            census.validate_controller(controller_value)
+            census.validate_controller(
+                controller_value, census.RAW_SCHEMA_V17)
 
     def test_namespace_identity_follows_the_target(self) -> None:
         with tempfile.TemporaryDirectory(prefix="leopard-passive-ns-test.") \
@@ -473,11 +725,24 @@ class PassiveEvidenceTests(unittest.TestCase):
     def test_wrapper_separates_passive_from_active_contract(self) -> None:
         text = WRAPPER.read_text(encoding="utf-8")
         self.assertIn("--passive-shared-host", text)
-        self.assertIn("passive-shared-host-observation/v1", text)
-        self.assertIn("passive-not-promoted-envelope/v2", text)
+        self.assertIn("--attempt N --attempt-budget 3", text)
+        self.assertIn("passive-windowed-shared-host-observation/v1", text)
+        self.assertIn("v18-gfni-main-passive-not-promoted-envelope/v1", text)
+        self.assertIn("v18-gfni-main-failed-envelope/v1", text)
+        self.assertIn("leopard2-passive-shared-host-policy/v2", text)
+        self.assertIn("windowed_contamination", text)
+        self.assertIn("passive_windowed_contamination_gate", text)
+        self.assertIn(
+            "windowed_benchmark_cpu_nonidle_excess_jiffies", text)
+        self.assertIn(
+            "out_of_window_reserved_sibling_nonidle_jiffies", text)
+        self.assertIn("attempt_statement", text)
+        self.assertIn("sealed_attempt_envelopes", text)
         self.assertIn('if [[ "$passive_mode" == true ||', text)
         self.assertIn("active_affinity_supervisor_executed:false", text)
+        self.assertIn("--supervision windowed", text)
         self.assertIn("--supervision absent", text)
+        self.assertIn("fresh active-v17 acquisition is disabled", text)
         self.assertIn("wrapper-process-and-owned-descendants-only", text)
 
     def test_wrapper_passive_contract_self_test_covers_float_timeout(
@@ -495,7 +760,7 @@ class PassiveEvidenceTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(
             completed.stdout,
-            "v17 passive wrapper contract self-test passed\n")
+            "v18 passive wrapper contract self-test passed\n")
 
 
 if __name__ == "__main__":

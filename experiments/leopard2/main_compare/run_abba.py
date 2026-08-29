@@ -71,7 +71,9 @@ RAW_SCHEMA_V13 = "leopard2-main-compare-raw/v13"
 RAW_SCHEMA_V14 = "leopard2-main-compare-raw/v14"
 RAW_SCHEMA_V15 = "leopard2-main-compare-raw/v15"
 RAW_SCHEMA_V16 = "leopard2-main-compare-raw/v16"
-RAW_SCHEMA = "leopard2-main-compare-raw/v17"
+RAW_SCHEMA_V17 = "leopard2-main-compare-raw/v17"
+RAW_SCHEMA_V18 = "leopard2-main-compare-raw/v18"
+RAW_SCHEMA = RAW_SCHEMA_V18
 HARDENED_HISTORICAL_BUILD_SCHEMA = \
     "leopard2-main-compare-build/hardened-historical-v1"
 MANIFEST_SCHEMA_V1 = "leopard2-main-compare-manifest/v1"
@@ -90,7 +92,9 @@ MANIFEST_SCHEMA_V13 = "leopard2-main-compare-manifest/v13"
 MANIFEST_SCHEMA_V14 = "leopard2-main-compare-manifest/v14"
 MANIFEST_SCHEMA_V15 = "leopard2-main-compare-manifest/v15"
 MANIFEST_SCHEMA_V16 = "leopard2-main-compare-manifest/v16"
-MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v17"
+MANIFEST_SCHEMA_V17 = "leopard2-main-compare-manifest/v17"
+MANIFEST_SCHEMA_V18 = "leopard2-main-compare-manifest/v18"
+MANIFEST_SCHEMA = MANIFEST_SCHEMA_V18
 FAILURE_SCHEMA_V2 = "leopard2-main-compare-failure/v2"
 FAILURE_SCHEMA_V3 = "leopard2-main-compare-failure/v3"
 FAILURE_SCHEMA_V4 = "leopard2-main-compare-failure/v4"
@@ -106,7 +110,9 @@ FAILURE_SCHEMA_V13 = "leopard2-main-compare-failure/v13"
 FAILURE_SCHEMA_V14 = "leopard2-main-compare-failure/v14"
 FAILURE_SCHEMA_V15 = "leopard2-main-compare-failure/v15"
 FAILURE_SCHEMA_V16 = "leopard2-main-compare-failure/v16"
-FAILURE_SCHEMA = "leopard2-main-compare-failure/v17"
+FAILURE_SCHEMA_V17 = "leopard2-main-compare-failure/v17"
+FAILURE_SCHEMA_V18 = "leopard2-main-compare-failure/v18"
+FAILURE_SCHEMA = FAILURE_SCHEMA_V18
 FAILURE_EVIDENCE_CONTRACT_V9 = \
     "leopard2-main-compare-failure-evidence-contract/v9"
 FAILURE_EVIDENCE_CONTRACT_V10 = \
@@ -123,14 +129,21 @@ FAILURE_EVIDENCE_CONTRACT_V15 = \
     "leopard2-main-compare-failure-evidence-contract/v15"
 FAILURE_EVIDENCE_CONTRACT_V16 = \
     "leopard2-main-compare-failure-evidence-contract/v16"
-FAILURE_EVIDENCE_CONTRACT = \
+FAILURE_EVIDENCE_CONTRACT_V17 = \
     "leopard2-main-compare-failure-evidence-contract/v17"
+FAILURE_EVIDENCE_CONTRACT_V18 = \
+    "leopard2-main-compare-failure-evidence-contract/v18"
+FAILURE_EVIDENCE_CONTRACT = FAILURE_EVIDENCE_CONTRACT_V18
 _V16_AUTO_GF16_GFNI_SELECTOR = re.compile(
     rb"(?m)^static std::atomic<uint32_t> "
     rb"g_auto_gf16_gfni_encode_mode\(([0-9]+)U\);$")
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
-ISOLATION_SCHEMA = "leopard2-main-compare-isolation/v1"
+ISOLATION_SCHEMA_V1 = "leopard2-main-compare-isolation/v1"
+ISOLATION_SCHEMA_V2 = "leopard2-main-compare-isolation/v2"
+ISOLATION_SCHEMA = ISOLATION_SCHEMA_V1
+CPU_WINDOW_SCHEMA = "leopard2-main-compare-invocation-cpu-window/v1"
+CLOCK_TICKS_PER_SECOND = 100
 SUPERVISION_SCHEMA = "leopard2-main-supervision/v1"
 SUPERVISION_NONCE_ENV = "LEO2_AFFINITY_EXECUTION_NONCE"
 CANONICAL_LDD_SCHEMA = "leopard2-main-compare-canonical-ldd/v1"
@@ -189,7 +202,8 @@ RAW_TO_CMAKE_IDENTITY = {
     RAW_SCHEMA_V14: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA_V15: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA_V16: CANONICAL_CMAKE_IDENTITY,
-    RAW_SCHEMA: CANONICAL_CMAKE_IDENTITY,
+    RAW_SCHEMA_V17: CANONICAL_CMAKE_IDENTITY,
+    RAW_SCHEMA_V18: CANONICAL_CMAKE_IDENTITY,
 }
 # This internal build-only schema lets another evidence family authenticate an
 # exact pre-rename CMake graph with current recipe-content hardening.  It is
@@ -214,7 +228,8 @@ HARDENED_BUILD_SCHEMAS = frozenset((
     RAW_SCHEMA_V14,
     RAW_SCHEMA_V15,
     RAW_SCHEMA_V16,
-    RAW_SCHEMA,
+    RAW_SCHEMA_V17,
+    RAW_SCHEMA_V18,
     HARDENED_HISTORICAL_BUILD_SCHEMA,
 ))
 MANIFEST_TO_RAW_SCHEMA = {
@@ -234,7 +249,8 @@ MANIFEST_TO_RAW_SCHEMA = {
     MANIFEST_SCHEMA_V14: RAW_SCHEMA_V14,
     MANIFEST_SCHEMA_V15: RAW_SCHEMA_V15,
     MANIFEST_SCHEMA_V16: RAW_SCHEMA_V16,
-    MANIFEST_SCHEMA: RAW_SCHEMA,
+    MANIFEST_SCHEMA_V17: RAW_SCHEMA_V17,
+    MANIFEST_SCHEMA_V18: RAW_SCHEMA_V18,
 }
 FAILURE_TO_RAW_SCHEMA = {
     FAILURE_SCHEMA_V2: RAW_SCHEMA_V2,
@@ -252,42 +268,45 @@ FAILURE_TO_RAW_SCHEMA = {
     FAILURE_SCHEMA_V14: RAW_SCHEMA_V14,
     FAILURE_SCHEMA_V15: RAW_SCHEMA_V15,
     FAILURE_SCHEMA_V16: RAW_SCHEMA_V16,
-    FAILURE_SCHEMA: RAW_SCHEMA,
+    FAILURE_SCHEMA_V17: RAW_SCHEMA_V17,
+    FAILURE_SCHEMA_V18: RAW_SCHEMA_V18,
 }
+GFNI_ENCODE_CAMPAIGN_SCHEMAS = frozenset((RAW_SCHEMA_V17, RAW_SCHEMA_V18))
+WINDOWED_CONTAMINATION_SCHEMAS = frozenset((RAW_SCHEMA_V18,))
 CANDIDATE_MODE_SCHEMAS = frozenset((
     RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA_V6, RAW_SCHEMA_V7,
     RAW_SCHEMA_V8, RAW_SCHEMA_V9, RAW_SCHEMA_V10, RAW_SCHEMA_V11,
     RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15,
-    RAW_SCHEMA_V16, RAW_SCHEMA,
+    RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18,
 ))
 WORKSPACE_SELECTOR_SCHEMAS = frozenset((
     RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA_V6,
     RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9, RAW_SCHEMA_V10,
     RAW_SCHEMA_V11, RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14,
-    RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA,
+    RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18,
 ))
 ISOLATION_SCHEMAS = frozenset((
     RAW_SCHEMA_V2, RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA_V5,
     RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
     RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12, RAW_SCHEMA_V13,
-    RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA,
+    RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18,
 ))
 COMPLETE_EVIDENCE_SCHEMAS = frozenset((
     RAW_SCHEMA_V5, RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8,
     RAW_SCHEMA_V9, RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
     RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16,
-    RAW_SCHEMA,
+    RAW_SCHEMA_V17, RAW_SCHEMA_V18,
 ))
 SUPERVISION_SCHEMAS = COMPLETE_EVIDENCE_SCHEMAS
 BUILD_CLOSURE_V7_SCHEMAS = frozenset((
     RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9, RAW_SCHEMA_V10,
     RAW_SCHEMA_V11, RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14,
-    RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA,
+    RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18,
 ))
 SEALED_EXECUTABLE_SCHEMAS = frozenset((
     RAW_SCHEMA_V8, RAW_SCHEMA_V9, RAW_SCHEMA_V10, RAW_SCHEMA_V11,
     RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15,
-    RAW_SCHEMA_V16, RAW_SCHEMA,
+    RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18,
 ))
 INPUT_SPECIFICATION_KEYS_V9 = frozenset((
     "runner", "taskset", "ldd", "baseline_executable",
@@ -325,9 +344,32 @@ INVOCATION_V8_KEYS = frozenset((
     "normalized", "identity_before", "identity_after", "reservation_before",
     "reservation_after",
 ))
+INVOCATION_V18_KEYS = frozenset((*INVOCATION_V8_KEYS, "cpu_window"))
+ISOLATION_V2_KEYS = frozenset((
+    "accepted", "after", "before", "benchmark_cpu", "delta",
+    "invocation_windows", "out_of_window", "pair_lease", "policy",
+    "reserved_sibling", "retained_window_count", "schema", "windowed",
+    "windows_schema",
+))
 RESERVATION_IDENTITY_KEYS = frozenset((
     "path", "sha256", "payload", "lock",
 ))
+
+
+def invocation_keys_for_raw_schema(raw_schema: str) -> frozenset[str]:
+    require(raw_schema in SEALED_EXECUTABLE_SCHEMAS,
+            "invocation keys use an unsupported evidence schema")
+    return (INVOCATION_V18_KEYS
+            if raw_schema in WINDOWED_CONTAMINATION_SCHEMAS
+            else INVOCATION_V8_KEYS)
+
+
+def isolation_schema_for_raw_schema(raw_schema: str) -> str:
+    require(raw_schema in ISOLATION_SCHEMAS,
+            "isolation schema uses an unsupported evidence schema")
+    return (ISOLATION_SCHEMA_V2
+            if raw_schema in WINDOWED_CONTAMINATION_SCHEMAS
+            else ISOLATION_SCHEMA_V1)
 STREAM_IDENTITY_KEYS = frozenset(("path", "size", "sha256"))
 MANIFEST_RAW_IDENTITY_KEYS = frozenset((
     "path", "size", "sha256", "payload_digest",
@@ -374,7 +416,7 @@ def child_environment_for_raw_schema(raw_schema: str) -> dict[str, str]:
     require(raw_schema in RAW_TO_CMAKE_IDENTITY,
             "child environment uses an unsupported evidence schema")
     return (CHILD_ENVIRONMENT if raw_schema in (
-                RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA)
+                RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18)
             else CHILD_ENVIRONMENT_V11)
 
 
@@ -421,13 +463,15 @@ CANDIDATE_LIBRARY_SOURCES_V16 = (
     "Leopard2BackendAVX2T8K8B1024.cpp",
     CANDIDATE_LIBRARY_SOURCES_V12[-1],
 )
-CANDIDATE_LIBRARY_SOURCES = (
+CANDIDATE_LIBRARY_SOURCES_V17 = (
     *CANDIDATE_LIBRARY_SOURCES_V16[:12],
     "Leopard2BackendAVX2T16Q2.cpp",
     "Leopard2BackendAVX2T8K62.cpp",
     "Leopard2BackendAVX2T16K66.cpp",
     *CANDIDATE_LIBRARY_SOURCES_V16[12:],
 )
+CANDIDATE_LIBRARY_SOURCES_V18 = CANDIDATE_LIBRARY_SOURCES_V17
+CANDIDATE_LIBRARY_SOURCES = CANDIDATE_LIBRARY_SOURCES_V18
 CANDIDATE_NON_LIBRARY_COMPILE_TARGETS_V9 = {
     "tests/benchmark.cpp": "bench_leopard.dir",
     "bench/leopard2/benchmark.cpp": "bench_leopard2.dir",
@@ -442,7 +486,7 @@ CANDIDATE_NON_LIBRARY_COMPILE_TARGETS_V9 = {
         "bench_leopard2_gf16_high_attribution.dir",
     "tests/experiments.cpp": "experiment_leopard.dir",
 }
-CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS = (
+CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V10 = (
     ("tests/benchmark.cpp", "bench_leopard.dir"),
     ("bench/leopard2/benchmark.cpp", "bench_leopard2.dir"),
     ("bench/leopard2/benchmark.cpp", "bench_leopard2_prevalidated_batch.dir"),
@@ -457,22 +501,34 @@ CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS = (
      "bench_leopard2_gf16_high_attribution.dir"),
     ("tests/experiments.cpp", "experiment_leopard.dir"),
 )
-CANDIDATE_CONFIGURED_SOURCES = tuple(dict.fromkeys((
-    *CANDIDATE_LIBRARY_SOURCES,
-    *(source for source, unused_target in CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS),
+CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V17 = \
+    CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V10
+CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V18 = \
+    CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V17
+CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS = \
+    CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V18
+CANDIDATE_CONFIGURED_SOURCES_V17 = tuple(dict.fromkeys((
+    *CANDIDATE_LIBRARY_SOURCES_V17,
+    *(source for source, unused_target in CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V17),
 )))
+CANDIDATE_CONFIGURED_SOURCES_V18 = CANDIDATE_CONFIGURED_SOURCES_V17
+CANDIDATE_CONFIGURED_SOURCES = CANDIDATE_CONFIGURED_SOURCES_V18
 BASELINE_EXPECTED_COMPILE_COMMAND_COUNT = 5
 CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT_V12 = (
     len(CANDIDATE_LIBRARY_SOURCES_V12) +
-    len(CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS)
+    len(CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V10)
 )
 CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT_V16 = (
     len(CANDIDATE_LIBRARY_SOURCES_V16) +
-    len(CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS)
+    len(CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V10)
 )
-CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = (
-    len(CANDIDATE_LIBRARY_SOURCES) + len(CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS)
-)
+CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT_V17 = (
+    len(CANDIDATE_LIBRARY_SOURCES_V17) +
+    len(CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V17))
+CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT_V18 = \
+    CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT_V17
+CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = \
+    CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT_V18
 COMPILE_COMMANDS_SCHEMA_V2 = "leopard2-main-compare-compile-commands/v2"
 COMPILE_COMMANDS_SCHEMA_V3 = "leopard2-main-compare-compile-commands/v3"
 COMPILE_COMMANDS_SCHEMA_V4 = "leopard2-main-compare-compile-commands/v4"
@@ -484,7 +540,8 @@ COMPILE_COMMANDS_SCHEMA_V9 = "leopard2-main-compare-compile-commands/v9"
 COMPILE_COMMANDS_SCHEMA_V10 = "leopard2-main-compare-compile-commands/v10"
 COMPILE_COMMANDS_SCHEMA_V11 = "leopard2-main-compare-compile-commands/v11"
 COMPILE_COMMANDS_SCHEMA_V12 = "leopard2-main-compare-compile-commands/v12"
-COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v13"
+COMPILE_COMMANDS_SCHEMA_V13 = "leopard2-main-compare-compile-commands/v13"
+COMPILE_COMMANDS_SCHEMA = COMPILE_COMMANDS_SCHEMA_V13
 GNU_CXX_DRIVER_BASENAME = re.compile(
     r"(?:g\+\+|(?:[A-Za-z0-9_.+]+-)+"
     r"(?:gnu|gnueabi(?:hf)?|eabi|elf|musl|mingw32)-g\+\+)"
@@ -509,8 +566,9 @@ CANDIDATE_COMPILE_PROFILE_V7 = \
     "gnu-compatible-cxx11-runtime-dispatch-effective-avx2-x86_64-release/v7"
 CANDIDATE_COMPILE_PROFILE_V8 = \
     "gnu-compatible-cxx11-runtime-dispatch-effective-avx2-x86_64-release/v8"
-CANDIDATE_COMPILE_PROFILE = \
+CANDIDATE_COMPILE_PROFILE_V9 = \
     "gnu-compatible-cxx11-runtime-dispatch-production-auto-gfni-encode-x86_64-release/v9"
+CANDIDATE_COMPILE_PROFILE = CANDIDATE_COMPILE_PROFILE_V9
 BUILD_CONFIGURATION_RECORD_SCHEMA_V2 = \
     "leopard2-main-compare-build-configuration/v2"
 BUILD_CONFIGURATION_RECORD_SCHEMA_V3 = \
@@ -527,8 +585,9 @@ BUILD_CONFIGURATION_RECORD_SCHEMA_V8 = \
     "leopard2-main-compare-build-configuration/v8"
 BUILD_CONFIGURATION_RECORD_SCHEMA_V9 = \
     "leopard2-main-compare-build-configuration/v9"
-BUILD_CONFIGURATION_RECORD_SCHEMA = \
+BUILD_CONFIGURATION_RECORD_SCHEMA_V10 = \
     "leopard2-main-compare-build-configuration/v10"
+BUILD_CONFIGURATION_RECORD_SCHEMA = BUILD_CONFIGURATION_RECORD_SCHEMA_V10
 BUILD_CONFIGURATION_FILE_SCHEMA_V2 = \
     "leopard2-benchmark-build-configuration/v2"
 BUILD_CONFIGURATION_FILE_SCHEMA_V3 = \
@@ -545,8 +604,9 @@ BUILD_CONFIGURATION_FILE_SCHEMA_V8 = \
     "leopard2-benchmark-build-configuration/v8"
 BUILD_CONFIGURATION_FILE_SCHEMA_V9 = \
     "leopard2-benchmark-build-configuration/v9"
-BUILD_CONFIGURATION_FILE_SCHEMA = \
+BUILD_CONFIGURATION_FILE_SCHEMA_V13 = \
     "leopard2-benchmark-build-configuration/v13"
+BUILD_CONFIGURATION_FILE_SCHEMA = BUILD_CONFIGURATION_FILE_SCHEMA_V13
 BUILD_CONFIGURATION_RELATIVE_PATH = (
     "generated/leopard2-benchmark-attestation/"
     "leopard2_benchmark_build_configuration.txt"
@@ -617,11 +677,12 @@ BUILD_CONFIGURATION_VARIABLES_V9 = (
     "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
     "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK",
 )
-BUILD_CONFIGURATION_VARIABLES = (
+BUILD_CONFIGURATION_VARIABLES_V10 = (
     *BUILD_CONFIGURATION_VARIABLES_V9[:17],
     "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
     *BUILD_CONFIGURATION_VARIABLES_V9[17:],
 )
+BUILD_CONFIGURATION_VARIABLES = BUILD_CONFIGURATION_VARIABLES_V10
 CMAKE_CACHE_ENTRY_TYPES = frozenset((
     "BOOL", "FILEPATH", "INTERNAL", "PATH", "STATIC", "STRING",
     "UNINITIALIZED",
@@ -756,7 +817,7 @@ def statistics_policy(raw_schema: str = RAW_SCHEMA) -> dict[str, Any]:
         "degrees_of_freedom": ROUNDS - 1,
         "child_estimator": "median of retained per-invocation samples",
     }
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         policy.update({
             "ordinary_encode_semantics": (
                 "exact Leopard1 leo_encode divided by Leopard2 ordinary "
@@ -777,7 +838,7 @@ def statistics_policy(raw_schema: str = RAW_SCHEMA) -> dict[str, Any]:
         "separate timing loops; excludes codec setup")
     if raw_schema in (
             RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         policy["decode_first_use_semantics"] = (
             "median public leo2_decode one-shot call including plan setup with codec "
             "already created; excludes codec setup")
@@ -824,7 +885,7 @@ def validate_input_specification(
         INPUT_SPECIFICATION_KEYS
         if raw_schema in (
             RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) else
+            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) else
         INPUT_SPECIFICATION_KEYS_V9)
     require(isinstance(value, dict) and set(value) == expected_keys and
             all(isinstance(value.get(name), str) and value[name]
@@ -836,7 +897,7 @@ def validate_input_specification(
             RAW_SCHEMA_V16):
         require(value.get("baseline_pure_avx2") is True,
                 "v10-v16 evidence requires the pure-AVX2 baseline selector")
-    elif raw_schema == RAW_SCHEMA:
+    elif raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         require(value.get("baseline_pure_avx2") is False,
                 "v17 evidence requires the native exact-main baseline selector")
     require(re.fullmatch(
@@ -3260,7 +3321,10 @@ def compile_commands_schema_for_raw_schema(raw_schema: str) -> str:
         return COMPILE_COMMANDS_SCHEMA_V11
     if raw_schema == RAW_SCHEMA_V16:
         return COMPILE_COMMANDS_SCHEMA_V12
-    return COMPILE_COMMANDS_SCHEMA
+    if raw_schema in (RAW_SCHEMA_V17, RAW_SCHEMA_V18):
+        return COMPILE_COMMANDS_SCHEMA_V13
+    raise EvidenceError(
+        "complete evidence schema lacks compile-command contract")
 
 
 def build_configuration_contract_for_raw_schema(
@@ -3316,11 +3380,14 @@ def build_configuration_contract_for_raw_schema(
             BUILD_CONFIGURATION_FILE_SCHEMA_V9,
             BUILD_CONFIGURATION_VARIABLES_V9,
         )
-    return (
-        BUILD_CONFIGURATION_RECORD_SCHEMA,
-        BUILD_CONFIGURATION_FILE_SCHEMA,
-        BUILD_CONFIGURATION_VARIABLES,
-    )
+    if raw_schema in (RAW_SCHEMA_V17, RAW_SCHEMA_V18):
+        return (
+            BUILD_CONFIGURATION_RECORD_SCHEMA_V10,
+            BUILD_CONFIGURATION_FILE_SCHEMA_V13,
+            BUILD_CONFIGURATION_VARIABLES_V10,
+        )
+    raise EvidenceError(
+        "build-closure schema lacks configuration contract")
 
 
 def build_configuration_material(
@@ -3514,14 +3581,14 @@ def validate_canonical_build_configuration_entries(
             "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
         } if raw_schema in (
             RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) else {}),
+            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) else {}),
         **({
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED":
-                ("ON" if raw_schema in (RAW_SCHEMA_V16, RAW_SCHEMA) else "OFF"),
+                ("ON" if raw_schema in (RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) else "OFF"),
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
         } if raw_schema in (
             RAW_SCHEMA_V11, RAW_SCHEMA_V12, RAW_SCHEMA_V13,
-            RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) else {}),
+            RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) else {}),
         **({
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
@@ -3529,18 +3596,18 @@ def validate_canonical_build_configuration_entries(
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
         } if raw_schema in (
             RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14,
-            RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) else {}),
+            RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) else {}),
         **({
             "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
-        } if raw_schema == RAW_SCHEMA else {}),
+        } if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS else {}),
         **({
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
-        } if raw_schema in (RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) else {}),
+        } if raw_schema in (RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) else {}),
         **({
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
             "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK":
-                ("ON" if raw_schema == RAW_SCHEMA else "OFF"),
-        } if raw_schema in (RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) else {}),
+                ("ON" if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS else "OFF"),
+        } if raw_schema in (RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) else {}),
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
     }
     require(all(entries.get(name) == value for name, value in expected.items()) and
@@ -3972,8 +4039,10 @@ def candidate_library_sources_for_raw_schema(
 ) -> tuple[str, ...]:
     require(raw_schema in RAW_TO_CMAKE_IDENTITY,
             "candidate source closure uses an unsupported evidence schema")
-    if raw_schema == RAW_SCHEMA:
-        return CANDIDATE_LIBRARY_SOURCES
+    if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
+        return (CANDIDATE_LIBRARY_SOURCES_V17
+                if raw_schema == RAW_SCHEMA_V17
+                else CANDIDATE_LIBRARY_SOURCES_V18)
     if raw_schema in (
             RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15,
             RAW_SCHEMA_V16):
@@ -4014,12 +4083,17 @@ def candidate_compile_actions_for_raw_schema(
     library = tuple(
         (source, candidate_library_target(source))
         for source in candidate_library_sources_for_raw_schema(raw_schema))
-    non_library = (
-        CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS
-        if raw_schema in (
+    if raw_schema in (
             RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) else
-        tuple(CANDIDATE_NON_LIBRARY_COMPILE_TARGETS_V9.items()))
+            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15,
+            RAW_SCHEMA_V16):
+        non_library = CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V10
+    elif raw_schema == RAW_SCHEMA_V17:
+        non_library = CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V17
+    elif raw_schema == RAW_SCHEMA_V18:
+        non_library = CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V18
+    else:
+        non_library = tuple(CANDIDATE_NON_LIBRARY_COMPILE_TARGETS_V9.items())
     return library + non_library
 
 
@@ -4030,7 +4104,7 @@ def candidate_expected_compile_command_count(raw_schema: str) -> int:
 def candidate_isa_policy(raw_schema: str) -> str:
     require(raw_schema in RAW_TO_CMAKE_IDENTITY,
             "candidate ISA policy uses an unsupported evidence schema")
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         return (
             "portable core with ISA flags only on SSSE3, AVX2, isolated "
             "generated and fixed-shape AVX2, and GFNI translation units; "
@@ -4087,7 +4161,7 @@ def candidate_required_cache(raw_schema: str) -> dict[str, str | None]:
         result["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "OFF"
     if raw_schema in (
             RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         result.update({
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
@@ -4109,28 +4183,28 @@ def candidate_required_cache(raw_schema: str) -> dict[str, str | None]:
         })
     if raw_schema in (
             RAW_SCHEMA_V11, RAW_SCHEMA_V12, RAW_SCHEMA_V13,
-            RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+            RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         result.update({
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED":
-                ("ON" if raw_schema in (RAW_SCHEMA_V16, RAW_SCHEMA) else "OFF"),
+                ("ON" if raw_schema in (RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) else "OFF"),
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
         })
     if raw_schema in (
-            RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+            RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         result.update({
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
         })
-    if raw_schema in (RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+    if raw_schema in (RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         result["LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = "ON"
     if raw_schema in (RAW_SCHEMA_V15, RAW_SCHEMA_V16):
         result.update({
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
             "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
         })
-    elif raw_schema == RAW_SCHEMA:
+    elif raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         result.update({
             "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
@@ -4160,8 +4234,8 @@ def compile_profile_for_implementation(
         return CANDIDATE_COMPILE_PROFILE_V7
     if raw_schema == RAW_SCHEMA_V16:
         return CANDIDATE_COMPILE_PROFILE_V8
-    if raw_schema == RAW_SCHEMA:
-        return CANDIDATE_COMPILE_PROFILE
+    if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
+        return CANDIDATE_COMPILE_PROFILE_V9
     return (CANDIDATE_COMPILE_PROFILE_V2
             if raw_schema in BUILD_CLOSURE_V7_SCHEMAS else
             CANDIDATE_COMPILE_PROFILE_V1)
@@ -4261,7 +4335,7 @@ def expected_compile_argv(
         definitions = ([] if source != adapter else [
             f'-DLEOPARD_MAIN_SOURCE_COMMIT="{MAIN_COMMIT}"',
             *(["-DLEO_MAIN_PURE_AVX2_PROFILE=0"]
-              if raw_schema == RAW_SCHEMA else []),
+              if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS else []),
         ])
         configuration_definition = (
             [f'-DCMAKE_INTDIR="{selected_configuration}"']
@@ -4322,7 +4396,7 @@ def expected_compile_argv(
         "Leopard2BackendAVX2T16K66.cpp": [
             "-mavx2", "-mno-avx512f", "-falign-functions=64"],
     }
-    if raw_schema in (RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) and \
+    if raw_schema in (RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) and \
             relative == "Leopard2BackendAVX2T8K8B1024.cpp" and \
             resolved_compiler_is_gnu(compiler_path):
         isolated_flags[relative].insert(-1, "-flive-range-shrinkage")
@@ -4426,7 +4500,7 @@ def expected_compile_argv(
                 "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER="
                 f'"{attestation_header}"',
                 *(["-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1"]
-                  if raw_schema == RAW_SCHEMA else []),
+                  if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS else []),
             ]
         includes = [f"-I{candidate_root}"]
         propagated_openmp = ["-fopenmp"]
@@ -4439,7 +4513,7 @@ def expected_compile_argv(
         definitions = [
             *(["-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=0",
                "-DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1"]
-              if raw_schema in (RAW_SCHEMA_V16, RAW_SCHEMA) else []),
+              if raw_schema in (RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) else []),
             "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK=0",
             "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
             "-DLEO2_HAVE_AVX2_BACKEND=1",
@@ -4490,7 +4564,7 @@ def expected_compile_argv(
             *(["-DLEO2_HAVE_AVX512_BACKEND=1"]
               if raw_schema not in (
                   RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-                  RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA)
+                  RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18)
               else []),
             "-DLEO2_HAVE_GFNI_BACKEND=1",
             "-DLEO2_HAVE_SSSE3_BACKEND=1",
@@ -4504,7 +4578,7 @@ def expected_compile_argv(
     source_definitions: list[str] = []
     if raw_schema in (
             RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         global_definitions = [
             "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
             "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
@@ -4518,13 +4592,13 @@ def expected_compile_argv(
                 "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
                 *(["-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1"]
                   if raw_schema in (
-                      RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) else []),
+                      RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) else []),
                 *(["-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1"]
                   if raw_schema in (
                       RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14,
-                      RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) else []),
+                      RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) else []),
                 *(["-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1"]
-                  if raw_schema == RAW_SCHEMA else []),
+                  if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS else []),
             ])
         elif relative in {
                 "Leopard2BackendAVX2.cpp",
@@ -4534,7 +4608,7 @@ def expected_compile_argv(
             definitions.extend([
                 "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
                 *(["-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1"]
-                  if raw_schema == RAW_SCHEMA else []),
+                  if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS else []),
             ])
         definitions.sort()
         if relative in {
@@ -4549,15 +4623,15 @@ def expected_compile_argv(
                 "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1")
         if raw_schema in (
                 RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14,
-                RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) and \
+                RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) and \
                 relative == "leopard2.cpp":
             source_definitions.extend([
                 "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
                 *(["-DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1"]
-                  if raw_schema in (RAW_SCHEMA_V16, RAW_SCHEMA) else []),
+                  if raw_schema in (RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) else []),
                 "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
             ])
-        if raw_schema in (RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) and \
+        if raw_schema in (RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) and \
                 relative == "leopard2.cpp":
             source_definitions.append(
                 "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1")
@@ -4567,7 +4641,7 @@ def expected_compile_argv(
                 "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1",
                 "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0",
             ])
-        elif raw_schema == RAW_SCHEMA and relative == "leopard2.cpp":
+        elif raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS and relative == "leopard2.cpp":
             source_definitions.extend([
                 "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1",
                 "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=1",
@@ -5385,7 +5459,7 @@ def build_provenance(
     if raw_schema in (
             RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
             RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         semantics["generated_attestation_header"] = (
             capture_candidate_benchmark_attestation(
                 specification, benchmark_records[0]["object"])
@@ -5692,7 +5766,7 @@ def runtime_closure(
     elif retained_output_schema in (
             RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
             RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         result["canonical_ldd_output"] = canonical_ldd_output(
             output, f"ldd output for {executable_argument}")
     else:
@@ -6100,7 +6174,7 @@ def validate_complete_runtime_closure(
         "canonical_ldd_output" if raw_schema in (
             RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
             RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) else None)
+            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) else None)
     require(output_key is not None,
             f"{label} runtime closure uses an unsupported evidence schema")
     require(isinstance(value, dict) and set(value) == {
@@ -6166,6 +6240,7 @@ def validate_complete_runtime_closure(
 
 def validate_sealed_executable_record(
     value: object, role: str, initial: Mapping[str, Any],
+    raw_schema: str = RAW_SCHEMA,
 ) -> dict[str, Any]:
     """Cross-bind one v8 timed memfd to its source and build closure."""
     require(role in SEALED_EXECUTABLE_COMMAND and
@@ -6200,7 +6275,7 @@ def validate_sealed_executable_record(
             f"{role} sealed executable identity differs from source bytes")
     closure = validate_complete_runtime_closure(
         value.get("runtime_closure"), f"{role} sealed executable",
-        SEALED_EXECUTABLE_COMMAND[role], RAW_SCHEMA)
+        SEALED_EXECUTABLE_COMMAND[role], raw_schema)
     source_closure = initial.get(f"{role}_runtime_closure")
     require(isinstance(source_closure, Mapping) and
             closure["dependencies"] == source_closure.get("dependencies") and
@@ -6211,13 +6286,14 @@ def validate_sealed_executable_record(
 
 
 def validate_sealed_executables(
-    value: object, initial: Mapping[str, Any],
+    value: object, initial: Mapping[str, Any], raw_schema: str = RAW_SCHEMA,
 ) -> dict[str, Any]:
     require(isinstance(value, dict) and
             set(value) == {"baseline", "candidate"},
             "sealed executable set shape differs")
     for role in ("baseline", "candidate"):
-        validate_sealed_executable_record(value.get(role), role, initial)
+        validate_sealed_executable_record(
+            value.get(role), role, initial, raw_schema)
     return value
 
 
@@ -6562,7 +6638,7 @@ def validate_complete_build_identity(
     if raw_schema in (
             RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
             RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         expected_compile_keys.add("generated_attestation_header")
     if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
         expected_compile_keys.add("effective_build_configuration")
@@ -6660,7 +6736,7 @@ def validate_complete_build_identity(
     if raw_schema in (
             RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
             RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         if implementation == "candidate":
             attestation = validate_complete_benchmark_attestation(
                 compile_record.get("generated_attestation_header"), build_dir,
@@ -6847,7 +6923,7 @@ def validate_complete_input_snapshot(
     if raw_schema in (
             RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
             RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         attestation = snapshot["candidate_build"][
             "validated_compile_commands"]["generated_attestation_header"]
         require(attestation["source_commit"] ==
@@ -7276,6 +7352,282 @@ def cpu_stat_delta(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[
         "nonidle_jiffies": nonidle,
         "total_jiffies": total,
     }
+
+
+def validate_cpu_stat_snapshot_exact(
+    value: object, expected_cpu: int,
+) -> dict[str, Any]:
+    """Validate the closed v18 per-CPU /proc/stat snapshot shape."""
+    require(isinstance(value, dict) and
+            set(value) == {"cpu", "fields", "total_jiffies"} and
+            type(value.get("cpu")) is int and value["cpu"] == expected_cpu and
+            isinstance(value.get("fields"), dict) and
+            set(value["fields"]) == set(CPU_STAT_FIELDS) and
+            all(type(value["fields"][name]) is int and
+                value["fields"][name] >= 0 for name in CPU_STAT_FIELDS) and
+            type(value.get("total_jiffies")) is int and
+            value["total_jiffies"] == sum(value["fields"].values()),
+            "windowed CPU stat snapshot is malformed")
+    return value
+
+
+def cpu_stat_pair_snapshot(
+    cpu: int, sibling: int, *, before_child: bool,
+) -> dict[str, Any]:
+    """Read both logical-CPU records in one bounded /proc/stat snapshot."""
+    require(type(cpu) is int and type(sibling) is int and
+            cpu >= 0 and sibling >= 0 and cpu != sibling,
+            "CPU pair snapshot identity is invalid")
+    read_started = time.monotonic_ns()
+    lines = Path("/proc/stat").read_text(encoding="ascii").splitlines()
+    read_finished = time.monotonic_ns()
+    records: dict[int, dict[str, Any]] = {}
+    for logical_cpu in (cpu, sibling):
+        prefix = f"cpu{logical_cpu} "
+        matches = [line for line in lines if line.startswith(prefix)]
+        require(len(matches) == 1,
+                f"CPU {logical_cpu} is absent or duplicate in /proc/stat")
+        tokens = matches[0].split()
+        require(tokens[0] == f"cpu{logical_cpu}" and
+                len(tokens) >= 1 + len(CPU_STAT_FIELDS),
+                f"CPU {logical_cpu} has an incomplete /proc/stat record")
+        try:
+            values = [
+                int(value) for value in
+                tokens[1:1 + len(CPU_STAT_FIELDS)]]
+        except ValueError as error:
+            raise EvidenceError(
+                f"CPU {logical_cpu} has a non-integer /proc/stat record") \
+                from error
+        require(all(value >= 0 for value in values),
+                f"CPU {logical_cpu} has a negative /proc/stat counter")
+        fields = dict(zip(CPU_STAT_FIELDS, values))
+        records[logical_cpu] = {
+            "cpu": logical_cpu,
+            "fields": fields,
+            "total_jiffies": sum(values),
+        }
+    return {
+        "benchmark_cpu": records[cpu],
+        "monotonic_ns": read_finished if before_child else read_started,
+        "read_finished_monotonic_ns": read_finished,
+        "read_started_monotonic_ns": read_started,
+        "reserved_sibling": records[sibling],
+    }
+
+
+def cpu_pair_snapshot_before(cpu: int, sibling: int) -> dict[str, Any]:
+    """Capture counters before a monotonic boundary enclosing the child."""
+    return cpu_stat_pair_snapshot(cpu, sibling, before_child=True)
+
+
+def cpu_pair_snapshot_after(cpu: int, sibling: int) -> dict[str, Any]:
+    """Capture counters after a monotonic boundary enclosing the child."""
+    return cpu_stat_pair_snapshot(cpu, sibling, before_child=False)
+
+
+def cpu_window_policy() -> dict[str, Any]:
+    return {
+        "benchmark_cpu_max_nonidle_excess_jiffies": 0,
+        "benchmark_cpu_tick_ceiling_formula":
+            "floor(child_wall_duration_ns * clock_ticks_per_second / "
+            "1000000000) + 1",
+        "counter_source": "/proc/stat",
+        "idle_fields": list(CPU_STAT_IDLE_FIELDS),
+        "interpretation":
+            "sampled 100 Hz rejection screen over the retained benchmark "
+            "window only; not process ownership attribution, not an "
+            "interference upper bound, and not proof of CPU exclusivity",
+        "nonidle_fields": [
+            name for name in CPU_STAT_FIELDS if name not in CPU_STAT_IDLE_FIELDS
+        ],
+        "reserved_sibling_max_nonidle_jiffies": 0,
+    }
+
+
+def cpu_window_record(
+    cpu: int,
+    sibling: int,
+    cell_id: str,
+    round_index: int,
+    slot: int,
+    implementation: str,
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+    child_started_monotonic_ns: int,
+    child_wall_duration_ns: int,
+) -> dict[str, Any]:
+    require(isinstance(cell_id, str) and cell_id and
+            type(round_index) is int and round_index >= 0 and
+            type(slot) is int and slot >= 0 and
+            implementation in ("baseline", "candidate"),
+            "per-invocation CPU window label is invalid")
+    require(isinstance(before, dict) and isinstance(after, dict) and
+            set(before) == {
+                "benchmark_cpu", "monotonic_ns",
+                "read_finished_monotonic_ns", "read_started_monotonic_ns",
+                "reserved_sibling"} and
+            set(after) == {
+                "benchmark_cpu", "monotonic_ns",
+                "read_finished_monotonic_ns", "read_started_monotonic_ns",
+                "reserved_sibling"} and
+            all(isinstance(record, dict) for record in (
+                before.get("benchmark_cpu"), before.get("reserved_sibling"),
+                after.get("benchmark_cpu"), after.get("reserved_sibling"))),
+            "per-invocation CPU snapshots are incomplete")
+    before_ns = before.get("monotonic_ns")
+    after_ns = after.get("monotonic_ns")
+    before_read_started = before.get("read_started_monotonic_ns")
+    before_read_finished = before.get("read_finished_monotonic_ns")
+    after_read_started = after.get("read_started_monotonic_ns")
+    after_read_finished = after.get("read_finished_monotonic_ns")
+    require(type(before_ns) is int and type(after_ns) is int and
+            type(before_read_started) is int and
+            type(before_read_finished) is int and
+            type(after_read_started) is int and
+            type(after_read_finished) is int and
+            type(child_started_monotonic_ns) is int and
+            type(child_wall_duration_ns) is int and
+            before_ns >= 0 and after_ns >= 0 and
+            child_started_monotonic_ns >= 0 and child_wall_duration_ns > 0 and
+            0 <= before_read_started <= before_read_finished == before_ns and
+            after_ns == after_read_started <= after_read_finished,
+            "per-invocation CPU timestamps are invalid")
+    require(before["benchmark_cpu"].get("cpu") == cpu and
+            after["benchmark_cpu"].get("cpu") == cpu and
+            before["reserved_sibling"].get("cpu") == sibling and
+            after["reserved_sibling"].get("cpu") == sibling,
+            "per-invocation CPU snapshots use another CPU pair")
+    for snapshot, expected_cpu in (
+            (before["benchmark_cpu"], cpu),
+            (after["benchmark_cpu"], cpu),
+            (before["reserved_sibling"], sibling),
+            (after["reserved_sibling"], sibling)):
+        validate_cpu_stat_snapshot_exact(snapshot, expected_cpu)
+    benchmark_delta = cpu_stat_delta(
+        before["benchmark_cpu"], after["benchmark_cpu"])
+    sibling_delta = cpu_stat_delta(
+        before["reserved_sibling"], after["reserved_sibling"])
+    window_ns = after_ns - before_ns
+    tick_ceiling = (
+        child_wall_duration_ns * CLOCK_TICKS_PER_SECOND // 1_000_000_000 + 1)
+    benchmark_excess = max(
+        0, benchmark_delta["nonidle_jiffies"] - tick_ceiling)
+    child_finished_monotonic_ns = (
+        child_started_monotonic_ns + child_wall_duration_ns)
+    accepted = (
+        before_ns <= child_started_monotonic_ns and
+        child_started_monotonic_ns < child_finished_monotonic_ns and
+        child_finished_monotonic_ns <= after_ns and
+        window_ns >= child_wall_duration_ns and
+        benchmark_excess == 0 and
+        sibling_delta["nonidle_jiffies"] == 0
+    )
+    return {
+        "accepted": accepted,
+        "after": copy.deepcopy(dict(after)),
+        "before": copy.deepcopy(dict(before)),
+        "benchmark_cpu": cpu,
+        "benchmark_cpu_nonidle_excess_jiffies": benchmark_excess,
+        "benchmark_cpu_tick_ceiling_jiffies": tick_ceiling,
+        "cell_id": cell_id,
+        "child_started_monotonic_ns": child_started_monotonic_ns,
+        "child_wall_duration_ns": child_wall_duration_ns,
+        "clock_ticks_per_second": CLOCK_TICKS_PER_SECOND,
+        "delta": {
+            "benchmark_cpu": benchmark_delta,
+            "reserved_sibling": sibling_delta,
+        },
+        "implementation": implementation,
+        "policy": cpu_window_policy(),
+        "reserved_sibling": sibling,
+        "reserved_sibling_nonidle_jiffies":
+            sibling_delta["nonidle_jiffies"],
+        "round": round_index,
+        "schema": CPU_WINDOW_SCHEMA,
+        "slot": slot,
+        "window_ns": window_ns,
+    }
+
+
+def validate_cpu_window(
+    value: object, cpu: int, sibling: int, require_accepted: bool = True,
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+        "accepted", "after", "before", "benchmark_cpu",
+        "benchmark_cpu_nonidle_excess_jiffies",
+        "benchmark_cpu_tick_ceiling_jiffies",
+        "cell_id", "child_started_monotonic_ns", "child_wall_duration_ns",
+        "clock_ticks_per_second", "delta", "implementation", "policy",
+        "reserved_sibling", "reserved_sibling_nonidle_jiffies", "round",
+        "schema", "slot", "window_ns"},
+        "per-invocation CPU window evidence is incomplete")
+    require(value.get("schema") == CPU_WINDOW_SCHEMA and
+            value.get("clock_ticks_per_second") == CLOCK_TICKS_PER_SECOND and
+            type(value.get("benchmark_cpu")) is int and
+            type(value.get("reserved_sibling")) is int and
+            value["benchmark_cpu"] == cpu and
+            value["reserved_sibling"] == sibling,
+            "per-invocation CPU window identity is invalid")
+    expected = cpu_window_record(
+        cpu, sibling, value.get("cell_id"), value.get("round"),
+        value.get("slot"), value.get("implementation"),
+        value.get("before"), value.get("after"),
+        value.get("child_started_monotonic_ns"),
+        value.get("child_wall_duration_ns"))
+    require(exact_json_equal(value, expected),
+            "per-invocation CPU window evidence was edited")
+    if require_accepted:
+        require(value["accepted"] is True,
+                "per-invocation CPU window rejection screen failed")
+    return value
+
+
+def validate_cpu_window_counter_chain(
+    windows: Sequence[Mapping[str, Any]],
+    cpu: int,
+    sibling: int,
+    *,
+    outer_before: Mapping[str, Any] | None = None,
+    outer_after: Mapping[str, Any] | None = None,
+) -> None:
+    """Require every retained /proc/stat counter epoch to be nested."""
+    require((outer_before is None) == (outer_after is None),
+            "CPU window counter chain has only one outer endpoint")
+    for endpoint, expected_cpu in (
+            ("benchmark_cpu", cpu), ("reserved_sibling", sibling)):
+        previous: Mapping[str, Any] | None = None
+        if outer_before is not None:
+            previous = validate_cpu_stat_snapshot_exact(
+                outer_before.get(endpoint), expected_cpu)
+        for index, window in enumerate(windows):
+            require(isinstance(window, Mapping) and
+                    isinstance(window.get("before"), Mapping) and
+                    isinstance(window.get("after"), Mapping),
+                    f"CPU window {index} lacks counter endpoints")
+            current_before = validate_cpu_stat_snapshot_exact(
+                window["before"].get(endpoint), expected_cpu)
+            current_after = validate_cpu_stat_snapshot_exact(
+                window["after"].get(endpoint), expected_cpu)
+            if previous is not None:
+                require(all(
+                    previous["fields"][name] <=
+                    current_before["fields"][name]
+                    for name in CPU_STAT_FIELDS),
+                    "per-invocation CPU counter epochs are not ordered")
+            require(all(
+                current_before["fields"][name] <=
+                current_after["fields"][name]
+                for name in CPU_STAT_FIELDS),
+                "per-invocation CPU counter epoch moved backwards")
+            previous = current_after
+        if outer_after is not None:
+            final = validate_cpu_stat_snapshot_exact(
+                outer_after.get(endpoint), expected_cpu)
+            require(previous is not None and all(
+                previous["fields"][name] <= final["fields"][name]
+                for name in CPU_STAT_FIELDS),
+                "retained CPU windows escape the campaign isolation interval")
 
 
 def pair_lease_payload(
@@ -7787,6 +8139,193 @@ def validate_isolation(
     return value
 
 
+def isolation_record_v2(
+    cpu: int,
+    sibling: int,
+    pair_lease: Mapping[str, Any],
+    before_monotonic_ns: int,
+    after_monotonic_ns: int,
+    before_cpu: Mapping[str, Any],
+    after_cpu: Mapping[str, Any],
+    before_sibling: Mapping[str, Any],
+    after_sibling: Mapping[str, Any],
+    windows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    require(type(windows) in (list, tuple),
+            "per-invocation CPU windows are not a sequence")
+    validate_pair_lease_identity(pair_lease, cpu, sibling)
+    for snapshot, expected_cpu in (
+            (before_cpu, cpu), (after_cpu, cpu),
+            (before_sibling, sibling), (after_sibling, sibling)):
+        validate_cpu_stat_snapshot_exact(snapshot, expected_cpu)
+    retained_windows = [
+        validate_cpu_window(window, cpu, sibling, require_accepted=False)
+        for window in windows
+    ]
+    validate_cpu_window_counter_chain(
+        retained_windows, cpu, sibling,
+        outer_before={
+            "benchmark_cpu": before_cpu,
+            "reserved_sibling": before_sibling,
+        },
+        outer_after={
+            "benchmark_cpu": after_cpu,
+            "reserved_sibling": after_sibling,
+        })
+    require(all(
+        retained_windows[index]["after"]["read_finished_monotonic_ns"] <=
+        retained_windows[index + 1]["before"]["read_started_monotonic_ns"]
+        for index in range(len(retained_windows) - 1)),
+        "per-invocation CPU windows are not strictly ordered")
+    require(type(before_monotonic_ns) is int and
+            type(after_monotonic_ns) is int and
+            before_monotonic_ns >= 0 and after_monotonic_ns >= 0,
+            "windowed isolation monotonic timestamps are invalid")
+    if retained_windows:
+        require(
+            before_monotonic_ns <=
+            retained_windows[0]["before"]["read_started_monotonic_ns"] and
+            retained_windows[-1]["after"]["read_finished_monotonic_ns"] <=
+            after_monotonic_ns,
+            "retained CPU windows escape the campaign isolation interval")
+    benchmark_delta = cpu_stat_delta(before_cpu, after_cpu)
+    sibling_delta = cpu_stat_delta(before_sibling, after_sibling)
+    require(benchmark_delta["cpu"] == cpu and sibling_delta["cpu"] == sibling,
+            "windowed isolation deltas use another CPU pair")
+    child_wall_duration_total_ns = sum(
+        window["child_wall_duration_ns"] for window in retained_windows)
+    window_duration_total_ns = sum(
+        window["window_ns"] for window in retained_windows)
+    benchmark_nonidle = sum(
+        window["delta"]["benchmark_cpu"]["nonidle_jiffies"]
+        for window in retained_windows)
+    benchmark_ceiling = sum(
+        window["benchmark_cpu_tick_ceiling_jiffies"]
+        for window in retained_windows)
+    benchmark_excess = sum(
+        window["benchmark_cpu_nonidle_excess_jiffies"]
+        for window in retained_windows)
+    sibling_nonidle = sum(
+        window["reserved_sibling_nonidle_jiffies"]
+        for window in retained_windows)
+    auxiliary_fields = ("iowait", "irq", "nice", "softirq", "steal")
+    auxiliary = {
+        name: sum(window["delta"]["benchmark_cpu"]["fields"][name]
+                  for window in retained_windows)
+        for name in auxiliary_fields
+    }
+    campaign_duration_ns = after_monotonic_ns - before_monotonic_ns
+    out_of_window = {
+        "benchmark_cpu_nonidle_jiffies":
+            benchmark_delta["nonidle_jiffies"] - benchmark_nonidle,
+        "duration_ns": campaign_duration_ns - window_duration_total_ns,
+        "gated": False,
+        "interpretation":
+            "runner overhead outside every retained benchmark window; "
+            "disclosed so the shared-host exposure is visible, deliberately "
+            "not gated because it contains no retained measurement",
+        "reserved_sibling_nonidle_jiffies":
+            sibling_delta["nonidle_jiffies"] - sibling_nonidle,
+    }
+    residuals_valid = all(type(value) is int and value >= 0 for value in (
+        out_of_window["benchmark_cpu_nonidle_jiffies"],
+        out_of_window["duration_ns"],
+        out_of_window["reserved_sibling_nonidle_jiffies"],
+    ))
+    field_residuals_valid = all(
+        benchmark_delta["fields"][name] >= sum(
+            window["delta"]["benchmark_cpu"]["fields"][name]
+            for window in retained_windows) and
+        sibling_delta["fields"][name] >= sum(
+            window["delta"]["reserved_sibling"]["fields"][name]
+            for window in retained_windows)
+        for name in CPU_STAT_FIELDS)
+    expected_invocation_count = len(V17_CELLS) * ROUNDS * len(ORDER)
+    accepted = (
+        after_monotonic_ns > before_monotonic_ns and
+        benchmark_delta["nonidle_jiffies"] > 0 and
+        sibling_delta["total_jiffies"] > 0 and
+        len(retained_windows) == expected_invocation_count and
+        all(window["accepted"] is True for window in retained_windows) and
+        benchmark_excess == 0 and sibling_nonidle == 0 and residuals_valid and
+        field_residuals_valid
+    )
+    return {
+        "accepted": accepted,
+        "after": {
+            "benchmark_cpu": dict(after_cpu),
+            "monotonic_ns": after_monotonic_ns,
+            "reserved_sibling": dict(after_sibling),
+        },
+        "before": {
+            "benchmark_cpu": dict(before_cpu),
+            "monotonic_ns": before_monotonic_ns,
+            "reserved_sibling": dict(before_sibling),
+        },
+        "benchmark_cpu": cpu,
+        "delta": {
+            "benchmark_cpu": benchmark_delta,
+            "reserved_sibling": sibling_delta,
+        },
+        "invocation_windows": copy.deepcopy(retained_windows),
+        "out_of_window": out_of_window,
+        "pair_lease": dict(pair_lease),
+        "policy": {
+            **cpu_window_policy(),
+            "benchmark_cpu_max_nonidle_excess_jiffies": 0,
+            "reserved_sibling_campaign_nonidle_gated": False,
+            "windowed_gate": "per retained invocation",
+        },
+        "reserved_sibling": sibling,
+        "retained_window_count": len(retained_windows),
+        "schema": ISOLATION_SCHEMA_V2,
+        "windowed": {
+            "benchmark_cpu_auxiliary_class_jiffies": auxiliary,
+            "benchmark_cpu_nonidle_excess_jiffies": benchmark_excess,
+            "benchmark_cpu_nonidle_jiffies": benchmark_nonidle,
+            "benchmark_cpu_tick_ceiling_jiffies": benchmark_ceiling,
+            "child_wall_duration_total_ns": child_wall_duration_total_ns,
+            "clock_ticks_per_second": CLOCK_TICKS_PER_SECOND,
+            "reserved_sibling_nonidle_jiffies": sibling_nonidle,
+            "window_duration_total_ns": window_duration_total_ns,
+        },
+        "windows_schema": CPU_WINDOW_SCHEMA,
+    }
+
+
+def validate_isolation_v2(
+    value: object,
+    cpu: int,
+    sibling: int,
+    windows: Sequence[Mapping[str, Any]],
+    require_accepted: bool = True,
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == ISOLATION_V2_KEYS,
+        "windowed isolation evidence is incomplete")
+    require(value.get("schema") == ISOLATION_SCHEMA_V2 and
+            value.get("windows_schema") == CPU_WINDOW_SCHEMA and
+            value.get("benchmark_cpu") == cpu and
+            value.get("reserved_sibling") == sibling,
+            "windowed isolation identity is invalid")
+    before = value.get("before")
+    after = value.get("after")
+    require(isinstance(before, dict) and isinstance(after, dict) and
+            set(before) == {"benchmark_cpu", "monotonic_ns", "reserved_sibling"} and
+            set(after) == {"benchmark_cpu", "monotonic_ns", "reserved_sibling"},
+            "windowed isolation snapshots are incomplete")
+    expected = isolation_record_v2(
+        cpu, sibling, value.get("pair_lease"), before.get("monotonic_ns"),
+        after.get("monotonic_ns"), before.get("benchmark_cpu"),
+        after.get("benchmark_cpu"), before.get("reserved_sibling"),
+        after.get("reserved_sibling"), windows)
+    require(exact_json_equal(value, expected),
+            "windowed isolation deltas or acceptance were edited")
+    if require_accepted:
+        require(value["accepted"] is True,
+                "per-invocation CPU rejection screen failed")
+    return value
+
+
 def supervision_record(
     nonce: str,
     runner_started_ns: int,
@@ -8089,7 +8628,7 @@ def baseline_physical_shard_bytes(cell: Cell, raw_schema: str) -> int:
     require(raw_schema in RAW_TO_CMAKE_IDENTITY,
             "baseline byte geometry uses an unsupported evidence schema")
     if raw_schema not in (
-            RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+            RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         return cell.shard_bytes
     return (cell.shard_bytes + 63) & ~63
 
@@ -8110,7 +8649,7 @@ def validate_cell(cell: Cell, raw_schema: str = RAW_SCHEMA) -> None:
             physical_bytes <= MAX_SHARD_BYTES and
             (raw_schema in (
                 RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14,
-                RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) or
+                RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) or
              cell.shard_bytes % 64 == 0),
             f"cell {cell.identifier} shard bytes violate the schema's "
             "positive byte-size policy")
@@ -8255,7 +8794,7 @@ def expected_parameters(
     if implementation == "baseline" and \
             raw_schema in (
                 RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14,
-                RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+                RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         parameters["logical_shard_bytes"] = cell.shard_bytes
     return parameters
 
@@ -8278,12 +8817,12 @@ def validate_result(
     baseline_padded = (
         implementation == "baseline" and
         raw_schema in (
-            RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) and
+            RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) and
         baseline_physical_shard_bytes(cell, raw_schema) != cell.shard_bytes)
     expected_schema = (
         ("leopard-main-benchmark-v2" if baseline_padded
          else "leopard-main-benchmark-v1") if implementation == "baseline"
-        else ("leopard2-benchmark-v35" if raw_schema == RAW_SCHEMA else
+        else ("leopard2-benchmark-v35" if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS else
               "leopard2-benchmark-v9"
               if raw_schema in (
                   RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
@@ -8315,7 +8854,7 @@ def validate_result(
                 resolved["thread_count"] == 1,
                 "baseline resolved more than one thread")
         if raw_schema in (
-                RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+                RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
             require(resolved.get("padded_application_bytes") is
                         baseline_padded and
                     resolved.get("padding_policy") ==
@@ -8324,7 +8863,7 @@ def validate_result(
                     "baseline logical-byte padding identity differs")
         require(build.get("main_source_commit") == MAIN_COMMIT,
                 "baseline did not attest the exact main commit")
-        if raw_schema == RAW_SCHEMA:
+        if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
             require(build.get("pure_avx2") is False,
                     "baseline v17 did not attest the native build policy")
         require(correctness.get("round_trip") is True,
@@ -8335,7 +8874,7 @@ def validate_result(
         required_candidate = {
             "requested_profile": "legacy_high_v1",
             "requested_field": (
-                "gf16" if raw_schema == RAW_SCHEMA else "auto"),
+                "gf16" if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS else "auto"),
             "requested_backend": "auto",
             "skip_legacy": True,
             "retain_samples": True,
@@ -8345,7 +8884,7 @@ def validate_result(
         for name, expected in required_candidate.items():
             require(exact_json_equal(parameters.get(name), expected),
                     f"candidate option {name} is not comparison-safe")
-        if raw_schema == RAW_SCHEMA:
+        if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
             for name, expected in {
                 "measure_one_shot_encode": True,
                 "attest_source": True,
@@ -8377,7 +8916,7 @@ def validate_result(
         require(type(resolved.get("thread_count")) is int and
                 resolved["thread_count"] == 1,
                 "candidate resolved more than one thread")
-        if raw_schema == RAW_SCHEMA:
+        if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
             require(candidate_mode == "auto",
                     "candidate v17 did not bind the production AUTO mode")
             require(resolved.get("backend") == V17_CONTEXT_BACKEND and
@@ -8443,7 +8982,7 @@ def validate_result(
         require(metrics.get("codec_setup") is None and
                 metrics.get("decode_timing_includes_setup") is True,
                 "baseline decode setup semantics are ambiguous")
-        if raw_schema == RAW_SCHEMA:
+        if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
             retained_window = min(encode) * int(campaign["reuse"])
             require(retained_window >= V17_MIN_RETAINED_TIMER_WINDOW_US,
                     "baseline v17 retained encode timer window is too short")
@@ -8466,7 +9005,7 @@ def validate_result(
             "decode": decode,
         }
     codec_setup = validate_summary(metrics.get("codec_setup"), iterations, setup=True)
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         one_shot_encode = validate_summary(
             metrics.get("one_shot_encode"), iterations)
         ordinary_window = min(encode) * int(campaign["reuse"])
@@ -8490,7 +9029,7 @@ def validate_result(
     one_shot_decode: list[float] | None = None
     if raw_schema in (
             RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
-            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA):
+            RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18):
         one_shot_decode = validate_summary(
             metrics.get("one_shot_decode_including_setup"), iterations)
         memory = value.get("memory")
@@ -8578,7 +9117,7 @@ def analyze_cell(
     require(len(records) == ROUNDS * len(ORDER), "cell has wrong invocation count")
     metrics = (
         ("encode", "one_shot_encode")
-        if raw_schema == RAW_SCHEMA else
+        if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS else
         ("encode", "decode_first_use", "decode_reuse_amortized")
     )
     observations: dict[str, list[float]] = {name: [] for name in metrics}
@@ -8920,7 +9459,12 @@ def validate_raw(
             "host policy/topology changed during campaign")
     validate_host_record(host_initial, cpu, sibling, allowed, raw_schema)
     if raw_schema in ISOLATION_SCHEMAS:
-        validate_isolation(raw.get("isolation"), cpu, sibling)
+        if raw_schema in WINDOWED_CONTAMINATION_SCHEMAS:
+            require(isinstance(raw.get("isolation"), dict) and
+                    raw["isolation"].get("schema") == ISOLATION_SCHEMA_V2,
+                    "v18 raw bundle lacks windowed isolation evidence")
+        else:
+            validate_isolation(raw.get("isolation"), cpu, sibling)
     else:
         require("isolation" not in raw,
                 "legacy raw schema contains unversioned isolation evidence")
@@ -8936,7 +9480,7 @@ def validate_raw(
             "campaign cell identifiers are not unique")
     for cell in cells:
         validate_cell(cell, raw_schema)
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         require(tuple(cells) == V17_CELLS and
                 candidate_mode_for_campaign(campaign) == "auto" and
                 campaign["reuse"] == 8 and campaign["iterations"] == 9 and
@@ -8955,7 +9499,7 @@ def validate_raw(
     validate_candidate_cmake_identity(input_spec, initial, raw_schema)
     executable_snapshots = raw.get("executable_snapshots")
     if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
-        validate_sealed_executables(executable_snapshots, initial)
+        validate_sealed_executables(executable_snapshots, initial, raw_schema)
     else:
         require("executable_snapshots" not in raw,
                 "historical raw bundle contains unversioned executable snapshots")
@@ -8966,7 +9510,10 @@ def validate_raw(
         require("supervision" in raw,
                 "complete raw bundle omits its supervision handshake field")
         supervision = raw.get("supervision")
-        if supervision is not None:
+        if raw_schema in WINDOWED_CONTAMINATION_SCHEMAS:
+            require(supervision is None,
+                    "v18 raw evidence must retain null supervision")
+        elif supervision is not None:
             validate_supervision(supervision, campaign, reservation, raw["isolation"])
     else:
         require("supervision" not in raw,
@@ -8994,7 +9541,7 @@ def validate_raw(
     for invocation, expected in zip(invocations, expected_sequence):
         require(isinstance(invocation, dict), "invocation is not an object")
         if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
-            require(set(invocation) == INVOCATION_V8_KEYS,
+            require(set(invocation) == invocation_keys_for_raw_schema(raw_schema),
                     "sealed invocation has unexpected or missing fields")
             validate_utc_timestamp(
                 invocation.get("started_utc"),
@@ -9018,6 +9565,16 @@ def validate_raw(
                 duration_ns > 0,
                 "benchmark child duration is not a positive integer")
         total_child_duration_ns += duration_ns
+        if raw_schema in WINDOWED_CONTAMINATION_SCHEMAS:
+            window = validate_cpu_window(
+                invocation.get("cpu_window"), cpu, sibling)
+            require(window["child_wall_duration_ns"] == duration_ns and
+                    [window["cell_id"], window["round"], window["slot"],
+                     window["implementation"]] == list(expected),
+                    "per-invocation CPU window differs from its child")
+        else:
+            require("cpu_window" not in invocation,
+                    "historical invocation contains windowed CPU evidence")
         cell = cell_by_id[expected[0]]
         expected_executable = (
             Path(SEALED_EXECUTABLE_COMMAND[expected[3]])
@@ -9093,7 +9650,7 @@ def validate_raw(
         else:
             digest_by_cell[expected[0]] = digests
         if expected[3] == "candidate":
-            if raw_schema == RAW_SCHEMA:
+            if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
                 build = result.get("build")
                 candidate_source = initial.get("candidate_source")
                 require(isinstance(build, Mapping) and
@@ -9113,6 +9670,10 @@ def validate_raw(
                 candidate_backend_by_cell[expected[0]] = backend
     if raw_schema in ISOLATION_SCHEMAS:
         isolation = raw["isolation"]
+        if raw_schema in WINDOWED_CONTAMINATION_SCHEMAS:
+            validate_isolation_v2(
+                isolation, cpu, sibling,
+                [invocation["cpu_window"] for invocation in invocations])
         elapsed_ns = isolation["after"]["monotonic_ns"] - \
             isolation["before"]["monotonic_ns"]
         require(elapsed_ns >= total_child_duration_ns,
@@ -9146,18 +9707,18 @@ def benchmark_arguments(
     if implementation == "baseline" and \
             raw_schema in (
                 RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14,
-                RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA) and \
+                RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18) and \
             benchmark_bytes != cell.shard_bytes:
         arguments.extend(("--logical-bytes", str(cell.shard_bytes)))
     if implementation == "candidate":
         arguments.extend((
             "--profile", "high", "--field",
-            ("gf16" if raw_schema == RAW_SCHEMA else "auto"),
+            ("gf16" if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS else "auto"),
             "--backend", "auto", "--skip-legacy", "--retain-samples",
         ))
         arguments.extend(candidate_mode_arguments(
             candidate_mode_for_campaign(campaign)))
-        if raw_schema == RAW_SCHEMA:
+        if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
             arguments.extend((
                 "--measure-one-shot-encode", "--attest-source",
                 "--auto-gf16-gfni-encode-mode", "1",
@@ -9183,13 +9744,15 @@ def run_child(
     output: Path,
     evidence_directory: EvidenceDirectory,
     cpu: int,
+    sibling: int,
     timeout: float,
     executable_snapshots: Mapping[str, Any],
     snapshot_owner: ExecutableSnapshotOwner,
+    cpu_windows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     retained_snapshot = executable_snapshots.get(implementation)
     validate_sealed_executable_record(
-        retained_snapshot, implementation, initial_identity)
+        retained_snapshot, implementation, initial_identity, RAW_SCHEMA)
     require(snapshot_owner.inspect(implementation) ==
             retained_snapshot["snapshot"],
             f"{implementation} sealed executable changed before launch")
@@ -9198,6 +9761,9 @@ def run_child(
     after: dict[str, Any] | None = None
     recorded_command: list[str] | None = None
     duration_ns = 0
+    child_started_monotonic_ns: int | None = None
+    before_window: dict[str, Any] | None = None
+    after_window: dict[str, Any] | None = None
     environment = dict(CHILD_ENVIRONMENT)
     start_utc = utc_now()
     primary: BaseException | None = None
@@ -9221,12 +9787,22 @@ def run_child(
         require(before == initial_identity,
                 "input identity changed before benchmark launch")
         validate_reservation_current(reservation)
-        start = time.monotonic_ns()
-        completed = run_process_bounded(
-            command, environment=environment, timeout=timeout,
-            max_stdout=8 * 1024 * 1024, max_stderr=1024 * 1024,
-            inherited_descriptors=(execution_descriptor,))
-        duration_ns = time.monotonic_ns() - start
+        before_window = cpu_pair_snapshot_before(cpu, sibling)
+        child_started_monotonic_ns = time.monotonic_ns()
+        try:
+            completed = run_process_bounded(
+                command, environment=environment, timeout=timeout,
+                max_stdout=8 * 1024 * 1024, max_stderr=1024 * 1024,
+                inherited_descriptors=(execution_descriptor,))
+        finally:
+            require(child_started_monotonic_ns is not None,
+                    "benchmark launch start time is missing")
+            duration_ns = time.monotonic_ns() - child_started_monotonic_ns
+            after_window = cpu_pair_snapshot_after(cpu, sibling)
+            cpu_windows.append(cpu_window_record(
+                cpu, sibling, cell.identifier, round_index, slot,
+                implementation, before_window, after_window,
+                child_started_monotonic_ns, duration_ns))
         require(sealed_executable_identity(
                     execution_descriptor, f"{implementation} benchmark") ==
                 retained_snapshot["snapshot"] and
@@ -9254,7 +9830,8 @@ def run_child(
                     f"{implementation} execution descriptor cleanup failed: "
                     f"{cleanup}") from cleanup
     require(completed is not None and before is not None and after is not None and
-            recorded_command is not None,
+            recorded_command is not None and child_started_monotonic_ns is not None and
+            before_window is not None and after_window is not None and cpu_windows,
             "sealed benchmark launch produced no complete result")
     stem = f"invocations/{cell.identifier}/round-{round_index}/slot-{slot}-{implementation}"
     stdout_relative = f"{stem}.stdout"
@@ -9297,6 +9874,7 @@ def run_child(
         "identity_after": after,
         "reservation_before": reservation,
         "reservation_after": reservation,
+        "cpu_window": copy.deepcopy(cpu_windows[-1]),
     }
 
 
@@ -9359,17 +9937,17 @@ def validate_failure(
             FAILURE_SCHEMA_V5, FAILURE_SCHEMA_V6, FAILURE_SCHEMA_V7,
             FAILURE_SCHEMA_V8, FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10,
             FAILURE_SCHEMA_V11, FAILURE_SCHEMA_V12, FAILURE_SCHEMA_V13,
-            FAILURE_SCHEMA_V14, FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA):
+            FAILURE_SCHEMA_V14, FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA_V17, FAILURE_SCHEMA_V18):
         expected_fields.add("supervision")
     if failure_schema in (
             FAILURE_SCHEMA_V8, FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10,
             FAILURE_SCHEMA_V11, FAILURE_SCHEMA_V12, FAILURE_SCHEMA_V13,
-            FAILURE_SCHEMA_V14, FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA):
+            FAILURE_SCHEMA_V14, FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA_V17, FAILURE_SCHEMA_V18):
         expected_fields.add("executable_snapshots")
     if failure_schema in (
             FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10, FAILURE_SCHEMA_V11,
             FAILURE_SCHEMA_V12, FAILURE_SCHEMA_V13, FAILURE_SCHEMA_V14,
-            FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA):
+            FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA_V17, FAILURE_SCHEMA_V18):
         expected_fields.add("evidence_contract")
     require(set(failure) == expected_fields,
         "failed campaign has unexpected or missing fields")
@@ -9380,7 +9958,7 @@ def validate_failure(
     if failure_schema in (
             FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10, FAILURE_SCHEMA_V11,
             FAILURE_SCHEMA_V12, FAILURE_SCHEMA_V13, FAILURE_SCHEMA_V14,
-            FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA):
+            FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA_V17, FAILURE_SCHEMA_V18):
         expected_contract = {
             FAILURE_SCHEMA_V9: FAILURE_EVIDENCE_CONTRACT_V9,
             FAILURE_SCHEMA_V10: FAILURE_EVIDENCE_CONTRACT_V10,
@@ -9390,7 +9968,8 @@ def validate_failure(
             FAILURE_SCHEMA_V14: FAILURE_EVIDENCE_CONTRACT_V14,
             FAILURE_SCHEMA_V15: FAILURE_EVIDENCE_CONTRACT_V15,
             FAILURE_SCHEMA_V16: FAILURE_EVIDENCE_CONTRACT_V16,
-            FAILURE_SCHEMA: FAILURE_EVIDENCE_CONTRACT,
+            FAILURE_SCHEMA_V17: FAILURE_EVIDENCE_CONTRACT_V17,
+            FAILURE_SCHEMA_V18: FAILURE_EVIDENCE_CONTRACT_V18,
         }[failure_schema]
         require(
             failure.get("evidence_contract") == expected_contract,
@@ -9401,7 +9980,7 @@ def validate_failure(
     if failure_schema in (
             FAILURE_SCHEMA_V8, FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10,
             FAILURE_SCHEMA_V11, FAILURE_SCHEMA_V12, FAILURE_SCHEMA_V13,
-            FAILURE_SCHEMA_V14, FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA):
+            FAILURE_SCHEMA_V14, FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA_V17, FAILURE_SCHEMA_V18):
         validate_utc_timestamp(
             failure.get("created_utc"), "sealed failed campaign creation time")
     campaign = failure.get("campaign")
@@ -9465,7 +10044,13 @@ def validate_failure(
     if pair_lease is not None:
         validate_pair_lease_identity(pair_lease, cpu, sibling)
     if isolation is not None:
-        validate_isolation(isolation, cpu, sibling, require_accepted=False)
+        if raw_schema in WINDOWED_CONTAMINATION_SCHEMAS:
+            require(isinstance(isolation, dict) and
+                    set(isolation) == ISOLATION_V2_KEYS and
+                    isolation.get("schema") == ISOLATION_SCHEMA_V2,
+                    "failed v18 campaign lacks windowed isolation evidence")
+        else:
+            validate_isolation(isolation, cpu, sibling, require_accepted=False)
         require(exact_json_equal(pair_lease, isolation["pair_lease"]),
                 "failed campaign isolation uses another pair lease")
     reservation = failure.get("reservation")
@@ -9474,13 +10059,16 @@ def validate_failure(
             reservation, cpu, sibling,
             exact=raw_schema in SEALED_EXECUTABLE_SCHEMAS)
     supervision = failure.get("supervision")
-    if supervision is not None:
+    if raw_schema in WINDOWED_CONTAMINATION_SCHEMAS:
+        require(supervision is None,
+                "failed v18 campaign must retain null supervision")
+    elif supervision is not None:
         require(failure_schema in (
                     FAILURE_SCHEMA_V5, FAILURE_SCHEMA_V6, FAILURE_SCHEMA_V7,
                     FAILURE_SCHEMA_V8, FAILURE_SCHEMA_V9,
                     FAILURE_SCHEMA_V10, FAILURE_SCHEMA_V11,
                     FAILURE_SCHEMA_V12, FAILURE_SCHEMA_V13,
-                    FAILURE_SCHEMA_V14, FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA) and
+                    FAILURE_SCHEMA_V14, FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA_V17, FAILURE_SCHEMA_V18) and
                 reservation is not None and
                 isolation is not None and isinstance(campaign, dict),
                 "failed supervision handshake has no complete-schema context")
@@ -9497,7 +10085,7 @@ def validate_failure(
     cells = [Cell(**item) for item in cells_value]
     for cell in cells:
         validate_cell(cell, raw_schema)
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         require(tuple(cells) == V17_CELLS and
                 candidate_mode_for_campaign(campaign) == "auto" and
                 campaign["reuse"] == 8 and campaign["iterations"] == 9 and
@@ -9523,7 +10111,8 @@ def validate_failure(
         require(executable_snapshots is None or isinstance(initial, dict),
                 "failed sealed snapshots lack their input identity")
         if executable_snapshots is not None:
-            validate_sealed_executables(executable_snapshots, initial)
+            validate_sealed_executables(
+                executable_snapshots, initial, raw_schema)
     else:
         require("executable_snapshots" not in failure,
                 "historical failure contains unversioned executable snapshots")
@@ -9531,7 +10120,13 @@ def validate_failure(
         require(isinstance(specification, dict) and isinstance(initial, dict) and
                 reservation is not None,
                 "failed invocation prefix lacks build or reservation identity")
+        if raw_schema in WINDOWED_CONTAMINATION_SCHEMAS:
+            require(set(campaign) == CAMPAIGN_V8_KEYS and
+                    isinstance(host_initial, dict) and
+                    isinstance(pair_lease, dict),
+                    "failed v18 invocation prefix lacks launch identity")
     cell_by_id = {cell.identifier: cell for cell in cells}
+    validated_invocation_windows: list[dict[str, Any]] = []
     for invocation, expected in zip(invocations, expected_sequence):
         require(isinstance(invocation, dict) and
                 exact_json_equal([
@@ -9542,7 +10137,7 @@ def validate_failure(
                 invocation["returncode"] == 0,
                 "failed campaign invocation prefix was edited")
         if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
-            require(set(invocation) == INVOCATION_V8_KEYS,
+            require(set(invocation) == invocation_keys_for_raw_schema(raw_schema),
                     "sealed failed invocation has unexpected or missing fields")
             validate_utc_timestamp(
                 invocation.get("started_utc"),
@@ -9551,6 +10146,18 @@ def validate_failure(
         require(isinstance(duration_ns, int) and not isinstance(duration_ns, bool) and
                 duration_ns > 0,
                 "failed campaign invocation duration is invalid")
+        if raw_schema in WINDOWED_CONTAMINATION_SCHEMAS:
+            window = validate_cpu_window(
+                invocation.get("cpu_window"), cpu, sibling,
+                require_accepted=False)
+            validated_invocation_windows.append(window)
+            require(window["child_wall_duration_ns"] == duration_ns and
+                    [window["cell_id"], window["round"], window["slot"],
+                     window["implementation"]] == list(expected),
+                    "failed per-invocation CPU window differs from its child")
+        else:
+            require("cpu_window" not in invocation,
+                    "historical failed invocation contains windowed CPU evidence")
         implementation = expected[3]
         cell = cell_by_id[expected[0]]
         expected_executable = (
@@ -9593,6 +10200,45 @@ def validate_failure(
             raw_schema)
         require(exact_json_equal(invocation.get("normalized"), normalized),
                 "failed campaign invocation result was edited")
+    if raw_schema in WINDOWED_CONTAMINATION_SCHEMAS:
+        validate_cpu_window_counter_chain(
+            validated_invocation_windows, cpu, sibling)
+        require(all(
+                    validated_invocation_windows[index]["after"]
+                        ["read_finished_monotonic_ns"] <=
+                    validated_invocation_windows[index + 1]["before"]
+                        ["read_started_monotonic_ns"]
+                    for index in range(len(validated_invocation_windows) - 1)),
+                "failed invocation CPU windows are not strictly ordered")
+        require(all(window["accepted"] is True
+                    for window in validated_invocation_windows[:-1]),
+                "failed invocation CPU windows do not form an accepted prefix")
+    if raw_schema in WINDOWED_CONTAMINATION_SCHEMAS and isolation is not None:
+        retained_windows = isolation.get("invocation_windows")
+        require(isinstance(retained_windows, list) and
+                len(invocations) <= len(retained_windows) <= len(invocations) + 1 and
+                len(retained_windows) <= len(expected_sequence),
+                "failed campaign window prefix has an invalid length")
+        validated_retained_windows = []
+        for index, window in enumerate(retained_windows):
+            expected = expected_sequence[index]
+            validated = validate_cpu_window(
+                window, cpu, sibling, require_accepted=False)
+            validated_retained_windows.append(validated)
+            require([
+                validated["cell_id"], validated["round"], validated["slot"],
+                validated["implementation"]] == list(expected),
+                "failed campaign window prefix was edited")
+            if index < len(invocations):
+                require(exact_json_equal(
+                            window, invocations[index]["cpu_window"]),
+                        "failed campaign invocation/window prefix differs")
+        require(all(window["accepted"] is True
+                    for window in validated_retained_windows[:-1]),
+                "failed campaign windows do not form an accepted prefix")
+        validate_isolation_v2(
+            isolation, cpu, sibling, retained_windows,
+            require_accepted=False)
     retained = failure.get("retained_files")
     require(isinstance(retained, list), "failed retained-file list is invalid")
     retained_paths: set[str] = set()
@@ -9672,6 +10318,10 @@ def _run_campaign_owned(
     if execution_nonce is not None:
         require(HEX256.fullmatch(execution_nonce) is not None,
                 "supervisor execution nonce is malformed")
+    require(execution_nonce is None,
+            "v18 acquisition is passive-only and requires null supervision")
+    require(os.sysconf("SC_CLK_TCK") == CLOCK_TICKS_PER_SECOND,
+            "v18 evidence requires SC_CLK_TCK=100")
     output = evidence_directory.path
     evidence_directory.validate_current()
     cells = cells_from_options(options)
@@ -9716,17 +10366,17 @@ def _run_campaign_owned(
     }
     require(options.baseline_native is True and
             options.baseline_pure_avx2 is False,
-            "fresh v17 acquisition requires --baseline-native")
+            "fresh v18 acquisition requires --baseline-native")
     require(options.preset == "v17-gfni-encode" and not options.cell and
             cells == V17_CELLS,
-            "fresh v17 acquisition requires the exact v17 GF16 encode preset")
+            "fresh v18 acquisition requires the exact GF16 encode preset")
     require(options.candidate_mode == "auto",
-            "fresh v17 acquisition requires the production AUTO candidate")
+            "fresh v18 acquisition requires the production AUTO candidate")
     require(options.reuse == 8 and options.iterations == 9 and
             options.warmup == 2,
-            "fresh v17 acquisition requires reuse=8, iterations=9, warmup=2")
+            "fresh v18 acquisition requires reuse=8, iterations=9, warmup=2")
     require(options.cpu == 52 and options.reserved_sibling == 116,
-            "fresh v17 acquisition requires the frozen CPU52/sibling116 pair")
+            "fresh v18 acquisition requires the frozen CPU52/sibling116 pair")
     require(options.iterations >= 3, "--iterations must be at least 3")
     require(options.reuse >= 1 and options.warmup >= 1,
             "--reuse and --warmup must be positive")
@@ -9738,6 +10388,7 @@ def _run_campaign_owned(
     pair_lease: dict[str, Any] | None = None
     initial: dict[str, Any] | None = None
     invocations: list[dict[str, Any]] = []
+    cpu_windows: list[dict[str, Any]] = []
     before_monotonic_ns: int | None = None
     before_cpu: dict[str, Any] | None = None
     before_sibling: dict[str, Any] | None = None
@@ -9769,25 +10420,43 @@ def _run_campaign_owned(
                             invocation = run_child(
                                 implementation, cell, round_index, slot, campaign,
                                 specification, initial, reservation, output,
-                                evidence_directory, options.cpu, options.timeout,
-                                executable_snapshots, snapshot_owner)
+                                evidence_directory, options.cpu,
+                                options.reserved_sibling, options.timeout,
+                                executable_snapshots, snapshot_owner, cpu_windows)
                             pair_guard.validate_current()
                             invocations.append(invocation)
+                            window = invocation["cpu_window"]
+                            invocation_number = len(invocations)
+                            require(
+                                window["reserved_sibling_nonidle_jiffies"] == 0,
+                                "reserved SMT sibling was non-idle during retained "
+                                f"benchmark invocation {invocation_number}")
+                            require(
+                                window[
+                                    "benchmark_cpu_nonidle_excess_jiffies"] == 0,
+                                "benchmark CPU exceeded the per-invocation tick "
+                                "ceiling during retained benchmark invocation "
+                                f"{invocation_number}")
+                            require(window["accepted"] is True,
+                                    "per-invocation CPU window evidence is "
+                                    "incomplete for invocation "
+                                    f"{invocation_number}")
             finally:
                 if before_monotonic_ns is not None and before_cpu is not None and \
                         before_sibling is not None:
                     after_cpu = cpu_stat_snapshot(options.cpu)
                     after_sibling = cpu_stat_snapshot(options.reserved_sibling)
                     after_monotonic_ns = time.monotonic_ns()
-                    isolation = isolation_record(
+                    isolation = isolation_record_v2(
                         options.cpu, options.reserved_sibling, pair_lease,
                         before_monotonic_ns, after_monotonic_ns,
-                        before_cpu, after_cpu, before_sibling, after_sibling)
+                        before_cpu, after_cpu, before_sibling, after_sibling,
+                        cpu_windows)
                     pair_guard.validate_current()
             require(isolation is not None,
                     "campaign produced no scheduler isolation evidence")
             require(isolation["accepted"] is True,
-                    "reserved SMT sibling performed non-idle work during the campaign")
+                    "per-invocation CPU rejection screen failed")
             final = input_snapshot(specification)
             require(final == initial, "input identity changed during campaign")
             for role in ("baseline", "candidate"):
@@ -9888,30 +10557,34 @@ def _run_campaign_owned(
     return 0
 
 
-def validate_fresh_v17_options(options: argparse.Namespace) -> None:
-    """Reject non-v17 acquisition requests before creating an evidence lane."""
+def validate_fresh_v18_options(options: argparse.Namespace) -> None:
+    """Reject non-v18 acquisition requests before creating an evidence lane."""
+    require(os.environ.get(SUPERVISION_NONCE_ENV) is None,
+            "v18 acquisition is passive-only and requires null supervision")
+    require(os.sysconf("SC_CLK_TCK") == CLOCK_TICKS_PER_SECOND,
+            "v18 evidence requires SC_CLK_TCK=100")
     cells = cells_from_options(options)
     for cell in cells:
         validate_cell(cell)
     require(options.baseline_native is True and
             options.baseline_pure_avx2 is False,
-            "fresh v17 acquisition requires --baseline-native")
+            "fresh v18 acquisition requires --baseline-native")
     require(options.preset == "v17-gfni-encode" and not options.cell and
             cells == V17_CELLS,
-            "fresh v17 acquisition requires the exact v17 GF16 encode preset")
+            "fresh v18 acquisition requires the exact GF16 encode preset")
     require(options.candidate_mode == "auto",
-            "fresh v17 acquisition requires the production AUTO candidate")
+            "fresh v18 acquisition requires the production AUTO candidate")
     require(options.reuse == 8 and options.iterations == 9 and
             options.warmup == 2,
-            "fresh v17 acquisition requires reuse=8, iterations=9, warmup=2")
+            "fresh v18 acquisition requires reuse=8, iterations=9, warmup=2")
     require(options.cpu == 52 and options.reserved_sibling == 116,
-            "fresh v17 acquisition requires the frozen CPU52/sibling116 pair")
+            "fresh v18 acquisition requires the frozen CPU52/sibling116 pair")
     require(math.isfinite(options.timeout) and options.timeout > 0,
             "--timeout must be positive and finite")
 
 
 def run_campaign(options: argparse.Namespace) -> int:
-    validate_fresh_v17_options(options)
+    validate_fresh_v18_options(options)
     evidence_directory = EvidenceDirectory.create_new(options.output)
     try:
         return _run_campaign_owned(options, evidence_directory)
@@ -9946,7 +10619,7 @@ def verified_campaign_bundle(
         if manifest_schema in (
                 MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10,
                 MANIFEST_SCHEMA_V11, MANIFEST_SCHEMA_V12,
-                MANIFEST_SCHEMA_V13, MANIFEST_SCHEMA_V14, MANIFEST_SCHEMA_V15, MANIFEST_SCHEMA_V16, MANIFEST_SCHEMA):
+                MANIFEST_SCHEMA_V13, MANIFEST_SCHEMA_V14, MANIFEST_SCHEMA_V15, MANIFEST_SCHEMA_V16, MANIFEST_SCHEMA_V17, MANIFEST_SCHEMA_V18):
             require(set(manifest) == MANIFEST_V8_KEYS,
                     "sealed manifest has unexpected or missing fields")
             validate_utc_timestamp(
@@ -9956,7 +10629,7 @@ def verified_campaign_bundle(
                 MANIFEST_SCHEMA_V7, MANIFEST_SCHEMA_V8,
                 MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10,
                 MANIFEST_SCHEMA_V11, MANIFEST_SCHEMA_V12,
-                MANIFEST_SCHEMA_V13, MANIFEST_SCHEMA_V14, MANIFEST_SCHEMA_V15, MANIFEST_SCHEMA_V16, MANIFEST_SCHEMA):
+                MANIFEST_SCHEMA_V13, MANIFEST_SCHEMA_V14, MANIFEST_SCHEMA_V15, MANIFEST_SCHEMA_V16, MANIFEST_SCHEMA_V17, MANIFEST_SCHEMA_V18):
             directory.enable_owner_only()
             _, strict_manifest_bytes = directory.snapshot(
                 manifest_path.name, MAX_IDENTITY_FILE_BYTES)
@@ -9976,7 +10649,7 @@ def verified_campaign_bundle(
         if manifest_schema in (
                 MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10,
                 MANIFEST_SCHEMA_V11, MANIFEST_SCHEMA_V12,
-                MANIFEST_SCHEMA_V13, MANIFEST_SCHEMA_V14, MANIFEST_SCHEMA_V15, MANIFEST_SCHEMA_V16, MANIFEST_SCHEMA):
+                MANIFEST_SCHEMA_V13, MANIFEST_SCHEMA_V14, MANIFEST_SCHEMA_V15, MANIFEST_SCHEMA_V16, MANIFEST_SCHEMA_V17, MANIFEST_SCHEMA_V18):
             require(set(raw_info) == MANIFEST_RAW_IDENTITY_KEYS,
                     "sealed manifest raw identity has unexpected or missing fields")
         raw_relative = raw_info.get("path")
@@ -10011,7 +10684,7 @@ def verified_campaign_bundle(
             MANIFEST_SCHEMA_V5, MANIFEST_SCHEMA_V6, MANIFEST_SCHEMA_V7,
             MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10,
             MANIFEST_SCHEMA_V11, MANIFEST_SCHEMA_V12, MANIFEST_SCHEMA_V13,
-            MANIFEST_SCHEMA_V14, MANIFEST_SCHEMA_V15, MANIFEST_SCHEMA_V16, MANIFEST_SCHEMA
+            MANIFEST_SCHEMA_V14, MANIFEST_SCHEMA_V15, MANIFEST_SCHEMA_V16, MANIFEST_SCHEMA_V17, MANIFEST_SCHEMA_V18
         ):
             names.append("isolation")
         else:
@@ -10021,7 +10694,7 @@ def verified_campaign_bundle(
                 MANIFEST_SCHEMA_V5, MANIFEST_SCHEMA_V6, MANIFEST_SCHEMA_V7,
                 MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10,
                 MANIFEST_SCHEMA_V11, MANIFEST_SCHEMA_V12,
-                MANIFEST_SCHEMA_V13, MANIFEST_SCHEMA_V14, MANIFEST_SCHEMA_V15, MANIFEST_SCHEMA_V16, MANIFEST_SCHEMA):
+                MANIFEST_SCHEMA_V13, MANIFEST_SCHEMA_V14, MANIFEST_SCHEMA_V15, MANIFEST_SCHEMA_V16, MANIFEST_SCHEMA_V17, MANIFEST_SCHEMA_V18):
             names.append("supervision")
         else:
             require("supervision" not in manifest,
@@ -10029,7 +10702,7 @@ def verified_campaign_bundle(
         if manifest_schema in (
                 MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10,
                 MANIFEST_SCHEMA_V11, MANIFEST_SCHEMA_V12,
-                MANIFEST_SCHEMA_V13, MANIFEST_SCHEMA_V14, MANIFEST_SCHEMA_V15, MANIFEST_SCHEMA_V16, MANIFEST_SCHEMA):
+                MANIFEST_SCHEMA_V13, MANIFEST_SCHEMA_V14, MANIFEST_SCHEMA_V15, MANIFEST_SCHEMA_V16, MANIFEST_SCHEMA_V17, MANIFEST_SCHEMA_V18):
             names.append("executable_snapshots")
         else:
             require("executable_snapshots" not in manifest,
@@ -10098,7 +10771,7 @@ def verify_failed_campaign(options: argparse.Namespace) -> int:
                 FAILURE_SCHEMA_V7, FAILURE_SCHEMA_V8,
                 FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10,
                 FAILURE_SCHEMA_V11, FAILURE_SCHEMA_V12,
-                FAILURE_SCHEMA_V13, FAILURE_SCHEMA_V14, FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA):
+                FAILURE_SCHEMA_V13, FAILURE_SCHEMA_V14, FAILURE_SCHEMA_V15, FAILURE_SCHEMA_V16, FAILURE_SCHEMA_V17, FAILURE_SCHEMA_V18):
             directory.enable_owner_only()
             _, strict_failure_bytes = directory.snapshot(
                 failure_path.name, MAX_IDENTITY_FILE_BYTES)
