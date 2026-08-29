@@ -14,6 +14,7 @@ import importlib.util
 import json
 import math
 import os
+import shlex
 import shutil
 import signal
 import stat
@@ -194,6 +195,7 @@ CAMPAIGN = {
     "order": list(runner.ORDER),
     "cells": [asdict(CELL)],
     "candidate_mode": "auto",
+    "candidate_backend": "auto",
     "batch": 1,
     "reuse": 8,
     "iterations": 3,
@@ -382,7 +384,7 @@ def baseline_result(
     correctness = {"round_trip": True}
     if raw_schema in (
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
-            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
         parameters["logical_shard_bytes"] = CELL.shard_bytes
         resolved.update({
             "padded_application_bytes": False,
@@ -411,17 +413,19 @@ def candidate_result(
     campaign: Mapping[str, object] = CAMPAIGN,
 ) -> dict:
     parameters = common_parameters()
+    candidate_backend = runner.candidate_backend_for_campaign(campaign)
     parameters.update({
         "requested_profile": "legacy_high_v1",
         "requested_field": "auto",
-        "requested_backend": "auto",
+        "requested_backend":
+            runner.reported_candidate_backend_request(candidate_backend),
         "skip_legacy": True,
         "retain_samples": True,
     })
     if raw_schema in (
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
-            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
         parameters["measure_one_shot_decode"] = True
     flags = runner.candidate_mode_flags(
         runner.candidate_mode_for_campaign(campaign))
@@ -450,7 +454,7 @@ def candidate_result(
                    if raw_schema in (
                        runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
                        runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
-                       runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA)
+                       runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA)
                    else "leopard2-benchmark-v2"),
         "build": ({
             "compiler": "fixture",
@@ -459,11 +463,12 @@ def candidate_result(
         } if raw_schema in (
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
-            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA)
+            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA)
         else {"compiler": "fixture"}),
         "parameters": parameters,
         "resolved": {
-            "profile": "legacy_high_v1", "field": "gf8", "backend": "avx2",
+            "profile": "legacy_high_v1", "field": "gf8",
+            "backend": runner.resolved_candidate_backend(candidate_backend),
             "thread_count": 1, "parent_count": 16, "padded_side": 4,
         },
         "correctness": {"leopard2_round_trip": True, "legacy_comparison": None},
@@ -493,7 +498,7 @@ def candidate_result(
     if raw_schema in (
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
-            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
         result["memory"] = {
             "one_shot_decode_scratch_bytes_per_stripe": 128,
             "one_shot_decode_scratch_bytes_batch": 128,
@@ -616,6 +621,7 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+            "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
@@ -721,7 +727,7 @@ def complete_build_fixture(
     if raw_schema not in (
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
-            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
         specification.pop("baseline_pure_avx2", None)
     build_dir = specification[f"{role}_build_dir"]
     source_root = specification[f"{role}_source_root"]
@@ -743,7 +749,7 @@ def complete_build_fixture(
         if raw_schema in (
                 runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
                 runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
-                runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA):
+                runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
             cache.update({
                 "LEO_MAIN_PURE_AVX2": "ON",
                 "LEO_MAIN_HAS_MARCH_X86_64": "1",
@@ -851,6 +857,9 @@ def complete_build_fixture(
             "Leopard2BackendSSSE3.cpp",
             "Leopard2BackendAVX2.cpp",
             "Leopard2BackendAVX2Xor.cpp",
+            "Leopard2BackendAVX2T16Q2.cpp",
+            "Leopard2BackendAVX2T8K62.cpp",
+            "Leopard2BackendAVX2T16K66.cpp",
             "Leopard2BackendAVX512.cpp",
             "Leopard2BackendAVX2T32B256.cpp",
             "Leopard2BackendAVX2T16B64.cpp",
@@ -1003,7 +1012,7 @@ def complete_build_fixture(
             runner.RAW_SCHEMA_V8, runner.RAW_SCHEMA_V9,
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
-            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
         if baseline:
             compile_identity["generated_attestation_header"] = None
         else:
@@ -1121,7 +1130,7 @@ def complete_runtime_fixture(
             runner.RAW_SCHEMA_V8, runner.RAW_SCHEMA_V9,
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
-            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
         result["canonical_ldd_output"] = runner.canonical_ldd_output(
             raw, "fixture raw ldd output")
     else:
@@ -1348,7 +1357,7 @@ def cmake_fixture_identity(
         if raw_schema not in (
                 runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
                 runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
-                runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA):
+                runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
             specification.pop("baseline_pure_avx2", None)
         specification.update({
             "baseline_executable": baseline_executable["path"],
@@ -1411,7 +1420,7 @@ def cmake_fixture_identity(
     if raw_schema not in (
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
-            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
         specification.pop("baseline_pure_avx2", None)
     specification["candidate_archive"] = archive_path
     return identity, specification
@@ -1440,7 +1449,7 @@ def sealed_executable_fixtures(identity: Mapping[str, object]) -> dict:
 
 def synthetic_raw(
     candidate_scale: float = 0.8, raw_schema: str = runner.RAW_SCHEMA,
-    candidate_mode: str = "auto",
+    candidate_mode: str = "auto", candidate_backend: str = "auto",
     *, multi_config: bool = False,
 ) -> dict:
     identity, specification = cmake_fixture_identity(
@@ -1456,6 +1465,10 @@ def synthetic_raw(
         campaign["candidate_mode"] = candidate_mode
     else:
         campaign.pop("candidate_mode", None)
+    if raw_schema in runner.CANDIDATE_BACKEND_SCHEMAS:
+        campaign["candidate_backend"] = candidate_backend
+    else:
+        campaign.pop("candidate_backend", None)
     invocations = []
     for round_index in range(runner.ROUNDS):
         for slot, implementation in enumerate(runner.ORDER):
@@ -1550,7 +1563,7 @@ def write_complete_evidence_bundle(
                 runner.MANIFEST_SCHEMA_V9, runner.MANIFEST_SCHEMA_V10,
                 runner.MANIFEST_SCHEMA_V11, runner.MANIFEST_SCHEMA_V12,
                 runner.MANIFEST_SCHEMA_V13, runner.MANIFEST_SCHEMA_V14,
-                runner.MANIFEST_SCHEMA_V15, runner.MANIFEST_SCHEMA):
+                runner.MANIFEST_SCHEMA_V15, runner.MANIFEST_SCHEMA_V16, runner.MANIFEST_SCHEMA):
             stdout_path.chmod(0o600)
             stderr_path.chmod(0o600)
         invocation["stdout"] = {
@@ -1590,14 +1603,14 @@ def write_complete_evidence_bundle(
         runner.MANIFEST_SCHEMA_V9, runner.MANIFEST_SCHEMA_V10,
         runner.MANIFEST_SCHEMA_V11, runner.MANIFEST_SCHEMA_V12,
         runner.MANIFEST_SCHEMA_V13, runner.MANIFEST_SCHEMA_V14,
-        runner.MANIFEST_SCHEMA_V15, runner.MANIFEST_SCHEMA,
+        runner.MANIFEST_SCHEMA_V15, runner.MANIFEST_SCHEMA_V16, runner.MANIFEST_SCHEMA,
     ):
         manifest_payload["supervision"] = value["supervision"]
     if manifest_schema in (
             runner.MANIFEST_SCHEMA_V8, runner.MANIFEST_SCHEMA_V9,
             runner.MANIFEST_SCHEMA_V10, runner.MANIFEST_SCHEMA_V11,
             runner.MANIFEST_SCHEMA_V12, runner.MANIFEST_SCHEMA_V13,
-            runner.MANIFEST_SCHEMA_V14, runner.MANIFEST_SCHEMA_V15, runner.MANIFEST_SCHEMA):
+            runner.MANIFEST_SCHEMA_V14, runner.MANIFEST_SCHEMA_V15, runner.MANIFEST_SCHEMA_V16, runner.MANIFEST_SCHEMA):
         manifest_payload["executable_snapshots"] = \
             value["executable_snapshots"]
     manifest = runner.signed(manifest_payload)
@@ -1685,6 +1698,7 @@ def synthetic_failure(raw_schema: str) -> dict:
         runner.RAW_SCHEMA_V13: runner.FAILURE_SCHEMA_V13,
         runner.RAW_SCHEMA_V14: runner.FAILURE_SCHEMA_V14,
         runner.RAW_SCHEMA_V15: runner.FAILURE_SCHEMA_V15,
+        runner.RAW_SCHEMA_V16: runner.FAILURE_SCHEMA_V16,
         runner.RAW_SCHEMA: runner.FAILURE_SCHEMA,
     }[raw_schema]
     payload = {
@@ -1719,6 +1733,8 @@ def synthetic_failure(raw_schema: str) -> dict:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V14
     elif raw_schema == runner.RAW_SCHEMA_V15:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V15
+    elif raw_schema == runner.RAW_SCHEMA_V16:
+        payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V16
     elif raw_schema == runner.RAW_SCHEMA:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT
     if raw_schema in runner.SUPERVISION_SCHEMAS:
@@ -2462,10 +2478,11 @@ class MainCompareRunnerTests(unittest.TestCase):
         self.assertNotIn(
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
             current_configuration["entries"])
-        self.assertEqual(len(runner.CANDIDATE_LIBRARY_SOURCES), 18)
-        self.assertEqual(runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT, 27)
+        self.assertEqual(len(runner.CANDIDATE_LIBRARY_SOURCES_V16), 18)
+        self.assertEqual(
+            runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT_V16, 27)
         k8_source = "Leopard2BackendAVX2T8K8B1024.cpp"
-        self.assertIn(k8_source, runner.CANDIDATE_LIBRARY_SOURCES)
+        self.assertIn(k8_source, runner.CANDIDATE_LIBRARY_SOURCES_V16)
         k8_entry = next(
             entry for entry in current_compile["required_entries"]
             if entry["file"].endswith("/" + k8_source))
@@ -2481,7 +2498,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             Path(entry["file"]).name: entry
             for entry in current_compile["required_entries"]
         }
-        for source in runner.CANDIDATE_LIBRARY_SOURCES:
+        for source in runner.CANDIDATE_LIBRARY_SOURCES_V16:
             with self.subTest(capability_scope=source):
                 expected_count = int(
                     source == k8_source or
@@ -2698,10 +2715,10 @@ class MainCompareRunnerTests(unittest.TestCase):
             current_compile["profile"], runner.CANDIDATE_COMPILE_PROFILE_V7)
         self.assertEqual(
             current_configuration["schema"],
-            runner.BUILD_CONFIGURATION_RECORD_SCHEMA)
+            runner.BUILD_CONFIGURATION_RECORD_SCHEMA_V9)
         self.assertEqual(
             current_configuration["configuration_schema"],
-            runner.BUILD_CONFIGURATION_FILE_SCHEMA)
+            runner.BUILD_CONFIGURATION_FILE_SCHEMA_V9)
         expected_selectors = {
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": ("ON", "1"),
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": ("ON", "1"),
@@ -2792,7 +2809,7 @@ class MainCompareRunnerTests(unittest.TestCase):
         runner.validate_raw(
             historical, None, check_files=False, check_current_inputs=False)
 
-        current = synthetic_raw()
+        current = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V16)
         current_compile = current["identities_initial"]["candidate_build"][
             "validated_compile_commands"]
         current_configuration = current_compile[
@@ -2804,9 +2821,9 @@ class MainCompareRunnerTests(unittest.TestCase):
             entry for entry in current_compile["required_entries"]
             if entry["file"].endswith("/Leopard2BackendAVX2T32B256.cpp"))
         self.assertEqual(
-            current_compile["schema"], runner.COMPILE_COMMANDS_SCHEMA)
+            current_compile["schema"], runner.COMPILE_COMMANDS_SCHEMA_V12)
         self.assertEqual(
-            current_compile["profile"], runner.CANDIDATE_COMPILE_PROFILE)
+            current_compile["profile"], runner.CANDIDATE_COMPILE_PROFILE_V8)
         self.assertEqual(
             current_configuration["entries"][
                 "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED"], "ON")
@@ -2819,14 +2836,14 @@ class MainCompareRunnerTests(unittest.TestCase):
         runner.validate_raw(
             current, None, check_files=False, check_current_inputs=False)
 
-        disabled = synthetic_raw()
+        disabled = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V16)
         disabled["identities_initial"]["candidate_build"][
             "validated_cache"][
                 "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED"] = "OFF"
         synchronize_identity(disabled)
         self.assert_rejected(disabled)
 
-        missing_definition = synthetic_raw()
+        missing_definition = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V16)
         entry = next(
             item for item in missing_definition["identities_initial"][
                 "candidate_build"]["validated_compile_commands"][
@@ -2838,7 +2855,7 @@ class MainCompareRunnerTests(unittest.TestCase):
         self.assert_rejected(missing_definition)
 
         upgraded = copy.deepcopy(historical)
-        upgraded["schema"] = runner.RAW_SCHEMA
+        upgraded["schema"] = runner.RAW_SCHEMA_V16
         self.assert_rejected(upgraded)
         downgraded = copy.deepcopy(current)
         downgraded["schema"] = runner.RAW_SCHEMA_V15
@@ -2854,6 +2871,148 @@ class MainCompareRunnerTests(unittest.TestCase):
                 (runner.MANIFEST_SCHEMA_V15, runner.RAW_SCHEMA_V15))
         runner.validate_failure(
             synthetic_failure(runner.RAW_SCHEMA_V15), Path("/unused"),
+            check_files=False)
+
+    def test_v16_replays_before_v17_candidate_backend_identity_bump(
+        self,
+    ) -> None:
+        historical = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V16)
+        historical_compile = historical["identities_initial"][
+            "candidate_build"]["validated_compile_commands"]
+        historical_configuration = historical_compile[
+            "effective_build_configuration"]
+        self.assertNotIn("candidate_backend", historical["campaign"])
+        self.assertEqual(
+            historical_compile["schema"],
+            runner.COMPILE_COMMANDS_SCHEMA_V12)
+        self.assertEqual(
+            historical_compile["profile"],
+            runner.CANDIDATE_COMPILE_PROFILE_V8)
+        self.assertEqual(
+            historical_compile["entry_count"],
+            runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT_V16)
+        self.assertEqual(
+            historical_configuration["schema"],
+            runner.BUILD_CONFIGURATION_RECORD_SCHEMA_V9)
+        self.assertEqual(
+            historical_configuration["configuration_schema"],
+            runner.BUILD_CONFIGURATION_FILE_SCHEMA_V9)
+        self.assertNotIn(
+            "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
+            historical_configuration["entries"])
+        current_only_sources = {
+            "Leopard2BackendAVX2T16Q2.cpp":
+                "leopard2_backend_avx2.dir",
+            "Leopard2BackendAVX2T8K62.cpp":
+                "leopard2_backend_avx2.dir",
+            "Leopard2BackendAVX2T16K66.cpp":
+                "leopard2_backend_avx2_t16_k66.dir",
+        }
+        self.assertEqual(
+            runner.candidate_library_sources_for_raw_schema(
+                runner.RAW_SCHEMA_V16),
+            runner.CANDIDATE_LIBRARY_SOURCES_V16)
+        for source in current_only_sources:
+            self.assertNotIn(
+                source, runner.CANDIDATE_LIBRARY_SOURCES_V16)
+        historical_candidate = next(
+            item for item in historical["invocations"]
+            if item["implementation"] == "candidate")
+        self.assertEqual(
+            historical_candidate["result"]["parameters"][
+                "requested_backend"], "auto")
+        self.assertEqual(
+            historical_candidate["result"]["resolved"]["backend"],
+            "avx2")
+        runner.validate_raw(
+            historical, None, check_files=False,
+            check_current_inputs=False)
+
+        current = synthetic_raw(candidate_backend="gfni")
+        current_compile = current["identities_initial"]["candidate_build"][
+            "validated_compile_commands"]
+        current_configuration = current_compile[
+            "effective_build_configuration"]
+        self.assertEqual(current["campaign"]["candidate_backend"], "gfni")
+        self.assertEqual(
+            current_compile["schema"], runner.COMPILE_COMMANDS_SCHEMA)
+        self.assertEqual(
+            current_compile["profile"], runner.CANDIDATE_COMPILE_PROFILE)
+        self.assertEqual(
+            current_compile["entry_count"],
+            runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT)
+        self.assertEqual(
+            current_configuration["schema"],
+            runner.BUILD_CONFIGURATION_RECORD_SCHEMA)
+        self.assertEqual(
+            current_configuration["configuration_schema"],
+            runner.BUILD_CONFIGURATION_FILE_SCHEMA)
+        self.assertEqual(
+            current_configuration["entries"][
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"], "ON")
+        self.assertEqual(
+            runner.candidate_library_sources_for_raw_schema(
+                runner.RAW_SCHEMA),
+            runner.CANDIDATE_LIBRARY_SOURCES)
+        for source, target in current_only_sources.items():
+            with self.subTest(current_source=source):
+                entry = next(
+                    item for item in current_compile["required_entries"]
+                    if item["file"].endswith("/" + source))
+                self.assertIn(f"/{target}/", entry["output"])
+                for token in (
+                        "-mavx2", "-mno-avx512f",
+                        "-falign-functions=64",
+                        "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1"):
+                    self.assertEqual(entry["arguments"].count(token), 1)
+        current_candidate = next(
+            item for item in current["invocations"]
+            if item["implementation"] == "candidate")
+        self.assertEqual(
+            current_candidate["result"]["parameters"][
+                "requested_backend"], "avx2-gfni")
+        self.assertEqual(
+            current_candidate["result"]["resolved"]["backend"],
+            "avx2-gfni")
+        runner.validate_raw(
+            current, None, check_files=False,
+            check_current_inputs=False)
+
+        q2_cache_disabled = synthetic_raw()
+        q2_cache_disabled["identities_initial"]["candidate_build"][
+            "validated_cache"][
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED"] = "OFF"
+        synchronize_identity(q2_cache_disabled)
+        self.assert_rejected(q2_cache_disabled)
+
+        q2_definition_missing = synthetic_raw()
+        q2_compile = q2_definition_missing["identities_initial"][
+            "candidate_build"]["validated_compile_commands"]
+        q2_entry = next(
+            item for item in q2_compile["required_entries"]
+            if item["file"].endswith("/Leopard2BackendAVX2T16Q2.cpp"))
+        q2_entry["arguments"].remove(
+            "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1")
+        synchronize_identity(q2_definition_missing)
+        self.assert_rejected(q2_definition_missing)
+
+        upgraded = copy.deepcopy(historical)
+        upgraded["schema"] = runner.RAW_SCHEMA
+        self.assert_rejected(upgraded)
+        downgraded = copy.deepcopy(current)
+        downgraded["schema"] = runner.RAW_SCHEMA_V16
+        self.assert_rejected(downgraded)
+
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = write_complete_evidence_bundle(
+                Path(directory), historical, runner.MANIFEST_SCHEMA_V16)
+            manifest, raw, _, _ = runner.verified_campaign_bundle(
+                manifest_path, no_current_input_check=True)
+            self.assertEqual(
+                (manifest["schema"], raw["schema"]),
+                (runner.MANIFEST_SCHEMA_V16, runner.RAW_SCHEMA_V16))
+        runner.validate_failure(
+            synthetic_failure(runner.RAW_SCHEMA_V16), Path("/unused"),
             check_files=False)
 
     def test_v8_exact_shapes_and_timestamps_fail_closed(self) -> None:
@@ -3335,7 +3494,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 with self.assertRaises(plan.PlanError):
                     plan.verify_exact_manifest(manifest_path)
 
-    def test_promotion_accepts_v12_v13_v14_and_rejects_schema_downgrades(
+    def test_promotion_accepts_v12_v13_v16_and_rejects_schema_downgrades(
         self,
     ) -> None:
         plan = load_plan_runner()
@@ -3344,7 +3503,7 @@ class MainCompareRunnerTests(unittest.TestCase):
              plan.EVIDENCE_SCOPE_SCHEMA_V8),
             (runner.MANIFEST_SCHEMA_V13, runner.RAW_SCHEMA_V13,
              plan.EVIDENCE_SCOPE_SCHEMA_V9),
-            (runner.MANIFEST_SCHEMA, runner.RAW_SCHEMA,
+            (runner.MANIFEST_SCHEMA_V16, runner.RAW_SCHEMA_V16,
              plan.EVIDENCE_SCOPE_SCHEMA),
         ):
             with self.subTest(replay=raw_schema), \
@@ -3358,14 +3517,14 @@ class MainCompareRunnerTests(unittest.TestCase):
                     plan.validate_evidence_scope(scope)["schema"],
                     scope_schema)
         for manifest_schema, raw_schema in (
-            (runner.MANIFEST_SCHEMA_V13, runner.RAW_SCHEMA),
-            (runner.MANIFEST_SCHEMA, runner.RAW_SCHEMA_V13),
-            (runner.MANIFEST_SCHEMA_V12, runner.RAW_SCHEMA),
-            (runner.MANIFEST_SCHEMA, runner.RAW_SCHEMA_V12),
-            (runner.MANIFEST_SCHEMA_V8, runner.RAW_SCHEMA),
-            (runner.MANIFEST_SCHEMA, runner.RAW_SCHEMA_V8),
-            (runner.MANIFEST_SCHEMA_V7, runner.RAW_SCHEMA),
-            (runner.MANIFEST_SCHEMA, runner.RAW_SCHEMA_V7),
+            (runner.MANIFEST_SCHEMA_V13, runner.RAW_SCHEMA_V16),
+            (runner.MANIFEST_SCHEMA_V16, runner.RAW_SCHEMA_V13),
+            (runner.MANIFEST_SCHEMA_V12, runner.RAW_SCHEMA_V16),
+            (runner.MANIFEST_SCHEMA_V16, runner.RAW_SCHEMA_V12),
+            (runner.MANIFEST_SCHEMA_V8, runner.RAW_SCHEMA_V16),
+            (runner.MANIFEST_SCHEMA_V16, runner.RAW_SCHEMA_V8),
+            (runner.MANIFEST_SCHEMA_V7, runner.RAW_SCHEMA_V16),
+            (runner.MANIFEST_SCHEMA_V16, runner.RAW_SCHEMA_V7),
             (runner.MANIFEST_SCHEMA_V6, runner.RAW_SCHEMA_V5),
         ):
             with self.subTest(
@@ -3598,22 +3757,59 @@ class MainCompareRunnerTests(unittest.TestCase):
 
     @unittest.skipUnless(
         sys.platform.startswith("linux") and Path("/usr/bin/ldd").is_file() and
-        Path("/usr/bin/env").is_file(), "requires Linux /usr/bin/ldd and env")
+        Path("/usr/bin/env").is_file() and shutil.which("cc") is not None,
+        "requires Linux /usr/bin/ldd, env, and a C compiler")
     def test_unmocked_same_binary_runtime_snapshots_are_aslr_stable(self) -> None:
-        executable = Path("/usr/bin/env")
-        first = runner.runtime_closure(
-            Path("/usr/bin/ldd"), executable, runner.RAW_SCHEMA)
-        second = runner.runtime_closure(
-            Path("/usr/bin/ldd"), executable, runner.RAW_SCHEMA)
-        self.assertEqual(first, second)
-        self.assertIn("canonical_ldd_output", first)
-        self.assertNotIn("raw_ldd_output", first)
-        transcript = first["canonical_ldd_output"]
-        self.assertEqual(transcript["schema"], runner.CANONICAL_LDD_SCHEMA)
-        self.assertIn(runner.CANONICAL_LDD_ADDRESS, transcript["text"])
-        runner.validate_complete_runtime_closure(
-            first, "unmocked /usr/bin/env", str(executable.resolve()),
-            runner.RAW_SCHEMA)
+        host_output = subprocess.run(
+            ["/usr/bin/ldd", "/usr/bin/env"], check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, timeout=30).stdout
+        host_entries = runner.parse_ldd_output_text(
+            host_output, "host /usr/bin/env ldd output")
+        loader = next(
+            Path(entry["loader_path"]).resolve(strict=True)
+            for entry in host_entries
+            if entry.get("file_kind") == "dynamic_loader")
+        libc = next(
+            Path(entry["loader_path"]).resolve(strict=True)
+            for entry in host_entries
+            if entry.get("soname") == "libc.so.6")
+        with tempfile.TemporaryDirectory(
+                prefix="leopard2-runtime-closure-") as directory:
+            root = Path(directory)
+            private_loader = root / loader.name
+            private_libc = root / "libc.so.6"
+            executable = root / "fixture"
+            private_ldd = root / "ldd"
+            shutil.copy2(loader, private_loader)
+            shutil.copy2(libc, private_libc)
+            private_ldd.write_text(
+                "#!/bin/sh\nexec " + shlex.quote(str(private_loader)) +
+                " --list \"$1\"\n", encoding="ascii")
+            private_ldd.chmod(0o700)
+            subprocess.run(
+                [str(shutil.which("cc")), "-x", "c", "-", "-o",
+                 str(executable),
+                 f"-Wl,--dynamic-linker={private_loader}",
+                 f"-Wl,-rpath,{root}"],
+                input=b"int main(void) { return 0; }\n", check=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                timeout=60)
+            first = runner.runtime_closure(
+                private_ldd, executable, runner.RAW_SCHEMA)
+            second = runner.runtime_closure(
+                private_ldd, executable, runner.RAW_SCHEMA)
+            self.assertEqual(first, second)
+            self.assertIn("canonical_ldd_output", first)
+            self.assertNotIn("raw_ldd_output", first)
+            transcript = first["canonical_ldd_output"]
+            self.assertEqual(
+                transcript["schema"], runner.CANONICAL_LDD_SCHEMA)
+            self.assertIn(
+                runner.CANONICAL_LDD_ADDRESS, transcript["text"])
+            runner.validate_complete_runtime_closure(
+                first, "unmocked private dynamic executable",
+                str(executable.resolve()), runner.RAW_SCHEMA)
 
     def test_canonical_ldd_normalization_changes_only_terminal_addresses(
         self,
@@ -3728,6 +3924,79 @@ class MainCompareRunnerTests(unittest.TestCase):
         value = synthetic_raw(candidate_mode="generic")
         value["campaign"]["candidate_mode"] = "auto"
         self.assert_rejected(value)
+
+    def test_candidate_backends_bind_request_resolution_and_exact_argv(
+        self,
+    ) -> None:
+        for backend in runner.CANDIDATE_BACKENDS:
+            with self.subTest(backend=backend):
+                value = synthetic_raw(candidate_backend=backend)
+                runner.validate_raw(
+                    value, None, check_files=False,
+                    check_current_inputs=False)
+                invocation = next(item for item in value["invocations"]
+                                  if item["implementation"] == "candidate")
+                command = invocation["command"]
+                backend_index = command.index("--backend")
+                self.assertEqual(command[backend_index + 1], backend)
+                self.assertEqual(
+                    invocation["result"]["parameters"]["requested_backend"],
+                    runner.reported_candidate_backend_request(backend))
+                self.assertEqual(
+                    invocation["result"]["resolved"]["backend"],
+                    runner.resolved_candidate_backend(backend))
+                self.assertEqual(
+                    invocation["normalized"]["backend"],
+                    runner.resolved_candidate_backend(backend))
+
+        value = synthetic_raw(candidate_backend="gfni")
+        value["campaign"]["candidate_backend"] = "auto"
+        self.assert_rejected(value)
+
+        value = synthetic_raw(candidate_backend="gfni")
+        invocation = next(item for item in value["invocations"]
+                          if item["implementation"] == "candidate")
+        command = invocation["command"]
+        command[command.index("--backend") + 1] = "auto"
+        self.assert_rejected(value)
+
+        value = synthetic_raw(candidate_backend="gfni")
+        invocation = next(item for item in value["invocations"]
+                          if item["implementation"] == "candidate")
+        invocation["result"]["parameters"]["requested_backend"] = "auto"
+        self.assert_rejected(value)
+
+        value = synthetic_raw(candidate_backend="gfni")
+        invocation = next(item for item in value["invocations"]
+                          if item["implementation"] == "candidate")
+        invocation["result"]["resolved"]["backend"] = "avx2"
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["campaign"].pop("candidate_backend")
+        self.assert_rejected(value)
+
+        for invalid in (None, ["auto"], "avx2", "GFNI"):
+            value = synthetic_raw()
+            value["campaign"]["candidate_backend"] = invalid
+            self.assert_rejected(value)
+
+        historical = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V16)
+        historical["campaign"]["candidate_backend"] = "auto"
+        self.assert_rejected(historical)
+
+        parsed = runner.parser().parse_args([
+            "run", "--baseline", "/b", "--candidate", "/c",
+            "--baseline-archive", "/ba", "--candidate-archive", "/ca",
+            "--baseline-build-dir", "/bb",
+            "--candidate-build-dir", "/cb",
+            "--baseline-source-root", "/bs",
+            "--candidate-source-root", "/cs",
+            "--candidate-commit", "1" * 40, "--baseline-pure-avx2",
+            "--candidate-backend", "gfni", "--reservation-file", "/r",
+            "--output", "/o", "--cpu", "0", "--reserved-sibling", "1",
+        ])
+        self.assertEqual(parsed.candidate_backend, "gfni")
 
         value = synthetic_raw(candidate_mode="generic")
         invocation = next(item for item in value["invocations"]
@@ -4173,9 +4442,22 @@ class MainCompareRunnerTests(unittest.TestCase):
             runner.parse_build_configuration_bytes(retained)["entries"],
             entries)
         plan = load_plan_runner()
+        plan_entries = complete_build_fixture(
+            "candidate", runner.RAW_SCHEMA_V16)[
+                "validated_compile_commands"][
+                    "effective_build_configuration"]["entries"]
+        plan_entries = copy.deepcopy(plan_entries)
+        plan_entries["CMAKE_CXX_COMPILER"] = \
+            "/usr/bin/c++\u2028fixture"
+        plan_material = runner.build_configuration_material(
+            plan_entries, runner.BUILD_CONFIGURATION_VARIABLES_V9)
+        plan_digest = runner.sha256_bytes(plan_material)
+        plan_retained = (
+            f"schema={runner.BUILD_CONFIGURATION_FILE_SCHEMA_V9}\n"
+            f"sha256={plan_digest}\n").encode("ascii") + plan_material
         self.assertEqual(
-            plan._parse_build_configuration_bytes(retained)["entries"],
-            entries)
+            plan._parse_build_configuration_bytes(plan_retained)["entries"],
+            plan_entries)
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "CMakeCache.txt"
@@ -4239,8 +4521,14 @@ class MainCompareRunnerTests(unittest.TestCase):
                     "build-Release.ninja",
                 ])
 
+        # The balanced-promotion planner is intentionally frozen to the v16
+        # AUTO/AVX2 campaign.  Exercise its normalization contract with the
+        # replayable v16 identity rather than teaching it to consume the new
+        # v17 GFNI-capable evidence schema implicitly.
         plan = load_plan_runner()
-        identities = multi["identities_initial"]
+        plan_multi = synthetic_raw(
+            raw_schema=runner.RAW_SCHEMA_V16, multi_config=True)
+        identities = plan_multi["identities_initial"]
         replacements = (
             (SPECIFICATION["baseline_source_root"], "$BASELINE_SOURCE"),
             (SPECIFICATION["candidate_source_root"], "$CANDIDATE_SOURCE"),
@@ -4379,7 +4667,8 @@ class MainCompareRunnerTests(unittest.TestCase):
 
     def test_normalized_multi_config_ninja_link_identity_tracks_graph(
             self) -> None:
-        build = complete_build_fixture("candidate", multi_config=True)
+        build = complete_build_fixture(
+            "candidate", runner.RAW_SCHEMA_V16, multi_config=True)
         impl_relative = "CMakeFiles/impl-Release.ninja"
         impl = next(
             record for record in build["multi_config_ninja_graph"]["files"]
@@ -4391,7 +4680,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             SPECIFICATION["candidate_source_root"] +
             "/leopard2.cpp\n")
         runner.validate_complete_build_identity(
-            build, "candidate", SPECIFICATION, runner.RAW_SCHEMA,
+            build, "candidate", SPECIFICATION, runner.RAW_SCHEMA_V16,
             CANDIDATE_TREE)
 
         plan = load_plan_runner()
@@ -4505,6 +4794,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=OFF",
                 "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK=OFF",
                 "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=ON",
+                "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=ON",
                 "-DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=ON",
                 "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=ON",
                 "-DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=ON",
@@ -4514,6 +4804,9 @@ class MainCompareRunnerTests(unittest.TestCase):
                 "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=ON",
                 "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=ON",
                 "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=ON",
+                "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=ON",
+                "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=ON",
+                "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=OFF",
                 "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0",
                 "-DLEO2_FLAG_MAVX512F=FALSE",
                 "-DLEO2_FLAG_MAVX512BW=FALSE",
@@ -5718,6 +6011,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             legacy["schema"] = runner.FAILURE_SCHEMA_V2
             legacy.pop("evidence_contract")
             legacy["campaign"].pop("candidate_mode", None)
+            legacy["campaign"].pop("candidate_backend", None)
             legacy["campaign"]["statistics"] = runner.statistics_policy(
                 runner.RAW_SCHEMA_V2)
             legacy["campaign"]["child_environment"] = copy.deepcopy(
@@ -6046,6 +6340,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 candidate_commit="1" * 40,
                 baseline_pure_avx2=True,
                 candidate_mode="auto",
+                candidate_backend="auto",
                 cpu=0,
                 reserved_sibling=1,
                 reservation_file=root / "reservation.json",
@@ -7442,12 +7737,12 @@ class MainCompareRunnerTests(unittest.TestCase):
             with self.subTest(cell=bad), self.assertRaises(runner.EvidenceError):
                 runner.parse_cell(bad)
 
-    def test_v12_through_v16_logical_tail_uses_zero_padded_exact_main_only(
+    def test_v12_through_v17_logical_tail_uses_zero_padded_exact_main_only(
         self,
     ) -> None:
         for raw_schema in (
                 runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
-                runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA):
+                runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15, runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA):
             for logical, physical in ((63, 64), (65, 128), (2049, 2112)):
                 with self.subTest(raw_schema=raw_schema, logical=logical):
                     self._assert_logical_tail_contract(
@@ -7456,6 +7751,9 @@ class MainCompareRunnerTests(unittest.TestCase):
     def _assert_logical_tail_contract(
         self, raw_schema: str, logical: int, physical: int,
     ) -> None:
+        campaign = copy.deepcopy(CAMPAIGN)
+        if raw_schema not in runner.CANDIDATE_BACKEND_SCHEMAS:
+            campaign.pop("candidate_backend", None)
         cell = runner.Cell(
             f"tail-{logical}", CELL.k, CELL.r, logical,
             CELL.losses, CELL.seed)
@@ -7471,20 +7769,21 @@ class MainCompareRunnerTests(unittest.TestCase):
             "missing_original_indices": runner.expected_losses(cell),
         })
         baseline["resolved"]["padded_application_bytes"] = True
-        candidate = candidate_result(raw_schema=raw_schema)
+        candidate = candidate_result(
+            raw_schema=raw_schema, campaign=campaign)
         candidate["parameters"].update({
             "shard_bytes": logical,
             "missing_original_indices": runner.expected_losses(cell),
         })
         runner.validate_result(
-            "baseline", baseline, cell, CAMPAIGN, raw_schema)
+            "baseline", baseline, cell, campaign, raw_schema)
         runner.validate_result(
-            "candidate", candidate, cell, CAMPAIGN, raw_schema)
+            "candidate", candidate, cell, campaign, raw_schema)
 
         baseline_arguments = runner.benchmark_arguments(
-            "baseline", Path("/baseline"), cell, CAMPAIGN, raw_schema)
+            "baseline", Path("/baseline"), cell, campaign, raw_schema)
         candidate_arguments = runner.benchmark_arguments(
-            "candidate", Path("/candidate"), cell, CAMPAIGN, raw_schema)
+            "candidate", Path("/candidate"), cell, campaign, raw_schema)
         self.assertEqual(
             baseline_arguments[baseline_arguments.index("--bytes") + 1],
             str(physical))
