@@ -30,6 +30,8 @@ from typing import Any, Mapping, Sequence
 
 
 AUDIT_SCHEMA = "leopard2-main-compare-v17-independent-audit/v1"
+PASSIVE_AUDIT_SCHEMA = \
+    "leopard2-main-compare-v17-passive-independent-audit/v1"
 MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v17"
 RAW_SCHEMA = "leopard2-main-compare-raw/v17"
 BASELINE_SCHEMA = "leopard-main-benchmark-v1"
@@ -105,6 +107,8 @@ REUSE = 8
 CPU = 52
 SIBLING = 116
 TIMER_FLOOR_US = 20_000.0
+PASSIVE_CLOCK_TICKS = 100
+PASSIVE_MAX_NONIDLE_EXCESS_OVER_CHILD_WALL_CEILING_JIFFIES = 16
 T_CRITICAL_DF2 = 4.302652729911275
 CELL = {
     "identifier": "gf16-high-full",
@@ -2682,6 +2686,121 @@ def validate_supervision(value: Any, campaign: Mapping[str, Any],
     return value
 
 
+def supervision_for_mode(value: Any, manifest_value: Any,
+                         campaign: Mapping[str, Any],
+                         reservation: Mapping[str, Any],
+                         isolation: Mapping[str, Any],
+                         mode: str) -> dict[str, Any] | None:
+    require(mode in ("required", "absent"), "unknown supervision audit mode")
+    if mode == "absent":
+        require(value is None and manifest_value is None,
+                "passive audit requires null raw/manifest supervision")
+        return None
+    require(manifest_value is not None,
+            "supervised audit requires manifest supervision")
+    return validate_supervision(value, campaign, reservation, isolation)
+
+
+def passive_contamination(isolation: Mapping[str, Any],
+                          child_wall_duration_total_ns: int) -> dict[str, Any]:
+    require(type(child_wall_duration_total_ns) is int and
+            child_wall_duration_total_ns > 0,
+            "passive child wall duration is invalid")
+    before_ns = isolation["before"]["monotonic_ns"]
+    after_ns = isolation["after"]["monotonic_ns"]
+    benchmark = isolation["delta"]["benchmark_cpu"]
+    sibling = isolation["delta"]["reserved_sibling"]
+    self_numerator = child_wall_duration_total_ns * PASSIVE_CLOCK_TICKS
+    self_max = (self_numerator + 1_000_000_000 - 1) // 1_000_000_000
+    observed = benchmark["nonidle_jiffies"]
+    excess = max(0, observed - self_max)
+    require(
+        excess <=
+            PASSIVE_MAX_NONIDLE_EXCESS_OVER_CHILD_WALL_CEILING_JIFFIES,
+        "benchmark CPU nonidle excess rejection threshold exceeded")
+    return {
+        "clock_ticks_per_second": PASSIVE_CLOCK_TICKS,
+        "campaign_window_ns": after_ns - before_ns,
+        "child_wall_duration_total_ns": child_wall_duration_total_ns,
+        "benchmark_cpu_nonidle_jiffies": observed,
+        "benchmark_cpu_idle_jiffies": benchmark["idle_jiffies"],
+        "benchmark_cpu_child_wall_time_ceiling_jiffies": self_max,
+        "benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies":
+            excess,
+        "benchmark_cpu_nonidle_excess_over_child_wall_ceiling_fraction": (
+            excess / observed if observed else 0.0),
+        "policy_max_nonidle_excess_over_child_wall_ceiling_jiffies":
+            PASSIVE_MAX_NONIDLE_EXCESS_OVER_CHILD_WALL_CEILING_JIFFIES,
+        "reserved_sibling_nonidle_jiffies": sibling["nonidle_jiffies"],
+        "interpretation": (
+            "descriptive one-sided rejection screen only; zero excess is not "
+            "process ownership attribution, an interference upper bound, or "
+            "proof of CPU exclusivity"
+        ),
+    }
+
+
+def audit_mode_result_fields(
+        supervision_mode: str,
+        contamination: Mapping[str, Any] | None) -> dict[str, Any]:
+    require(supervision_mode in ("required", "absent"),
+            "invalid audit result supervision mode")
+    if supervision_mode == "required":
+        require(contamination is None,
+                "supervised audit unexpectedly has passive contamination")
+        return {"schema": AUDIT_SCHEMA}
+    require(type(contamination) is dict,
+            "passive audit lacks validated contamination")
+    sibling_nonidle = contamination.get("reserved_sibling_nonidle_jiffies")
+    require(type(sibling_nonidle) is int and sibling_nonidle == 0,
+            "passive audit contamination lacks a zero sibling observation")
+    return {
+        "schema": PASSIVE_AUDIT_SCHEMA,
+        "audit_mode": "passive-shared-host-observation",
+        "acquisition_generation": "passive-v1",
+        "evidence_class": "passive-shared-host-observation/v1",
+        "affinity_supervisor_binding_verified": False,
+        "promotion_eligible": False,
+        "promotion_passed": False,
+        "causal_performance_claim_eligible": False,
+        "cpu_pair_exclusive": False,
+        "contamination": dict(contamination),
+        "isolation_claim": {
+            "schema": "leopard2-v17-passive-isolation-claim/v1",
+            "mechanism": (
+                "passive taskset pinning, reservation file, pair lease, "
+                "and sibling jiffy gate"
+            ),
+            "campaign_supervision": None,
+            "foreign_process_affinity_mutation_claimed": False,
+            "foreign_process_signalling_claimed": False,
+            "benchmark_cpu_exclusive_ownership_claimed": False,
+            "same_uid_pair_exclusion_certificate": False,
+            "cgroup_or_os_exclusive_certificate": False,
+            "reserved_sibling_zero_nonidle_jiffies_observed":
+                sibling_nonidle == 0,
+            "counter_resolution": (
+                "frozen x86-64 Linux /proc/stat USER_HZ=100 contract"
+            ),
+            "interval_complete_task_observation": False,
+            "benchmark_cpu_foreign_work_attributable": False,
+            "causal_performance_claim_eligible": False,
+            "promotion_eligible": False,
+            "promotion_passed": False,
+            "unmitigated_confounders": [
+                "package boost and thermal residency",
+                "shared LLC and memory bandwidth",
+                "root-owned, other-UID, and kernel work",
+                "sub-jiffy transient work",
+            ],
+            "scope": (
+                "host, compiler, API, and workload specific; not "
+                "generalizable and not promotion evidence"
+            ),
+        },
+    }
+
+
 def confidence_interval(log_ratios: Sequence[float]) -> dict[str, Any]:
     require(len(log_ratios) == ROUNDS and
             all(math.isfinite(item) for item in log_ratios),
@@ -2757,7 +2876,9 @@ def validate_campaign(value: Any) -> dict[str, Any]:
     return value
 
 
-def replay(manifest_path: Path) -> dict[str, Any]:
+def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[str, Any]:
+    require(supervision_mode in ("required", "absent"),
+            "invalid supervision audit mode")
     manifest_path = canonical_existing_file(manifest_path)
     root = manifest_path.parent.resolve(strict=True)
     require(manifest_path.parent == root, "manifest parent is aliased")
@@ -2899,8 +3020,13 @@ def replay(manifest_path: Path) -> dict[str, Any]:
                 normalized["retained_timer_window_us"]["one_shot_encode"])
         accepted.append(dict(invocation, normalized=normalized))
     isolation = validate_isolation(raw["isolation"], campaign, total_duration)
-    supervision = validate_supervision(
-        raw["supervision"], campaign, reservation, isolation)
+    supervision = supervision_for_mode(
+        raw["supervision"], manifest["supervision"], campaign, reservation,
+        isolation, supervision_mode)
+    contamination = (
+        passive_contamination(isolation, total_duration)
+        if supervision_mode == "absent" else None
+    )
     host_initial = validate_host(
         raw["host_initial"], "initial", campaign["allowed_cpu_set_at_launch"])
     host_final = validate_host(
@@ -2927,7 +3053,7 @@ def replay(manifest_path: Path) -> dict[str, Any]:
         Path(__file__).resolve(strict=True), 8 * 1024 * 1024)
     del auditor_bytes
     return {
-        "schema": AUDIT_SCHEMA,
+        **audit_mode_result_fields(supervision_mode, contamination),
         "status": "complete",
         "audit_passed": True,
         "timing_performed": False,
@@ -2992,7 +3118,14 @@ def replay(manifest_path: Path) -> dict[str, Any]:
             "multi_config_builds_excluded_fail_closed": True,
             "generated_attestation_and_configuration_bytes": True,
             "canonical_runtime_dependency_closure": True,
-            "reservation_pair_lease_supervision_closure": True,
+            **({
+                "reservation_pair_lease_null_supervision_closure": True,
+                "benchmark_cpu_nonidle_excess_over_child_wall_ceiling_"
+                "within_rejection_policy": True,
+                "benchmark_cpu_exclusivity_not_claimed": True,
+            } if supervision_mode == "absent" else {
+                "reservation_pair_lease_supervision_closure": True,
+            }),
             "complete_host_topology_identity": True,
             "candidate_gfni_route_all_six_children": True,
             "sealed_executable_identity": True,
@@ -3012,6 +3145,11 @@ def replay(manifest_path: Path) -> dict[str, Any]:
             "production_selector_bound_by_candidate_commit_tree_object_and_"
             "runtime_attestation": True,
             "multi_config_ninja_graphs_are_outside_this_auditor_contract": True,
+            **({
+                "clustered_t_interval_reported_as_nominal_under_shared_"
+                "host_load": True,
+                "passive_observation_is_not_promotion_evidence": True,
+            } if supervision_mode == "absent" else {}),
         },
     }
 
@@ -3415,6 +3553,37 @@ def self_test() -> None:
     }
     validate_supervision(supervision, supervision_campaign, reservation,
                          supervision_isolation)
+    require(PASSIVE_AUDIT_SCHEMA != AUDIT_SCHEMA,
+            "passive and supervised audit schemas collide")
+    require(supervision_for_mode(
+        None, None, supervision_campaign, reservation,
+        supervision_isolation, "absent") is None,
+        "passive null-supervision validator failed")
+    for raw_value, manifest_value, label in (
+            (supervision, None, "passive raw supervision object"),
+            (None, supervision, "passive manifest supervision object"),
+            (False, None, "passive false supervision"),
+            (None, {}, "passive empty manifest supervision")):
+        expect_failure(lambda raw_value=raw_value,
+                       manifest_value=manifest_value: supervision_for_mode(
+                           raw_value, manifest_value, supervision_campaign,
+                           reservation, supervision_isolation, "absent"), label)
+    expect_failure(lambda: supervision_for_mode(
+        None, None, supervision_campaign, reservation,
+        supervision_isolation, "required"),
+        "supervised audit accepted null supervision")
+    passive = passive_contamination(isolation, 1)
+    require(passive[
+        "benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies"] == 0,
+            "passive contamination derivation failed")
+    boundary_isolation = clone(isolation)
+    boundary_isolation["delta"]["benchmark_cpu"]["nonidle_jiffies"] = (
+        1 + PASSIVE_MAX_NONIDLE_EXCESS_OVER_CHILD_WALL_CEILING_JIFFIES)
+    passive_contamination(boundary_isolation, 1)
+    over_boundary_isolation = clone(boundary_isolation)
+    over_boundary_isolation["delta"]["benchmark_cpu"]["nonidle_jiffies"] += 1
+    expect_failure(lambda: passive_contamination(over_boundary_isolation, 1),
+                   "passive contamination beyond policy")
     bad_supervision = clone(supervision)
     del bad_supervision["runner_pid"]
     expect_failure(lambda: validate_supervision(
@@ -3780,11 +3949,17 @@ def main() -> int:
                         help="compatibility alias for --manifest")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--supervision", choices=("required", "absent"), default="required",
+        help=("require the existing supervisor handshake or explicitly require "
+              "JSON-null supervision for passive shared-host evidence"),
+    )
     options = parser.parse_args()
     manifest = options.manifest if options.manifest is not None else options.report
     if options.self_test:
-        require(manifest is None and options.output is None,
-                "--self-test cannot be combined with replay paths")
+        require(manifest is None and options.output is None and
+                options.supervision == "required",
+                "--self-test cannot be combined with replay options")
         self_test()
         return 0
     require(manifest is not None and options.output is not None,
@@ -3793,13 +3968,17 @@ def main() -> int:
             "audit paths must be absolute")
     require(manifest != options.output,
             "audit output aliases the manifest")
-    result = replay(manifest)
+    result = replay(manifest, supervision_mode=options.supervision)
     write_canonical(options.output, result)
     print(json.dumps({
+        "affinity_supervisor_binding_verified": result.get(
+            "affinity_supervisor_binding_verified"),
+        "audit_mode": result.get("audit_mode", "supervision-required"),
         "audit_passed": True,
         "benchmark_executed": False,
         "manifest_sha256": result["manifest"]["sha256"],
         "output": str(options.output),
+        "schema": result["schema"],
         "timing_performed": False,
     }, sort_keys=True))
     return 0

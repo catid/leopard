@@ -27,6 +27,12 @@ if [[ ${1:-} != --leopard-v17-gfni-main-clean-env-internal ]]; then
 fi
 shift
 
+passive_mode=false
+if [[ ${1:-} == --passive-shared-host ]]; then
+    passive_mode=true
+    shift
+fi
+
 for required_pair in \
     'PATH=/usr/bin:/bin' \
     'LANG=C' \
@@ -75,8 +81,14 @@ relative_git_capture=experiments/leopard2/main_compare/git_capture.py
 relative_helper=experiments/leopard2/decoder_dispatch/balanced_evidence_common.py
 relative_build_provenance=tools/leopard2_build_provenance.py
 relative_auditor=experiments/leopard2/main_compare/audit_v17_gfni_main_compare.py
+relative_census=experiments/leopard2/main_compare/passive_environment_census.py
 relative_supervisor=tools/leopard2_affinity_supervisor.py
 lock=/tmp/leopard-gf8-authoritative.lock
+passive_housekeeping_jq='[.allowed_cpus[] | select(. != 52 and . != 116)]
+    | map(tostring) | join(",") | select(length > 0)'
+passive_timeout_argument_jq='.campaign.timeout_seconds
+    | select(type == "number" and . == 600)
+    | "600"'
 
 tools_to_hash=(
     /usr/bin/bash /usr/bin/env /usr/bin/c++ /usr/bin/cc /usr/bin/ld
@@ -95,6 +107,31 @@ require_empty_output()
     local observed_output
     observed_output="$("$@")" || return 1
     test -z "$observed_output"
+}
+
+passive_contract_self_test()
+{
+    local observed_housekeeping=
+    local observed_timeout_argument=
+    observed_housekeeping="$(/usr/bin/printf '%s\n' \
+        '{"allowed_cpus":[0,1,52,116]}' | \
+        /usr/bin/jq -er "$passive_housekeeping_jq")" || return 1
+    test "$observed_housekeeping" = 0,1
+    if /usr/bin/printf '%s\n' '{"allowed_cpus":[52,116]}' | \
+            /usr/bin/jq -er "$passive_housekeeping_jq" >/dev/null 2>&1; then
+        return 1
+    fi
+    observed_timeout_argument="$(/usr/bin/printf '%s\n' \
+        '{"campaign":{"timeout_seconds":600.0}}' | \
+        /usr/bin/jq -er "$passive_timeout_argument_jq")" || return 1
+    test "$observed_timeout_argument" = 600
+    if /usr/bin/printf '%s\n' \
+            '{"campaign":{"timeout_seconds":600.5}}' | \
+            /usr/bin/jq -er "$passive_timeout_argument_jq" \
+                >/dev/null 2>&1; then
+        return 1
+    fi
+    /usr/bin/printf 'v17 passive wrapper contract self-test passed\n'
 }
 
 install_build_order_normalizer()
@@ -1987,6 +2024,9 @@ verify_envelope()
     local verified_core="$verified_envelope/core"
     local status_file=
     local status_schema=
+    local evidence_generation=
+    local core_schema=
+    local audit_schema=
     local status_value=
     local promotion_value=
     local campaign_exit_value=
@@ -1998,6 +2038,24 @@ verify_envelope()
     local replay_campaign=
     local replay_controller_root=
     local verifier_tmp=
+    local passive_file=
+    local passive_field=
+    local passive_hash_binding=
+    local artifact_hash_binding=
+    local artifact_hash_field=
+    local artifact_hash_path=
+    local artifact_hash_expected=
+    local verified_performance_gate_passed=
+    local active_required_artifact=
+    local passive_only_artifact=
+    local active_only_artifact=
+    local failure_path=
+    local retained_failure_sha=
+    local failed_verify_root=
+    local replay_failure_status=
+    local failed_core_schema=
+    local verified_timeout_argument=
+    local -a audit_replay_args=()
 
     test -d "$verified_envelope"
     test ! -L "$verified_envelope"
@@ -2011,10 +2069,6 @@ verify_envelope()
     test -f "$verified_core/SHA256SUMS"
     test -f "$verified_core/run-authoritative.sh"
     (
-        cd "$verified_core"
-        /usr/bin/sha256sum -c SHA256SUMS
-    ) >/dev/null
-    (
         cd "$verified_envelope"
         /usr/bin/sha256sum -c SHA256SUMS
     ) >/dev/null
@@ -2025,14 +2079,12 @@ verify_envelope()
         test ! -e "$verified_envelope/NOT_PROMOTED.json"
         test ! -e "$verified_envelope/FAILED.json"
         status_file="$verified_envelope/COMPLETED.json"
-        status_schema=leopard2-v17-gfni-main-completion-envelope/v1
         status_value=complete
         promotion_value=true
     elif [[ -f "$verified_envelope/NOT_PROMOTED.json" ]]; then
         test ! -e "$verified_envelope/COMPLETED.json"
         test ! -e "$verified_envelope/FAILED.json"
         status_file="$verified_envelope/NOT_PROMOTED.json"
-        status_schema=leopard2-v17-gfni-main-not-promoted-envelope/v1
         status_value=complete
         promotion_value=false
     else
@@ -2040,17 +2092,82 @@ verify_envelope()
         test ! -e "$verified_envelope/COMPLETED.json"
         test ! -e "$verified_envelope/NOT_PROMOTED.json"
         status_file="$verified_envelope/FAILED.json"
-        status_schema=leopard2-v17-gfni-main-failed-envelope/v1
         status_value=failed
         promotion_value=false
     fi
-    test "$(/usr/bin/jq -er '.schema | strings' "$status_file")" = \
-        "$status_schema"
+    status_schema="$(/usr/bin/jq -er '.schema | strings' "$status_file")"
+    case "${status_file##*/}:$status_schema" in
+        COMPLETED.json:leopard2-v17-gfni-main-completion-envelope/v1)
+            evidence_generation=active-v1
+            core_schema=leopard2-v17-gfni-main-core-manifest/v3
+            audit_schema=leopard2-main-compare-v17-independent-audit/v1
+            ;;
+        NOT_PROMOTED.json:leopard2-v17-gfni-main-not-promoted-envelope/v1)
+            evidence_generation=active-v1
+            core_schema=leopard2-v17-gfni-main-core-manifest/v3
+            audit_schema=leopard2-main-compare-v17-independent-audit/v1
+            ;;
+        NOT_PROMOTED.json:leopard2-v17-gfni-main-passive-not-promoted-envelope/v2)
+            evidence_generation=passive-v1
+            core_schema=leopard2-v17-gfni-main-passive-core-manifest/v4
+            audit_schema=leopard2-main-compare-v17-passive-independent-audit/v1
+            ;;
+        FAILED.json:leopard2-v17-gfni-main-failed-envelope/v1)
+            evidence_generation=failed-v1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    if [[ "$evidence_generation" == failed-v1 ]] && \
+       /usr/bin/jq -e \
+           'has("core_sha256sums_verified") and
+            .core_sha256sums_verified == false' \
+           "$status_file" >/dev/null; then
+        : # The outer manifest authenticates a diagnosed corrupt core verbatim.
+    else
+        (
+            cd "$verified_core"
+            /usr/bin/sha256sum -c SHA256SUMS
+        ) >/dev/null
+    fi
     test "$(/usr/bin/jq -er '.status | strings' "$status_file")" = \
         "$status_value"
     test "$(/usr/bin/jq -er \
         '.promotion_passed | booleans | tostring' "$status_file")" = \
         "$promotion_value"
+    if [[ "$evidence_generation" == passive-v1 ]]; then
+        /usr/bin/jq -e '
+            keys == ([
+                "acquisition_generation", "audit_sha256", "baseline_commit",
+                "benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies",
+                "campaign_exit_status", "campaign_manifest_sha256",
+                "causal_performance_claim_eligible", "core_manifest_sha256",
+                "core_sha256sums_sha256", "cpu_pair_exclusive",
+                "evidence_class", "evidence_valid", "isolation_claim",
+                "performance_gate_passed", "postseal_audit_byte_identical",
+                "postseal_audit_passed", "postseal_audit_sha256",
+                "preseal_audit_passed", "promotion_eligible",
+                "promotion_passed", "schema", "source_commit", "source_tree",
+                "status"
+            ] | sort) and
+            .acquisition_generation == "passive-v1" and
+            .evidence_class == "passive-shared-host-observation/v1" and
+            .promotion_eligible == false and .promotion_passed == false and
+            .causal_performance_claim_eligible == false and
+            .cpu_pair_exclusive == false and .evidence_valid == true and
+            .preseal_audit_passed == true and
+            .postseal_audit_passed == true and
+            .postseal_audit_byte_identical == true and
+            (.performance_gate_passed | type == "boolean") and
+            (.benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies |
+                type) == "number" and
+            (.benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies |
+                floor) ==
+                .benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies and
+            .benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies >= 0
+        ' "$status_file" >/dev/null
+    fi
     campaign_exit_value="$(/usr/bin/jq -er \
         '.campaign_exit_status | numbers' "$status_file")"
     test "$(/usr/bin/sha256sum "$verified_core/SHA256SUMS" | \
@@ -2065,8 +2182,52 @@ verify_envelope()
         test -f "$verified_core/manifest.json"
         test -f "$verified_core/campaign/manifest.json"
         test -f "$verified_core/audit.json"
-        test -f "$verified_core/affinity-report.json"
-        test -f "$verified_core/affinity-binding.json"
+        test -f "$verified_core/result-summary.json"
+        if [[ "$evidence_generation" == active-v1 ]]; then
+            for active_required_artifact in \
+                affinity-report.json affinity-binding.json \
+                affinity-report.json.accepted.json \
+                affinity-report-verification.log \
+                affinity-binding-create.log \
+                affinity-binding-verification.log supervisor-self-test.log; do
+                test -f "$verified_core/$active_required_artifact"
+            done
+            test ! -e "$verified_core/affinity-report.json.ambiguous"
+            for passive_only_artifact in \
+                passive_environment_census.py \
+                environment-census-pre.json environment-census-post.json \
+                passive-environment-policy.json controller-affinity.json \
+                passive-census-self-test.log passive-auditor-self-test.log \
+                passive-controller-taskset.log \
+                build-closure/committed-passive-census.py; do
+                test ! -e "$verified_core/$passive_only_artifact"
+            done
+        else
+            test "$evidence_generation" = passive-v1
+            for active_only_artifact in \
+                affinity-report.json affinity-binding.json \
+                affinity-report.json.accepted.json \
+                affinity-report.json.ambiguous \
+                affinity-report-verification.log \
+                affinity-binding-create.log \
+                affinity-binding-verification.log supervisor-self-test.log \
+                passive-auditor-self-test.log \
+                passive-controller-taskset.log; do
+                test ! -e "$verified_core/$active_only_artifact"
+            done
+            test -f "$verified_core/passive_environment_census.py"
+            test -f "$verified_core/environment-census-pre.json"
+            test -f "$verified_core/environment-census-post.json"
+            test -f "$verified_core/passive-environment-policy.json"
+            test -f "$verified_core/controller-affinity.json"
+            test -f "$verified_core/passive-census-self-test.log"
+            test -f "$verified_core/campaign-command.json"
+            test -f "$verified_core/wrapper-launch-affinity.json"
+            test -f \
+                "$verified_core/build-closure/committed-passive-census.py"
+            /usr/bin/cmp "$verified_core/passive_environment_census.py" \
+                "$verified_core/build-closure/committed-passive-census.py"
+        fi
         test -f "$verified_core/run_abba.py"
         test -f "$verified_core/git_capture.py"
         test -f "$verified_core/balanced_evidence_common.py"
@@ -2456,24 +2617,167 @@ verify_envelope()
         ' "$verified_core/candidate-test-temporal-closure.json" >/dev/null
         test "$(/usr/bin/jq -er '.evidence_valid | booleans | tostring' \
             "$status_file")" = true
-        test "$(/usr/bin/jq -er \
-            '.performance_gate_passed | booleans | tostring' \
-            "$status_file")" = "$promotion_value"
+        if [[ "$evidence_generation" == active-v1 ]]; then
+            test "$(/usr/bin/jq -er \
+                '.performance_gate_passed | booleans | tostring' \
+                "$status_file")" = "$promotion_value"
+        else
+            /usr/bin/jq -e \
+                '.performance_gate_passed | type == "boolean"' \
+                "$status_file" >/dev/null
+        fi
         test "$(/usr/bin/jq -er '.schema | strings' \
-            "$verified_core/manifest.json")" = \
-            leopard2-v17-gfni-main-core-manifest/v3
+            "$verified_core/manifest.json")" = "$core_schema"
         test "$(/usr/bin/jq -er '.campaign_exit_status | numbers' \
             "$verified_core/manifest.json")" -eq 0
         test "$(/usr/bin/jq -er '.evidence_valid | booleans | tostring' \
             "$verified_core/manifest.json")" = true
-        test "$(/usr/bin/jq -er \
-            '.promotion_requires_completion_envelope | booleans | tostring' \
-            "$verified_core/manifest.json")" = true
+        if [[ "$evidence_generation" == active-v1 ]]; then
+            test "$(/usr/bin/jq -er \
+                '.promotion_requires_completion_envelope | booleans | tostring' \
+                "$verified_core/manifest.json")" = true
+        else
+            /usr/bin/jq -e '
+                keys == ([
+                    "acquisition_generation", "active_affinity_supervisor_executed",
+                    "audit_sha256", "auditor_sha256", "baseline_archive_sha256_pre_post",
+                    "baseline_binary_sha256_pre_post", "baseline_commit",
+                    "benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies",
+                    "build_order_normalizer_sha256", "build_reproduction",
+                    "campaign_exit_status", "campaign_manifest_sha256",
+                    "campaign_raw_sha256", "candidate_archive_sha256_pre_post",
+                    "candidate_binary_sha256_pre_post",
+                    "candidate_test_normalization_report_sha256",
+                    "candidate_timing_normalization_report_sha256",
+                    "canonical_lock", "causal_performance_claim_eligible",
+                    "controller_affinity_sha256", "cpu", "cpu_pair_exclusive",
+                    "environment_census_post_sha256",
+                    "environment_census_pre_sha256", "evidence_class",
+                    "evidence_valid", "independent_auditor_scope",
+                    "independent_auditor_supervision_mode",
+                    "independent_preseal_audit_passed", "isolation_claim",
+                    "passive_census_sha256", "passive_environment_policy_sha256",
+                    "performance_gate_passed", "postseal_policy",
+                    "producer_verification_mode", "producer_verification_passed",
+                    "promotion_eligible", "promotion_passed", "ratio_policy",
+                    "runner_sha256", "schema", "sibling", "source_commit",
+                    "source_tree", "sse2neon_commit",
+                    "sse2neon_source_archive_sha256", "status",
+                    "supervisor_role", "supervisor_sha256", "wrapper_sha256"
+                ] | sort) and
+                .acquisition_generation == "passive-v1" and
+                .evidence_class == "passive-shared-host-observation/v1" and
+                .promotion_eligible == false and .promotion_passed == false and
+                .causal_performance_claim_eligible == false and
+                .cpu_pair_exclusive == false and .status == "complete" and
+                .campaign_exit_status == 0 and .evidence_valid == true and
+                .active_affinity_supervisor_executed == false and
+                .supervisor_role == "retained-active-v1-verifier-only" and
+                .producer_verification_passed == true and
+                .producer_verification_mode == "manifest-without-affinity-binding" and
+                .independent_preseal_audit_passed == true and
+                .independent_auditor_supervision_mode == "absent" and
+                .canonical_lock == "/tmp/leopard-gf8-authoritative.lock" and
+                .cpu == 52 and .sibling == 116 and
+                .ratio_policy == {
+                    ordinary_and_one_shot_are_separate:true,
+                    ratios_are_separate_correlated_and_must_not_be_multiplied:true,
+                    combined_or_stacked_ratio_emitted:false,
+                    same_binary_ratio_is_another_campaign:true,
+                    clustered_t_interval_reported_as_nominal_under_shared_host_load:true
+                } and
+                .postseal_policy ==
+                    "passive shared-host observations always publish NOT_PROMOTED.json, independent of the observed speed gate"
+            ' "$verified_core/manifest.json" >/dev/null
+        fi
+        for artifact_hash_binding in \
+            candidate_binary_sha256_pre_post:build-closure/replay-candidate/bench_leopard2 \
+            candidate_archive_sha256_pre_post:build-closure/replay-candidate/libleopard.a \
+            baseline_binary_sha256_pre_post:build-closure/replay-baseline/leopard_main_benchmark \
+            baseline_archive_sha256_pre_post:build-closure/replay-baseline/libleopard_main_exact.a \
+            campaign_raw_sha256:campaign/raw.json; do
+            artifact_hash_field=${artifact_hash_binding%%:*}
+            artifact_hash_path=${artifact_hash_binding#*:}
+            artifact_hash_expected="$(/usr/bin/jq -er \
+                --arg field "$artifact_hash_field" \
+                '.[$field] | strings | select(test("^[0-9a-f]{64}$"))' \
+                "$verified_core/manifest.json")" || return 1
+            test "$(/usr/bin/sha256sum \
+                "$verified_core/$artifact_hash_path" | \
+                /usr/bin/cut -d' ' -f1)" = "$artifact_hash_expected"
+        done
+        verified_performance_gate_passed="$(/usr/bin/jq -er '
+            [
+                .analysis["gf16-high-full"].encode
+                    .promotion_lower_bound_at_least_1_05,
+                .analysis["gf16-high-full"].one_shot_encode
+                    .promotion_lower_bound_at_least_1_05
+            ] |
+            if all(.[]; type == "boolean") then all
+            else error("invalid gates") end |
+            tostring
+        ' "$verified_core/campaign/manifest.json")" || return 1
+        /usr/bin/jq -e \
+            --slurpfile status "$status_file" \
+            --slurpfile closure "$verified_core/build-closure.json" \
+            --slurpfile campaign "$verified_core/campaign/manifest.json" \
+            --slurpfile audit "$verified_core/audit.json" \
+            --arg main_commit "$main_commit" \
+            --argjson gate "$verified_performance_gate_passed" '
+            .campaign_raw_sha256 == $campaign[0].raw.sha256 and
+            .campaign_raw_sha256 == $audit[0].raw.sha256 and
+            .candidate_binary_sha256_pre_post ==
+                $closure[0].candidate.binary_sha256 and
+            .candidate_binary_sha256_pre_post ==
+                $campaign[0].identities.candidate_executable.sha256 and
+            .candidate_archive_sha256_pre_post ==
+                $closure[0].candidate.archive_sha256 and
+            .candidate_archive_sha256_pre_post ==
+                $campaign[0].identities.candidate_archive.sha256 and
+            .baseline_binary_sha256_pre_post ==
+                $closure[0].baseline.binary_sha256 and
+            .baseline_binary_sha256_pre_post ==
+                $campaign[0].identities.baseline_executable.sha256 and
+            .baseline_archive_sha256_pre_post ==
+                $closure[0].baseline.archive_sha256 and
+            .baseline_archive_sha256_pre_post ==
+                $campaign[0].identities.baseline_archive.sha256 and
+            .performance_gate_passed == $gate and
+            $status[0].performance_gate_passed == $gate and
+            (.source_tree | type) == "string" and
+            (.source_tree | test("^[0-9a-f]{40}$")) and
+            .source_tree == $closure[0].candidate.tree and
+            .source_tree == $campaign[0].identities.candidate_source.tree and
+            .source_tree == $status[0].source_tree and
+            .source_commit == $closure[0].candidate.commit and
+            .source_commit == $campaign[0].identities.candidate_source.head and
+            .source_commit == $status[0].source_commit and
+            .baseline_commit == $main_commit and
+            .baseline_commit == $closure[0].baseline.commit and
+            .baseline_commit == $campaign[0].identities.baseline_source.head and
+            .baseline_commit == $audit[0].contract.baseline_main_commit and
+            .baseline_commit == $status[0].baseline_commit
+        ' "$verified_core/manifest.json" >/dev/null
+        if [[ "${status_file##*/}" == COMPLETED.json ]]; then
+            test "$(/usr/bin/jq -er '.candidate_binary_sha256 | strings' \
+                "$status_file")" = \
+                "$(/usr/bin/jq -er \
+                    '.candidate_binary_sha256_pre_post | strings' \
+                    "$verified_core/manifest.json")"
+            test "$(/usr/bin/jq -er '.baseline_binary_sha256 | strings' \
+                "$status_file")" = \
+                "$(/usr/bin/jq -er \
+                    '.baseline_binary_sha256_pre_post | strings' \
+                    "$verified_core/manifest.json")"
+        fi
         test "$(/usr/bin/jq -er '.promotion_passed | booleans | tostring' \
             "$verified_core/manifest.json")" = false
         test "$(/usr/bin/jq -er \
             '.performance_gate_passed | booleans | tostring' \
-            "$verified_core/manifest.json")" = "$promotion_value"
+            "$verified_core/manifest.json")" = \
+            "$(/usr/bin/jq -er \
+                '.performance_gate_passed | booleans | tostring' \
+                "$status_file")"
         test "$(/usr/bin/jq -er '.source_commit | strings' \
             "$verified_core/manifest.json")" = \
             "$(/usr/bin/jq -er '.source_commit | strings' "$status_file")"
@@ -2501,6 +2805,65 @@ verify_envelope()
             /usr/bin/cut -d' ' -f1)" = \
             "$(/usr/bin/jq -er '.supervisor_sha256 | strings' \
                 "$verified_core/manifest.json")"
+        if [[ "$evidence_generation" == passive-v1 ]]; then
+            test "$(/usr/bin/sha256sum \
+                "$verified_core/passive_environment_census.py" | \
+                /usr/bin/cut -d' ' -f1)" = \
+                "$(/usr/bin/jq -er '.passive_census_sha256 | strings' \
+                    "$verified_core/manifest.json")"
+            for passive_hash_binding in \
+                controller-affinity.json:controller_affinity_sha256 \
+                environment-census-pre.json:environment_census_pre_sha256 \
+                environment-census-post.json:environment_census_post_sha256 \
+                passive-environment-policy.json:passive_environment_policy_sha256; do
+                passive_file=${passive_hash_binding%%:*}
+                passive_field=${passive_hash_binding#*:}
+                test "$(/usr/bin/sha256sum \
+                    "$verified_core/$passive_file" | /usr/bin/cut -d' ' -f1)" = \
+                    "$(/usr/bin/jq -er --arg field "$passive_field" \
+                        '.[$field] | strings' "$verified_core/manifest.json")"
+            done
+            /usr/bin/jq -e --slurpfile audit "$verified_core/audit.json" \
+                --slurpfile status "$status_file" \
+                --slurpfile census_pre \
+                    "$verified_core/environment-census-pre.json" \
+                --slurpfile census_post \
+                    "$verified_core/environment-census-post.json" '
+                .acquisition_generation == "passive-v1" and
+                .acquisition_generation == $audit[0].acquisition_generation and
+                .acquisition_generation == $status[0].acquisition_generation and
+                .evidence_class == "passive-shared-host-observation/v1" and
+                .evidence_class == $audit[0].evidence_class and
+                .evidence_class == $status[0].evidence_class and
+                .active_affinity_supervisor_executed == false and
+                .supervisor_role == "retained-active-v1-verifier-only" and
+                .promotion_eligible == false and
+                .promotion_eligible == $audit[0].promotion_eligible and
+                .promotion_eligible == $status[0].promotion_eligible and
+                .promotion_passed == false and
+                .promotion_passed == $audit[0].promotion_passed and
+                .promotion_passed == $status[0].promotion_passed and
+                .causal_performance_claim_eligible == false and
+                .causal_performance_claim_eligible ==
+                    $audit[0].causal_performance_claim_eligible and
+                .causal_performance_claim_eligible ==
+                    $status[0].causal_performance_claim_eligible and
+                .cpu_pair_exclusive == false and
+                .cpu_pair_exclusive == $audit[0].cpu_pair_exclusive and
+                .cpu_pair_exclusive == $status[0].cpu_pair_exclusive and
+                $audit[0].contamination.clock_ticks_per_second == 100 and
+                $audit[0].contamination.clock_ticks_per_second ==
+                    $census_pre[0].clock_ticks_per_second and
+                $audit[0].contamination.clock_ticks_per_second ==
+                    $census_post[0].clock_ticks_per_second and
+                .benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies ==
+                    $audit[0].contamination.benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies and
+                .benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies ==
+                    $status[0].benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies and
+                .isolation_claim == $audit[0].isolation_claim and
+                .isolation_claim == $status[0].isolation_claim
+            ' "$verified_core/manifest.json" >/dev/null
+        fi
         test "$(/usr/bin/sha256sum \
             "$verified_core/build-order-normalizer.py" | \
             /usr/bin/cut -d' ' -f1)" = \
@@ -2561,23 +2924,191 @@ verify_envelope()
             /usr/bin/cut -d' ' -f1)" = \
             "$(/usr/bin/jq -er '.audit_sha256 | strings' \
                 "$status_file")"
+        test "$(/usr/bin/jq -er '.schema | strings' \
+            "$verified_core/audit.json")" = "$audit_schema"
+        /usr/bin/jq -e --slurpfile campaign \
+            "$verified_core/campaign/manifest.json" '
+            .ordinary_one_item_batch ==
+                $campaign[0].analysis["gf16-high-full"].encode and
+            .one_shot_encode ==
+                $campaign[0].analysis["gf16-high-full"].one_shot_encode and
+            .ratios_are_separate_correlated_and_must_not_be_multiplied == true
+        ' "$verified_core/result-summary.json" >/dev/null
+        if [[ "$evidence_generation" == passive-v1 ]]; then
+            test "$(/usr/bin/jq -er '.schema | strings' \
+                "$verified_core/result-summary.json")" = \
+                leopard2-v17-gfni-main-passive-result-summary/v2
+            /usr/bin/jq -e --slurpfile audit "$verified_core/audit.json" \
+                --slurpfile status "$status_file" \
+                --slurpfile policy \
+                    "$verified_core/passive-environment-policy.json" '
+                keys == ([
+                    "acquisition_generation", "active_affinity_supervisor_executed",
+                    "causal_performance_claim_eligible",
+                    "clustered_t_interval_reported_as_nominal_under_shared_host_load",
+                    "contamination", "cpu_pair_exclusive", "evidence_class",
+                    "isolation_claim", "one_shot_encode", "ordinary_one_item_batch",
+                    "outer_contamination",
+                    "promotion_eligible", "promotion_passed", "ratio_orientation",
+                    "ratios_are_separate_correlated_and_must_not_be_multiplied",
+                    "same_binary_gfni_over_avx2_is_a_separate_campaign", "schema"
+                ] | sort) and
+                .acquisition_generation == "passive-v1" and
+                .active_affinity_supervisor_executed == false and
+                .acquisition_generation == $audit[0].acquisition_generation and
+                .acquisition_generation == $status[0].acquisition_generation and
+                .evidence_class == "passive-shared-host-observation/v1" and
+                .evidence_class == $audit[0].evidence_class and
+                .evidence_class == $status[0].evidence_class and
+                .promotion_eligible == false and
+                .promotion_passed == false and
+                .causal_performance_claim_eligible == false and
+                .cpu_pair_exclusive == false and
+                .ratio_orientation ==
+                    "exact_leopard1_native_time_over_leopard2_candidate_time" and
+                .ratios_are_separate_correlated_and_must_not_be_multiplied == true and
+                .clustered_t_interval_reported_as_nominal_under_shared_host_load == true and
+                .same_binary_gfni_over_avx2_is_a_separate_campaign == true and
+                .contamination == $audit[0].contamination and
+                .outer_contamination == $policy[0].outer_contamination and
+                .isolation_claim == $audit[0].isolation_claim
+            ' "$verified_core/result-summary.json" >/dev/null
+        else
+            test "$(/usr/bin/jq -er '.schema | strings' \
+                "$verified_core/result-summary.json")" = \
+                leopard2-v17-gfni-main-result-summary/v1
+        fi
         test "$(/usr/bin/sha256sum \
             "$verified_envelope/postseal-audit.json" | \
             /usr/bin/cut -d' ' -f1)" = \
             "$(/usr/bin/jq -er '.postseal_audit_sha256 | strings' \
                 "$status_file")"
-        /usr/bin/python3 -I -S -B \
-            "$verified_core/leopard2_affinity_supervisor.py" verify-report \
-            --report "$verified_core/affinity-report.json" \
-            > "$verifier_tmp/supervisor-report-verification.log" \
-            2> "$verifier_tmp/supervisor-report-verification-stderr.log"
-        /usr/bin/python3 -I -S -B \
-            "$verified_core/leopard2_affinity_supervisor.py" verify-binding \
-            --binding "$verified_core/affinity-binding.json" \
-            --manifest "$verified_core/campaign/manifest.json" \
-            --manifest-sha256 "$campaign_manifest_sha" \
-            > "$verifier_tmp/supervisor-binding-verification.log" \
-            2> "$verifier_tmp/supervisor-binding-verification-stderr.log"
+        if [[ "$evidence_generation" == active-v1 ]]; then
+            test "$(/usr/bin/sha256sum \
+                "$verified_core/affinity-report.json" | \
+                /usr/bin/cut -d' ' -f1)" = \
+                "$(/usr/bin/jq -er '.affinity_report_sha256 | strings' \
+                    "$verified_core/manifest.json")"
+            test "$(/usr/bin/sha256sum \
+                "$verified_core/affinity-binding.json" | \
+                /usr/bin/cut -d' ' -f1)" = \
+                "$(/usr/bin/jq -er '.affinity_binding_sha256 | strings' \
+                    "$verified_core/manifest.json")"
+            /usr/bin/python3 -I -S -B \
+                "$verified_core/leopard2_affinity_supervisor.py" verify-report \
+                --report "$verified_core/affinity-report.json" \
+                > "$verifier_tmp/supervisor-report-verification.log" \
+                2> "$verifier_tmp/supervisor-report-verification-stderr.log"
+            /usr/bin/python3 -I -S -B \
+                "$verified_core/leopard2_affinity_supervisor.py" verify-binding \
+                --binding "$verified_core/affinity-binding.json" \
+                --manifest "$verified_core/campaign/manifest.json" \
+                --manifest-sha256 "$campaign_manifest_sha" \
+                > "$verifier_tmp/supervisor-binding-verification.log" \
+                2> "$verifier_tmp/supervisor-binding-verification-stderr.log"
+        else
+            test "$(/usr/bin/jq -er '.supervision == null' \
+                "$verified_core/campaign/manifest.json")" = true
+            test "$(/usr/bin/jq -er '.supervision == null' \
+                "$verified_core/campaign/raw.json")" = true
+            /usr/bin/python3 -I -S -B \
+                "$verified_core/passive_environment_census.py" verify \
+                --input "$verified_core/environment-census-pre.json" --phase pre
+            /usr/bin/python3 -I -S -B \
+                "$verified_core/passive_environment_census.py" verify \
+                --input "$verified_core/environment-census-post.json" --phase post
+            /usr/bin/python3 -I -S -B \
+                "$verified_core/passive_environment_census.py" compare \
+                --pre "$verified_core/environment-census-pre.json" \
+                --post "$verified_core/environment-census-post.json" \
+                --raw "$verified_core/campaign/raw.json" \
+                --controller "$verified_core/controller-affinity.json" \
+                --output "$verifier_tmp/passive-environment-policy.json"
+            /usr/bin/cmp "$verified_core/passive-environment-policy.json" \
+                "$verifier_tmp/passive-environment-policy.json"
+            test "$(/usr/bin/jq -er \
+                '.promotion_eligible | booleans | tostring' \
+                "$verified_core/passive-environment-policy.json")" = false
+            test "$(/usr/bin/jq -er \
+                '.cpu_pair_exclusive | booleans | tostring' \
+                "$verified_core/passive-environment-policy.json")" = false
+            /usr/bin/jq -e '
+                keys == (["acquisition_generation","active_affinity_supervisor_executed","affinity_mutation_scope","after_allowed_cpus","before_allowed_cpus","benchmark_cpu","runner_launch_allowed_cpus","schema","reserved_sibling","wrapper_pid"] | sort) and
+                .schema == "leopard2-v17-passive-controller-affinity/v1" and
+                .acquisition_generation == "passive-v1" and
+                .active_affinity_supervisor_executed == false and
+                .affinity_mutation_scope ==
+                    "wrapper-process-and-owned-descendants-only" and
+                .benchmark_cpu == 52 and .reserved_sibling == 116 and
+                .wrapper_pid > 0 and
+                .runner_launch_allowed_cpus == .before_allowed_cpus and
+                (.before_allowed_cpus | index(52)) != null and
+                (.before_allowed_cpus | index(116)) != null and
+                (.after_allowed_cpus | length) > 0 and
+                (.after_allowed_cpus | index(52)) == null and
+                (.after_allowed_cpus | index(116)) == null and
+                (.after_allowed_cpus ==
+                    [.before_allowed_cpus[] | select(. != 52 and . != 116)])
+            ' "$verified_core/controller-affinity.json" >/dev/null
+            /usr/bin/jq -e \
+                --slurpfile controller "$verified_core/controller-affinity.json" \
+                --slurpfile raw "$verified_core/campaign/raw.json" \
+                --slurpfile campaign_manifest \
+                    "$verified_core/campaign/manifest.json" '
+                keys == ["allowed_cpus"] and
+                .allowed_cpus == $controller[0].before_allowed_cpus and
+                $controller[0].runner_launch_allowed_cpus ==
+                    $raw[0].campaign.allowed_cpu_set_at_launch and
+                $controller[0].runner_launch_allowed_cpus ==
+                    $campaign_manifest[0].campaign.allowed_cpu_set_at_launch
+            ' "$verified_core/wrapper-launch-affinity.json" >/dev/null
+            verified_timeout_argument="$(/usr/bin/jq -er \
+                "$passive_timeout_argument_jq" \
+                "$verified_core/campaign/raw.json")" || return 1
+            /usr/bin/jq -e \
+                --arg campaign_dir "$verified_core/campaign" \
+                --arg timeout_argument "$verified_timeout_argument" \
+                --slurpfile controller "$verified_core/controller-affinity.json" \
+                --slurpfile raw "$verified_core/campaign/raw.json" '
+                . == [
+                    "/usr/bin/taskset", "-c",
+                    ($controller[0].runner_launch_allowed_cpus |
+                        map(tostring) | join(",")),
+                    "/usr/bin/python3", "-I", "-S", "-B",
+                    $raw[0].input_specification.runner, "run",
+                    "--baseline", $raw[0].input_specification.baseline_executable,
+                    "--candidate", $raw[0].input_specification.candidate_executable,
+                    "--baseline-archive",
+                        $raw[0].input_specification.baseline_archive,
+                    "--candidate-archive",
+                        $raw[0].input_specification.candidate_archive,
+                    "--baseline-build-dir",
+                        $raw[0].input_specification.baseline_build_dir,
+                    "--candidate-build-dir",
+                        $raw[0].input_specification.candidate_build_dir,
+                    "--baseline-source-root",
+                        $raw[0].input_specification.baseline_source_root,
+                    "--candidate-source-root",
+                        $raw[0].input_specification.candidate_source_root,
+                    "--candidate-commit",
+                        $raw[0].input_specification.candidate_commit,
+                    "--baseline-native", "--candidate-mode",
+                        $raw[0].campaign.candidate_mode,
+                    "--reservation-file", $raw[0].reservation.path,
+                    "--output", $campaign_dir,
+                    "--cpu", ($raw[0].campaign.benchmark_cpu | tostring),
+                    "--reserved-sibling",
+                        ($raw[0].campaign.reserved_sibling | tostring),
+                    "--taskset", $raw[0].input_specification.taskset,
+                    "--ldd", $raw[0].input_specification.ldd,
+                    "--preset", "v17-gfni-encode",
+                    "--reuse", ($raw[0].campaign.reuse | tostring),
+                    "--iterations", ($raw[0].campaign.iterations | tostring),
+                    "--warmup", ($raw[0].campaign.warmup | tostring),
+                    "--timeout", $timeout_argument
+                ] and $raw[0].input_specification.baseline_pure_avx2 == false
+            ' "$verified_core/campaign-command.json" >/dev/null
+        fi
         replay_campaign="$verifier_tmp/campaign"
         reconstruct_owner_only_campaign_tree \
             "$verified_core/campaign" "$replay_campaign"
@@ -2622,9 +3153,14 @@ verify_envelope()
             --no-current-input-check \
             > "$verifier_tmp/producer-retained-verification.log" \
             2> "$verifier_tmp/producer-retained-verification-stderr.log"
+        audit_replay_args=()
+        if [[ "$evidence_generation" == passive-v1 ]]; then
+            audit_replay_args=(--supervision absent)
+        fi
         /usr/bin/python3 -I -S -B \
             "$verified_core/audit_v17_gfni_main_compare.py" \
             --manifest "$verified_core/campaign/manifest.json" \
+            "${audit_replay_args[@]}" \
             --output "$verifier_tmp/audit.json" \
             > "$verifier_tmp/audit-summary.json" \
             2> "$verifier_tmp/audit-stderr.log"
@@ -2641,12 +3177,172 @@ verify_envelope()
         verify_tree_metadata_manifest "$verified_envelope"
     else
         test "$campaign_exit_value" -ne 0
+        if /usr/bin/jq -e \
+                'has("stage") and (has("core_sha256sums_verified") | not)' \
+                "$status_file" >/dev/null; then
+            /usr/bin/jq -e '
+                keys == (["campaign_exit_status","core_sha256sums_sha256",
+                    "promotion_passed","schema","source_commit","source_tree",
+                    "stage","status"] | sort) and
+                .schema == "leopard2-v17-gfni-main-failed-envelope/v1" and
+                .status == "failed" and .promotion_passed == false and
+                (.campaign_exit_status | type == "number") and
+                .campaign_exit_status != 0 and
+                (.stage | type == "string" and length > 0)
+            ' "$status_file" >/dev/null
+        else
+            if /usr/bin/jq -e 'has("failure_verified")' \
+                    "$status_file" >/dev/null; then
+                test -f "$verified_core/manifest.json"
+                test "$(/usr/bin/jq -er '.schema | strings' \
+                    "$verified_core/manifest.json")" = \
+                    leopard2-v17-gfni-main-failed-core-manifest/v1
+                /usr/bin/jq -e --slurpfile status "$status_file" '
+                    keys == (["baseline_binary_sha256","baseline_commit",
+                        "campaign_exit_status","candidate_binary_sha256",
+                        "canonical_lock","cpu","failure_sha256",
+                        "failure_verified","failure_verify_status",
+                        "promotion_passed","schema","sibling","source_commit",
+                        "source_tree","status"] | sort) and
+                    .status == "failed" and .promotion_passed == false and
+                    .campaign_exit_status != 0 and
+                    (.failure_verify_status | type == "number") and
+                    (.failure_verified | type == "boolean") and
+                    .failure_verified == $status[0].failure_verified and
+                    .source_commit == $status[0].source_commit and
+                    .source_tree == $status[0].source_tree and
+                    .campaign_exit_status == $status[0].campaign_exit_status and
+                    .canonical_lock == "/tmp/leopard-gf8-authoritative.lock" and
+                    .baseline_commit ==
+                        "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198" and
+                    .cpu == 52 and .sibling == 116
+                ' "$verified_core/manifest.json" >/dev/null
+                /usr/bin/jq -e '
+                    keys == (["campaign_exit_status","core_sha256sums_sha256",
+                        "failure_verified","promotion_passed","schema",
+                        "source_commit","source_tree","status"] | sort) and
+                    .status == "failed" and .promotion_passed == false and
+                    .campaign_exit_status != 0 and
+                    (.failure_verified | type == "boolean")
+                ' "$status_file" >/dev/null
+                test "$(/usr/bin/sha256sum \
+                    "$verified_core/build-closure/replay-candidate/bench_leopard2" | \
+                    /usr/bin/cut -d' ' -f1)" = \
+                    "$(/usr/bin/jq -er '.candidate_binary_sha256 | strings' \
+                        "$verified_core/manifest.json")"
+                test "$(/usr/bin/sha256sum \
+                    "$verified_core/build-closure/replay-baseline/leopard_main_benchmark" | \
+                    /usr/bin/cut -d' ' -f1)" = \
+                    "$(/usr/bin/jq -er '.baseline_binary_sha256 | strings' \
+                        "$verified_core/manifest.json")"
+                failure_path="$verified_core/campaign/failure.json"
+                retained_failure_sha="$(/usr/bin/jq -er \
+                    '.failure_sha256 | if . == null then "null" else strings end' \
+                    "$verified_core/manifest.json")"
+                if [[ -f "$failure_path" ]]; then
+                    test "$retained_failure_sha" != null
+                    test "$(/usr/bin/sha256sum "$failure_path" | \
+                        /usr/bin/cut -d' ' -f1)" = "$retained_failure_sha"
+                    failed_verify_root="$(/usr/bin/mktemp -d \
+                        /tmp/leopard-v17-failed-replay.XXXXXX)"
+                    reconstruct_owner_only_campaign_tree \
+                        "$verified_core/campaign" "$failed_verify_root/campaign"
+                    /usr/bin/mkdir -p \
+                        "$failed_verify_root/controller/experiments/leopard2/main_compare" \
+                        "$failed_verify_root/controller/experiments/leopard2/decoder_dispatch" \
+                        "$failed_verify_root/controller/tools"
+                    /usr/bin/cp --reflink=never "$verified_core/run_abba.py" \
+                        "$failed_verify_root/controller/experiments/leopard2/main_compare/run_abba.py"
+                    /usr/bin/cp --reflink=never "$verified_core/git_capture.py" \
+                        "$failed_verify_root/controller/experiments/leopard2/main_compare/git_capture.py"
+                    /usr/bin/cp --reflink=never \
+                        "$verified_core/balanced_evidence_common.py" \
+                        "$failed_verify_root/controller/experiments/leopard2/decoder_dispatch/balanced_evidence_common.py"
+                    /usr/bin/cp --reflink=never \
+                        "$verified_core/leopard2_build_provenance.py" \
+                        "$failed_verify_root/controller/tools/leopard2_build_provenance.py"
+                    /usr/bin/find "$failed_verify_root/controller" -type d \
+                        -exec /usr/bin/chmod 0700 {} +
+                    /usr/bin/find "$failed_verify_root/controller" -type f \
+                        -exec /usr/bin/chmod 0600 {} +
+                    set +e
+                    /usr/bin/python3 -I -S -B \
+                        "$failed_verify_root/controller/experiments/leopard2/main_compare/run_abba.py" \
+                        verify-failure \
+                        --failure "$failed_verify_root/campaign/failure.json" \
+                        > "$failed_verify_root/verification.log" 2>&1
+                    replay_failure_status=$?
+                    set -e
+                    test "$replay_failure_status" -eq \
+                        "$(/usr/bin/jq -er '.failure_verify_status | numbers' \
+                            "$verified_core/manifest.json")"
+                    if [[ "$(/usr/bin/jq -er \
+                            '.failure_verified | booleans | tostring' \
+                            "$verified_core/manifest.json")" == true ]]; then
+                        test "$replay_failure_status" -eq 0
+                    else
+                        test "$replay_failure_status" -ne 0
+                    fi
+                else
+                    test "$retained_failure_sha" = null
+                    test "$(/usr/bin/jq -er \
+                        '.failure_verified | booleans | tostring' \
+                        "$verified_core/manifest.json")" = false
+                    test "$(/usr/bin/jq -er '.failure_verify_status | numbers' \
+                        "$verified_core/manifest.json")" -ne 0
+                fi
+            else
+                /usr/bin/jq -e '
+                    keys == (["baseline_commit","campaign_exit_status",
+                        "core_sha256sums_sha256","core_sha256sums_verified",
+                        "promotion_passed","schema","source_commit","source_tree",
+                        "stage","status"] | sort) and
+                    .status == "failed" and .promotion_passed == false and
+                    .campaign_exit_status != 0 and
+                    (.core_sha256sums_verified | type == "boolean") and
+                    (.stage | type == "string" and length > 0)
+                ' "$status_file" >/dev/null
+                if [[ "$(/usr/bin/jq -er \
+                        '.core_sha256sums_verified | booleans | tostring' \
+                        "$status_file")" == true ]]; then
+                    test -f "$verified_core/manifest.json"
+                    failed_core_schema="$(/usr/bin/jq -er '.schema | strings' \
+                        "$verified_core/manifest.json")"
+                    test "$failed_core_schema" = \
+                        leopard2-v17-gfni-main-core-manifest/v3 || \
+                    test "$failed_core_schema" = \
+                        leopard2-v17-gfni-main-passive-core-manifest/v4 || \
+                    test "$failed_core_schema" = \
+                        leopard2-v17-gfni-main-failed-core-manifest/v1
+                    test "$(/usr/bin/jq -er '.source_commit | strings' \
+                        "$verified_core/manifest.json")" = \
+                        "$(/usr/bin/jq -er '.source_commit | strings' \
+                            "$status_file")"
+                    test "$(/usr/bin/jq -er '.source_tree | strings' \
+                        "$verified_core/manifest.json")" = \
+                        "$(/usr/bin/jq -er '.source_tree | strings' \
+                            "$status_file")"
+                fi
+            fi
+        fi
     fi
     /usr/bin/printf 'authoritative v17 envelope verified: %s\n' \
         "$verified_envelope"
 }
 
+if [[ $# -eq 1 && $1 == --self-test-passive-contract ]]; then
+    test "$passive_mode" = false
+    passive_contract_self_test
+    exit 0
+fi
+
 if [[ $# -eq 2 && $1 == --verify && $2 == /* ]]; then
+    if [[ "$passive_mode" == true ]]; then
+        /usr/bin/printf \
+            '%s cannot be combined with --verify; generation comes from the sealed envelope\n' \
+            --passive-shared-host >&2
+        exit 2
+    fi
     verify_envelope "$2"
     exit 0
 fi
@@ -2654,8 +3350,11 @@ fi
 if [[ $# -ne 1 || $1 != /* ]]; then
     /usr/bin/printf 'usage: %s /absolute/repository/.research/envelope\n' \
         "$0" >&2
+    /usr/bin/printf '       %s --passive-shared-host /absolute/repository/.research/envelope\n' \
+        "$0" >&2
     /usr/bin/printf '       %s --verify /absolute/repository/.research/envelope\n' \
         "$0" >&2
+    /usr/bin/printf '       %s --self-test-passive-contract\n' "$0" >&2
     exit 2
 fi
 envelope=$1
@@ -2753,8 +3452,11 @@ postseal_failure_record()
     trap - ERR
     set +e
     exec 8>&-
-    if [[ -d "$envelope" && -w "$envelope" && \
-          -f "$lane/SHA256SUMS" ]]; then
+    if [[ -d "$envelope" && -f "$lane/SHA256SUMS" ]]; then
+        /usr/bin/chmod u+w "$envelope" 2>/dev/null
+        if [[ -e "$envelope/SHA256SUMS" ]]; then
+            /usr/bin/chmod u+w "$envelope/SHA256SUMS" 2>/dev/null
+        fi
         if (
             cd "$lane" || exit
             /usr/bin/sha256sum -c SHA256SUMS
@@ -2764,7 +3466,7 @@ postseal_failure_record()
         failed_core_sha="$(/usr/bin/sha256sum "$lane/SHA256SUMS" | \
             /usr/bin/cut -d' ' -f1)"
         for displaced_status in \
-            COMPLETED.json NOT_PROMOTED.json TREE-METADATA.json; do
+            COMPLETED.json NOT_PROMOTED.json FAILED.json TREE-METADATA.json; do
             if [[ -e "$envelope/$displaced_status" ]]; then
                 /usr/bin/mv "$envelope/$displaced_status" \
                     "$envelope/UNCOMMITTED-$displaced_status"
@@ -2911,7 +3613,9 @@ test "$(/usr/bin/cat "$lane/cpu52-thread-siblings.txt")" = 52,116
 /usr/bin/python3 -I -S -B -c '
 import json, os
 allowed = sorted(os.sched_getaffinity(0))
-assert 52 in allowed and 116 in allowed and len(set(allowed) - {52, 116}) > 0
+if not (52 in allowed and 116 in allowed and
+        len(set(allowed) - {52, 116}) > 0):
+    raise SystemExit("wrapper launch affinity lacks the reserved pair or housekeeping")
 print(json.dumps({"allowed_cpus": allowed}, sort_keys=True, separators=(",", ":")))
 ' > "$lane/wrapper-launch-affinity.json"
 
@@ -3021,10 +3725,17 @@ next_stage freeze_committed_controllers
     "$lane/leopard2_build_provenance.py"
 /usr/bin/cp --reflink=never "$candidate_source/$relative_supervisor" \
     "$lane/leopard2_affinity_supervisor.py"
+if [[ "$passive_mode" == true ]]; then
+    /usr/bin/cp --reflink=never "$candidate_source/$relative_census" \
+        "$lane/passive_environment_census.py"
+fi
 /usr/bin/chmod 0555 \
     "$lane/audit_v17_gfni_main_compare.py" \
     "$lane/run_abba.py" \
     "$lane/leopard2_affinity_supervisor.py"
+if [[ "$passive_mode" == true ]]; then
+    /usr/bin/chmod 0555 "$lane/passive_environment_census.py"
+fi
 /usr/bin/chmod 0444 \
     "$lane/git_capture.py" \
     "$lane/balanced_evidence_common.py" \
@@ -3044,6 +3755,11 @@ for frozen_controller in \
     test ! -L "$frozen_controller"
     test "$(/usr/bin/stat -c %h "$frozen_controller")" = 1
 done
+if [[ "$passive_mode" == true ]]; then
+    test ! -L "$lane/passive_environment_census.py"
+    test "$(/usr/bin/stat -c %h \
+        "$lane/passive_environment_census.py")" = 1
+fi
 
 candidate_configure=(
     -G "Unix Makefiles"
@@ -3319,9 +4035,16 @@ next_stage isolated_controller_self_tests
 /usr/bin/python3 -I -S -B \
     "$candidate_source/$relative_auditor" --self-test \
     > "$lane/auditor-self-test.log" 2>&1
-/usr/bin/python3 -I -S -B \
-    "$candidate_source/$relative_supervisor" self-test \
-    > "$lane/supervisor-self-test.log" 2>&1
+if [[ "$passive_mode" == true ]]; then
+    /usr/bin/python3 -I -S -B \
+        "$candidate_source/$relative_census" self-test \
+        > "$lane/passive-census-self-test.log" 2>&1
+    test ! -e "$lane/supervisor-self-test.log"
+else
+    /usr/bin/python3 -I -S -B \
+        "$candidate_source/$relative_supervisor" self-test \
+        > "$lane/supervisor-self-test.log" 2>&1
+fi
 
 copy_timing_closure()
 {
@@ -3509,6 +4232,10 @@ next_stage committed_controller_closure
     > "$lane/build-closure/committed-auditor.py"
 /usr/bin/git -C "$repo" show "$commit:$relative_supervisor" \
     > "$lane/build-closure/committed-supervisor.py"
+if [[ "$passive_mode" == true ]]; then
+    /usr/bin/git -C "$repo" show "$commit:$relative_census" \
+        > "$lane/build-closure/committed-passive-census.py"
+fi
 /usr/bin/cmp "$lane/run-authoritative.sh" \
     "$lane/build-closure/committed-wrapper.sh"
 /usr/bin/cmp "$lane/run_abba.py" \
@@ -3523,6 +4250,10 @@ next_stage committed_controller_closure
     "$lane/build-closure/committed-auditor.py"
 /usr/bin/cmp "$lane/leopard2_affinity_supervisor.py" \
     "$lane/build-closure/committed-supervisor.py"
+if [[ "$passive_mode" == true ]]; then
+    /usr/bin/cmp "$lane/passive_environment_census.py" \
+        "$lane/build-closure/committed-passive-census.py"
+fi
 /usr/bin/cmp "$candidate_source/$relative_wrapper" \
     "$lane/run-authoritative.sh"
 /usr/bin/cmp "$candidate_source/$relative_auditor" \
@@ -3551,6 +4282,11 @@ auditor_hash="$(/usr/bin/sha256sum \
     "$lane/audit_v17_gfni_main_compare.py" | /usr/bin/cut -d' ' -f1)"
 supervisor_hash="$(/usr/bin/sha256sum \
     "$lane/leopard2_affinity_supervisor.py" | /usr/bin/cut -d' ' -f1)"
+passive_census_hash=null
+if [[ "$passive_mode" == true ]]; then
+    passive_census_hash="$(/usr/bin/sha256sum \
+        "$lane/passive_environment_census.py" | /usr/bin/cut -d' ' -f1)"
+fi
 wrapper_hash="$(/usr/bin/sha256sum "$lane/run-authoritative.sh" | \
     /usr/bin/cut -d' ' -f1)"
 build_order_normalizer_hash="$(/usr/bin/sha256sum \
@@ -3771,21 +4507,105 @@ finally:
 ' "$reservation"
 test "$(/usr/bin/stat -c %a "$reservation")" = 600
 
-next_stage supervised_campaign
+original_allowed_csv=
+housekeeping_csv=
+if [[ "$passive_mode" == true ]]; then
+    next_stage passive_controller_affinity
+    original_allowed_csv="$(/usr/bin/jq -er \
+        '.allowed_cpus | map(tostring) | join(",")' \
+        "$lane/wrapper-launch-affinity.json")"
+    housekeeping_csv="$(/usr/bin/jq -er \
+        "$passive_housekeeping_jq" \
+        "$lane/wrapper-launch-affinity.json")"
+    current_allowed="$(/usr/bin/python3 -I -S -B -c '
+import json, os, sys
+print(json.dumps({"allowed_cpus": sorted(os.sched_getaffinity(int(sys.argv[1])))}, sort_keys=True, separators=(",", ":")))
+' "$$")"
+    test "$current_allowed" = \
+        "$(/usr/bin/jq -cS . "$lane/wrapper-launch-affinity.json")"
+    wrapper_children="$(<"/proc/$$/task/$$/children")"
+    test -z "${wrapper_children//[[:space:]]/}"
+    /usr/bin/taskset -pc "$housekeeping_csv" "$$" \
+        > /dev/null
+    /usr/bin/python3 -I -S -B -c '
+import json, os, sys
+source, output, original_csv, housekeeping_csv, wrapper_pid = sys.argv[1:]
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+with open(source, "r", encoding="utf-8") as handle:
+    before = json.load(handle)["allowed_cpus"]
+after = sorted(os.sched_getaffinity(int(wrapper_pid)))
+def parse(text):
+    return [int(item) for item in text.split(",")]
+require(before == parse(original_csv), "original affinity serialization differs")
+require(after == parse(housekeeping_csv), "housekeeping affinity differs")
+require(52 not in after and 116 not in after and bool(after),
+        "housekeeping affinity includes the reserved pair or is empty")
+payload = {
+    "schema": "leopard2-v17-passive-controller-affinity/v1",
+    "acquisition_generation": "passive-v1",
+    "wrapper_pid": int(wrapper_pid),
+    "before_allowed_cpus": before,
+    "after_allowed_cpus": after,
+    "runner_launch_allowed_cpus": before,
+    "benchmark_cpu": 52,
+    "reserved_sibling": 116,
+    "affinity_mutation_scope": "wrapper-process-and-owned-descendants-only",
+    "active_affinity_supervisor_executed": False,
+}
+data = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+try:
+    view = memoryview(data)
+    while view:
+        count = os.write(fd, view)
+        require(count > 0, "short controller-affinity write")
+        view = view[count:]
+    os.fsync(fd)
+finally:
+    os.close(fd)
+directory = os.open(os.path.dirname(output), os.O_RDONLY | os.O_DIRECTORY)
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+' "$lane/wrapper-launch-affinity.json" "$lane/controller-affinity.json" \
+        "$original_allowed_csv" "$housekeeping_csv" "$$"
+    next_stage passive_environment_census_pre
+    /usr/bin/python3 -I -S -B "$lane/passive_environment_census.py" capture \
+        --phase pre --reserved-cpus 52,116 \
+        --output "$lane/environment-census-pre.json"
+fi
+
+if [[ "$passive_mode" == true ]]; then
+    next_stage passive_campaign
+else
+    next_stage supervised_campaign
+fi
 campaign_dir="$lane/campaign"
 affinity_report="$lane/affinity-report.json"
-campaign_command=(
-    /usr/bin/python3 -I -S -B
-    "$candidate_source/$relative_supervisor"
-    run
-    --report "$affinity_report"
-    --reserved-cpus 52,116
-    --
-    # Supervisor v14 requires the child Python source as direct argv[1].  It
-    # seals both files and launches its bootstrap with isolated/no-site flags;
-    # the clean environment's PYTHONDONTWRITEBYTECODE=1 supplies -B semantics.
-    /usr/bin/python3
-    "$candidate_source/$relative_runner"
+campaign_command=()
+if [[ "$passive_mode" == true ]]; then
+    campaign_command=(
+        /usr/bin/taskset -c "$original_allowed_csv"
+        /usr/bin/python3 -I -S -B
+        "$candidate_source/$relative_runner"
+    )
+else
+    campaign_command=(
+        /usr/bin/python3 -I -S -B
+        "$candidate_source/$relative_supervisor"
+        run
+        --report "$affinity_report"
+        --reserved-cpus 52,116
+        --
+        # Supervisor v14 requires the child Python source as direct argv[1].
+        /usr/bin/python3
+        "$candidate_source/$relative_runner"
+    )
+fi
+campaign_command+=(
     run
     --baseline "$baseline_build/leopard_main_benchmark"
     --candidate "$candidate_build/bench_leopard2"
@@ -3819,6 +4639,20 @@ set +e
 campaign_status=$?
 set -e
 trap failure_record ERR
+
+if [[ "$passive_mode" == true && "$campaign_status" -eq 0 ]]; then
+    next_stage passive_environment_census_post
+    /usr/bin/python3 -I -S -B "$lane/passive_environment_census.py" capture \
+        --phase post --reserved-cpus 52,116 \
+        --output "$lane/environment-census-post.json"
+    next_stage passive_environment_policy
+    /usr/bin/python3 -I -S -B "$lane/passive_environment_census.py" compare \
+        --pre "$lane/environment-census-pre.json" \
+        --post "$lane/environment-census-post.json" \
+        --raw "$campaign_dir/raw.json" \
+        --controller "$lane/controller-affinity.json" \
+        --output "$lane/passive-environment-policy.json"
+fi
 
 if [[ "$campaign_status" -ne 0 ]]; then
     next_stage verify_and_seal_failed_campaign
@@ -3856,13 +4690,13 @@ if [[ "$campaign_status" -ne 0 ]]; then
         --arg failure_sha256 "$failure_sha" \
         '{schema:"leopard2-v17-gfni-main-failed-core-manifest/v1",status:"failed",promotion_passed:false,campaign_exit_status:$campaign_exit_status,failure_verify_status:$failure_verify_status,failure_verified:$failure_verified,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,candidate_binary_sha256:$candidate_binary_sha256,baseline_binary_sha256:$baseline_binary_sha256,failure_sha256:($failure_sha256 | if . == "null" then null else . end),canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116}' \
         > "$lane/manifest.json"
-    trap - ERR
     (
         cd "$lane"
         /usr/bin/find . -type f ! -name SHA256SUMS -print0 | \
             /usr/bin/sort -z | \
             /usr/bin/xargs -0 /usr/bin/sha256sum > SHA256SUMS
     )
+    trap postseal_failure_record ERR
     /usr/bin/find "$lane" -type f -perm /222 \
         -exec /usr/bin/chmod a-w {} +
     /usr/bin/find "$lane" -type d -perm /222 \
@@ -3900,52 +4734,85 @@ if [[ "$campaign_status" -ne 0 ]]; then
         2> "$failed_verification/verification-stderr.log"
     /usr/bin/printf 'sealed_failed_envelope=%s\nexternal_verification=%s\n' \
         "$envelope" "$failed_verification"
+    trap - ERR
     exit "$campaign_status"
 fi
 
-next_stage accepted_supervisor_report
-test -f "$affinity_report"
-test "$(/usr/bin/jq -er '.schema | strings' "$affinity_report")" = \
-    leopard2-affinity-supervisor/v14
-test "$(/usr/bin/jq -er '.accepted | booleans | tostring' \
-    "$affinity_report")" = true
-/usr/bin/python3 -I -S -B \
-    "$candidate_source/$relative_supervisor" verify-report \
-    --report "$affinity_report" \
-    > "$lane/affinity-report-verification.log" 2>&1
+affinity_binding=
+if [[ "$passive_mode" == true ]]; then
+    next_stage passive_null_supervision_contract
+    test "$(/usr/bin/jq -er '.supervision == null' \
+        "$campaign_dir/raw.json")" = true
+    test "$(/usr/bin/jq -er '.supervision == null' \
+        "$campaign_dir/manifest.json")" = true
+    for forbidden_affinity_artifact in \
+        "$affinity_report" \
+        "$lane/affinity-report.json.accepted.json" \
+        "$lane/affinity-report.json.ambiguous" \
+        "$lane/affinity-binding.json" \
+        "$lane/affinity-report-verification.log" \
+        "$lane/affinity-binding-create.log" \
+        "$lane/affinity-binding-verification.log" \
+        "$lane/supervisor-self-test.log" \
+        "$lane/passive-auditor-self-test.log" \
+        "$lane/passive-controller-taskset.log"; do
+        test ! -e "$forbidden_affinity_artifact"
+    done
+else
+    next_stage accepted_supervisor_report
+    test -f "$affinity_report"
+    test "$(/usr/bin/jq -er '.schema | strings' "$affinity_report")" = \
+        leopard2-affinity-supervisor/v14
+    test "$(/usr/bin/jq -er '.accepted | booleans | tostring' \
+        "$affinity_report")" = true
+    /usr/bin/python3 -I -S -B \
+        "$candidate_source/$relative_supervisor" verify-report \
+        --report "$affinity_report" \
+        > "$lane/affinity-report-verification.log" 2>&1
 
-next_stage bind_affinity_to_manifest
-test -f "$campaign_dir/manifest.json"
-affinity_binding="$lane/affinity-binding.json"
-/usr/bin/python3 -I -S -B \
-    "$candidate_source/$relative_supervisor" bind \
-    --report "$affinity_report" \
-    --manifest "$campaign_dir/manifest.json" \
-    --output "$affinity_binding" \
-    > "$lane/affinity-binding-create.log" 2>&1
-test "$(/usr/bin/jq -er '.schema | strings' "$affinity_binding")" = \
-    leopard2-affinity-main-binding/v8
-/usr/bin/python3 -I -S -B \
-    "$candidate_source/$relative_supervisor" verify-binding \
-    --binding "$affinity_binding" \
-    --manifest "$campaign_dir/manifest.json" \
-    --manifest-sha256 \
-    "$(/usr/bin/sha256sum "$campaign_dir/manifest.json" | \
-        /usr/bin/cut -d' ' -f1)" \
-    > "$lane/affinity-binding-verification.log" 2>&1
+    next_stage bind_affinity_to_manifest
+    test -f "$campaign_dir/manifest.json"
+    affinity_binding="$lane/affinity-binding.json"
+    /usr/bin/python3 -I -S -B \
+        "$candidate_source/$relative_supervisor" bind \
+        --report "$affinity_report" \
+        --manifest "$campaign_dir/manifest.json" \
+        --output "$affinity_binding" \
+        > "$lane/affinity-binding-create.log" 2>&1
+    test "$(/usr/bin/jq -er '.schema | strings' "$affinity_binding")" = \
+        leopard2-affinity-main-binding/v8
+    /usr/bin/python3 -I -S -B \
+        "$candidate_source/$relative_supervisor" verify-binding \
+        --binding "$affinity_binding" \
+        --manifest "$campaign_dir/manifest.json" \
+        --manifest-sha256 \
+        "$(/usr/bin/sha256sum "$campaign_dir/manifest.json" | \
+            /usr/bin/cut -d' ' -f1)" \
+        > "$lane/affinity-binding-verification.log" 2>&1
+fi
 
 next_stage producer_bundle_verification
-/usr/bin/python3 -I -S -B \
-    "$candidate_source/$relative_runner" verify \
-    --manifest "$campaign_dir/manifest.json" \
-    --affinity-binding "$affinity_binding" \
-    > "$lane/producer-verification.log" \
+producer_verify_args=(
+    /usr/bin/python3 -I -S -B
+    "$candidate_source/$relative_runner" verify
+    --manifest "$campaign_dir/manifest.json"
+)
+if [[ "$passive_mode" == false ]]; then
+    producer_verify_args+=(--affinity-binding "$affinity_binding")
+fi
+"${producer_verify_args[@]}" > "$lane/producer-verification.log" \
     2> "$lane/producer-verification-stderr.log"
 
 next_stage independent_preseal_audit
-/usr/bin/python3 -I -S -B \
-    "$lane/audit_v17_gfni_main_compare.py" \
-    --manifest "$campaign_dir/manifest.json" \
+audit_args=(
+    /usr/bin/python3 -I -S -B
+    "$lane/audit_v17_gfni_main_compare.py"
+    --manifest "$campaign_dir/manifest.json"
+)
+if [[ "$passive_mode" == true ]]; then
+    audit_args+=(--supervision absent)
+fi
+"${audit_args[@]}" \
     --output "$lane/audit.json" \
     > "$lane/audit-summary.json" 2> "$lane/audit-stderr.log"
 test "$(/usr/bin/jq -er '.audit_passed | booleans | tostring' \
@@ -3957,6 +4824,27 @@ test "$(/usr/bin/jq -er '.benchmark_executed | booleans | tostring' \
 test "$(/usr/bin/jq -er \
     '.reporting_policy.combined_or_stacked_ratio_emitted | booleans | tostring' \
     "$lane/audit.json")" = false
+if [[ "$passive_mode" == true ]]; then
+    test "$(/usr/bin/jq -er '.schema | strings' "$lane/audit.json")" = \
+        leopard2-main-compare-v17-passive-independent-audit/v1
+    /usr/bin/jq -e '
+        .audit_mode == "passive-shared-host-observation" and
+        .acquisition_generation == "passive-v1" and
+        .evidence_class == "passive-shared-host-observation/v1" and
+        .affinity_supervisor_binding_verified == false and
+        .promotion_eligible == false and .promotion_passed == false and
+        .causal_performance_claim_eligible == false and
+        .cpu_pair_exclusive == false and
+        .isolation_claim.benchmark_cpu_exclusive_ownership_claimed == false and
+        .isolation_claim.foreign_process_affinity_mutation_claimed == false and
+        .isolation_claim.foreign_process_signalling_claimed == false and
+        .isolation_claim.promotion_eligible == false and
+        .isolation_claim.promotion_passed == false and
+        .gate_results.reservation_pair_lease_null_supervision_closure == true and
+        .gate_results.benchmark_cpu_nonidle_excess_over_child_wall_ceiling_within_rejection_policy == true and
+        .gate_results.benchmark_cpu_exclusivity_not_claimed == true
+    ' "$lane/audit.json" >/dev/null
+fi
 
 next_stage post_campaign_closure
 postcampaign_candidate_test_closure=\
@@ -4018,6 +4906,10 @@ require_empty_output /usr/bin/find "$candidate_build" "$baseline_build" \
     "$lane/audit_v17_gfni_main_compare.py"
 /usr/bin/cmp "$candidate_source/$relative_supervisor" \
     "$lane/leopard2_affinity_supervisor.py"
+if [[ "$passive_mode" == true ]]; then
+    /usr/bin/cmp "$candidate_source/$relative_census" \
+        "$lane/passive_environment_census.py"
+fi
 test "$(/usr/bin/sha256sum "$lane/run-authoritative.sh" | \
     /usr/bin/cut -d' ' -f1)" = "$wrapper_hash"
 test "$(/usr/bin/sha256sum "$lane/run_abba.py" | \
@@ -4026,6 +4918,10 @@ test "$(/usr/bin/sha256sum "$lane/audit_v17_gfni_main_compare.py" | \
     /usr/bin/cut -d' ' -f1)" = "$auditor_hash"
 test "$(/usr/bin/sha256sum "$lane/leopard2_affinity_supervisor.py" | \
     /usr/bin/cut -d' ' -f1)" = "$supervisor_hash"
+if [[ "$passive_mode" == true ]]; then
+    test "$(/usr/bin/sha256sum "$lane/passive_environment_census.py" | \
+        /usr/bin/cut -d' ' -f1)" = "$passive_census_hash"
+fi
 test "$(/usr/bin/sha256sum "$lane/build-order-normalizer.py" | \
     /usr/bin/cut -d' ' -f1)" = "$build_order_normalizer_hash"
 require_empty_output /usr/bin/git -C "$candidate_source" status \
@@ -4087,28 +4983,101 @@ performance_gate_passed="$(/usr/bin/jq -er '
     if all(.[]; type == "boolean") then all else error("invalid gates") end |
     tostring
 ' "$campaign_dir/manifest.json")"
-/usr/bin/jq '{
-    schema:"leopard2-v17-gfni-main-result-summary/v1",
-    ratio_orientation:
-        "exact_leopard1_native_time_over_leopard2_candidate_time",
-    ratios_are_separate_correlated_and_must_not_be_multiplied:true,
-    same_binary_gfni_over_avx2_is_a_separate_campaign:true,
-    ordinary_one_item_batch:.analysis["gf16-high-full"].encode,
-    one_shot_encode:.analysis["gf16-high-full"].one_shot_encode
-}' "$campaign_dir/manifest.json" > "$lane/result-summary.json"
+if [[ "$passive_mode" == true ]]; then
+    /usr/bin/jq --slurpfile audit "$lane/audit.json" \
+        --slurpfile policy "$lane/passive-environment-policy.json" '{
+        schema:"leopard2-v17-gfni-main-passive-result-summary/v2",
+        acquisition_generation:"passive-v1",
+        active_affinity_supervisor_executed:false,
+        evidence_class:"passive-shared-host-observation/v1",
+        promotion_eligible:false,
+        promotion_passed:false,
+        causal_performance_claim_eligible:false,
+        cpu_pair_exclusive:false,
+        ratio_orientation:
+            "exact_leopard1_native_time_over_leopard2_candidate_time",
+        ratios_are_separate_correlated_and_must_not_be_multiplied:true,
+        clustered_t_interval_reported_as_nominal_under_shared_host_load:true,
+        same_binary_gfni_over_avx2_is_a_separate_campaign:true,
+        isolation_claim:$audit[0].isolation_claim,
+        contamination:$audit[0].contamination,
+        outer_contamination:$policy[0].outer_contamination,
+        ordinary_one_item_batch:.analysis["gf16-high-full"].encode,
+        one_shot_encode:.analysis["gf16-high-full"].one_shot_encode
+    }' "$campaign_dir/manifest.json" > "$lane/result-summary.json"
+else
+    /usr/bin/jq '{
+        schema:"leopard2-v17-gfni-main-result-summary/v1",
+        ratio_orientation:
+            "exact_leopard1_native_time_over_leopard2_candidate_time",
+        ratios_are_separate_correlated_and_must_not_be_multiplied:true,
+        same_binary_gfni_over_avx2_is_a_separate_campaign:true,
+        ordinary_one_item_batch:.analysis["gf16-high-full"].encode,
+        one_shot_encode:.analysis["gf16-high-full"].one_shot_encode
+    }' "$campaign_dir/manifest.json" > "$lane/result-summary.json"
+fi
 
 campaign_manifest_hash="$(/usr/bin/sha256sum \
     "$campaign_dir/manifest.json" | /usr/bin/cut -d' ' -f1)"
 campaign_raw_hash="$(/usr/bin/sha256sum "$campaign_dir/raw.json" | \
     /usr/bin/cut -d' ' -f1)"
-affinity_report_hash="$(/usr/bin/sha256sum "$affinity_report" | \
-    /usr/bin/cut -d' ' -f1)"
-affinity_binding_hash="$(/usr/bin/sha256sum "$affinity_binding" | \
-    /usr/bin/cut -d' ' -f1)"
+affinity_report_hash=null
+affinity_binding_hash=null
+if [[ "$passive_mode" == false ]]; then
+    affinity_report_hash="$(/usr/bin/sha256sum "$affinity_report" | \
+        /usr/bin/cut -d' ' -f1)"
+    affinity_binding_hash="$(/usr/bin/sha256sum "$affinity_binding" | \
+        /usr/bin/cut -d' ' -f1)"
+fi
 audit_hash="$(/usr/bin/sha256sum "$lane/audit.json" | \
     /usr/bin/cut -d' ' -f1)"
 
 next_stage final_core_manifest
+if [[ "$passive_mode" == true ]]; then
+    controller_affinity_hash="$(/usr/bin/sha256sum \
+        "$lane/controller-affinity.json" | /usr/bin/cut -d' ' -f1)"
+    census_pre_hash="$(/usr/bin/sha256sum \
+        "$lane/environment-census-pre.json" | /usr/bin/cut -d' ' -f1)"
+    census_post_hash="$(/usr/bin/sha256sum \
+        "$lane/environment-census-post.json" | /usr/bin/cut -d' ' -f1)"
+    passive_policy_hash="$(/usr/bin/sha256sum \
+        "$lane/passive-environment-policy.json" | /usr/bin/cut -d' ' -f1)"
+    /usr/bin/jq -n --slurpfile audit "$lane/audit.json" \
+        --argjson campaign_exit_status "$campaign_status" \
+        --argjson performance_gate_passed "$performance_gate_passed" \
+        --arg commit "$commit" \
+        --arg tree "$tree" \
+        --arg main_commit "$main_commit" \
+        --arg candidate_binary_sha256 "$candidate_binary_hash" \
+        --arg candidate_archive_sha256 "$candidate_archive_hash" \
+        --arg baseline_binary_sha256 "$baseline_binary_hash" \
+        --arg baseline_archive_sha256 "$baseline_archive_hash" \
+        --arg runner_sha256 "$runner_hash" \
+        --arg auditor_sha256 "$auditor_hash" \
+        --arg supervisor_sha256 "$supervisor_hash" \
+        --arg passive_census_sha256 "$passive_census_hash" \
+        --arg wrapper_sha256 "$wrapper_hash" \
+        --arg build_order_normalizer_sha256 "$build_order_normalizer_hash" \
+        --arg candidate_timing_normalization_report_sha256 \
+            "$candidate_timing_normalization_report_hash" \
+        --argjson candidate_timing_raw_tree_byte_identical \
+            "$candidate_timing_raw_tree_byte_identical" \
+        --arg candidate_test_normalization_report_sha256 \
+            "$candidate_test_normalization_report_hash" \
+        --argjson candidate_test_raw_tree_byte_identical \
+            "$candidate_test_raw_tree_byte_identical" \
+        --arg campaign_manifest_sha256 "$campaign_manifest_hash" \
+        --arg campaign_raw_sha256 "$campaign_raw_hash" \
+        --arg audit_sha256 "$audit_hash" \
+        --arg controller_affinity_sha256 "$controller_affinity_hash" \
+        --arg environment_census_pre_sha256 "$census_pre_hash" \
+        --arg environment_census_post_sha256 "$census_post_hash" \
+        --arg passive_environment_policy_sha256 "$passive_policy_hash" \
+        --arg sse2neon_commit "$candidate_submodule_commit" \
+        --arg sse2neon_source_archive_sha256 "$sse2neon_source_archive_hash" \
+        '{schema:"leopard2-v17-gfni-main-passive-core-manifest/v4",status:"complete",acquisition_generation:"passive-v1",campaign_exit_status:$campaign_exit_status,evidence_valid:true,evidence_class:"passive-shared-host-observation/v1",performance_gate_passed:$performance_gate_passed,promotion_eligible:false,promotion_passed:false,causal_performance_claim_eligible:false,cpu_pair_exclusive:false,benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies:$audit[0].contamination.benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,sse2neon_commit:$sse2neon_commit,sse2neon_source_archive_sha256:$sse2neon_source_archive_sha256,candidate_binary_sha256_pre_post:$candidate_binary_sha256,candidate_archive_sha256_pre_post:$candidate_archive_sha256,baseline_binary_sha256_pre_post:$baseline_binary_sha256,baseline_archive_sha256_pre_post:$baseline_archive_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,supervisor_sha256:$supervisor_sha256,supervisor_role:"retained-active-v1-verifier-only",active_affinity_supervisor_executed:false,passive_census_sha256:$passive_census_sha256,wrapper_sha256:$wrapper_sha256,build_order_normalizer_sha256:$build_order_normalizer_sha256,candidate_timing_normalization_report_sha256:$candidate_timing_normalization_report_sha256,candidate_test_normalization_report_sha256:$candidate_test_normalization_report_sha256,campaign_manifest_sha256:$campaign_manifest_sha256,campaign_raw_sha256:$campaign_raw_sha256,audit_sha256:$audit_sha256,controller_affinity_sha256:$controller_affinity_sha256,environment_census_pre_sha256:$environment_census_pre_sha256,environment_census_post_sha256:$environment_census_post_sha256,passive_environment_policy_sha256:$passive_environment_policy_sha256,isolation_claim:$audit[0].isolation_claim,build_reproduction:{candidate_timing_qualified_semantic_equal:true,candidate_timing_raw_tree_file_bytes_identical:$candidate_timing_raw_tree_byte_identical,candidate_tests_qualified_semantic_equal:true,candidate_tests_raw_tree_file_bytes_identical:$candidate_test_raw_tree_byte_identical,baseline_raw_byte_identical:true},producer_verification_passed:true,producer_verification_mode:"manifest-without-affinity-binding",independent_preseal_audit_passed:true,independent_auditor_supervision_mode:"absent",independent_auditor_scope:"campaign semantics only; build-order qualification is separately recomputed by the frozen wrapper normalizer",canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116,ratio_policy:{ordinary_and_one_shot_are_separate:true,ratios_are_separate_correlated_and_must_not_be_multiplied:true,combined_or_stacked_ratio_emitted:false,same_binary_ratio_is_another_campaign:true,clustered_t_interval_reported_as_nominal_under_shared_host_load:true},postseal_policy:"passive shared-host observations always publish NOT_PROMOTED.json, independent of the observed speed gate"}' \
+        > "$lane/manifest.json"
+else
 /usr/bin/jq -n \
     --argjson campaign_exit_status "$campaign_status" \
     --argjson performance_gate_passed "$performance_gate_passed" \
@@ -4141,9 +5110,9 @@ next_stage final_core_manifest
     --arg sse2neon_source_archive_sha256 "$sse2neon_source_archive_hash" \
     '{schema:"leopard2-v17-gfni-main-core-manifest/v3",status:"complete",campaign_exit_status:$campaign_exit_status,evidence_valid:true,performance_gate_passed:$performance_gate_passed,promotion_passed:false,promotion_requires_completion_envelope:true,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,sse2neon_commit:$sse2neon_commit,sse2neon_source_archive_sha256:$sse2neon_source_archive_sha256,candidate_binary_sha256_pre_post:$candidate_binary_sha256,candidate_archive_sha256_pre_post:$candidate_archive_sha256,baseline_binary_sha256_pre_post:$baseline_binary_sha256,baseline_archive_sha256_pre_post:$baseline_archive_sha256,runner_sha256:$runner_sha256,auditor_sha256:$auditor_sha256,supervisor_sha256:$supervisor_sha256,wrapper_sha256:$wrapper_sha256,build_order_normalizer_sha256:$build_order_normalizer_sha256,candidate_timing_normalization_report_sha256:$candidate_timing_normalization_report_sha256,candidate_test_normalization_report_sha256:$candidate_test_normalization_report_sha256,campaign_manifest_sha256:$campaign_manifest_sha256,campaign_raw_sha256:$campaign_raw_sha256,affinity_report_sha256:$affinity_report_sha256,affinity_binding_sha256:$affinity_binding_sha256,audit_sha256:$audit_sha256,build_reproduction:{candidate_timing_qualified_semantic_equal:true,candidate_timing_raw_tree_file_bytes_identical:$candidate_timing_raw_tree_byte_identical,candidate_tests_qualified_semantic_equal:true,candidate_tests_raw_tree_file_bytes_identical:$candidate_test_raw_tree_byte_identical,baseline_raw_byte_identical:true},producer_verification_passed:true,independent_preseal_audit_passed:true,independent_auditor_scope:"campaign semantics only; build-order qualification is separately recomputed by the frozen wrapper normalizer",canonical_lock:"/tmp/leopard-gf8-authoritative.lock",cpu:52,sibling:116,ratio_policy:{ordinary_and_one_shot_are_separate:true,ratios_are_separate_correlated_and_must_not_be_multiplied:true,combined_or_stacked_ratio_emitted:false,same_binary_ratio_is_another_campaign:true},postseal_policy:"promotion requires the enclosing COMPLETED.json written only after byte-identical independent pre/post audits, qualified-semantic build closure verification, core SHA verification, clean-source recheck, and a zero campaign exit"}' \
     > "$lane/manifest.json"
+fi
 
 next_stage seal_core
-trap - ERR
 (
     cd "$lane"
     /usr/bin/find . -type f ! -name SHA256SUMS -print0 | \
@@ -4163,9 +5132,15 @@ verify_sealed_tree "$lane"
 
 stage=independent_postseal_audit
 /usr/bin/printf 'AUTHORITATIVE_STAGE independent_postseal_audit\n'
-/usr/bin/python3 -I -S -B \
-    "$lane/audit_v17_gfni_main_compare.py" \
-    --manifest "$campaign_dir/manifest.json" \
+postseal_audit_args=(
+    /usr/bin/python3 -I -S -B
+    "$lane/audit_v17_gfni_main_compare.py"
+    --manifest "$campaign_dir/manifest.json"
+)
+if [[ "$passive_mode" == true ]]; then
+    postseal_audit_args+=(--supervision absent)
+fi
+"${postseal_audit_args[@]}" \
     --output "$envelope/postseal-audit.json" \
     > "$envelope/postseal-audit-summary.json" \
     2> "$envelope/postseal-audit-stderr.log"
@@ -4183,9 +5158,24 @@ core_sha256sums_sha="$(/usr/bin/sha256sum "$lane/SHA256SUMS" | \
 postseal_audit_sha="$(/usr/bin/sha256sum \
     "$envelope/postseal-audit.json" | /usr/bin/cut -d' ' -f1)"
 
-if [[ "$performance_gate_passed" != true ]]; then
+if [[ "$passive_mode" == true || "$performance_gate_passed" != true ]]; then
     stage=publish_not_promoted_envelope
     /usr/bin/printf 'AUTHORITATIVE_STAGE publish_not_promoted_envelope\n'
+    if [[ "$passive_mode" == true ]]; then
+        /usr/bin/jq -n --slurpfile audit "$lane/audit.json" \
+            --argjson campaign_exit_status "$campaign_status" \
+            --argjson performance_gate_passed "$performance_gate_passed" \
+            --arg commit "$commit" \
+            --arg tree "$tree" \
+            --arg main_commit "$main_commit" \
+            --arg campaign_manifest_sha256 "$campaign_manifest_hash" \
+            --arg audit_sha256 "$audit_hash" \
+            --arg postseal_audit_sha256 "$postseal_audit_sha" \
+            --arg core_manifest_sha256 "$core_manifest_sha" \
+            --arg core_sha256sums_sha256 "$core_sha256sums_sha" \
+            '{schema:"leopard2-v17-gfni-main-passive-not-promoted-envelope/v2",status:"complete",acquisition_generation:"passive-v1",evidence_class:"passive-shared-host-observation/v1",promotion_eligible:false,promotion_passed:false,causal_performance_claim_eligible:false,cpu_pair_exclusive:false,benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies:$audit[0].contamination.benchmark_cpu_nonidle_excess_over_child_wall_ceiling_jiffies,performance_gate_passed:$performance_gate_passed,evidence_valid:true,campaign_exit_status:$campaign_exit_status,preseal_audit_passed:true,postseal_audit_passed:true,postseal_audit_byte_identical:true,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,campaign_manifest_sha256:$campaign_manifest_sha256,audit_sha256:$audit_sha256,postseal_audit_sha256:$postseal_audit_sha256,core_manifest_sha256:$core_manifest_sha256,core_sha256sums_sha256:$core_sha256sums_sha256,isolation_claim:$audit[0].isolation_claim}' \
+            > "$envelope/NOT_PROMOTED.json"
+    else
     /usr/bin/jq -n \
         --argjson campaign_exit_status "$campaign_status" \
         --arg commit "$commit" \
@@ -4198,6 +5188,7 @@ if [[ "$performance_gate_passed" != true ]]; then
         --arg core_sha256sums_sha256 "$core_sha256sums_sha" \
         '{schema:"leopard2-v17-gfni-main-not-promoted-envelope/v1",status:"complete",promotion_passed:false,performance_gate_passed:false,evidence_valid:true,campaign_exit_status:$campaign_exit_status,preseal_audit_passed:true,postseal_audit_passed:true,postseal_audit_byte_identical:true,source_commit:$commit,source_tree:$tree,baseline_commit:$main_commit,campaign_manifest_sha256:$campaign_manifest_sha256,audit_sha256:$audit_sha256,postseal_audit_sha256:$postseal_audit_sha256,core_manifest_sha256:$core_manifest_sha256,core_sha256sums_sha256:$core_sha256sums_sha256}' \
         > "$envelope/NOT_PROMOTED.json"
+    fi
     /usr/bin/printf '' > "$envelope/SHA256SUMS"
     write_tree_metadata_manifest "$envelope"
     (
@@ -4206,7 +5197,6 @@ if [[ "$performance_gate_passed" != true ]]; then
             /usr/bin/sort -z | \
             /usr/bin/xargs -0 /usr/bin/sha256sum > SHA256SUMS
     )
-    trap - ERR
     /usr/bin/find "$envelope" -type f -perm /222 \
         -exec /usr/bin/chmod a-w {} +
     /usr/bin/find "$envelope" -type d -perm /222 \
@@ -4219,6 +5209,7 @@ if [[ "$performance_gate_passed" != true ]]; then
     /usr/bin/printf \
         'sealed_not_promoted_envelope=%s\nexternal_verification=%s\n' \
         "$envelope" "$verification_root"
+    trap - ERR
     exit 0
 fi
 
@@ -4252,7 +5243,6 @@ write_tree_metadata_manifest "$envelope"
     /usr/bin/printf '%s  ./COMPLETED.json\n' "$completion_hash" \
         >> SHA256SUMS
 )
-trap - ERR
 /usr/bin/find "$envelope" -type f -perm /222 \
     ! -path "$envelope/COMPLETED.json" -exec /usr/bin/chmod a-w {} +
 /usr/bin/find "$envelope" -type d -perm /222 \
@@ -4293,4 +5283,5 @@ verification_root="$(/usr/bin/mktemp -d \
 /usr/bin/printf 'campaign_manifest_sha256=%s\n' "$campaign_manifest_hash"
 /usr/bin/printf 'sealed_envelope=%s\nexternal_verification=%s\n' \
     "$envelope" "$verification_root"
+trap - ERR
 exit 0

@@ -3091,6 +3091,50 @@ if(LEO2_BUILD_TESTS)
                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_affinity_supervisor.py
                     self-test)
             add_test(
+                NAME leopard2_v17_passive_evidence_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_passive_evidence.py)
+            add_test(
+                NAME leopard2_v17_passive_evidence_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_passive_evidence.py)
+            add_test(
+                NAME leopard2_v17_passive_census_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/passive_environment_census.py
+                    self-test)
+            add_test(
+                NAME leopard2_v17_passive_census_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/passive_environment_census.py
+                    self-test)
+            add_test(
+                NAME leopard2_v17_passive_auditor_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/audit_v17_gfni_main_compare.py
+                    --self-test)
+            add_test(
+                NAME leopard2_v17_passive_auditor_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/audit_v17_gfni_main_compare.py
+                    --self-test)
+            add_test(
+                NAME leopard2_v17_passive_wrapper_contract_self_test
+                COMMAND
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/run_authoritative_v17_gfni_main_compare.sh
+                    --self-test-passive-contract)
+            set_tests_properties(
+                leopard2_v17_passive_evidence_self_test
+                leopard2_v17_passive_evidence_optimized_self_test
+                leopard2_v17_passive_census_self_test
+                leopard2_v17_passive_census_optimized_self_test
+                leopard2_v17_passive_auditor_self_test
+                leopard2_v17_passive_auditor_optimized_self_test
+                leopard2_v17_passive_wrapper_contract_self_test
+                PROPERTIES
+                    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+                    TIMEOUT 300)
+            add_test(
                 NAME leopard2_lab_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_lab.py

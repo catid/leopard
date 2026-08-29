@@ -154,7 +154,8 @@ that residual and the previously exhausted safe specialization candidates.
 ## Counterbalanced comparison
 
 `run_abba.py` supplies the other half of the comparison. Its current evidence
-contract is raw/manifest/failure version 16. It accepts only fresh Release
+contract is raw/manifest/failure version 17; version 16 remains the frozen
+effective-AVX2 predecessor. It accepts only fresh Release
 artifacts with the expected compile, object, archive, link, source,
 runtime-library, field/profile, and requested decoder-path identities. Each cell
 runs three independent
@@ -190,6 +191,76 @@ operation-specific substitution. A successor schema must either pin the
 selector off and attest the zero-route control, or attest the production
 default GFNI route under a separately named comparison. Until then, a current
 AUTO-GFNI candidate cannot be labeled version-16 AVX2 evidence.
+
+### Version 17 production GFNI and passive shared-host observations
+
+Version 17 is the exact production-route comparison for the single GF16
+legacy-high cell K=1000, R=200, B=65536, full parity, one thread. Its Leopard1
+arm is detached commit `6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`
+built under Leopard1's native `-march=native` Release policy. Its Leopard2 arm
+requests AUTO: the context reports AVX2, while every candidate child attests
+that the exact encode operation used the startup-qualified VEX-256 GFNI table.
+The two reported ratios use the same Leopard1 `leo_encode` observations as the
+numerator and separately measure Leopard2 ordinary one-item
+`leo2_encode_batch` and one-shot `leo2_encode`. They are correlated estimates
+and must not be multiplied or stacked.
+
+The original wrapper uses affinity supervisor v14 to confine every same-UID
+process away from CPU52 and its SMT sibling CPU116. On the current OBS
+streaming host that supervisor cannot operate non-disruptively: its v4 attempt
+rejected a Chromium GPU process with nonuniform per-thread masks before the
+runner launched, then its fail-closed restoration path terminated that
+unrelated process. The sealed v4 envelope contains no campaign directory and
+no timing samples. Retrying the active supervisor while OBS is running is
+therefore neither safe nor useful.
+
+The same wrapper has an explicit, weaker acquisition generation:
+
+    experiments/leopard2/main_compare/run_authoritative_v17_gfni_main_compare.sh \
+        --passive-shared-host \
+        /home/catid/leopard/.research/leopard-79h/<commit>-v17-passive-main-v1
+
+This mode changes affinity only for the wrapper and its owned descendants. It
+pins the wrapper to housekeeping CPUs, starts the owned runner with the
+original allowed set, and lets the unchanged v17 runner pin every benchmark
+child to CPU52. It never executes the active supervisor, never changes or
+signals an unrelated process, requires JSON-null campaign supervision, and
+retains the runner's pair lease, reservation, source/build/digest, route,
+20-ms timer-window, three-round ABBA, and zero-nonidle-jiffy CPU116 gates.
+Read-only pre/post endpoint censuses disclose same-UID affinity eligibility and
+an enclosing `/proc/stat` interval. They are non-atomic and explicitly do not
+claim complete process history.
+
+Passive evidence uses the unchanged
+`leopard2-main-compare-{raw,manifest}/v17` schemas because null supervision is
+an existing, tested v17 state. Its surrounding assurance is separately
+versioned as
+`leopard2-main-compare-v17-passive-independent-audit/v1`,
+`leopard2-v17-gfni-main-passive-core-manifest/v4`, and
+`leopard2-v17-gfni-main-passive-not-promoted-envelope/v2`. A successful
+passive acquisition always publishes `NOT_PROMOTED.json`, even when both
+observed lower confidence bounds exceed 1.05. The audit, result summary, core,
+and terminal envelope all bind `promotion_eligible:false`,
+`cpu_pair_exclusive:false`, and
+`causal_performance_claim_eligible:false`.
+
+The defensible interpretation is limited: CPU116 accumulated zero observed
+nonidle `/proc/stat` jiffies, and CPU52's descriptive nonidle-jiffy excess over
+the retained child-wall-time ceiling stayed within its rejection threshold in
+both the runner interval and the enclosing census interval. This is a
+one-sided rejection screen, not process attribution or an interference upper
+bound, and neither condition proves CPU52 exclusivity. Foreign work can fit
+inside child wall time or below the 100-Hz jiffy resolution, and active work
+elsewhere can change package boost/thermal residency, shared LLC state, and
+memory bandwidth. The policy discloses CPU52 nice, iowait, IRQ, softirq, and
+steal deltas: nice/IRQ/softirq/steal are already included in aggregate
+nonidle, while iowait is diagnostic idle accounting; none has a separate
+zero-tolerance gate. The
+three-round Student-t interval is consequently reported as a nominal clustered
+interval under shared-host load, not a quiet-host or causal performance
+guarantee. Any number from this path must be described as a host-, compiler-,
+API-, and workload-specific passive observation; promotion still requires a
+dedicated or safely isolated environment.
 
 The fresh v16 producer enforces that boundary before capturing executables or
 starting timing: the Git-bound `leopard2.cpp` must contain exactly one selector
