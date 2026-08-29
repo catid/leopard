@@ -1141,6 +1141,23 @@ class CMakeProductionGraph(object):
         "leopard2_k9r5_b1024_runner_optimized_self_test": 1,
         "leopard2_affinity_supervisor_self_test": 1,
         "leopard2_affinity_supervisor_optimized_self_test": 1,
+        "leopard2_v17_passive_evidence_self_test": 1,
+        "leopard2_v17_passive_evidence_optimized_self_test": 1,
+        "leopard2_v17_passive_census_self_test": 1,
+        "leopard2_v17_passive_census_optimized_self_test": 1,
+        "leopard2_v17_passive_auditor_self_test": 1,
+        "leopard2_v17_passive_auditor_optimized_self_test": 1,
+        "leopard2_v17_passive_wrapper_contract_self_test": 1,
+        "leopard2_v18_passive_evidence_self_test": 1,
+        "leopard2_v18_passive_evidence_optimized_self_test": 1,
+        "leopard2_v18_passive_census_self_test": 1,
+        "leopard2_v18_passive_census_optimized_self_test": 1,
+        "leopard2_v18_passive_auditor_self_test": 1,
+        "leopard2_v18_passive_auditor_optimized_self_test": 1,
+        "leopard2_v18_passive_wrapper_contract_self_test": 1,
+        "leopard2_v18_replay_compatibility_self_test": 1,
+        "leopard2_pair_qualification_contract_self_test": 1,
+        "leopard2_pair_qualification_contract_optimized_self_test": 1,
         "leopard2_lab_self_test": 1,
         "leopard2_fuzz_campaign_self_test": 1,
         "leopard2_gf16_neighbor_evidence_self_test": 1,
@@ -1183,6 +1200,21 @@ class CMakeProductionGraph(object):
         "leopard2_k9r5_b1024_runner_optimized_self_test",
         "leopard2_affinity_supervisor_self_test",
         "leopard2_affinity_supervisor_optimized_self_test",
+        "leopard2_v17_passive_evidence_self_test",
+        "leopard2_v17_passive_evidence_optimized_self_test",
+        "leopard2_v17_passive_census_self_test",
+        "leopard2_v17_passive_census_optimized_self_test",
+        "leopard2_v17_passive_auditor_self_test",
+        "leopard2_v17_passive_auditor_optimized_self_test",
+        "leopard2_v17_passive_wrapper_contract_self_test",
+        "leopard2_v18_passive_evidence_self_test",
+        "leopard2_v18_passive_evidence_optimized_self_test",
+        "leopard2_v18_passive_census_self_test",
+        "leopard2_v18_passive_census_optimized_self_test",
+        "leopard2_v18_passive_auditor_self_test",
+        "leopard2_v18_passive_auditor_optimized_self_test",
+        "leopard2_v18_passive_wrapper_contract_self_test",
+        "leopard2_v18_replay_compatibility_self_test",
         "leopard2_lab_self_test",
         "leopard2_fuzz_campaign_self_test",
         "leopard2_gf16_neighbor_evidence_self_test",
@@ -1200,12 +1232,16 @@ class CMakeProductionGraph(object):
         "leopard2_pruned_transform_benchmark_smoke",
         "leopard2_sparse_encode_benchmark_smoke",
     })
-    # Canonical SHA-256 of the sorted complete token tuples for the 47
+    _shell_tests_in_python_registration_gate = frozenset({
+        "leopard2_v17_passive_wrapper_contract_self_test",
+        "leopard2_v18_passive_wrapper_contract_self_test",
+    })
+    # Canonical SHA-256 of the sorted complete token tuples for the
     # registrations above.  Names and guards alone are insufficient: a
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "c87a392c339039d1590baf41fd9ab08bc93679c22f2b9cb689a15675de6f4094"
+        "363e26e59052d47fad52767f37db2cbaad6e542a4be52a46b72add30a9f917d8"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1271,6 +1307,30 @@ class CMakeProductionGraph(object):
             "PYTHONDONTWRITEBYTECODE=1;"
             "PYTHONWARNINGS=error::ResourceWarning",
             "RUN_SERIAL", "TRUE", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_v17_passive_evidence_self_test",
+            "leopard2_v17_passive_evidence_optimized_self_test",
+            "leopard2_v17_passive_census_self_test",
+            "leopard2_v17_passive_census_optimized_self_test",
+            "leopard2_v17_passive_auditor_self_test",
+            "leopard2_v17_passive_auditor_optimized_self_test",
+            "leopard2_v17_passive_wrapper_contract_self_test",
+            "leopard2_v18_passive_evidence_self_test",
+            "leopard2_v18_passive_evidence_optimized_self_test",
+            "leopard2_v18_passive_census_self_test",
+            "leopard2_v18_passive_census_optimized_self_test",
+            "leopard2_v18_passive_auditor_self_test",
+            "leopard2_v18_passive_auditor_optimized_self_test",
+            "leopard2_v18_passive_wrapper_contract_self_test",
+            "leopard2_v18_replay_compatibility_self_test",
+            "PROPERTIES", "ENVIRONMENT", "PYTHONDONTWRITEBYTECODE=1",
+            "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_pair_qualification_contract_self_test", "PROPERTIES",
+            "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_pair_qualification_contract_optimized_self_test",
+            "PROPERTIES", "TIMEOUT", "300")): 1,
     })
     # CMake is an imperative language: proving that each security-sensitive
     # command appears once is not enough when moving a package discovery,
@@ -2322,12 +2382,18 @@ class CMakeProductionGraph(object):
         if not (selected_python or known_name or inside_registration_gate):
             return
         if (not inside_registration_gate or not known_name or
-                name_index != 0 or command_index != 2 or
-                len(tokens) <= 3 or
-                tokens[3] != "${LEO2_PYTHON_EXECUTABLE}"):
+                name_index != 0 or command_index != 2 or len(tokens) <= 3):
             raise ContractError(
                 "Python test registration escaped its exact gate: " +
                 repr(tuple(tokens)))
+        expected_executable = "${LEO2_PYTHON_EXECUTABLE}"
+        if name in self._shell_tests_in_python_registration_gate:
+            expected_executable = (
+                "${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/"
+                "main_compare/run_authoritative_v17_gfni_main_compare.sh")
+        if tokens[3] != expected_executable:
+            raise ContractError(
+                "Python-gated test executable drift: " + repr(tuple(tokens)))
         approved_generators = {
             "$<TARGET_FILE:bench_leopard2>",
             "$<TARGET_FILE:bench_leopard2_allk>",
@@ -2405,18 +2471,18 @@ class CMakeProductionGraph(object):
             raise ContractError(
                 "unapproved required Python test properties: " +
                 repr(tuple(tokens)))
-        equal_rounded_group = [
-            "leopard2_equal_rounded_abba_self_test",
-            "leopard2_equal_rounded_abba_optimized_self_test",
-        ]
-        if required_names == equal_rounded_group and names == equal_rounded_group:
-            expected_guard, expected_reasons = \
-                self._expected_python_test_guards(required_names[0])[0]
-            if (tuple(reasons) != expected_reasons or
-                    not self._formula_equivalent(guard, expected_guard)):
-                raise ContractError(
-                    "required Python test property guard drift: " +
-                    ", ".join(required_names))
+        if len(required_names) > 1 and required_names == names:
+            for name in required_names:
+                candidates = self._expected_python_test_guards(name)
+                if len(candidates) != 1:
+                    raise ContractError(
+                        "ambiguous grouped Python test property guard: " +
+                        name)
+                expected_guard, expected_reasons = candidates[0]
+                if (tuple(reasons) != expected_reasons or
+                        not self._formula_equivalent(guard, expected_guard)):
+                    raise ContractError(
+                        "required Python test property guard drift: " + name)
             self.python_test_property_counts[key] += 1
             return True
         if len(required_names) != 1 or len(names) != 1:

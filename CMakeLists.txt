@@ -3047,6 +3047,23 @@ if(LEO2_BUILD_TESTS)
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/cost_model.py
                 self-test)
+        # Pair qualification is a pure, synthetic contract test.  Keep it
+        # outside the Linux-only acquisition block so CI also proves that the
+        # core has no /proc, affinity, clock, or host-topology dependency.
+        add_test(
+            NAME leopard2_pair_qualification_contract_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_pair_qualification_contract.py)
+        add_test(
+            NAME leopard2_pair_qualification_contract_optimized_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_pair_qualification_contract.py)
+        set_tests_properties(
+            leopard2_pair_qualification_contract_self_test
+            PROPERTIES TIMEOUT 300)
+        set_tests_properties(
+            leopard2_pair_qualification_contract_optimized_self_test
+            PROPERTIES TIMEOUT 300)
         # The lab runner's self-test exercises Linux process affinity and
         # /proc-based runtime attestation.  The strict sanitizer campaign also
         # attests ELF instrumentation with nm and POSIX alias semantics.  Keep
