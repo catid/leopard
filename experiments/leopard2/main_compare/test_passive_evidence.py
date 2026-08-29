@@ -160,7 +160,11 @@ def raw_evidence() -> dict:
     return {
         "schema": census.RAW_SCHEMA_V17,
         "supervision": None,
-        "campaign": {"allowed_cpu_set_at_launch": [0, 1, 52, 116]},
+        "campaign": {
+            "allowed_cpu_set_at_launch": [0, 1, 52, 116],
+            "benchmark_cpu": 52,
+            "reserved_sibling": 116,
+        },
         "invocations": [
             {"duration_ns": 1}
             for _ in range(census.EXPECTED_INVOCATION_COUNT)
@@ -183,6 +187,68 @@ def raw_evidence() -> dict:
             "delta": {}, "pair_lease": {}, "policy": {},
         },
     }
+
+
+def relabel_windowed_raw_pair(
+    raw: dict,
+    cpu_pair: tuple[int, int],
+) -> dict:
+    """Relabel only pair-oriented v18 fields for internal-validator tests."""
+    benchmark_cpu, reserved_sibling = cpu_pair
+    raw = copy.deepcopy(raw)
+    legacy_pair = set(audit.LEGACY_CPU_PAIR)
+    raw["campaign"]["allowed_cpu_set_at_launch"] = sorted(
+        (set(raw["campaign"]["allowed_cpu_set_at_launch"]) - legacy_pair) |
+        set(cpu_pair))
+    raw["campaign"].update(
+        benchmark_cpu=benchmark_cpu,
+        reserved_sibling=reserved_sibling,
+    )
+    reservation_payload = raw["reservation"]["payload"]
+    reservation_payload.update(
+        benchmark_cpu=benchmark_cpu,
+        reserved_sibling=reserved_sibling,
+    )
+    raw["reservation"]["sha256"] = audit.sha256_bytes(
+        audit.canonical_bytes(reservation_payload))
+
+    isolation = raw["isolation"]
+    isolation.update(
+        benchmark_cpu=benchmark_cpu,
+        reserved_sibling=reserved_sibling,
+    )
+    pair_lease = isolation["pair_lease"]
+    pair_lease["payload"]["cpus"] = sorted(cpu_pair)
+    pair_lease["path"] = (
+        f"/run/user/{pair_lease['payload']['uid']}/leopard2-cpu-leases/"
+        f"leopard2-cpu-pair-{pair_lease['payload']['uid']}-"
+        f"{min(cpu_pair)}-{max(cpu_pair)}.lock"
+    )
+    pair_lease["sha256"] = audit.sha256_bytes(
+        audit.canonical_bytes(pair_lease["payload"]))
+    for endpoint in (isolation["before"], isolation["after"]):
+        endpoint["benchmark_cpu"]["cpu"] = benchmark_cpu
+        endpoint["reserved_sibling"]["cpu"] = reserved_sibling
+    isolation["delta"]["benchmark_cpu"]["cpu"] = benchmark_cpu
+    isolation["delta"]["reserved_sibling"]["cpu"] = reserved_sibling
+
+    for invocation, retained in zip(
+            raw["invocations"], isolation["invocation_windows"]):
+        invocation["pinned_cpu"] = benchmark_cpu
+        invocation["command"][2] = str(benchmark_cpu)
+        for reservation_name in ("reservation_before", "reservation_after"):
+            invocation[reservation_name] = copy.deepcopy(raw["reservation"])
+        for window in (invocation["cpu_window"], retained):
+            window.update(
+                benchmark_cpu=benchmark_cpu,
+                reserved_sibling=reserved_sibling,
+            )
+            for endpoint in (window["before"], window["after"]):
+                endpoint["benchmark_cpu"]["cpu"] = benchmark_cpu
+                endpoint["reserved_sibling"]["cpu"] = reserved_sibling
+            window["delta"]["benchmark_cpu"]["cpu"] = benchmark_cpu
+            window["delta"]["reserved_sibling"]["cpu"] = reserved_sibling
+    return raw
 
 
 def reseal_snapshot(value: dict) -> None:
@@ -440,6 +506,158 @@ class PassiveEvidenceTests(unittest.TestCase):
             claim[
                 "reserved_sibling_zero_nonidle_jiffies_in_every_retained_window"],
             True)
+
+    def test_pair_generic_internal_validators_preserve_oriented_roles(
+            self) -> None:
+        cpu_pair = (7, 3)
+        raw = relabel_windowed_raw_pair(
+            runner_fixtures.synthetic_raw(
+                raw_schema=runner_fixtures.runner.RAW_SCHEMA_V18),
+            cpu_pair,
+        )
+        windows = [invocation["cpu_window"]
+                   for invocation in raw["invocations"]]
+
+        self.assertEqual(
+            audit.expected_command(
+                "baseline", "/usr/bin/taskset", cpu_pair=cpu_pair)[2],
+            "7")
+        audit.validate_campaign(raw["campaign"], cpu_pair=cpu_pair)
+        audit.validate_reservation(raw["reservation"], cpu_pair=cpu_pair)
+        lease = audit.validate_pair_lease(
+            raw["isolation"]["pair_lease"], cpu_pair=cpu_pair)
+        self.assertEqual(lease["payload"]["cpus"], [3, 7])
+        self.assertTrue(lease["path"].endswith("-3-7.lock"))
+        audit.validate_cpu_window(
+            windows[0], (0, 0, "baseline"),
+            raw["invocations"][0]["duration_ns"], cpu_pair=cpu_pair)
+        audit.validate_isolation_v2(
+            raw["isolation"], windows, cpu_pair=cpu_pair)
+        observation = audit.windowed_observation(
+            raw["isolation"], cpu_pair=cpu_pair)
+        self.assertEqual(
+            (observation["benchmark_cpu"], observation["reserved_sibling"]),
+            cpu_pair)
+
+        census.validate_v18_isolation(
+            raw["isolation"], raw, cpu_pair=cpu_pair)
+        controller_value = v18_controller()
+        controller_value.update(
+            before_allowed_cpus=[0, 3, 7],
+            after_allowed_cpus=[0],
+            runner_launch_allowed_cpus=[0, 3, 7],
+            benchmark_cpu=cpu_pair[0],
+            reserved_sibling=cpu_pair[1],
+        )
+        census.validate_controller(
+            controller_value, census.RAW_SCHEMA_V18, cpu_pair=cpu_pair)
+        generic_snapshot = snapshot("pre")
+        generic_snapshot["reserved_cpus"] = [3, 7]
+        generic_snapshot["proc_stat"] = {
+            "3": cpu_record(3), "7": cpu_record(7)}
+        reseal_snapshot(generic_snapshot)
+        census.validate_snapshot(
+            generic_snapshot, "pre", cpu_pair=cpu_pair)
+
+        isolation = raw["isolation"]
+        supervision = {
+            "schema": audit.SUPERVISION_SCHEMA,
+            "execution_nonce": "a" * 64,
+            "runner_pid": 123,
+            "runner_started_monotonic_ns": 0,
+            "runner_finished_monotonic_ns":
+                isolation["after"]["monotonic_ns"] + 1,
+            "launch_cpus": raw["campaign"]["allowed_cpu_set_at_launch"],
+            "reserved_cpus": [3, 7],
+            "campaign_sha256": audit.sha256_bytes(
+                audit.canonical_bytes(raw["campaign"])),
+            "reservation_sha256": raw["reservation"]["sha256"],
+            "reservation_nonce": raw["reservation"]["payload"]["nonce"],
+            "isolation_before_monotonic_ns":
+                isolation["before"]["monotonic_ns"],
+            "isolation_after_monotonic_ns":
+                isolation["after"]["monotonic_ns"],
+        }
+        audit.validate_supervision(
+            supervision, raw["campaign"], raw["reservation"], isolation,
+            cpu_pair=cpu_pair)
+        unsorted_supervision = copy.deepcopy(supervision)
+        unsorted_supervision["reserved_cpus"] = [7, 3]
+        with self.assertRaises(audit.AuditError):
+            audit.validate_supervision(
+                unsorted_supervision, raw["campaign"], raw["reservation"],
+                isolation, cpu_pair=cpu_pair)
+
+        legacy_raw = runner_fixtures.synthetic_raw(
+            raw_schema=runner_fixtures.runner.RAW_SCHEMA_V18)
+        reversed_host = copy.deepcopy(legacy_raw["host_initial"])
+        reversed_host["benchmark_cpu"], reversed_host["reserved_sibling"] = (
+            reversed_host["reserved_sibling"],
+            reversed_host["benchmark_cpu"],
+        )
+        for record in (
+                reversed_host["benchmark_cpu"],
+                reversed_host["reserved_sibling"]):
+            record["cpuinfo"]["flags"] = "avx2 gfni"
+        audit.validate_host(
+            reversed_host, "reversed", [0, 52, 116],
+            cpu_pair=(116, 52))
+
+        self.assertEqual(
+            audit.cpu_pair_for_raw_schema(audit.RAW_SCHEMA_V17),
+            audit.LEGACY_CPU_PAIR)
+        self.assertEqual(
+            census.cpu_pair_for_generation("passive-v2"),
+            census.LEGACY_CPU_PAIR)
+        with self.assertRaises(audit.AuditError):
+            audit.cpu_pair_for_raw_schema("leopard2-main-compare-raw/v19")
+        with self.assertRaises(census.CensusError):
+            census.cpu_pair_for_raw_schema(
+                "leopard2-main-compare-raw/v19")
+        with self.assertRaises(census.CensusError):
+            census.cpu_pair_for_generation("passive-v3")
+        with self.assertRaises(census.CensusError):
+            census.validate_controller(
+                controller_value, "leopard2-main-compare-raw/v19",
+                cpu_pair=cpu_pair)
+
+    def test_census_uses_oriented_pair_not_sorted_pair_for_v17_gate(
+            self) -> None:
+        cpu_pair = (116, 52)
+        raw = raw_evidence()
+        raw["campaign"].update(
+            benchmark_cpu=cpu_pair[0], reserved_sibling=cpu_pair[1])
+        isolation = raw["isolation"]
+        isolation.update(
+            benchmark_cpu=cpu_pair[0], reserved_sibling=cpu_pair[1])
+        for endpoint in (isolation["before"], isolation["after"]):
+            endpoint["benchmark_cpu"]["cpu"] = cpu_pair[0]
+            endpoint["reserved_sibling"]["cpu"] = cpu_pair[1]
+
+        pre, post = snapshot("pre"), snapshot("post")
+        pre["proc_stat"] = {
+            "52": cpu_record(52), "116": cpu_record(116)}
+        post["proc_stat"] = {
+            "52": cpu_record(52, idle=1),
+            "116": cpu_record(116, user=17),
+        }
+        reseal_snapshot(pre)
+        reseal_snapshot(post)
+        controller_value = controller()
+        controller_value.update(
+            benchmark_cpu=cpu_pair[0], reserved_sibling=cpu_pair[1])
+
+        with mock.patch.object(
+                census, "cpu_pair_for_raw_schema", return_value=cpu_pair):
+            policy = census.compare(pre, post, raw, controller_value)
+        self.assertEqual(
+            policy["outer_contamination"]
+            ["benchmark_cpu_nonidle_jiffies"],
+            17)
+        self.assertEqual(
+            policy["outer_contamination"]
+            ["reserved_sibling_nonidle_jiffies"],
+            0)
 
     def test_persistent_affinity_change_rejects(self) -> None:
         pre, post = snapshot("pre"), snapshot("post")

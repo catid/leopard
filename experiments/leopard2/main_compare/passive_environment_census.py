@@ -42,6 +42,9 @@ MAX_TASKS = 1_000_000
 CLOCK_TICKS_PER_SECOND = 100
 LEGACY_V17_CPU52_AGGREGATE_EXCESS_LIMIT_JIFFIES = 16
 EXPECTED_INVOCATION_COUNT = 12
+LEGACY_BENCHMARK_CPU = 52
+LEGACY_RESERVED_SIBLING = 116
+LEGACY_CPU_PAIR = (LEGACY_BENCHMARK_CPU, LEGACY_RESERVED_SIBLING)
 HEX256 = re.compile(r"^[0-9a-f]{64}$")
 BOOT_ID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -59,6 +62,18 @@ class CensusError(RuntimeError):
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise CensusError(message)
+
+
+def cpu_pair_for_raw_schema(raw_schema: str) -> tuple[int, int]:
+    require(raw_schema in (RAW_SCHEMA_V17, RAW_SCHEMA_V18),
+            "passive campaign raw schema has no frozen CPU-pair contract")
+    return LEGACY_CPU_PAIR
+
+
+def cpu_pair_for_generation(generation: str) -> tuple[int, int]:
+    require(generation in ("passive-v1", "passive-v2"),
+            "passive census generation has no frozen CPU-pair contract")
+    return LEGACY_CPU_PAIR
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -388,8 +403,14 @@ def exact_keys(value: Any, keys: set[str], label: str) -> Mapping[str, Any]:
 
 
 def validate_snapshot(
-    value: Any, phase: str, *, require_no_confined_threads: bool = True,
+    value: Any,
+    phase: str,
+    *,
+    require_no_confined_threads: bool = True,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
 ) -> Mapping[str, Any]:
+    canonical_pair = sorted(cpu_pair)
+    pair_set = set(cpu_pair)
     value = exact_keys(value, {
         "schema", "phase", "semantics", "mutation_policy", "uid", "boot_id",
         "namespaces", "clock_ticks_per_second", "reserved_cpus",
@@ -417,7 +438,7 @@ def validate_snapshot(
             type(value["boot_id"]) is str and BOOT_ID.fullmatch(value["boot_id"])
             is not None and type(reserved_cpus) is list and
             all(type(cpu) is int for cpu in reserved_cpus) and
-            reserved_cpus == [52, 116],
+            reserved_cpus == canonical_pair,
             f"{phase} census host identity differs")
     namespaces = exact_keys(value["namespaces"], {"pid", "user"},
                             f"{phase} namespaces")
@@ -448,9 +469,10 @@ def validate_snapshot(
                 for cpu in collector_cpus) and collector_cpus and
             not set(collector_cpus).intersection(value["reserved_cpus"]),
             f"{phase} collector used a reserved CPU")
-    proc_stat = exact_keys(value["proc_stat"], {"52", "116"},
+    proc_stat = exact_keys(value["proc_stat"], {
+        str(cpu) for cpu in canonical_pair},
                            f"{phase} proc stat")
-    for cpu in (52, 116):
+    for cpu in canonical_pair:
         record = exact_keys(proc_stat[str(cpu)], {
             "cpu", "fields", "total_jiffies", "nonidle_jiffies"},
             f"{phase} CPU {cpu}")
@@ -501,7 +523,7 @@ def validate_snapshot(
                 all(type(cpu) is int and 0 <= cpu <= MAX_CPU_ID for cpu in cpus)
                 and type(intersection) is list and
                 all(type(cpu) is int for cpu in intersection) and
-                intersection == sorted(set(cpus).intersection((52, 116))),
+                intersection == sorted(set(cpus).intersection(pair_set)),
                 f"{phase} entry affinity differs")
         identities.append((entry["pid"], entry["tid"]))
         by_process.setdefault(entry["pid"], []).append(entry)
@@ -542,10 +564,10 @@ def validate_snapshot(
             len({tuple(item["cpus_allowed"]) for item in group}) > 1
             for group in by_process.values()),
         "confined_to_reserved_subset_process_count": sum(
-            any(set(item["cpus_allowed"]).issubset((52, 116))
+            any(set(item["cpus_allowed"]).issubset(pair_set)
                 for item in group) for group in by_process.values()),
         "confined_to_reserved_subset_thread_count": sum(
-            set(item["cpus_allowed"]).issubset((52, 116))
+            set(item["cpus_allowed"]).issubset(pair_set)
             for item in entries),
         "vanished_record_count": len(vanished),
     }
@@ -574,7 +596,13 @@ def cpu_delta(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, 
     }
 
 
-def validate_controller(value: Any, raw_schema: str) -> Mapping[str, Any]:
+def validate_controller(
+    value: Any,
+    raw_schema: str,
+    *,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
+) -> Mapping[str, Any]:
+    benchmark_cpu, reserved_sibling = cpu_pair
     value = exact_keys(value, {
         "schema", "acquisition_generation", "wrapper_pid",
         "before_allowed_cpus", "after_allowed_cpus",
@@ -584,10 +612,13 @@ def validate_controller(value: Any, raw_schema: str) -> Mapping[str, Any]:
     before = value["before_allowed_cpus"]
     after = value["after_allowed_cpus"]
     launch = value["runner_launch_allowed_cpus"]
-    expected_schema, expected_generation = (
-        (CONTROLLER_SCHEMA_V18, "passive-v2")
-        if raw_schema == RAW_SCHEMA_V18 else
-        (CONTROLLER_SCHEMA_V17, "passive-v1"))
+    contracts = {
+        RAW_SCHEMA_V17: (CONTROLLER_SCHEMA_V17, "passive-v1"),
+        RAW_SCHEMA_V18: (CONTROLLER_SCHEMA_V18, "passive-v2"),
+    }
+    require(raw_schema in contracts,
+            "passive controller raw schema differs")
+    expected_schema, expected_generation = contracts[raw_schema]
     require(value["schema"] == expected_schema and
             value["acquisition_generation"] == expected_generation and
             type(value["wrapper_pid"]) is int and value["wrapper_pid"] > 0 and
@@ -596,13 +627,13 @@ def validate_controller(value: Any, raw_schema: str) -> Mapping[str, Any]:
             type(launch) is list and launch == sorted(set(launch)) and
             all(type(cpu) is int and 0 <= cpu <= MAX_CPU_ID
                 for cpu in before + after + launch) and
-            52 in before and 116 in before and
-            after == [cpu for cpu in before if cpu not in (52, 116)] and
+            benchmark_cpu in before and reserved_sibling in before and
+            after == [cpu for cpu in before if cpu not in set(cpu_pair)] and
             launch == before and
             type(value["benchmark_cpu"]) is int and
-            value["benchmark_cpu"] == 52 and
+            value["benchmark_cpu"] == benchmark_cpu and
             type(value["reserved_sibling"]) is int and
-            value["reserved_sibling"] == 116 and
+            value["reserved_sibling"] == reserved_sibling and
             value["affinity_mutation_scope"] ==
                 "wrapper-process-and-owned-descendants-only" and
             value["active_affinity_supervisor_executed"] is False,
@@ -660,8 +691,14 @@ def window_policy() -> dict[str, Any]:
     }
 
 
-def validate_window_endpoint(value: Any, label: str, *, before: bool
-                             ) -> Mapping[str, Any]:
+def validate_window_endpoint(
+    value: Any,
+    label: str,
+    *,
+    before: bool,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
+) -> Mapping[str, Any]:
+    benchmark_cpu, reserved_sibling = cpu_pair
     value = exact_keys(value, {
         "benchmark_cpu", "monotonic_ns", "read_finished_monotonic_ns",
         "read_started_monotonic_ns", "reserved_sibling"}, label)
@@ -672,14 +709,18 @@ def validate_window_endpoint(value: Any, label: str, *, before: bool
             type(boundary) is int and 0 <= started <= finished and
             boundary == (finished if before else started),
             f"{label} read boundaries differ")
-    raw_cpu_stat(value["benchmark_cpu"], 52, f"{label} benchmark CPU")
-    raw_cpu_stat(value["reserved_sibling"], 116,
+    raw_cpu_stat(value["benchmark_cpu"], benchmark_cpu,
+                 f"{label} benchmark CPU")
+    raw_cpu_stat(value["reserved_sibling"], reserved_sibling,
                  f"{label} reserved sibling")
     return value
 
 
 def validate_v18_window(value: Any, round_index: int, slot: int, role: str,
-                        duration_ns: int) -> Mapping[str, Any]:
+                        duration_ns: int, *,
+                        cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR
+                        ) -> Mapping[str, Any]:
+    benchmark_cpu, reserved_sibling = cpu_pair
     label = f"v18 invocation {round_index}/{slot} CPU window"
     value = exact_keys(value, {
         "accepted", "after", "before", "benchmark_cpu",
@@ -695,9 +736,9 @@ def validate_v18_window(value: Any, round_index: int, slot: int, role: str,
             type(value["slot"]) is int and value["slot"] == slot and
             value["implementation"] == role and
             type(value["benchmark_cpu"]) is int and
-            value["benchmark_cpu"] == 52 and
+            value["benchmark_cpu"] == benchmark_cpu and
             type(value["reserved_sibling"]) is int and
-            value["reserved_sibling"] == 116 and
+            value["reserved_sibling"] == reserved_sibling and
             type(value["clock_ticks_per_second"]) is int and
             value["clock_ticks_per_second"] == CLOCK_TICKS_PER_SECOND and
             type(value["child_started_monotonic_ns"]) is int and
@@ -706,18 +747,21 @@ def validate_v18_window(value: Any, round_index: int, slot: int, role: str,
             value["child_wall_duration_ns"] == duration_ns and duration_ns > 0,
             f"{label} identity differs")
     before = validate_window_endpoint(
-        value["before"], f"{label} before", before=True)
+        value["before"], f"{label} before", before=True,
+        cpu_pair=cpu_pair)
     after = validate_window_endpoint(
-        value["after"], f"{label} after", before=False)
+        value["after"], f"{label} after", before=False,
+        cpu_pair=cpu_pair)
     started = value["child_started_monotonic_ns"]
     finished = started + duration_ns
     before_ns = before["monotonic_ns"]
     after_ns = after["monotonic_ns"]
     benchmark = raw_isolation_delta(
-        before["benchmark_cpu"], after["benchmark_cpu"], 52,
+        before["benchmark_cpu"], after["benchmark_cpu"], benchmark_cpu,
         f"{label} benchmark CPU")
     sibling = raw_isolation_delta(
-        before["reserved_sibling"], after["reserved_sibling"], 116,
+        before["reserved_sibling"], after["reserved_sibling"],
+        reserved_sibling,
         f"{label} reserved sibling")
     ceiling = duration_ns * CLOCK_TICKS_PER_SECOND // 1_000_000_000 + 1
     excess = max(0, benchmark["nonidle_jiffies"] - ceiling)
@@ -747,10 +791,13 @@ def validate_v18_counter_chain(
     windows: Sequence[Mapping[str, Any]],
     outer_before: Mapping[str, Any],
     outer_after: Mapping[str, Any],
+    *,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
 ) -> None:
     """Independently nest every retained counter epoch in the outer pair."""
-    for endpoint, cpu in (("benchmark_cpu", 52),
-                          ("reserved_sibling", 116)):
+    benchmark_cpu, reserved_sibling = cpu_pair
+    for endpoint, cpu in (("benchmark_cpu", benchmark_cpu),
+                          ("reserved_sibling", reserved_sibling)):
         previous = raw_cpu_stat(
             outer_before[endpoint], cpu, f"outer {endpoint} before")
         for index, window in enumerate(windows):
@@ -774,8 +821,13 @@ def validate_v18_counter_chain(
                 "v18 per-invocation CPU counters escape outer endpoints")
 
 
-def validate_v18_isolation(value: Any, raw: Mapping[str, Any]
-                           ) -> Mapping[str, Any]:
+def validate_v18_isolation(
+    value: Any,
+    raw: Mapping[str, Any],
+    *,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
+) -> Mapping[str, Any]:
+    benchmark_cpu, reserved_sibling = cpu_pair
     value = exact_keys(value, {
         "accepted", "after", "before", "benchmark_cpu", "delta",
         "invocation_windows", "out_of_window", "pair_lease", "policy",
@@ -801,13 +853,13 @@ def validate_v18_isolation(value: Any, raw: Mapping[str, Any]
                 f"v18 invocation {index} identity differs")
         windows.append(validate_v18_window(
             invocation.get("cpu_window"), round_index, slot, role,
-            invocation["duration_ns"]))
+            invocation["duration_ns"], cpu_pair=cpu_pair))
     require(value["schema"] == ISOLATION_SCHEMA_V2 and
             value["windows_schema"] == CPU_WINDOW_SCHEMA and
             type(value["benchmark_cpu"]) is int and
-            value["benchmark_cpu"] == 52 and
+            value["benchmark_cpu"] == benchmark_cpu and
             type(value["reserved_sibling"]) is int and
-            value["reserved_sibling"] == 116 and
+            value["reserved_sibling"] == reserved_sibling and
             type(value["retained_window_count"]) is int and
             value["retained_window_count"] == 12 and
             exact_json_equal(value["invocation_windows"], windows) and
@@ -829,12 +881,14 @@ def validate_v18_isolation(value: Any, raw: Mapping[str, Any]
             windows[-1]["after"]["read_finished_monotonic_ns"] <=
                 after["monotonic_ns"],
             "v18 isolation interval does not enclose retained windows")
-    validate_v18_counter_chain(windows, before, after)
+    validate_v18_counter_chain(
+        windows, before, after, cpu_pair=cpu_pair)
     benchmark = raw_isolation_delta(
-        before["benchmark_cpu"], after["benchmark_cpu"], 52,
+        before["benchmark_cpu"], after["benchmark_cpu"], benchmark_cpu,
         "v18 global benchmark CPU")
     sibling = raw_isolation_delta(
-        before["reserved_sibling"], after["reserved_sibling"], 116,
+        before["reserved_sibling"], after["reserved_sibling"],
+        reserved_sibling,
         "v18 global reserved sibling")
     benchmark_nonidle = sum(
         window["delta"]["benchmark_cpu"]["nonidle_jiffies"]
@@ -961,9 +1015,12 @@ def compare(pre: Mapping[str, Any], post: Mapping[str, Any],
                 RAW_SCHEMA_V17, RAW_SCHEMA_V18),
             "passive campaign raw schema differs")
     raw_schema = raw["schema"]
-    pre = validate_snapshot(pre, "pre")
-    post = validate_snapshot(post, "post")
-    controller = validate_controller(controller, raw_schema)
+    cpu_pair = cpu_pair_for_raw_schema(raw_schema)
+    benchmark_cpu, reserved_sibling = cpu_pair
+    pre = validate_snapshot(pre, "pre", cpu_pair=cpu_pair)
+    post = validate_snapshot(post, "post", cpu_pair=cpu_pair)
+    controller = validate_controller(
+        controller, raw_schema, cpu_pair=cpu_pair)
     require(pre["uid"] == post["uid"] and
             pre["boot_id"] == post["boot_id"] and
             pre["namespaces"] == post["namespaces"] and
@@ -979,11 +1036,16 @@ def compare(pre: Mapping[str, Any], post: Mapping[str, Any],
             raw_launch_cpus == sorted(set(raw_launch_cpus)) and
             all(type(cpu) is int and 0 <= cpu <= MAX_CPU_ID
                 for cpu in raw_launch_cpus) and
-            raw_launch_cpus == controller["runner_launch_allowed_cpus"],
+            raw_launch_cpus == controller["runner_launch_allowed_cpus"] and
+            type(campaign.get("benchmark_cpu")) is int and
+            campaign["benchmark_cpu"] == benchmark_cpu and
+            type(campaign.get("reserved_sibling")) is int and
+            campaign["reserved_sibling"] == reserved_sibling,
             "passive runner launch affinity differs from the controller")
     isolation = raw.get("isolation")
     if raw_schema == RAW_SCHEMA_V18:
-        isolation = validate_v18_isolation(isolation, raw)
+        isolation = validate_v18_isolation(
+            isolation, raw, cpu_pair=cpu_pair)
     else:
         require(type(isolation) is dict and
                 set(isolation) == {
@@ -991,9 +1053,9 @@ def compare(pre: Mapping[str, Any], post: Mapping[str, Any],
                     "pair_lease", "policy", "reserved_sibling", "schema"} and
                 isolation.get("schema") == ISOLATION_SCHEMA_V1 and
                 type(isolation.get("benchmark_cpu")) is int and
-                isolation.get("benchmark_cpu") == 52 and
+                isolation.get("benchmark_cpu") == benchmark_cpu and
                 type(isolation.get("reserved_sibling")) is int and
-                isolation.get("reserved_sibling") == 116 and
+                isolation.get("reserved_sibling") == reserved_sibling and
                 isolation.get("accepted") is True,
                 "passive v17 campaign isolation was not accepted")
     isolation_before = exact_keys(isolation["before"], {
@@ -1010,7 +1072,8 @@ def compare(pre: Mapping[str, Any], post: Mapping[str, Any],
                 post["activity_boundary_monotonic_ns"] <=
                 post["scan_started_monotonic_ns"],
             "passive census does not enclose campaign isolation")
-    for cpu, raw_name in ((52, "benchmark_cpu"), (116, "reserved_sibling")):
+    for cpu, raw_name in ((benchmark_cpu, "benchmark_cpu"),
+                          (reserved_sibling, "reserved_sibling")):
         raw_before = raw_cpu_stat(
             isolation_before[raw_name], cpu, f"raw CPU {cpu} before")
         raw_after = raw_cpu_stat(
@@ -1027,8 +1090,8 @@ def compare(pre: Mapping[str, Any], post: Mapping[str, Any],
         str(cpu): cpu_delta(pre["proc_stat"][str(cpu)],
                             post["proc_stat"][str(cpu)]) for cpu in cpus
     }
-    benchmark = outer[str(cpus[0])]
-    sibling = outer[str(cpus[1])]
+    benchmark = outer[str(benchmark_cpu)]
+    sibling = outer[str(reserved_sibling)]
     outer_contamination: dict[str, Any] | None = None
     if raw_schema == RAW_SCHEMA_V17:
         require(sibling["nonidle_jiffies"] == 0,
@@ -1269,7 +1332,9 @@ def main() -> int:
         write_exclusive(options.output, value)
         return 0
     if options.command == "verify":
-        validate_snapshot(load_json(options.input), options.phase)
+        validate_snapshot(
+            load_json(options.input), options.phase,
+            cpu_pair=cpu_pair_for_generation(options.generation))
         return 0
     result = compare(
         load_json(options.pre), load_json(options.post), load_json(options.raw),

@@ -117,6 +117,7 @@ WARMUP = 2
 REUSE = 8
 CPU = 52
 SIBLING = 116
+LEGACY_CPU_PAIR = (CPU, SIBLING)
 TIMER_FLOOR_US = 20_000.0
 PASSIVE_CLOCK_TICKS = 100
 LEGACY_V17_PASSIVE_CPU52_AGGREGATE_EXCESS_LIMIT_JIFFIES = 16
@@ -385,6 +386,12 @@ class AuditError(RuntimeError):
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise AuditError(message)
+
+
+def cpu_pair_for_raw_schema(raw_schema: str) -> tuple[int, int]:
+    require(raw_schema in (RAW_SCHEMA_V17, RAW_SCHEMA_V18),
+            "auditor raw schema has no frozen CPU-pair contract")
+    return LEGACY_CPU_PAIR
 
 
 def exact_keys(value: Any, expected: set[str], label: str) -> dict[str, Any]:
@@ -2219,9 +2226,15 @@ def validate_child_result(role: str, result: Any, campaign: Mapping[str, Any],
     }
 
 
-def expected_command(role: str, taskset: str) -> list[str]:
+def expected_command(
+    role: str,
+    taskset: str,
+    *,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
+) -> list[str]:
+    benchmark_cpu, _ = cpu_pair
     command = [
-        taskset, "-c", str(CPU), SEALED_EXECUTABLE_COMMAND[role],
+        taskset, "-c", str(benchmark_cpu), SEALED_EXECUTABLE_COMMAND[role],
         "--k", str(CELL["k"]), "--r", str(CELL["r"]),
         "--bytes", str(CELL["shard_bytes"]),
         "--loss", str(CELL["losses"]), "--batch", "1",
@@ -2432,8 +2445,14 @@ def validate_cpu_policy(record: Any, label: str, cpu: int,
     return record
 
 
-def validate_host(value: Any, label: str,
-                  allowed: Sequence[int]) -> dict[str, Any]:
+def validate_host(
+    value: Any,
+    label: str,
+    allowed: Sequence[int],
+    *,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
+) -> dict[str, Any]:
+    benchmark_cpu, reserved_sibling = cpu_pair
     value = exact_keys(value, {
         "system", "allowed_cpu_set_at_launch", "online_cpu_set",
         "online_cpu_list_text", "online_node_list_text", "benchmark_cpu",
@@ -2455,7 +2474,7 @@ def validate_host(value: Any, label: str,
             type(online) is list and online == sorted(set(online)) and
             1 <= len(online) <= MAX_CPU_LIST_ENTRIES and
             all(type(cpu) is int and 0 <= cpu <= MAX_CPU_ID for cpu in online) and
-            CPU in online and SIBLING in online,
+            benchmark_cpu in online and reserved_sibling in online,
             f"{label} host launch/online CPU sets differ")
     online_text = validate_text(
         value["online_cpu_list_text"], f"{label} online CPU list")
@@ -2467,9 +2486,11 @@ def validate_host(value: Any, label: str,
                 set(online) and online_nodes,
             f"{label} online CPU/node text differs")
     benchmark = validate_cpu_policy(
-        value["benchmark_cpu"], f"{label} benchmark", CPU, SIBLING)
+        value["benchmark_cpu"], f"{label} benchmark", benchmark_cpu,
+        reserved_sibling)
     sibling = validate_cpu_policy(
-        value["reserved_sibling"], f"{label} sibling", SIBLING, CPU)
+        value["reserved_sibling"], f"{label} sibling", reserved_sibling,
+        benchmark_cpu)
     require(exact_json_equal(benchmark["cache_hierarchy"],
                              sibling["cache_hierarchy"]) and
             benchmark["numa_nodes"] == sibling["numa_nodes"] and
@@ -2566,7 +2587,12 @@ def cpu_delta(before: Any, after: Any, cpu: int, label: str) -> dict[str, Any]:
     }
 
 
-def validate_reservation(value: Any) -> dict[str, Any]:
+def validate_reservation(
+    value: Any,
+    *,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
+) -> dict[str, Any]:
+    benchmark_cpu, reserved_sibling = cpu_pair
     value = exact_keys(value, {"path", "sha256", "payload", "lock"},
                        "CPU reservation")
     require(is_canonical_absolute_path(value["path"]) and
@@ -2580,9 +2606,9 @@ def validate_reservation(value: Any) -> dict[str, Any]:
     require(payload["schema"] == RESERVATION_SCHEMA and
             payload["status"] == "held" and
             type(payload["benchmark_cpu"]) is int and
-            payload["benchmark_cpu"] == CPU and
+            payload["benchmark_cpu"] == benchmark_cpu and
             type(payload["reserved_sibling"]) is int and
-            payload["reserved_sibling"] == SIBLING and
+            payload["reserved_sibling"] == reserved_sibling and
             type(payload["owner"]) is str and payload["owner"].strip() and
             type(payload["nonce"]) is str and
             8 <= len(payload["nonce"]) <= 256 and
@@ -2591,20 +2617,26 @@ def validate_reservation(value: Any) -> dict[str, Any]:
     return value
 
 
-def validate_pair_lease(value: Any) -> dict[str, Any]:
+def validate_pair_lease(
+    value: Any,
+    *,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
+) -> dict[str, Any]:
+    canonical_pair = sorted(cpu_pair)
     value = exact_keys(value, {
         "device", "directory_device", "directory_inode", "inode", "lock",
         "path", "payload", "sha256"}, "CPU pair lease")
     payload = exact_keys(value["payload"], {"cpus", "schema", "uid"},
                          "CPU pair lease payload")
     require(payload["schema"] == PAIR_LEASE_SCHEMA and
-            exact_json_equal(payload["cpus"], [CPU, SIBLING]) and
+            exact_json_equal(payload["cpus"], canonical_pair) and
             all(type(cpu) is int for cpu in payload["cpus"]) and
             type(payload["uid"]) is int and payload["uid"] >= 0,
             "CPU pair lease payload differs")
     expected_path = (
         Path("/run/user") / str(payload["uid"]) / "leopard2-cpu-leases" /
-        f"leopard2-cpu-pair-{payload['uid']}-{CPU}-{SIBLING}.lock")
+        f"leopard2-cpu-pair-{payload['uid']}-"
+        f"{canonical_pair[0]}-{canonical_pair[1]}.lock")
     require(value["path"] == str(expected_path) and
             all(type(value[name]) is int and value[name] >= 0
                 for name in ("device", "directory_device", "directory_inode",
@@ -2616,14 +2648,18 @@ def validate_pair_lease(value: Any) -> dict[str, Any]:
 
 
 def validate_isolation(value: Any, campaign: Mapping[str, Any],
-                       durations_ns: int) -> dict[str, Any]:
+                       durations_ns: int, *,
+                       cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR
+                       ) -> dict[str, Any]:
+    benchmark_cpu, reserved_sibling = cpu_pair
     value = exact_keys(value, {
         "accepted", "after", "before", "benchmark_cpu", "delta", "pair_lease",
         "policy", "reserved_sibling", "schema"}, "isolation")
     require(value["schema"] == ISOLATION_SCHEMA and
             type(value["benchmark_cpu"]) is int and
             type(value["reserved_sibling"]) is int and
-            value["benchmark_cpu"] == CPU and value["reserved_sibling"] == SIBLING,
+            value["benchmark_cpu"] == benchmark_cpu and
+            value["reserved_sibling"] == reserved_sibling,
             "isolation CPU identity differs")
     expected_policy = {
         "counter_source": "/proc/stat",
@@ -2646,10 +2682,11 @@ def validate_isolation(value: Any, campaign: Mapping[str, Any],
             after["monotonic_ns"] - before["monotonic_ns"] >= durations_ns,
             "isolation interval does not cover all child durations")
     benchmark = cpu_delta(
-        before["benchmark_cpu"], after["benchmark_cpu"], CPU,
+        before["benchmark_cpu"], after["benchmark_cpu"], benchmark_cpu,
         "benchmark CPU")
     sibling = cpu_delta(
-        before["reserved_sibling"], after["reserved_sibling"], SIBLING,
+        before["reserved_sibling"], after["reserved_sibling"],
+        reserved_sibling,
         "reserved sibling")
     require(exact_json_equal(value["delta"], {
                 "benchmark_cpu": benchmark, "reserved_sibling": sibling}) and
@@ -2657,7 +2694,7 @@ def validate_isolation(value: Any, campaign: Mapping[str, Any],
             sibling["total_jiffies"] > 0 and
             sibling["nonidle_jiffies"] == 0 and value["accepted"] is True,
             "recomputed sibling-isolation gate failed")
-    validate_pair_lease(value["pair_lease"])
+    validate_pair_lease(value["pair_lease"], cpu_pair=cpu_pair)
     return value
 
 
@@ -2679,8 +2716,14 @@ def cpu_window_policy() -> dict[str, Any]:
     }
 
 
-def validate_cpu_window_endpoint(value: Any, label: str, *, before: bool
-                                 ) -> dict[str, Any]:
+def validate_cpu_window_endpoint(
+    value: Any,
+    label: str,
+    *,
+    before: bool,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
+) -> dict[str, Any]:
+    benchmark_cpu, reserved_sibling = cpu_pair
     value = exact_keys(value, {
         "benchmark_cpu", "monotonic_ns", "read_finished_monotonic_ns",
         "read_started_monotonic_ns", "reserved_sibling"}, label)
@@ -2692,14 +2735,18 @@ def validate_cpu_window_endpoint(value: Any, label: str, *, before: bool
             0 <= started <= finished and
             boundary == (finished if before else started),
             f"{label} read boundaries differ")
-    cpu_stat(value["benchmark_cpu"], CPU, f"{label} benchmark CPU")
-    cpu_stat(value["reserved_sibling"], SIBLING,
+    cpu_stat(value["benchmark_cpu"], benchmark_cpu,
+             f"{label} benchmark CPU")
+    cpu_stat(value["reserved_sibling"], reserved_sibling,
              f"{label} reserved sibling")
     return value
 
 
 def validate_cpu_window(value: Any, expected: tuple[int, int, str],
-                        duration_ns: int) -> dict[str, Any]:
+                        duration_ns: int, *,
+                        cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR
+                        ) -> dict[str, Any]:
+    benchmark_cpu, reserved_sibling = cpu_pair
     round_index, slot, role = expected
     label = f"invocation {round_index}/{slot} CPU window"
     value = exact_keys(value, {
@@ -2716,9 +2763,9 @@ def validate_cpu_window(value: Any, expected: tuple[int, int, str],
             type(value["slot"]) is int and value["slot"] == slot and
             value["implementation"] == role and
             type(value["benchmark_cpu"]) is int and
-            value["benchmark_cpu"] == CPU and
+            value["benchmark_cpu"] == benchmark_cpu and
             type(value["reserved_sibling"]) is int and
-            value["reserved_sibling"] == SIBLING and
+            value["reserved_sibling"] == reserved_sibling and
             type(value["clock_ticks_per_second"]) is int and
             value["clock_ticks_per_second"] == PASSIVE_CLOCK_TICKS and
             type(value["child_started_monotonic_ns"]) is int and
@@ -2728,18 +2775,21 @@ def validate_cpu_window(value: Any, expected: tuple[int, int, str],
             duration_ns > 0,
             f"{label} identity differs")
     before = validate_cpu_window_endpoint(
-        value["before"], f"{label} before", before=True)
+        value["before"], f"{label} before", before=True,
+        cpu_pair=cpu_pair)
     after = validate_cpu_window_endpoint(
-        value["after"], f"{label} after", before=False)
+        value["after"], f"{label} after", before=False,
+        cpu_pair=cpu_pair)
     started = value["child_started_monotonic_ns"]
     finished = started + duration_ns
     before_ns = before["monotonic_ns"]
     after_ns = after["monotonic_ns"]
     benchmark = cpu_delta(
-        before["benchmark_cpu"], after["benchmark_cpu"], CPU,
+        before["benchmark_cpu"], after["benchmark_cpu"], benchmark_cpu,
         f"{label} benchmark CPU")
     sibling = cpu_delta(
-        before["reserved_sibling"], after["reserved_sibling"], SIBLING,
+        before["reserved_sibling"], after["reserved_sibling"],
+        reserved_sibling,
         f"{label} reserved sibling")
     ceiling = duration_ns * PASSIVE_CLOCK_TICKS // 1_000_000_000 + 1
     excess = max(0, benchmark["nonidle_jiffies"] - ceiling)
@@ -2769,10 +2819,13 @@ def validate_cpu_window_counter_chain(
     windows: Sequence[Mapping[str, Any]],
     outer_before: Mapping[str, Any],
     outer_after: Mapping[str, Any],
+    *,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
 ) -> None:
     """Independently bind each retained counter epoch to the outer pair."""
-    for endpoint, cpu in (
-            ("benchmark_cpu", CPU), ("reserved_sibling", SIBLING)):
+    benchmark_cpu, reserved_sibling = cpu_pair
+    for endpoint, cpu in (("benchmark_cpu", benchmark_cpu),
+                          ("reserved_sibling", reserved_sibling)):
         previous = cpu_stat(
             outer_before[endpoint], cpu, f"outer {endpoint} before")
         for index, window in enumerate(windows):
@@ -2796,8 +2849,13 @@ def validate_cpu_window_counter_chain(
                 "per-invocation CPU counters escape the campaign endpoints")
 
 
-def validate_isolation_v2(value: Any, windows: Sequence[Mapping[str, Any]]) \
-        -> dict[str, Any]:
+def validate_isolation_v2(
+    value: Any,
+    windows: Sequence[Mapping[str, Any]],
+    *,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
+) -> dict[str, Any]:
+    benchmark_cpu, reserved_sibling = cpu_pair
     value = exact_keys(value, {
         "accepted", "after", "before", "benchmark_cpu", "delta",
         "invocation_windows", "out_of_window", "pair_lease", "policy",
@@ -2806,9 +2864,9 @@ def validate_isolation_v2(value: Any, windows: Sequence[Mapping[str, Any]]) \
     require(value["schema"] == ISOLATION_SCHEMA_V2 and
             value["windows_schema"] == CPU_WINDOW_SCHEMA and
             type(value["benchmark_cpu"]) is int and
-            value["benchmark_cpu"] == CPU and
+            value["benchmark_cpu"] == benchmark_cpu and
             type(value["reserved_sibling"]) is int and
-            value["reserved_sibling"] == SIBLING and
+            value["reserved_sibling"] == reserved_sibling and
             type(value["retained_window_count"]) is int and
             value["retained_window_count"] == len(windows) ==
                 ROUNDS * len(ORDER) and
@@ -2833,12 +2891,14 @@ def validate_isolation_v2(value: Any, windows: Sequence[Mapping[str, Any]]) \
             windows[-1]["after"]["read_finished_monotonic_ns"] <=
                 after["monotonic_ns"],
             "windowed isolation interval does not enclose retained windows")
-    validate_cpu_window_counter_chain(windows, before, after)
+    validate_cpu_window_counter_chain(
+        windows, before, after, cpu_pair=cpu_pair)
     benchmark = cpu_delta(
-        before["benchmark_cpu"], after["benchmark_cpu"], CPU,
+        before["benchmark_cpu"], after["benchmark_cpu"], benchmark_cpu,
         "windowed isolation benchmark CPU")
     sibling = cpu_delta(
-        before["reserved_sibling"], after["reserved_sibling"], SIBLING,
+        before["reserved_sibling"], after["reserved_sibling"],
+        reserved_sibling,
         "windowed isolation reserved sibling")
     require(exact_json_equal(value["delta"], {
         "benchmark_cpu": benchmark, "reserved_sibling": sibling}),
@@ -2908,13 +2968,15 @@ def validate_isolation_v2(value: Any, windows: Sequence[Mapping[str, Any]]) \
             value["accepted"] is True and
             all(window["accepted"] is True for window in windows),
             "windowed isolation aggregate or rejection policy differs")
-    validate_pair_lease(value["pair_lease"])
+    validate_pair_lease(value["pair_lease"], cpu_pair=cpu_pair)
     return value
 
 
 def validate_supervision(value: Any, campaign: Mapping[str, Any],
                          reservation: Mapping[str, Any],
-                         isolation: Mapping[str, Any]) -> dict[str, Any]:
+                         isolation: Mapping[str, Any], *,
+                         cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR
+                         ) -> dict[str, Any]:
     value = exact_keys(value, {
         "campaign_sha256", "execution_nonce",
         "isolation_after_monotonic_ns", "isolation_before_monotonic_ns",
@@ -2933,7 +2995,7 @@ def validate_supervision(value: Any, campaign: Mapping[str, Any],
     payload = reservation["payload"]
     require(exact_json_equal(value["launch_cpus"],
                              campaign["allowed_cpu_set_at_launch"]) and
-            exact_json_equal(value["reserved_cpus"], [CPU, SIBLING]) and
+            exact_json_equal(value["reserved_cpus"], sorted(cpu_pair)) and
             type(value["launch_cpus"]) is list and
             all(type(cpu) is int for cpu in value["launch_cpus"]) and
             type(value["reserved_cpus"]) is list and
@@ -2953,7 +3015,9 @@ def supervision_for_mode(value: Any, manifest_value: Any,
                          campaign: Mapping[str, Any],
                          reservation: Mapping[str, Any],
                          isolation: Mapping[str, Any],
-                         mode: str) -> dict[str, Any] | None:
+                         mode: str, *,
+                         cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR
+                         ) -> dict[str, Any] | None:
     require(mode in ("required", "absent", "windowed"),
             "unknown supervision audit mode")
     if mode in ("absent", "windowed"):
@@ -2962,7 +3026,8 @@ def supervision_for_mode(value: Any, manifest_value: Any,
         return None
     require(manifest_value is not None,
             "supervised audit requires manifest supervision")
-    return validate_supervision(value, campaign, reservation, isolation)
+    return validate_supervision(
+        value, campaign, reservation, isolation, cpu_pair=cpu_pair)
 
 
 def passive_contamination(isolation: Mapping[str, Any],
@@ -3004,15 +3069,20 @@ def passive_contamination(isolation: Mapping[str, Any],
     }
 
 
-def windowed_observation(isolation: Mapping[str, Any]) -> dict[str, Any]:
+def windowed_observation(
+    isolation: Mapping[str, Any],
+    *,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
+) -> dict[str, Any]:
+    benchmark_cpu, reserved_sibling = cpu_pair
     windows = isolation["invocation_windows"]
     require(type(windows) is list and len(windows) == ROUNDS * len(ORDER),
             "windowed audit lacks twelve retained observations")
     return {
         "schema": "leopard2-v18-windowed-cpu-observation/v1",
         "clock_ticks_per_second": PASSIVE_CLOCK_TICKS,
-        "benchmark_cpu": CPU,
-        "reserved_sibling": SIBLING,
+        "benchmark_cpu": benchmark_cpu,
+        "reserved_sibling": reserved_sibling,
         "retained_window_count": len(windows),
         "per_invocation": [{
             "index": index,
@@ -3214,7 +3284,12 @@ def analyze(invocations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return {CELL["identifier"]: result}
 
 
-def validate_campaign(value: Any) -> dict[str, Any]:
+def validate_campaign(
+    value: Any,
+    *,
+    cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR,
+) -> dict[str, Any]:
+    benchmark_cpu, reserved_sibling = cpu_pair
     value = exact_keys(value, CAMPAIGN_KEYS, "campaign")
     timeout = value["timeout_seconds"]
     allowed = value["allowed_cpu_set_at_launch"]
@@ -3223,14 +3298,17 @@ def validate_campaign(value: Any) -> dict[str, Any]:
             type(allowed) is list and allowed == sorted(set(allowed)) and
             3 <= len(allowed) <= MAX_CPU_LIST_ENTRIES and
             all(type(cpu) is int and 0 <= cpu <= MAX_CPU_ID for cpu in allowed) and
-            CPU in allowed and SIBLING in allowed and len(set(allowed) - {CPU, SIBLING}) > 0,
+            benchmark_cpu in allowed and reserved_sibling in allowed and
+            len(set(allowed) - set(cpu_pair)) > 0,
             "campaign launch topology or timeout differs")
     expected = {
         "rounds": ROUNDS, "order": list(ORDER), "cells": [dict(CELL)],
         "candidate_mode": "auto", "batch": 1, "reuse": REUSE,
         "iterations": ITERATIONS, "warmup": WARMUP, "threads": 1,
-        "child_environment": CHILD_ENVIRONMENT, "benchmark_cpu": CPU,
-        "reserved_sibling": SIBLING, "statistics": STATISTICS_POLICY,
+        "child_environment": CHILD_ENVIRONMENT,
+        "benchmark_cpu": benchmark_cpu,
+        "reserved_sibling": reserved_sibling,
+        "statistics": STATISTICS_POLICY,
     }
     for name, expected_value in expected.items():
         require(exact_json_equal(value.get(name), expected_value),
@@ -3245,6 +3323,8 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
     expected_manifest_schema = (
         MANIFEST_SCHEMA_V18 if windowed_mode else MANIFEST_SCHEMA_V17)
     expected_raw_schema = RAW_SCHEMA_V18 if windowed_mode else RAW_SCHEMA_V17
+    cpu_pair = cpu_pair_for_raw_schema(expected_raw_schema)
+    benchmark_cpu, reserved_sibling = cpu_pair
     expected_invocation_keys = (
         INVOCATION_V18_KEYS if windowed_mode else INVOCATION_KEYS)
     manifest_path = canonical_existing_file(manifest_path)
@@ -3278,13 +3358,14 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
             raw["validity_is_independent_of_speed"] is True and
             raw_info["payload_digest"] == raw["digest"],
             "raw bundle does not match the requested audit generation")
-    campaign = validate_campaign(raw["campaign"])
+    campaign = validate_campaign(raw["campaign"], cpu_pair=cpu_pair)
     require(type(raw["identities_initial"]) is dict and
             exact_json_equal(raw["identities_initial"], raw["identities_final"]),
             "input identities changed during the campaign")
     identities = validate_native_build(
         raw["input_specification"], raw["identities_initial"])
-    reservation = validate_reservation(raw["reservation"])
+    reservation = validate_reservation(
+        raw["reservation"], cpu_pair=cpu_pair)
     validate_sealed_executables(raw["executable_snapshots"], identities)
     input_spec = raw["input_specification"]
     require(input_spec["taskset"] == identities.get("taskset", {}).get("path"),
@@ -3316,13 +3397,14 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
                 invocation["round"] == round_index and
                 type(invocation["slot"]) is int and invocation["slot"] == slot and
                 invocation["implementation"] == role and
-                invocation["command"] == expected_command(role, input_spec["taskset"]) and
+                invocation["command"] == expected_command(
+                    role, input_spec["taskset"], cpu_pair=cpu_pair) and
                 invocation["execution_protocol"] == SEALED_EXECUTABLE_PROTOCOL and
                 exact_json_equal(invocation["executable_snapshot"],
                                  raw["executable_snapshots"][role]) and
                 exact_json_equal(invocation["environment"], CHILD_ENVIRONMENT) and
                 type(invocation["pinned_cpu"]) is int and
-                invocation["pinned_cpu"] == CPU and
+                invocation["pinned_cpu"] == benchmark_cpu and
                 type(invocation["duration_ns"]) is int and
                 invocation["duration_ns"] > 0 and
                 type(invocation["returncode"]) is int and
@@ -3331,7 +3413,7 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
         if windowed_mode:
             cpu_windows.append(validate_cpu_window(
                 invocation["cpu_window"], (round_index, slot, role),
-                invocation["duration_ns"]))
+                invocation["duration_ns"], cpu_pair=cpu_pair))
         validate_timestamp(
             invocation["started_utc"], f"invocation {round_index}/{slot} start")
         require(exact_json_equal(invocation["identity_before"], identities) and
@@ -3393,20 +3475,26 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
                 normalized["retained_timer_window_us"]["one_shot_encode"])
         accepted.append(dict(invocation, normalized=normalized))
     isolation = (
-        validate_isolation_v2(raw["isolation"], cpu_windows)
+        validate_isolation_v2(
+            raw["isolation"], cpu_windows, cpu_pair=cpu_pair)
         if windowed_mode else
-        validate_isolation(raw["isolation"], campaign, total_duration))
+        validate_isolation(
+            raw["isolation"], campaign, total_duration,
+            cpu_pair=cpu_pair))
     supervision = supervision_for_mode(
         raw["supervision"], manifest["supervision"], campaign, reservation,
-        isolation, supervision_mode)
+        isolation, supervision_mode, cpu_pair=cpu_pair)
     contamination = (
-        windowed_observation(isolation) if windowed_mode else
+        windowed_observation(isolation, cpu_pair=cpu_pair)
+        if windowed_mode else
         passive_contamination(isolation, total_duration)
         if supervision_mode == "absent" else None)
     host_initial = validate_host(
-        raw["host_initial"], "initial", campaign["allowed_cpu_set_at_launch"])
+        raw["host_initial"], "initial", campaign["allowed_cpu_set_at_launch"],
+        cpu_pair=cpu_pair)
     host_final = validate_host(
-        raw["host_final"], "final", campaign["allowed_cpu_set_at_launch"])
+        raw["host_final"], "final", campaign["allowed_cpu_set_at_launch"],
+        cpu_pair=cpu_pair)
     require(exact_json_equal(host_initial, host_final),
             "host identity changed during the campaign")
     analysis = analyze(accepted)
@@ -3452,8 +3540,8 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
             "reuse": REUSE,
             "iterations": ITERATIONS,
             "warmup": WARMUP,
-            "cpu": CPU,
-            "sibling": SIBLING,
+            "cpu": benchmark_cpu,
+            "sibling": reserved_sibling,
             "timer_floor_us": TIMER_FLOOR_US,
             "route_contract": ROUTE_CONTRACT,
             "build_layout_contract":
