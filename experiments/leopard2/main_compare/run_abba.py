@@ -272,6 +272,7 @@ FAILURE_TO_RAW_SCHEMA = {
     FAILURE_SCHEMA_V18: RAW_SCHEMA_V18,
 }
 GFNI_ENCODE_CAMPAIGN_SCHEMAS = frozenset((RAW_SCHEMA_V17, RAW_SCHEMA_V18))
+FROZEN_CPU_PAIR_SCHEMAS = frozenset((RAW_SCHEMA_V17, RAW_SCHEMA_V18))
 WINDOWED_CONTAMINATION_SCHEMAS = frozenset((RAW_SCHEMA_V18,))
 CANDIDATE_MODE_SCHEMAS = frozenset((
     RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA_V6, RAW_SCHEMA_V7,
@@ -8668,6 +8669,31 @@ def candidate_mode_for_campaign(campaign: Mapping[str, Any]) -> str:
     return mode
 
 
+def validate_gfni_campaign_contract(
+    raw_schema: str,
+    cells: Sequence[Cell],
+    campaign: Mapping[str, Any],
+    cpu: int,
+    sibling: int,
+    *,
+    failure: bool = False,
+) -> None:
+    """Keep the GFNI workload fixed without freezing every future CPU pair."""
+    if raw_schema not in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
+        return
+    frozen_pair_matches = (
+        raw_schema not in FROZEN_CPU_PAIR_SCHEMAS or
+        (cpu == 52 and sibling == 116)
+    )
+    require(tuple(cells) == V17_CELLS and
+            candidate_mode_for_campaign(campaign) == "auto" and
+            campaign["reuse"] == 8 and campaign["iterations"] == 9 and
+            campaign["warmup"] == 2 and frozen_pair_matches,
+            ("failed v17 campaign differs from the frozen native-main/GFNI cell"
+             if failure else
+             "v17 campaign differs from the frozen native-main/GFNI cell"))
+
+
 def validate_candidate_mode_schema(
     campaign: Mapping[str, Any], raw_schema: str
 ) -> str:
@@ -9480,12 +9506,8 @@ def validate_raw(
             "campaign cell identifiers are not unique")
     for cell in cells:
         validate_cell(cell, raw_schema)
-    if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
-        require(tuple(cells) == V17_CELLS and
-                candidate_mode_for_campaign(campaign) == "auto" and
-                campaign["reuse"] == 8 and campaign["iterations"] == 9 and
-                campaign["warmup"] == 2 and cpu == 52 and sibling == 116,
-                "v17 campaign differs from the frozen native-main/GFNI cell")
+    validate_gfni_campaign_contract(
+        raw_schema, cells, campaign, cpu, sibling)
     input_spec = raw.get("input_specification")
     initial = raw.get("identities_initial")
     final = raw.get("identities_final")
@@ -10085,12 +10107,8 @@ def validate_failure(
     cells = [Cell(**item) for item in cells_value]
     for cell in cells:
         validate_cell(cell, raw_schema)
-    if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS:
-        require(tuple(cells) == V17_CELLS and
-                candidate_mode_for_campaign(campaign) == "auto" and
-                campaign["reuse"] == 8 and campaign["iterations"] == 9 and
-                campaign["warmup"] == 2 and cpu == 52 and sibling == 116,
-                "failed v17 campaign differs from the frozen native-main/GFNI cell")
+    validate_gfni_campaign_contract(
+        raw_schema, cells, campaign, cpu, sibling, failure=True)
     expected_sequence = [
         (cell.identifier, round_index, slot, implementation)
         for cell in cells for round_index in range(ROUNDS)

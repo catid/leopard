@@ -8001,6 +8001,37 @@ class MainCompareRunnerTests(unittest.TestCase):
                                 data, object_id=object_id, records=records))
 
     def test_v17_replays_before_v18_windowed_isolation_contract(self) -> None:
+        self.assertEqual(
+            runner.FROZEN_CPU_PAIR_SCHEMAS,
+            frozenset((runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18)))
+        self.assertLessEqual(
+            runner.FROZEN_CPU_PAIR_SCHEMAS,
+            runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS)
+        future_schema = "leopard2-main-compare-raw/future-pair-test"
+        future_campaign = copy.deepcopy(
+            synthetic_raw(raw_schema=runner.RAW_SCHEMA_V18)["campaign"])
+        with mock.patch.object(
+                runner, "GFNI_ENCODE_CAMPAIGN_SCHEMAS",
+                runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS | {future_schema}):
+            runner.validate_gfni_campaign_contract(
+                future_schema, runner.V17_CELLS, future_campaign, 53, 117)
+            changed_workload = copy.deepcopy(future_campaign)
+            changed_workload["warmup"] = 3
+            with self.assertRaisesRegex(
+                    runner.EvidenceError,
+                    "differs from the frozen native-main/GFNI cell"):
+                runner.validate_gfni_campaign_contract(
+                    future_schema, runner.V17_CELLS,
+                    changed_workload, 53, 117)
+            with mock.patch.object(
+                    runner, "FROZEN_CPU_PAIR_SCHEMAS",
+                    runner.FROZEN_CPU_PAIR_SCHEMAS | {future_schema}):
+                with self.assertRaisesRegex(
+                        runner.EvidenceError,
+                        "differs from the frozen native-main/GFNI cell"):
+                    runner.validate_gfni_campaign_contract(
+                        future_schema, runner.V17_CELLS,
+                        future_campaign, 53, 117)
         historical = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V17)
         current = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V18)
         runner.validate_raw(historical, None, False, False)
@@ -8750,6 +8781,24 @@ class MainCompareRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(
                 runner.EvidenceError, "exact GF16 encode preset"):
             runner.validate_fresh_v18_options(wrong)
+        wrong_pair = runner.parser().parse_args([
+            *base, "--baseline-native", "--cpu", "53",
+            "--reserved-sibling", "117"])
+        self.assertEqual((wrong_pair.cpu, wrong_pair.reserved_sibling),
+                         (53, 117))
+        with self.assertRaisesRegex(
+                runner.EvidenceError,
+                "fresh v18 acquisition requires the frozen "
+                "CPU52/sibling116 pair"):
+            runner.validate_fresh_v18_options(wrong_pair)
+        with mock.patch.object(
+                runner.EvidenceDirectory, "create_new") as create_new:
+            with self.assertRaisesRegex(
+                    runner.EvidenceError,
+                    "fresh v18 acquisition requires the frozen "
+                    "CPU52/sibling116 pair"):
+                runner.run_campaign(wrong_pair)
+            create_new.assert_not_called()
 
         with mock.patch.dict(
                 os.environ,
