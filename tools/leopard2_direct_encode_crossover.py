@@ -4670,13 +4670,32 @@ def retain_launched_process(process, description):
 
 
 def close_retained_process(record):
+    errors = []
+    interrupted = None
     for key in ("pidfd", "proc_descriptor"):
         descriptor = record.get(key)
         if descriptor is not None:
             try:
                 os.close(descriptor)
+            except OSError as error:
+                errors.append((key, error))
+            except BaseException as error:
+                if interrupted is None:
+                    interrupted = error
             finally:
                 record[key] = None
+    if interrupted is not None:
+        raise interrupted
+    if errors:
+        raise CrossoverError(
+            "cannot close retained process descriptors: {}".format(
+                "; ".join(
+                    "{} {}: {}".format(
+                        key, type(error).__name__, error
+                    ) for key, error in errors
+                )
+            )
+        )
 
 
 def retained_process_alive(record):
@@ -5910,46 +5929,76 @@ def cleanup_command_tree(
         ):
             leader_identity
     }
-    try:
+    leader_key = (
+        leader_identity["pid"], leader_identity["starttime_ticks"],
+        leader_identity.get("proc_identity"),
+    )
+    residual = set()
+    active_error = None
+
+    def discover():
         retain_discovered_processes(
             process.pid, containment_identity, adopted_baseline, retained
         )
-        residual = sorted(
+        residual.update(
             record["pid"] for record in retained.values()
             if record is not leader_identity
         )
-        if not timed_out and not residual:
-            process.wait(timeout=0)
-            return residual
+
+    def unreaped_adopted_children():
+        if adopted_baseline is None:
+            return set()
+        return direct_child_identities() - adopted_baseline - {leader_key}
+
+    def finish_if_quiescent():
+        """Prove no retained or newly adopted child remains."""
+        return (
+            not any(retained_process_alive(record)
+                    for record in retained.values()) and
+            not unreaped_adopted_children()
+        )
+
+    try:
+        discover()
+        fast_path_stable_scans = 0
+        while (not timed_out and not residual and
+               finish_if_quiescent()):
+            fast_path_stable_scans += 1
+            if fast_path_stable_scans >= 3:
+                process.wait(timeout=0)
+                return []
+            time.sleep(0.01)
+            count_before = len(retained)
+            discover()
+            if len(retained) != count_before:
+                fast_path_stable_scans = 0
 
         # Never signal a numeric PID, process group, or session here.  A pidfd
         # names the exact task retained between two matching /proc starttime
         # reads and remains safe after the numeric identifier can be reused.
         for record in retained.values():
             signal_retained_process(record, signal.SIGTERM)
+        term_signalled = set(retained)
 
         term_deadline = time.monotonic() + 0.35
         quiescent_scans = 0
         while time.monotonic() < term_deadline:
             count_before = len(retained)
-            retain_discovered_processes(
-                process.pid, containment_identity, adopted_baseline, retained
-            )
-            for record in retained.values():
+            discover()
+            for key, record in retained.items():
+                if key not in term_signalled:
+                    signal_retained_process(record, signal.SIGTERM)
+                    term_signalled.add(key)
                 if record is not leader_identity:
                     reap_retained_process(record)
-            live = [
-                record for record in retained.values()
-                if retained_process_alive(record)
-            ]
-            if not live:
+            if finish_if_quiescent():
                 quiescent_scans = (
                     quiescent_scans + 1
                     if len(retained) == count_before else 0
                 )
                 if quiescent_scans >= 3:
                     process.wait(timeout=0)
-                    return residual
+                    return sorted(residual)
             else:
                 quiescent_scans = 0
             time.sleep(0.01)
@@ -5959,11 +6008,10 @@ def cleanup_command_tree(
 
         kill_deadline = time.monotonic() + 2.0
         quiescent_scans = 0
+        remaining = []
         while time.monotonic() < kill_deadline:
             count_before = len(retained)
-            retain_discovered_processes(
-                process.pid, containment_identity, adopted_baseline, retained
-            )
+            discover()
             for record in retained.values():
                 signal_retained_process(record, signal.SIGKILL)
                 if record is not leader_identity:
@@ -5972,26 +6020,67 @@ def cleanup_command_tree(
                 record for record in retained.values()
                 if retained_process_alive(record)
             ]
-            if not remaining:
+            if not remaining and finish_if_quiescent():
                 quiescent_scans = (
                     quiescent_scans + 1
                     if len(retained) == count_before else 0
                 )
                 if quiescent_scans >= 3:
                     process.wait(timeout=0)
-                    return residual
+                    return sorted(residual)
             else:
                 quiescent_scans = 0
             time.sleep(0.01)
+        adopted_remaining = unreaped_adopted_children()
         raise CrossoverError(
-            "command descendant cleanup failed for retained PIDs {}".format(
-                ",".join(str(record["pid"]) for record in remaining)
+            "command descendant cleanup failed for retained PIDs {}; "
+            "residual {}; unreaped adopted children {}".format(
+                ",".join(
+                    str(record["pid"]) for record in remaining
+                ) or "none",
+                ",".join(str(pid) for pid in sorted(residual)) or "none",
+                ",".join(
+                    str(identity[0])
+                    for identity in sorted(adopted_remaining)
+                ) or "none",
             )
         )
+    except BaseException as error:
+        active_error = error
+        raise
     finally:
+        close_errors = []
+        close_interrupt = None
         for record in retained.values():
             if record is not leader_identity:
-                close_retained_process(record)
+                try:
+                    close_retained_process(record)
+                except Exception as error:
+                    close_errors.append(error)
+                except BaseException as error:
+                    if close_interrupt is None:
+                        close_interrupt = error
+        if close_interrupt is not None:
+            if active_error is not None:
+                raise close_interrupt from active_error
+            raise close_interrupt
+        if close_errors:
+            detail = "; ".join(
+                "{}: {}".format(type(error).__name__, error)
+                for error in close_errors
+            )
+            if active_error is not None:
+                if not isinstance(active_error, Exception):
+                    raise active_error
+                raise CrossoverError(
+                    "command descendant cleanup failed: {}; descriptor "
+                    "cleanup also failed: {}".format(active_error, detail)
+                ) from active_error
+            raise CrossoverError(
+                "command descendant descriptor cleanup failed: {}".format(
+                    detail
+                )
+            )
 
 
 def _run_command_owned(
@@ -12970,6 +13059,351 @@ def self_test():
             live_descriptor_count() == descriptors_before_abort,
             "run_job closes result/log/raw directories after a "
             "BaseException during isolation",
+        )
+
+        def cleanup_with_scan_guard(
+                label, process, containment_identity, timed_out,
+                adopted_baseline, leader, minimum_scans=1):
+            scans_after_reap = []
+            original_retain_discovered = globals()[
+                "retain_discovered_processes"
+            ]
+            original_direct_children = globals()[
+                "direct_child_identities"
+            ]
+
+            def observed_retain_discovered(*arguments, **keywords):
+                scans_after_reap.append(process.returncode is not None)
+                return original_retain_discovered(*arguments, **keywords)
+
+            def observed_direct_children(*arguments, **keywords):
+                scans_after_reap.append(process.returncode is not None)
+                return original_direct_children(*arguments, **keywords)
+
+            try:
+                globals()["retain_discovered_processes"] = (
+                    observed_retain_discovered
+                )
+                globals()["direct_child_identities"] = (
+                    observed_direct_children
+                )
+                residual = cleanup_command_tree(
+                    process, containment_identity, timed_out,
+                    adopted_baseline, leader,
+                )
+            finally:
+                globals()["retain_discovered_processes"] = (
+                    original_retain_discovered
+                )
+                globals()["direct_child_identities"] = (
+                    original_direct_children
+                )
+            check(
+                len(scans_after_reap) >= minimum_scans and
+                not any(scans_after_reap),
+                "{} performs its stable scans before releasing its "
+                "leader PID".format(label),
+            )
+            return residual
+
+        def exercise_adopted_cleanup(label, exit_status, timed_out):
+            """Exercise the owner-layer adopted-child net directly."""
+            ensure_child_subreaper()
+            adopted_baseline = direct_child_identities()
+            check(
+                not adopted_baseline,
+                "{} starts without pre-existing direct children".format(
+                    label
+                ),
+            )
+            gate_read = None
+            gate_write = None
+            containment_read = None
+            containment_write = None
+            process = None
+            leader = None
+            daemon = None
+            daemon_pid = None
+            pid_path = root / (label + ".pid")
+            program = (
+                "import os,pathlib,signal,sys,time\n"
+                "gate=int(sys.argv[1])\n"
+                "if os.read(gate,1)!=b'G': raise SystemExit(91)\n"
+                "os.close(gate)\n"
+                "first=os.fork()\n"
+                "if first==0:\n"
+                " os.setsid()\n"
+                " child=os.fork()\n"
+                " if child!=0: os._exit(0)\n"
+                " null=os.open('/dev/null',os.O_RDWR)\n"
+                " os.dup2(null,0);os.dup2(null,1);os.dup2(null,2)\n"
+                " if null>2: os.close(null)\n"
+                " for fd in range(3,256):\n"
+                "  try: os.close(fd)\n"
+                "  except OSError: pass\n"
+                " target=pathlib.Path(sys.argv[2])\n"
+                " stage=target.with_suffix('.tmp')\n"
+                " stage.write_text(str(os.getpid()),encoding='ascii')\n"
+                " os.replace(str(stage),str(target))\n"
+                " signal.signal(signal.SIGTERM,signal.SIG_IGN)\n"
+                " time.sleep(30)\n"
+                " os._exit(0)\n"
+                "deadline=time.monotonic()+5\n"
+                "while not os.path.exists(sys.argv[2]) and "
+                "time.monotonic()<deadline: time.sleep(.01)\n"
+                "if not os.path.exists(sys.argv[2]): raise SystemExit(92)\n"
+                "if sys.argv[3]=='timeout': time.sleep(30)\n"
+                "raise SystemExit(int(sys.argv[4]))\n"
+            )
+            try:
+                gate_read, gate_write = os.pipe2(
+                    getattr(os, "O_CLOEXEC", 0)
+                )
+                (containment_read, containment_write,
+                 containment_identity) = open_containment_descriptor()
+                process = subprocess.Popen(
+                    [
+                        sys.executable, "-c", program,
+                        str(gate_read), str(pid_path),
+                        "timeout" if timed_out else "exit",
+                        str(exit_status),
+                    ],
+                    cwd=str(root), stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                    pass_fds=(gate_read, containment_read),
+                )
+                os.close(gate_read)
+                gate_read = None
+                leader = retain_launched_process(
+                    process, "self-test " + label + " leader"
+                )
+                write_descriptor_all(gate_write, b"G")
+                os.close(gate_write)
+                gate_write = None
+                deadline = time.monotonic() + 5
+                while (not pid_path.is_file() and
+                       time.monotonic() < deadline):
+                    time.sleep(0.01)
+                check(
+                    pid_path.is_file(),
+                    "{} published its adopted daemon PID".format(label),
+                )
+                daemon_pid = int(pid_path.read_text(encoding="ascii"))
+                daemon_record = proc_record(daemon_pid)
+                daemon = (
+                    retain_process_identity(
+                        daemon_record, "self-test " + label + " daemon"
+                    ) if daemon_record is not None else None
+                )
+                check(
+                    daemon is not None,
+                    "{} retained its adopted daemon identity".format(label),
+                )
+                if not timed_out:
+                    check(
+                        wait_retained_process_exit(leader, 5),
+                        "{} leader exited in bounded time".format(label),
+                    )
+                residual = cleanup_with_scan_guard(
+                    label, process, containment_identity, timed_out,
+                    adopted_baseline, leader,
+                )
+                check(
+                    process.returncode == (
+                        -signal.SIGTERM if timed_out else exit_status
+                    ) and
+                    daemon_pid in residual and
+                    proc_record(daemon_pid) is None and
+                    not (direct_child_identities() - adopted_baseline),
+                    "{} discovers, terminates, reaps, and reports its "
+                    "closed-descriptor double-fork".format(label),
+                )
+            finally:
+                if daemon is not None:
+                    try:
+                        if retained_process_alive(daemon):
+                            signal_retained_process(
+                                daemon, signal.SIGKILL
+                            )
+                            wait_retained_process_exit(daemon, 2)
+                        reap_retained_process(daemon)
+                    finally:
+                        close_retained_process(daemon)
+                if process is not None and process.poll() is None:
+                    if leader is not None:
+                        signal_retained_process(leader, signal.SIGKILL)
+                        wait_retained_process_exit(leader, 2)
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=2)
+                if leader is not None:
+                    close_retained_process(leader)
+                for descriptor in (
+                        gate_read, gate_write,
+                        containment_read, containment_write):
+                    if descriptor is not None:
+                        os.close(descriptor)
+
+        def exercise_clean_cleanup():
+            """Pin the three-scan fast path without a descendant."""
+            ensure_child_subreaper()
+            adopted_baseline = direct_child_identities()
+            check(
+                not adopted_baseline,
+                "clean cleanup starts without pre-existing children",
+            )
+            gate_read = None
+            gate_write = None
+            containment_read = None
+            containment_write = None
+            process = None
+            leader = None
+            try:
+                gate_read, gate_write = os.pipe2(
+                    getattr(os, "O_CLOEXEC", 0)
+                )
+                (containment_read, containment_write,
+                 containment_identity) = open_containment_descriptor()
+                process = subprocess.Popen(
+                    [
+                        sys.executable, "-c",
+                        "import os,sys; gate=int(sys.argv[1]); "
+                        "raise SystemExit(0 if os.read(gate,1)==b'G' "
+                        "else 91)",
+                        str(gate_read),
+                    ],
+                    cwd=str(root), stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                    pass_fds=(gate_read, containment_read),
+                )
+                os.close(gate_read)
+                gate_read = None
+                leader = retain_launched_process(
+                    process, "self-test clean cleanup leader"
+                )
+                write_descriptor_all(gate_write, b"G")
+                os.close(gate_write)
+                gate_write = None
+                check(
+                    wait_retained_process_exit(leader, 5),
+                    "clean cleanup leader exited in bounded time",
+                )
+                residual = cleanup_with_scan_guard(
+                    "clean cleanup", process, containment_identity,
+                    False, adopted_baseline, leader, minimum_scans=6,
+                )
+                check(
+                    process.returncode == 0 and residual == [] and
+                    not (direct_child_identities() - adopted_baseline),
+                    "clean cleanup proves three stable scans before "
+                    "reaping its leader",
+                )
+            finally:
+                if process is not None and process.poll() is None:
+                    if leader is not None:
+                        signal_retained_process(leader, signal.SIGKILL)
+                        wait_retained_process_exit(leader, 2)
+                    process.wait(timeout=2)
+                if leader is not None:
+                    close_retained_process(leader)
+                for descriptor in (
+                        gate_read, gate_write,
+                        containment_read, containment_write):
+                    if descriptor is not None:
+                        os.close(descriptor)
+
+        descriptors_before_adopted_cleanup = live_descriptor_count()
+        exercise_clean_cleanup()
+        exercise_adopted_cleanup("adopted-success", 0, False)
+        exercise_adopted_cleanup("adopted-failure", 7, False)
+        exercise_adopted_cleanup("adopted-timeout", 0, True)
+        check(
+            live_descriptor_count() ==
+            descriptors_before_adopted_cleanup,
+            "adopted-child cleanup conserves raw descriptors",
+        )
+
+        close_descriptors = [
+            os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
+            for unused in range(2)
+        ]
+        close_record = {
+            "pidfd": close_descriptors[0],
+            "proc_descriptor": close_descriptors[1],
+        }
+        observed_closes = []
+        original_os_close = os.close
+
+        def injected_close_error(descriptor):
+            observed_closes.append(descriptor)
+            original_os_close(descriptor)
+            if descriptor == close_descriptors[0]:
+                raise OSError(errno.EIO, "injected close failure")
+
+        try:
+            os.close = injected_close_error
+            try:
+                close_retained_process(close_record)
+            except CrossoverError as error:
+                check(
+                    "injected close failure" in str(error),
+                    "descriptor-close failure remains diagnostic",
+                )
+            else:
+                raise CrossoverError(
+                    "self-test failed: descriptor-close failure passed"
+                )
+        finally:
+            os.close = original_os_close
+        check(
+            observed_closes == close_descriptors and
+            close_record == {"pidfd": None, "proc_descriptor": None},
+            "retained-process close attempts every descriptor after an "
+            "OSError",
+        )
+
+        interrupted_descriptors = [
+            os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
+            for unused in range(2)
+        ]
+        interrupted_record = {
+            "pidfd": interrupted_descriptors[0],
+            "proc_descriptor": interrupted_descriptors[1],
+        }
+        interrupted_closes = []
+
+        def injected_close_abort(descriptor):
+            interrupted_closes.append(descriptor)
+            original_os_close(descriptor)
+            if descriptor == interrupted_descriptors[0]:
+                raise InjectedAbort("injected close abort")
+
+        try:
+            os.close = injected_close_abort
+            try:
+                close_retained_process(interrupted_record)
+            except InjectedAbort:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: descriptor close downgraded a "
+                    "BaseException"
+                )
+        finally:
+            os.close = original_os_close
+        check(
+            interrupted_closes == interrupted_descriptors and
+            interrupted_record == {
+                "pidfd": None, "proc_descriptor": None
+            },
+            "retained-process close preserves BaseException type after "
+            "attempting every descriptor",
         )
 
         escaped_pid_path = root / "closed-fd-escape.pid"
