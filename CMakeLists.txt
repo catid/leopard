@@ -3087,6 +3087,24 @@ if(LEO2_BUILD_TESTS)
         # both host-tool tests out of non-Linux CTest inventories; portable
         # codec and Python tests remain registered independently.
         if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+            # GNU readelf is an independent test oracle only.  Production
+            # normalized identities are derived by the portable byte parser.
+            if(EXISTS "/usr/bin/readelf")
+                add_test(
+                    NAME leopard2_exact_main_baseline_elf_oracle_self_test
+                    COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                        ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_elf_oracle_test.py)
+                add_test(
+                    NAME leopard2_exact_main_baseline_elf_oracle_optimized_self_test
+                    COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                        ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_elf_oracle_test.py)
+                set_tests_properties(
+                    leopard2_exact_main_baseline_elf_oracle_self_test
+                    PROPERTIES TIMEOUT 300)
+                set_tests_properties(
+                    leopard2_exact_main_baseline_elf_oracle_optimized_self_test
+                    PROPERTIES TIMEOUT 300)
+            endif()
             add_test(
                 NAME leopard2_allk_gap_identity_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}

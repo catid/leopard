@@ -1160,6 +1160,8 @@ class CMakeProductionGraph(object):
         "leopard2_pair_qualification_contract_optimized_self_test": 1,
         "leopard2_exact_main_baseline_contract_self_test": 1,
         "leopard2_exact_main_baseline_contract_optimized_self_test": 1,
+        "leopard2_exact_main_baseline_elf_oracle_self_test": 1,
+        "leopard2_exact_main_baseline_elf_oracle_optimized_self_test": 1,
         "leopard2_lab_self_test": 1,
         "leopard2_fuzz_campaign_self_test": 1,
         "leopard2_gf16_neighbor_evidence_self_test": 1,
@@ -1229,6 +1231,10 @@ class CMakeProductionGraph(object):
         "leopard2_small_direct_exhaustive_self_test",
         "leopard2_small_direct_exhaustive_optimized_self_test",
     })
+    _readelf_python_test_registrations = frozenset({
+        "leopard2_exact_main_baseline_elf_oracle_self_test",
+        "leopard2_exact_main_baseline_elf_oracle_optimized_self_test",
+    })
     _benchmark_python_test_registrations = frozenset({
         "leopard2_locator_benchmark_smoke",
         "leopard2_pruned_transform_benchmark_smoke",
@@ -1243,7 +1249,7 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "0df73203952424246fb7724cb1b5823e6a604fa24efc8b01aec5e9d918960754"
+        "11f13fe5df5b7f27b5e94323867cf10162b8c81aae13718fe45778981657e407"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1338,6 +1344,12 @@ class CMakeProductionGraph(object):
             "TIMEOUT", "300")): 1,
         ("set_tests_properties", (
             "leopard2_exact_main_baseline_contract_optimized_self_test",
+            "PROPERTIES", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_exact_main_baseline_elf_oracle_self_test",
+            "PROPERTIES", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_exact_main_baseline_elf_oracle_optimized_self_test",
             "PROPERTIES", "TIMEOUT", "300")): 1,
     })
     # CMake is an imperative language: proving that each security-sensitive
@@ -2344,6 +2356,12 @@ class CMakeProductionGraph(object):
                 (bool_and(benchmark, allk), target_reason),
                 (bool_and(benchmark, bool_not(allk)), target_reason),
             )
+        if name in self._readelf_python_test_registrations:
+            return ((bool_and(
+                base, host_linux,
+                bool_atom("predicate:EXISTS:/usr/bin/readelf")),
+                host_reasons + (
+                    "unsupported CMake conditional predicate: EXISTS",)),)
         if name in self._linux_python_test_registrations:
             return ((bool_and(base, host_linux), host_reasons),)
         if name == "leopard2_high_decode_copy_benchmark_smoke":

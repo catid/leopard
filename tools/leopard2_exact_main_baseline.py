@@ -15,7 +15,9 @@ import hashlib
 import json
 import math
 import re
+import struct
 from pathlib import PurePosixPath
+from types import MappingProxyType
 from typing import Any, Mapping, NoReturn, Sequence
 
 
@@ -33,8 +35,10 @@ SHF_WRITE = 0x1
 
 # These are parser/resource bounds, not evidence thresholds.
 MAX_JSON_BYTES = 64 << 20
+MAX_ELF_INPUT_BYTES = 256 << 20
 MAX_ARTIFACT_BYTES = (1 << 63) - 1
 MAX_SECTION_COUNT = 4096
+MAX_ELF_SECTION_TABLE_COUNT = 1 << 16
 MAX_SECTION_INDEX = (1 << 31) - 1
 MAX_SECTION_ADDRESS = (1 << 64) - 1
 MAX_SECTION_SIZE = (1 << 63) - 1
@@ -43,22 +47,6 @@ MAX_SECTION_ALIGNMENT = 1 << 63
 MAX_PATH_OCCURRENCES = (1 << 31) - 1
 MAX_TEXT_LENGTH = 4096
 
-# Fixed Unicode-15 format/control ranges.  Do not use unicodedata.category here:
-# record validity must not drift with the Python runtime's Unicode database.
-_DISPLAY_EXCLUDED_CODE_POINT_RANGES = (
-    (0x00AD, 0x00AD), (0x0600, 0x0605), (0x061C, 0x061C),
-    (0x06DD, 0x06DD), (0x070F, 0x070F), (0x0890, 0x0891),
-    (0x08E2, 0x08E2), (0x180E, 0x180E), (0x200B, 0x200F),
-    (0x2028, 0x202E), (0x2060, 0x2064), (0x2066, 0x206F),
-    (0xFEFF, 0xFEFF), (0xFFF9, 0xFFFB), (0x110BD, 0x110BD),
-    (0x110CD, 0x110CD), (0x13430, 0x1343F), (0x1BCA0, 0x1BCA3),
-    (0x1D173, 0x1D17A), (0xE0001, 0xE0001), (0xE0020, 0xE007F),
-)
-DISPLAY_EXCLUDED_CODE_POINTS = frozenset(
-    code_point
-    for first, last in _DISPLAY_EXCLUDED_CODE_POINT_RANGES
-    for code_point in range(first, last + 1)
-)
 EMPTY_CONTENT_SHA256 = \
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -99,6 +87,43 @@ ALLOC_SECTION_TYPES = frozenset((
     "FINI_ARRAY", "PREINIT_ARRAY", "DYNAMIC", "X86_64_UNWIND",
 ))
 
+ELF64_HEADER_SIZE = 64
+ELF64_SECTION_HEADER_SIZE = 64
+ELF64_HEADER_FORMAT = "<16sHHIQQQIHHHHHH"
+ELF64_SECTION_HEADER_FORMAT = "<IIQQQQIIQQ"
+ET_EXEC = 2
+ET_DYN = 3
+EM_X86_64 = 62
+SHN_XINDEX = 0xFFFF
+SHN_LORESERVE = 0xFF00
+SHT_NULL = 0
+SHT_STRTAB = 3
+SHT_NOBITS = 8
+SECTION_TYPE_NAMES = MappingProxyType({
+    1: "PROGBITS",
+    3: "STRTAB",
+    4: "RELA",
+    5: "HASH",
+    6: "DYNAMIC",
+    7: "NOTE",
+    8: "NOBITS",
+    9: "REL",
+    11: "DYNSYM",
+    14: "INIT_ARRAY",
+    15: "FINI_ARRAY",
+    16: "PREINIT_ARRAY",
+    19: "RELR",
+    0x6FFFFFF6: "GNU_HASH",
+    0x6FFFFFFD: "VERDEF",
+    0x6FFFFFFE: "VERNEED",
+    0x6FFFFFFF: "VERSYM",
+    0x70000001: "X86_64_UNWIND",
+})
+ELF_SECTION_KEYS = frozenset((
+    "index", "name", "type", "flags", "address", "offset", "size",
+    "alignment", "entsize", "link", "info",
+))
+
 
 class ExactMainBaselineError(ValueError):
     """An exact-main baseline object violates the pure contract."""
@@ -136,8 +161,7 @@ def _bounded_text(value: Any, label: str) -> str:
     _require(all(
         ord(character) >= 0x20 and
         not (0x7F <= ord(character) <= 0x9F) and
-        not (0xD800 <= ord(character) <= 0xDFFF) and
-        ord(character) not in DISPLAY_EXCLUDED_CODE_POINTS
+        not (0xD800 <= ord(character) <= 0xDFFF)
         for character in value
     ), f"{label} contains a non-display-safe character")
     return value
@@ -566,14 +590,375 @@ def load_normalized_code_identity(data: bytes) -> dict[str, Any]:
         strict_json_loads(data, "normalized exact-main identity JSON"))
 
 
+def _raw_elf64_section_header(
+    data: bytes,
+    table_offset: int,
+    index: int,
+) -> dict[str, int]:
+    offset = table_offset + index * ELF64_SECTION_HEADER_SIZE
+    fields = struct.unpack_from(ELF64_SECTION_HEADER_FORMAT, data, offset)
+    return {
+        "name_offset": fields[0],
+        "type": fields[1],
+        "flags": fields[2],
+        "address": fields[3],
+        "offset": fields[4],
+        "size": fields[5],
+        "link": fields[6],
+        "info": fields[7],
+        "alignment": fields[8],
+        "entsize": fields[9],
+    }
+
+
+def parse_elf64_section_table(data: bytes) -> list[dict[str, Any]]:
+    """Parse one complete little-endian x86-64 ELF section table."""
+    _require(
+        struct.calcsize(ELF64_HEADER_FORMAT) == ELF64_HEADER_SIZE and
+        struct.calcsize(ELF64_SECTION_HEADER_FORMAT) ==
+        ELF64_SECTION_HEADER_SIZE,
+        "ELF struct layout diverges from the fixed ELF64 sizes",
+    )
+    _require(type(data) is bytes, "ELF artifact is not an exact byte string")
+    _require(ELF64_HEADER_SIZE <= len(data) <= MAX_ELF_INPUT_BYTES,
+             "ELF artifact has an invalid byte length")
+    fields = struct.unpack_from(ELF64_HEADER_FORMAT, data, 0)
+    ident = fields[0]
+    _require(ident[:4] == b"\x7fELF", "ELF artifact has invalid magic")
+    _require(ident[4] == 2, "ELF artifact is not ELF64")
+    _require(ident[5] == 1, "ELF artifact is not little-endian")
+    _require(ident[6] == 1, "ELF artifact has an invalid ident version")
+    elf_type = fields[1]
+    machine = fields[2]
+    version = fields[3]
+    section_table_offset = fields[6]
+    elf_header_size = fields[8]
+    section_header_size = fields[11]
+    encoded_section_count = fields[12]
+    encoded_string_table_index = fields[13]
+    _require(elf_type in (ET_EXEC, ET_DYN),
+             "ELF artifact is not an executable image")
+    _require(machine == EM_X86_64, "ELF artifact is not x86-64")
+    _require(version == 1, "ELF artifact has an invalid object version")
+    _require(elf_header_size == ELF64_HEADER_SIZE,
+             "ELF artifact has an invalid header size")
+    _require(section_header_size == ELF64_SECTION_HEADER_SIZE,
+             "ELF artifact has an invalid section-header size")
+    _require(section_table_offset != 0 and
+             section_table_offset <= len(data) - ELF64_SECTION_HEADER_SIZE,
+             "ELF section table starts outside the artifact")
+
+    section_zero = _raw_elf64_section_header(
+        data, section_table_offset, 0)
+    _require(
+        section_zero["name_offset"] == 0 and
+        section_zero["type"] == SHT_NULL and
+        section_zero["flags"] == 0 and
+        section_zero["address"] == 0 and
+        section_zero["offset"] == 0,
+        "ELF section zero is not the null section",
+    )
+    if encoded_section_count == 0:
+        section_count = section_zero["size"]
+        _require(section_count >= SHN_LORESERVE,
+                 "ELF extended section count is not canonical")
+    else:
+        _require(encoded_section_count < SHN_LORESERVE,
+                 "ELF direct section count uses a reserved encoding")
+        _require(section_zero["size"] == 0,
+                 "ELF section zero has an unexpected extended count")
+        section_count = encoded_section_count
+    if encoded_string_table_index == SHN_XINDEX:
+        string_table_index = section_zero["link"]
+        _require(string_table_index >= SHN_LORESERVE,
+                 "ELF extended string-table index is not canonical")
+    else:
+        _require(encoded_string_table_index < SHN_LORESERVE,
+                 "ELF direct string-table index uses a reserved encoding")
+        _require(section_zero["link"] == 0,
+                 "ELF section zero has an unexpected extended string index")
+        string_table_index = encoded_string_table_index
+    _require(type(section_count) is int and
+             1 <= section_count <= MAX_ELF_SECTION_TABLE_COUNT,
+             "ELF artifact has an invalid section count")
+    table_size = section_count * ELF64_SECTION_HEADER_SIZE
+    _require(section_table_offset <= len(data) - table_size,
+             "ELF section table extends outside the artifact")
+    _require(type(string_table_index) is int and
+             0 < string_table_index < section_count,
+             "ELF section-name string table index is invalid")
+
+    raw_sections = [
+        _raw_elf64_section_header(data, section_table_offset, index)
+        for index in range(section_count)
+    ]
+    for index, section in enumerate(raw_sections):
+        _require(section["size"] <= MAX_SECTION_SIZE,
+                 f"ELF section {index} size exceeds the structural bound")
+        _require(section["alignment"] <= MAX_SECTION_ALIGNMENT,
+                 f"ELF section {index} alignment exceeds the structural bound")
+        if section["type"] != SHT_NOBITS:
+            _require(section["offset"] <= len(data) and
+                     section["size"] <= len(data) - section["offset"],
+                     f"ELF section {index} extends outside the artifact")
+
+    string_table = raw_sections[string_table_index]
+    _require(string_table["type"] == SHT_STRTAB and
+             string_table["size"] > 0,
+             "ELF section-name table is not a file-backed string table")
+    string_table_bytes = data[
+        string_table["offset"]:
+        string_table["offset"] + string_table["size"]
+    ]
+    _require(string_table_bytes.startswith(b"\0"),
+             "ELF section-name table lacks the empty name")
+
+    sections: list[dict[str, Any]] = []
+    for index, section in enumerate(raw_sections):
+        name_offset = section["name_offset"]
+        _require(name_offset < len(string_table_bytes),
+                 f"ELF section {index} name offset is outside the string table")
+        terminator = string_table_bytes.find(
+            b"\0", name_offset, name_offset + MAX_TEXT_LENGTH + 1)
+        _require(terminator >= 0,
+                 f"ELF section {index} name is unterminated or too long")
+        try:
+            name = string_table_bytes[name_offset:terminator].decode("ascii")
+        except UnicodeDecodeError as error:
+            raise ExactMainBaselineError(
+                f"ELF section {index} name is not ASCII") from error
+        sections.append({
+            "index": index,
+            "name": name,
+            "type": section["type"],
+            "flags": section["flags"],
+            "address": section["address"],
+            "offset": section["offset"],
+            "size": section["size"],
+            "alignment": section["alignment"],
+            "entsize": section["entsize"],
+            "link": section["link"],
+            "info": section["info"],
+        })
+    _require(all(set(section) == ELF_SECTION_KEYS for section in sections),
+             "ELF section parser emitted an unexpected key set")
+    return sections
+
+
+def _normalized_sections_from_elf(
+    data: bytes,
+    sections: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[Mapping[str, Any]]]:
+    _require(len(SECTION_TYPE_NAMES) == len(ALLOC_SECTION_TYPES) and
+             set(SECTION_TYPE_NAMES.values()) == ALLOC_SECTION_TYPES,
+             "ELF section-type map diverges from the normalized domain")
+    selected: list[tuple[Mapping[str, Any], str]] = []
+    for row in sections:
+        if int(row["flags"]) & SHF_ALLOC == 0:
+            continue
+        name = str(row["name"])
+        if name in EXCLUDED_SECTION_NAMES or any(
+                name.startswith(prefix)
+                for prefix in EXCLUDED_SECTION_PREFIXES):
+            continue
+        section_type = SECTION_TYPE_NAMES.get(int(row["type"]))
+        _require(section_type is not None,
+                 f"allocatable ELF section has an unknown type: {name!r}")
+        selected.append((row, section_type))
+        _require(len(selected) <= MAX_SECTION_COUNT,
+                 "ELF artifact has an invalid retained section count")
+    _require(selected,
+             "ELF artifact has an invalid retained section count")
+
+    file_ranges = sorted(
+        (int(row["offset"]),
+         int(row["offset"]) + int(row["size"]), str(row["name"]))
+        for row, section_type in selected
+        if section_type != "NOBITS" and int(row["size"]) != 0
+    )
+    _require(all(
+        previous[1] <= current[0]
+        for previous, current in zip(file_ranges, file_ranges[1:])
+    ), "retained file-backed ELF sections overlap")
+
+    normalized: list[dict[str, Any]] = []
+    retained_rows: list[Mapping[str, Any]] = []
+    for row, section_type in selected:
+        offset = int(row["offset"])
+        size = int(row["size"])
+        if section_type == "NOBITS":
+            content_sha256: str | None = None
+        else:
+            content_sha256 = hashlib.sha256(
+                memoryview(data)[offset:offset + size]).hexdigest()
+        normalized.append({
+            "index": int(row["index"]),
+            "name": str(row["name"]),
+            "type": section_type,
+            "flags": int(row["flags"]),
+            "address": int(row["address"]),
+            "size": size,
+            "alignment": int(row["alignment"]),
+            "content_sha256": content_sha256,
+        })
+        retained_rows.append(row)
+    return normalized, retained_rows
+
+
+def _validated_census_roots(roots: Any) -> dict[str, str]:
+    _require(type(roots) is dict and
+             set(roots) == set(PATH_CENSUS_ROOT_ROLES),
+             "ELF path census roots have an unexpected key set")
+    canonical = {
+        role: _absolute_posix_path(roots[role], f"ELF {role}")
+        for role in PATH_CENSUS_ROOT_ROLES
+    }
+    paths = [canonical[role] for role in PATH_CENSUS_ROOT_ROLES]
+    _require(all(
+        left not in right and right not in left
+        for index, left in enumerate(paths)
+        for right in paths[index + 1:]
+    ), "ELF path census roots overlap by exact byte substring")
+    return canonical
+
+
+def _nonoverlapping_occurrence_count(
+    data: bytes,
+    needle: bytes,
+    start: int,
+    size: int,
+) -> int:
+    end = start + size
+    count = 0
+    cursor = start
+    while cursor <= end - len(needle):
+        match = data.find(needle, cursor, end)
+        if match < 0:
+            break
+        count += 1
+        _require(count <= MAX_PATH_OCCURRENCES,
+                 "ELF path occurrence count exceeds its structural bound")
+        cursor = match + len(needle)
+    return count
+
+
+def _path_string_census_from_normalized(
+    data: bytes,
+    normalized: Sequence[Mapping[str, Any]],
+    retained_rows: Sequence[Mapping[str, Any]],
+    roots: Any,
+) -> dict[str, Any]:
+    canonical_roots = _validated_census_roots(roots)
+    census_roots = []
+    for role in PATH_CENSUS_ROOT_ROLES:
+        path = canonical_roots[role]
+        needle = path.encode("utf-8")
+        rows = []
+        for normalized_section, retained_row in zip(
+                normalized, retained_rows):
+            if normalized_section["type"] == "NOBITS":
+                occurrences = 0
+            else:
+                occurrences = _nonoverlapping_occurrence_count(
+                    data,
+                    needle,
+                    int(retained_row["offset"]),
+                    int(retained_row["size"]),
+                )
+            rows.append({
+                "name": normalized_section["name"],
+                "occurrences": occurrences,
+            })
+        census_roots.append({
+            "role": role,
+            "path": path,
+            "occurrences": sum(row["occurrences"] for row in rows),
+            "sections": rows,
+        })
+    census = {
+        "match_rule": PATH_CENSUS_MATCH_RULE,
+        "roots": census_roots,
+    }
+    return _census_record(
+        census, normalized,
+        [section["name"] for section in normalized])
+
+
+def _path_string_census_from_parsed_elf(
+    data: bytes,
+    sections: Sequence[Mapping[str, Any]],
+    roots: Any,
+) -> dict[str, Any]:
+    normalized, retained_rows = _normalized_sections_from_elf(data, sections)
+    return _path_string_census_from_normalized(
+        data, normalized, retained_rows, roots)
+
+
+def path_string_census_from_elf(
+    data: bytes,
+    sections: list[dict[str, Any]],
+    roots: dict[str, str],
+) -> dict[str, Any]:
+    """Recompute the selected-section path census from exact ELF bytes."""
+    parsed = parse_elf64_section_table(data)
+    _require(type(sections) is list and exact_json_equal(sections, parsed),
+             "ELF path census section table was not derived from the artifact")
+    return _path_string_census_from_parsed_elf(data, parsed, roots)
+
+
+def normalized_code_identity_from_elf_bytes(
+    data: bytes,
+    *,
+    roots: dict[str, str],
+) -> dict[str, Any]:
+    """Derive a closed normalized identity directly from retained ELF bytes."""
+    sections = parse_elf64_section_table(data)
+    normalized, retained_rows = _normalized_sections_from_elf(data, sections)
+    census = _path_string_census_from_normalized(
+        data, normalized, retained_rows, roots)
+    return normalized_code_identity_record(
+        artifact={"size": len(data), "sha256": hashlib.sha256(data).hexdigest()},
+        sections=normalized,
+        path_string_census=census,
+    )
+
+
+def verify_normalized_code_identity_against_elf_bytes(
+    data: bytes,
+    identity: Any,
+    *,
+    roots: dict[str, str],
+) -> dict[str, Any]:
+    """Bind an identity to exact ELF bytes and acquisition-provided roots."""
+    validated = validate_normalized_code_identity(identity)
+    canonical_roots = _validated_census_roots(roots)
+    recorded_roots = {
+        root["role"]: root["path"]
+        for root in validated["path_string_census"]["roots"]
+    }
+    _require(exact_json_equal(recorded_roots, canonical_roots),
+             "normalized identity path roots do not match acquisition")
+    recomputed = normalized_code_identity_from_elf_bytes(
+        data, roots=canonical_roots)
+    _require(exact_json_equal(recomputed, validated),
+             "normalized identity does not match the retained ELF bytes")
+    return recomputed
+
+
 __all__ = (
     "ExactMainBaselineError",
+    "MAX_ELF_INPUT_BYTES",
     "NORMALIZED_CODE_IDENTITY_SCHEMA",
+    "SECTION_TYPE_NAMES",
     "canonical_json_bytes",
     "canonical_sha256",
     "exact_json_equal",
     "load_normalized_code_identity",
+    "normalized_code_identity_from_elf_bytes",
     "normalized_code_identity_record",
+    "parse_elf64_section_table",
+    "path_string_census_from_elf",
     "strict_json_loads",
     "validate_normalized_code_identity",
+    "verify_normalized_code_identity_against_elf_bytes",
 )
