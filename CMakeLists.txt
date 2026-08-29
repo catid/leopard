@@ -3081,6 +3081,23 @@ if(LEO2_BUILD_TESTS)
         set_tests_properties(
             leopard2_exact_main_baseline_contract_optimized_self_test
             PROPERTIES TIMEOUT 300)
+        # The promoted authority record is a second pure layer: it joins three
+        # retained build identities, provenance, attestation, and the
+        # zero-census promotion gate without touching the host.
+        add_test(
+            NAME leopard2_exact_main_baseline_record_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_record_test.py)
+        add_test(
+            NAME leopard2_exact_main_baseline_record_optimized_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_record_test.py)
+        set_tests_properties(
+            leopard2_exact_main_baseline_record_self_test
+            PROPERTIES TIMEOUT 300)
+        set_tests_properties(
+            leopard2_exact_main_baseline_record_optimized_self_test
+            PROPERTIES TIMEOUT 300)
         # The lab runner's self-test exercises Linux process affinity and
         # /proc-based runtime attestation.  The strict sanitizer campaign also
         # attests ELF instrumentation with nm and POSIX alias semantics.  Keep

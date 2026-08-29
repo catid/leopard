@@ -1160,6 +1160,8 @@ class CMakeProductionGraph(object):
         "leopard2_pair_qualification_contract_optimized_self_test": 1,
         "leopard2_exact_main_baseline_contract_self_test": 1,
         "leopard2_exact_main_baseline_contract_optimized_self_test": 1,
+        "leopard2_exact_main_baseline_record_self_test": 1,
+        "leopard2_exact_main_baseline_record_optimized_self_test": 1,
         "leopard2_exact_main_baseline_elf_oracle_self_test": 1,
         "leopard2_exact_main_baseline_elf_oracle_optimized_self_test": 1,
         "leopard2_lab_self_test": 1,
@@ -1249,7 +1251,7 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "11f13fe5df5b7f27b5e94323867cf10162b8c81aae13718fe45778981657e407"
+        "ee7811e452e113a0967425dcd260c544e2bcbf8db5152d3d7038ad1cc6b21c9b"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1344,6 +1346,12 @@ class CMakeProductionGraph(object):
             "TIMEOUT", "300")): 1,
         ("set_tests_properties", (
             "leopard2_exact_main_baseline_contract_optimized_self_test",
+            "PROPERTIES", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_exact_main_baseline_record_self_test", "PROPERTIES",
+            "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_exact_main_baseline_record_optimized_self_test",
             "PROPERTIES", "TIMEOUT", "300")): 1,
         ("set_tests_properties", (
             "leopard2_exact_main_baseline_elf_oracle_self_test",
