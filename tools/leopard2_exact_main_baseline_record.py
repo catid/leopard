@@ -40,6 +40,8 @@ ATTESTATION_SCHEMA = \
     "leopard2-gf8-exact-main-pure-avx2-attestation/v1"
 PROMOTION_GATE = \
     "same-path-bytes-path-variant-normalized-zero-census/v1"
+SEAL_PROTOCOL = "owner-only-tree-sha256sums/v1"
+CANONICAL_LDD_NORMALIZATION = "canonical-ldd-C-v1"
 
 BEAD_ID = "leopard-79h.38.5.12.1"
 BASELINE_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
@@ -59,6 +61,7 @@ MAX_RETAINED_FILES = 256
 MAX_CLOSURE_FILES = 1 << 16
 MAX_FILE_BYTES = (1 << 63) - 1
 MAX_CPU_COUNT = 4096
+MAX_CANONICAL_LDD_BYTES = 1 << 20
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _GIT_OID = re.compile(r"[0-9a-f]{40}")
@@ -410,7 +413,7 @@ def _lane(value: Any, *, successful: bool) -> dict[str, Any]:
         "attempt_budget": 3,
         "record_relative_path": record_path,
         "seal_protocol": _fixed_text(
-            lane["seal_protocol"], "owner-only-tree-sha256sums/v1",
+            lane["seal_protocol"], SEAL_PROTOCOL,
             "baseline lane seal protocol"),
         "stages": _stage_records(lane["stages"], successful=successful),
     }
@@ -662,6 +665,25 @@ def exact_main_build_profile() -> dict[str, Any]:
         ],
         "build_job_count": 1,
     }
+
+
+def exact_main_build_cache_requirements(
+    roots: Mapping[str, Any],
+) -> tuple[dict[str, str], ...]:
+    """Expand the fixed cache requirements for one validated build root set."""
+    roots_value = _dict(roots, ROOTS_KEYS, "exact-main build roots")
+    canonical_roots = {
+        key: _absolute_path(roots_value[key], f"exact-main {key}")
+        for key in ("adapter_source_root", "baseline_source_root", "build_root")
+    }
+    _require_independent_paths(
+        list(canonical_roots.values()), "exact-main build roots")
+    requirements = copy.deepcopy(
+        exact_main_build_profile()["cache_requirements"])
+    for requirement in requirements:
+        if requirement["value"] == "${BASELINE_SOURCE_ROOT}":
+            requirement["value"] = canonical_roots["baseline_source_root"]
+    return tuple(requirements)
 
 
 def _profile(value: Any) -> dict[str, Any]:
@@ -940,6 +962,72 @@ def _require_git_object_consistency(
             commit_trees[commit_id] = tree_id
 
 
+def _retained_inventory_entry(
+    record: Mapping[str, Any],
+    *,
+    path_key: str = "relative_path",
+) -> dict[str, Any]:
+    return {
+        "relative_path": record[path_key],
+        "size": record["size"],
+        "sha256": record["sha256"],
+    }
+
+
+def _authority_retained_inventory_from_validated(
+    lane: Mapping[str, Any],
+    source: Mapping[str, Any],
+    toolchain: Mapping[str, Any],
+    builds: Mapping[str, Mapping[str, Any]],
+    runtime: Mapping[str, Any],
+    attestation: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    inventory: list[dict[str, Any]] = [{
+        "relative_path": lane["record_relative_path"],
+        "size": None,
+        "sha256": None,
+    }]
+    inventory.extend(
+        _retained_inventory_entry(stage["log"])
+        for stage in lane["stages"])
+    for source_role in ("baseline", "adapter_repository"):
+        inventory.extend((
+            _retained_inventory_entry(source[source_role]["git_capture"]),
+            _retained_inventory_entry(source[source_role]["archive"]),
+        ))
+    for version in toolchain["versions"]:
+        inventory.extend((
+            _retained_inventory_entry(version["stdout"]),
+            _retained_inventory_entry(version["stderr"]),
+        ))
+    for role in BUILD_ROLES:
+        build = builds[role]
+        inventory.extend(
+            _retained_inventory_entry(build[key])
+            for key in ("configure_log", "build_log", "cmake_cache",
+                        "compile_commands"))
+        inventory.extend((
+            _retained_inventory_entry(
+                build["executable"], path_key="retained_relative_path"),
+            _retained_inventory_entry(
+                build["archive"], path_key="retained_relative_path"),
+            _retained_inventory_entry(build["closure"]),
+        ))
+    inventory.extend(
+        _retained_inventory_entry(record["canonical_ldd_output"])
+        for record in runtime["records"])
+    inventory.append(_retained_inventory_entry(attestation["test_controller"]))
+    for record in attestation["records"]:
+        inventory.extend((
+            _retained_inventory_entry(record["stdout"]),
+            _retained_inventory_entry(record["stderr"]),
+            _retained_inventory_entry(record["ctest"]["stdout"]),
+            _retained_inventory_entry(record["ctest"]["stderr"]),
+        ))
+    inventory.sort(key=lambda item: item["relative_path"])
+    return tuple(copy.deepcopy(inventory))
+
+
 def _authority_evidence_inventory(
     lane: Mapping[str, Any],
     source: Mapping[str, Any],
@@ -950,8 +1038,14 @@ def _authority_evidence_inventory(
     attestation: Mapping[str, Any],
     identity: Mapping[str, Any],
 ) -> None:
-    paths = [lane["record_relative_path"]]
-    byte_identities: list[tuple[str, int]] = []
+    retained_inventory = _authority_retained_inventory_from_validated(
+        lane, source, toolchain, builds, runtime, attestation)
+    paths = [item["relative_path"] for item in retained_inventory]
+    byte_identities: list[tuple[str, int]] = [
+        (item["sha256"], item["size"])
+        for item in retained_inventory
+        if item["sha256"] is not None and item["size"] is not None
+    ]
     byte_claims: list[tuple[str, str, Any]] = []
     host_files: list[tuple[str, int, str]] = []
 
@@ -959,14 +1053,7 @@ def _authority_evidence_inventory(
                   digest_key: str = "sha256") -> None:
         byte_identities.append((record[digest_key], record["size"]))
 
-    paths.extend(stage["log"]["relative_path"] for stage in lane["stages"])
-    for stage in lane["stages"]:
-        add_bytes(stage["log"])
     for source_role in ("baseline", "adapter_repository"):
-        paths.append(source[source_role]["git_capture"]["relative_path"])
-        paths.append(source[source_role]["archive"]["relative_path"])
-        add_bytes(source[source_role]["git_capture"])
-        add_bytes(source[source_role]["archive"])
         add_bytes(source[source_role]["archive"], "replay_sha256")
         byte_claims.append((
             source[source_role]["archive"]["sha256"], "archive_prefix",
@@ -978,52 +1065,20 @@ def _authority_evidence_inventory(
         add_bytes(tool)
         host_files.append((
             tool["resolved_path"], tool["size"], tool["sha256"]))
-    for version in toolchain["versions"]:
-        paths.extend((
-            version["stdout"]["relative_path"],
-            version["stderr"]["relative_path"],
-        ))
-        add_bytes(version["stdout"])
-        add_bytes(version["stderr"])
     for role in BUILD_ROLES:
         build = builds[role]
-        paths.extend(build[key]["relative_path"] for key in (
-            "configure_log", "build_log", "cmake_cache", "compile_commands"))
-        paths.extend((
-            build["executable"]["retained_relative_path"],
-            build["archive"]["retained_relative_path"],
-            build["closure"]["relative_path"],
-        ))
-        for key in ("configure_log", "build_log", "cmake_cache",
-                    "compile_commands", "executable", "archive", "closure"):
-            add_bytes(build[key])
         byte_claims.append((
             build["closure"]["sha256"], "closure_file_count",
             build["closure"]["file_count"],
         ))
     for runtime_record in runtime["records"]:
-        ldd_output = runtime_record["canonical_ldd_output"]
-        paths.append(ldd_output["relative_path"])
-        add_bytes(ldd_output)
         for dependency in runtime_record["dependencies"]:
             if dependency["kind"] == "file":
                 add_bytes(dependency)
                 host_files.append((
                     dependency["path"], dependency["size"],
                     dependency["sha256"]))
-    paths.append(attestation["test_controller"]["relative_path"])
     add_bytes(attestation["test_controller"])
-    for record in attestation["records"]:
-        paths.extend((
-            record["stdout"]["relative_path"],
-            record["stderr"]["relative_path"],
-            record["ctest"]["stdout"]["relative_path"],
-            record["ctest"]["stderr"]["relative_path"],
-        ))
-        add_bytes(record["stdout"])
-        add_bytes(record["stderr"])
-        add_bytes(record["ctest"]["stdout"])
-        add_bytes(record["ctest"]["stderr"])
     for role in BUILD_ROLES:
         normalized = identity[role]
         add_bytes(normalized["artifact"])
@@ -1068,13 +1123,69 @@ def _dependency(value: Any, label: str) -> dict[str, Any]:
     }
 
 
+def parse_canonical_ldd_output(data: bytes) -> tuple[dict[str, Any], ...]:
+    """Parse the frozen canonical-ldd-C-v1 byte grammar.
+
+    File-backed rows are ``SONAME<TAB>file<TAB>/absolute/path<LF>`` and
+    virtual rows are ``SONAME<TAB>virtual<LF>``.  Rows are sorted uniquely by
+    SONAME.  File sizes and hashes remain separate record claims because the
+    normalized ldd text intentionally contains no mutable host identities.
+    """
+    _require(type(data) is bytes and 0 < len(data) <= MAX_CANONICAL_LDD_BYTES,
+             "canonical ldd output is not bounded non-empty bytes")
+    try:
+        text = data.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ExactMainBaselineRecordError(
+            "canonical ldd output is not strict ASCII") from error
+    _require(text.endswith("\n") and "\r" not in text,
+             "canonical ldd output is not LF-framed")
+    lines = text[:-1].split("\n")
+    _require(0 < len(lines) <= MAX_DEPENDENCIES and all(lines),
+             "canonical ldd output row count is invalid")
+    records: list[dict[str, Any]] = []
+    for index, line in enumerate(lines):
+        fields = line.split("\t")
+        _require(len(fields) in (2, 3),
+                 f"canonical ldd row {index} is malformed")
+        soname = _text(fields[0], f"canonical ldd row {index} soname")
+        _require(all(0x21 <= ord(character) <= 0x7E
+                     for character in soname) and "/" not in soname,
+                 f"canonical ldd row {index} soname is not portable")
+        if len(fields) == 2:
+            _require(fields[1] == "virtual",
+                     f"canonical ldd row {index} kind changed")
+            records.append({"soname": soname, "kind": "virtual", "path": None})
+        else:
+            _require(fields[1] == "file",
+                     f"canonical ldd row {index} kind changed")
+            records.append({
+                "soname": soname,
+                "kind": "file",
+                "path": _absolute_path(
+                    fields[2], f"canonical ldd row {index} path"),
+            })
+    sonames = [record["soname"] for record in records]
+    _require(sonames == sorted(set(sonames)),
+             "canonical ldd rows are not sorted and unique")
+    reconstructed = "".join(
+        (f'{record["soname"]}\tvirtual\n'
+         if record["kind"] == "virtual" else
+         f'{record["soname"]}\tfile\t{record["path"]}\n')
+        for record in records
+    ).encode("ascii")
+    _require(reconstructed == data,
+             "canonical ldd output is not byte-canonical")
+    return tuple(copy.deepcopy(records))
+
+
 def _runtime_closure(value: Any,
                      builds: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     closure = _dict(value, RUNTIME_KEYS, "exact-main runtime closure")
     _fixed_text(closure["schema"], RUNTIME_CLOSURE_SCHEMA,
                 "runtime closure schema")
     normalization = _fixed_text(
-        closure["normalization"], "canonical-ldd-C-v1",
+        closure["normalization"], CANONICAL_LDD_NORMALIZATION,
         "runtime closure normalization")
     values = closure["records"]
     _require(type(values) is list and len(values) == len(BUILD_ROLES),
@@ -1511,6 +1622,39 @@ def load_baseline_authority_record(data: bytes) -> dict[str, Any]:
     return validate_baseline_authority_record(value)
 
 
+def authority_retained_inventory(
+    record: Any,
+) -> tuple[dict[str, Any], ...]:
+    """Return the one validated authority-lane file inventory.
+
+    The terminal record necessarily carries ``None`` for its own byte identity;
+    canonical terminal bytes and the outer checksum ledger close that entry.
+    """
+    validated = validate_baseline_authority_record(record)
+    return _authority_retained_inventory_from_validated(
+        validated["lane"], validated["source"], validated["toolchain"],
+        validated["builds"], validated["runtime_closure"],
+        validated["attestation"],
+    )
+
+
+def _failure_retained_inventory_from_validated(
+    lane: Mapping[str, Any],
+    retained: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    inventory: list[dict[str, Any]] = [{
+        "relative_path": lane["record_relative_path"],
+        "size": None,
+        "sha256": None,
+    }]
+    inventory.extend(
+        _retained_inventory_entry(stage["log"])
+        for stage in lane["stages"])
+    inventory.extend(_retained_inventory_entry(item) for item in retained)
+    inventory.sort(key=lambda item: item["relative_path"])
+    return tuple(copy.deepcopy(inventory))
+
+
 def _failure_record(value: Any, schema: str) -> dict[str, Any]:
     record = _dict(value, FAILURE_KEYS, "baseline failure record")
     _fixed_text(record["schema"], schema, "baseline failure schema")
@@ -1547,12 +1691,11 @@ def _failure_record(value: Any, schema: str) -> dict[str, Any]:
     }
     _require(not future_stage_logs.intersection(paths),
              "baseline failure retained a log for a stage that never ran")
+    failure_inventory = _failure_retained_inventory_from_validated(
+        lane, retained)
     _require_unique_retained_paths(
-        [lane["record_relative_path"]] +
-        [stage_record["log"]["relative_path"]
-         for stage_record in lane["stages"]] + paths,
-        "baseline failure record",
-    )
+        [item["relative_path"] for item in failure_inventory],
+        "baseline failure record")
     failure_byte_records = (
         [stage_record["log"] for stage_record in lane["stages"]] + retained)
     _require_digest_size_function(
@@ -1600,6 +1743,15 @@ def validate_baseline_failure_record(value: Any) -> dict[str, Any]:
         ACQUISITION_FAILURE_SCHEMA, VERIFICATION_FAILURE_SCHEMA),
         "baseline failure schema changed")
     return _failure_record(value, schema)
+
+
+def failure_retained_inventory(
+    record: Any,
+) -> tuple[dict[str, Any], ...]:
+    """Return the one validated failure-lane file inventory."""
+    validated = validate_baseline_failure_record(record)
+    return _failure_retained_inventory_from_validated(
+        validated["lane"], validated["retained_files"])
 
 
 def _construct_failure(
@@ -1687,13 +1839,16 @@ __all__ = (
     "BEAD_ID",
     "BUILD_PROFILE_SCHEMA",
     "BUILD_ROLES",
+    "CANONICAL_LDD_NORMALIZATION",
     "ExactMainBaselineRecordError",
     "HISTORICAL_ARCHIVE_SHA256",
     "HISTORICAL_EXECUTABLE_SHA256",
     "MINIMUM_HARNESS_COMMIT",
     "MAX_CLOSURE_FILES",
+    "MAX_CANONICAL_LDD_BYTES",
     "PROMOTION_GATE",
     "RUNTIME_CLOSURE_SCHEMA",
+    "SEAL_PROTOCOL",
     "STAGE_NAMES",
     "SUBTOOL_ROLES",
     "TOOL_ROLES",
@@ -1702,10 +1857,14 @@ __all__ = (
     "baseline_acquisition_failure_record",
     "baseline_authority_record",
     "baseline_verification_failure_record",
+    "authority_retained_inventory",
     "canonical_json_bytes",
+    "exact_main_build_cache_requirements",
     "exact_main_build_profile",
+    "failure_retained_inventory",
     "load_baseline_authority_record",
     "load_baseline_failure_record",
+    "parse_canonical_ldd_output",
     "superseded_historical_references",
     "validate_baseline_authority_record",
     "validate_baseline_failure_record",

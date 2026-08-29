@@ -1122,6 +1122,74 @@ class ExactMainBaselineAuthorityRecordTest(unittest.TestCase):
         self.assertEqual(label, "baseline authority record")
         self.assertEqual(len(paths), 74)
         self.assertEqual(sorted(paths), expected_paths)
+        inventory = contract.authority_retained_inventory(record)
+        self.assertIs(type(inventory), tuple)
+        self.assertEqual(
+            [item["relative_path"] for item in inventory], expected_paths)
+        self.assertEqual(inventory[18], {
+            "relative_path": "baseline-authority.json",
+            "size": None,
+            "sha256": None,
+        })
+        detached = contract.authority_retained_inventory(record)
+        detached[0]["relative_path"] = "changed"
+        self.assertEqual(
+            contract.authority_retained_inventory(record)[0]["relative_path"],
+            expected_paths[0],
+        )
+
+    def test_canonical_ldd_grammar_and_cache_expansion(self) -> None:
+        payload = (
+            b"ld-linux-x86-64.so.2\tfile\t"
+            b"/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2\n"
+            b"libc.so.6\tfile\t/usr/lib/x86_64-linux-gnu/libc.so.6\n"
+            b"linux-vdso.so.1\tvirtual\n"
+        )
+        self.assertEqual(contract.parse_canonical_ldd_output(payload), (
+            {
+                "soname": "ld-linux-x86-64.so.2",
+                "kind": "file",
+                "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            },
+            {
+                "soname": "libc.so.6",
+                "kind": "file",
+                "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            },
+            {"soname": "linux-vdso.so.1", "kind": "virtual", "path": None},
+        ))
+        hostile = (
+            payload.replace(b"\n", b"\r\n"),
+            payload[:-1],
+            payload + payload.splitlines(keepends=True)[0],
+            b"libc.so.6\tfile\trelative/path\n",
+            b"libc.so.6\tother\n",
+            b"libc.so.6\tvirtual\textra\n",
+            b"z.so\tvirtual\na.so\tvirtual\n",
+            b"libc.so.6\tvirtual\nlibc.so.6\tvirtual\n",
+            b"libc.so.6\tvirtual\n\xff",
+        )
+        for index, changed in enumerate(hostile):
+            with self.subTest(ldd_index=index):
+                with self.assertRaises(contract.ExactMainBaselineRecordError):
+                    contract.parse_canonical_ldd_output(changed)
+
+        roots = roots_fixture("canonical_first")
+        requirements = contract.exact_main_build_cache_requirements(roots)
+        self.assertIs(type(requirements), tuple)
+        self.assertEqual(requirements, (
+            {"name": "CMAKE_BUILD_TYPE", "type": "STRING",
+             "value": "Release"},
+            {"name": "CMAKE_CXX_FLAGS_RELEASE", "type": "STRING",
+             "value": "-g -O0 -O3"},
+            {"name": "LEOPARD_MAIN_SOURCE_DIR", "type": "PATH",
+             "value": roots["baseline_source_root"]},
+            {"name": "LEO_MAIN_PURE_AVX2", "type": "BOOL", "value": "ON"},
+        ))
+        requirements[0]["value"] = "changed"
+        self.assertEqual(
+            contract.exact_main_build_cache_requirements(roots)[0]["value"],
+            "Release")
 
     def test_runtime_and_attestation_joins(self) -> None:
         record = authority_fixture()
@@ -1256,6 +1324,23 @@ class ExactMainBaselineAuthorityRecordTest(unittest.TestCase):
             "0484832272ff8c3d0ab5af517c6d0bd1cc237ead082eb9cde507a850aca6d8be",
         )
         self.assertFalse(verification["promoted"])
+        acquisition_inventory = contract.failure_retained_inventory(acquisition)
+        expected_failure_paths = sorted(
+            ["FAILED.json"] +
+            [stage["log"]["relative_path"] for stage in lane["stages"]] +
+            [item["relative_path"] for item in retained])
+        self.assertEqual(
+            [item["relative_path"] for item in acquisition_inventory],
+            expected_failure_paths,
+        )
+        terminal = next(item for item in acquisition_inventory
+                        if item["relative_path"] == "FAILED.json")
+        self.assertEqual(terminal, {
+            "relative_path": "FAILED.json", "size": None, "sha256": None})
+        self.assertEqual(
+            len(contract.failure_retained_inventory(verification)),
+            1 + len(verification_lane["stages"]) + len(retained),
+        )
 
         changes = []
         changed = copy.deepcopy(acquisition)
@@ -1593,6 +1678,14 @@ class ExactMainBaselineAuthorityRecordTest(unittest.TestCase):
                 authority_bytes), record)
             self.assertEqual(contract.exact_main_build_profile(),
                              record["configure"])
+            self.assertEqual(len(contract.authority_retained_inventory(record)),
+                             74)
+            self.assertEqual(
+                contract.exact_main_build_cache_requirements(
+                    record["builds"]["canonical_first"]["roots"])[2]["value"],
+                record["builds"]["canonical_first"]["roots"][
+                    "baseline_source_root"],
+            )
             self.assertEqual(contract.superseded_historical_references(),
                              record["superseded_references"])
 
@@ -1608,6 +1701,10 @@ class ExactMainBaselineAuthorityRecordTest(unittest.TestCase):
             self.assertEqual(
                 contract.validate_baseline_failure_record(acquisition),
                 acquisition)
+            self.assertEqual(
+                len(contract.failure_retained_inventory(acquisition)),
+                1 + len(acquisition_lane["stages"]),
+            )
             self.assertEqual(contract.load_baseline_failure_record(
                 contract.canonical_json_bytes(acquisition)), acquisition)
 
