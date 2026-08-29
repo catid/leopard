@@ -1158,6 +1158,8 @@ class CMakeProductionGraph(object):
         "leopard2_v18_replay_compatibility_self_test": 1,
         "leopard2_pair_qualification_contract_self_test": 1,
         "leopard2_pair_qualification_contract_optimized_self_test": 1,
+        "leopard2_exact_main_baseline_contract_self_test": 1,
+        "leopard2_exact_main_baseline_contract_optimized_self_test": 1,
         "leopard2_lab_self_test": 1,
         "leopard2_fuzz_campaign_self_test": 1,
         "leopard2_gf16_neighbor_evidence_self_test": 1,
@@ -1241,7 +1243,7 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "363e26e59052d47fad52767f37db2cbaad6e542a4be52a46b72add30a9f917d8"
+        "0df73203952424246fb7724cb1b5823e6a604fa24efc8b01aec5e9d918960754"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1330,6 +1332,12 @@ class CMakeProductionGraph(object):
             "TIMEOUT", "300")): 1,
         ("set_tests_properties", (
             "leopard2_pair_qualification_contract_optimized_self_test",
+            "PROPERTIES", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_exact_main_baseline_contract_self_test", "PROPERTIES",
+            "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_exact_main_baseline_contract_optimized_self_test",
             "PROPERTIES", "TIMEOUT", "300")): 1,
     })
     # CMake is an imperative language: proving that each security-sensitive

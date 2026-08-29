@@ -3064,6 +3064,23 @@ if(LEO2_BUILD_TESTS)
         set_tests_properties(
             leopard2_pair_qualification_contract_optimized_self_test
             PROPERTIES TIMEOUT 300)
+        # Exact-main baseline normalization is likewise a pure JSON/ELF
+        # projection contract.  Keep normal and optimized interpreters in the
+        # portable inventory so assertions can never carry evidence semantics.
+        add_test(
+            NAME leopard2_exact_main_baseline_contract_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_test.py)
+        add_test(
+            NAME leopard2_exact_main_baseline_contract_optimized_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_test.py)
+        set_tests_properties(
+            leopard2_exact_main_baseline_contract_self_test
+            PROPERTIES TIMEOUT 300)
+        set_tests_properties(
+            leopard2_exact_main_baseline_contract_optimized_self_test
+            PROPERTIES TIMEOUT 300)
         # The lab runner's self-test exercises Linux process affinity and
         # /proc-based runtime attestation.  The strict sanitizer campaign also
         # attests ELF instrumentation with nm and POSIX alias semantics.  Keep
