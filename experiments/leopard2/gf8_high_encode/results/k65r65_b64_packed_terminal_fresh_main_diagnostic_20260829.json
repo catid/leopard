@@ -1,0 +1,193 @@
+{
+  "schema": "leopard2-gf8-k65r65-b64-packed-terminal-fresh-main-diagnostic/v1",
+  "status": "diagnostic_pass_non_promotional",
+  "created_utc": "2026-08-29T08:24:50Z",
+  "bead": "leopard-79h.38.5.12",
+  "finding": {
+    "input": {
+      "profile": "legacy_high_v1",
+      "field": "gf8",
+      "backend": "avx2",
+      "K": 65,
+      "R": 65,
+      "shard_bytes": 64,
+      "batch": 1,
+      "reuse": 8192
+    },
+    "originating_canonical_30_round_main_over_prechange": {
+      "source_commit": "970107e9c295ff3b4cec601836ba1df17dee7564",
+      "speedup": 0.926406,
+      "ci95": [
+        0.922816,
+        0.93001
+      ],
+      "interpretation": "Leopard2 was about eight percent slower than exact Leopard1."
+    },
+    "fresh_spot_check_us": {
+      "prechange_leopard2": 1.058871,
+      "optimized_leopard2": 0.915895,
+      "fresh_exact_leopard1": 0.996253
+    }
+  },
+  "candidate": {
+    "source_commit": "37f23e0ffe39f78bd0395321177312f30c0af710",
+    "source_tree": "aaf40ef853b096c4a6a1ca582df21ce5d32cf9f8",
+    "implementation_commit": "b27c09b4463e0c424029fd2b47d949eb7c7da277",
+    "executable_sha256": "47704b3a7df0519bff49f651fe1061232af4b93bb361f6dd349656b5ca802e85",
+    "forced_backend_variant": "avx2",
+    "optional_avx512_gfni_leaf_selected": false
+  },
+  "prechange": {
+    "source_commit": "970107e9c295ff3b4cec601836ba1df17dee7564",
+    "source_tree": "0ea848d4a9eb5c56f4b85ec6ecf7c7bd784a0a39",
+    "executable_sha256": "68d8feac149549b74a46ec8b66bd79594aa3d88ab68f32f9e89b0c3d9f1fed9f"
+  },
+  "exact_main": {
+    "source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "fresh_executable_sha256": "d82fc9bbf885f2f0035e8f216806a9226a7dd66a762017c6577f6603a43a039f",
+    "frozen_historical_executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "fresh_binary_is_promotion_authority": false
+  },
+  "campaign": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_k65r65_b64_packed_terminal_abba.py",
+    "rounds": 25,
+    "iterations_per_process": 31,
+    "warmup_calls": 64,
+    "reuse": 8192,
+    "benchmark_cpu": 13,
+    "reserved_smt_sibling": 77,
+    "target_raw_sha256": "60acb1f3e0fd82ac59a649de9b5c99997cb272bec7640d8c2e06f39094665ac3",
+    "immediate_neighbor_raw_sha256": "1637fd8651d236f39d0fd03f570660bcce252619e50e86eec1e456138e5238db",
+    "discarded_round_attempts": 0,
+    "all_workload_digests_matched": true,
+    "candidate_control_shared_one_physical_executable": true
+  },
+  "target": {
+    "workload_digests": {
+      "algorithm": "fnv1a64",
+      "original_data": "da28fa19377abb38",
+      "transmitted_parity": "ccf2e43cd5758e4c",
+      "recovered_originals": "6d2378d8fc4d93b1"
+    },
+    "encode_execution": {
+      "mature_control_over_candidate": {
+        "speedup": 1.1516400576940287,
+        "ci95": [
+          1.1468283307365084,
+          1.1564719731276207
+        ]
+      },
+      "fresh_exact_main_over_candidate": {
+        "speedup": 1.1097295051051248,
+        "ci95": [
+          1.1048856306240993,
+          1.11459461537684
+        ]
+      }
+    },
+    "one_shot_encode": {
+      "mature_control_over_candidate": {
+        "speedup": 1.146329863288247,
+        "ci95": [
+          1.1404735867852245,
+          1.1522162114868155
+        ]
+      },
+      "fresh_exact_main_over_candidate": {
+        "speedup": 1.1130697327330126,
+        "ci95": [
+          1.108105989645236,
+          1.118055710828696
+        ]
+      }
+    },
+    "diagnostic_floor": 1.05,
+    "all_four_lower_confidence_bounds_passed": true
+  },
+  "immediate_neighbor_equivalence": {
+    "required_band": [
+      0.9803921568627451,
+      1.02
+    ],
+    "all_passed": true,
+    "cells": [
+      {
+        "id": "K64_R65_B64",
+        "encode_execution_ci95": [
+          0.9972173460440358,
+          1.0031226550188213
+        ],
+        "one_shot_encode_ci95": [
+          0.9949694510483356,
+          1.0026661641899657
+        ]
+      },
+      {
+        "id": "K66_R65_B64",
+        "encode_execution_ci95": [
+          0.994958229448296,
+          1.0062234316993455
+        ],
+        "one_shot_encode_ci95": [
+          0.9939390936866479,
+          1.0043734973245053
+        ]
+      },
+      {
+        "id": "K65_R64_B64",
+        "encode_execution_ci95": [
+          0.9963525808431102,
+          1.0045251853590054
+        ],
+        "one_shot_encode_ci95": [
+          0.9957045497870454,
+          1.0035493123367372
+        ]
+      },
+      {
+        "id": "K65_R66_B64",
+        "encode_execution_ci95": [
+          0.994702076496661,
+          1.0025700987486221
+        ],
+        "one_shot_encode_ci95": [
+          0.9947673449660467,
+          1.0023543905549237
+        ]
+      },
+      {
+        "id": "K65_R65_B63",
+        "encode_execution_ci95": [
+          0.9949766402085669,
+          1.001896210683923
+        ],
+        "one_shot_encode_ci95": [
+          0.9956870278275034,
+          1.0032073536988413
+        ]
+      },
+      {
+        "id": "K65_R65_B65",
+        "encode_execution_ci95": [
+          0.9933226743048884,
+          1.002378212904154
+        ],
+        "one_shot_encode_ci95": [
+          0.9925768129988234,
+          1.0021580528791625
+        ]
+      }
+    ]
+  },
+  "correctness_and_safety": {
+    "gcc13_release_focused_tests": "2/2 passed",
+    "clang18_asan_ubsan_lsan_focused_tests": "2/2 passed in 153.20 seconds",
+    "portable_avx2_isa_and_registration": "2/2 passed",
+    "hardened_runner_unit_test": "passed",
+    "manual_bug_fix_pass": "no defect found in eligibility, packed geometry, overlap priority, live scratch rows, fixed transform, or fallback paths"
+  },
+  "formal_acceptance": {
+    "passed": false,
+    "reason": "The historical canonical exact-main executable is not present on this host, and the retained B8192 plus layout-control cells were not rerun. This checkpoint must not be used to close the frozen 13-cell promotion gate."
+  }
+}
