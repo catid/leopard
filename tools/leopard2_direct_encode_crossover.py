@@ -4057,11 +4057,26 @@ def cmake_generator_is_multi_config(entries):
     )
 
 
+def reject_authoritative_multi_config(entries, context):
+    if cmake_generator_is_multi_config(entries):
+        generator = attested_text(
+            entries.get("CMAKE_GENERATOR"), "effective CMake generator"
+        )
+        raise CrossoverError(
+            "{} requires a single-configuration CMake generator; found "
+            "{!r}".format(context, generator)
+        )
+
+
 def validate_embedded_build_type(
         entries, embedded_build_type, authoritative):
     embedded_build_type = attested_text(
         embedded_build_type, "embedded benchmark build type"
     )
+    if authoritative:
+        reject_authoritative_multi_config(
+            entries, "authoritative benchmark executable"
+        )
     build_type, configuration_types = cmake_configuration_types(entries)
     if cmake_generator_is_multi_config(entries):
         if not configuration_types:
@@ -4168,16 +4183,16 @@ def validate_build_source_binding(
     git = source_state.get("git", {})
     if git.get("worktree_clean") is not True:
         raise CrossoverError("authoritative build requires a clean Git source tree")
-    configured_build_type, configured_types = cmake_configuration_types(
-        configuration_entries
+    reject_authoritative_multi_config(
+        configuration_entries, "authoritative build provenance"
     )
-    is_multi_config = cmake_generator_is_multi_config(
-        configuration_entries
+    configured_build_type, unused_configuration_types = (
+        cmake_configuration_types(configuration_entries)
     )
-    if ((is_multi_config and "Release" not in configured_types) or
-            (not is_multi_config and configured_build_type != "Release")):
+    del unused_configuration_types
+    if configured_build_type != "Release":
         raise CrossoverError(
-            "authoritative build must provide the Release configuration"
+            "authoritative build must use the Release configuration"
         )
     if configuration_entries.get(
             "LEO2_BUILD_TESTS", "").upper() not in ("1", "ON", "TRUE"):
@@ -12232,9 +12247,30 @@ def self_test():
     validate_embedded_build_type(
         multi_configuration, "Release", authoritative=False
     )
-    validate_embedded_build_type(
-        multi_configuration, "Release", authoritative=True
-    )
+    for generator in (
+            "Ninja Multi-Config", "Xcode", "Visual Studio 17 2022"):
+        authoritative_multi_configuration = dict(
+            multi_configuration, CMAKE_GENERATOR=generator
+        )
+        try:
+            validate_embedded_build_type(
+                authoritative_multi_configuration, "Release",
+                authoritative=True,
+            )
+        except CrossoverError as error:
+            expected = (
+                "authoritative benchmark executable requires a "
+                "single-configuration CMake generator; found {!r}"
+            ).format(generator)
+            check(
+                str(error) == expected,
+                "authoritative multi-config rejection is explicit",
+            )
+        else:
+            raise CrossoverError(
+                "self-test failed: authoritative {} build type was "
+                "accepted".format(generator)
+            )
     for label, configuration, build_type, authoritative in (
             (
                 "single-config Debug",
@@ -12243,10 +12279,6 @@ def self_test():
             (
                 "multi-config unknown configuration",
                 multi_configuration, "RelWithDebInfo", False,
-            ),
-            (
-                "authoritative multi-config Debug",
-                multi_configuration, "Debug", True,
             ),
             (
                 "authoritative single-config Debug",
@@ -12351,6 +12383,58 @@ def self_test():
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
                 attestation["sha256"],
         })
+
+    multi_config_closure = json.loads(json.dumps(closure_metadata))
+    for encoded_entries in (
+            multi_config_closure["entries"],
+            multi_config_closure[
+                "effective_configuration_attestation"]["entries"]):
+        encoded_entries.update({
+            "CMAKE_BUILD_TYPE": "",
+            "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
+            "CMAKE_GENERATOR": "Ninja Multi-Config",
+        })
+    refresh_closure_attestation(multi_config_closure)
+    screen_multi_config = json.loads(json.dumps(multi_config_closure))
+    screen_multi_config["extra_file_sha256"] = {}
+    validate_build_source_binding(
+        screen_multi_config, Path("/self-test/source"), closure_source_state,
+        "avx2", require_fresh=False,
+    )
+    for label, artifact_inventory in (
+            ("empty", {}),
+            (
+                "configuration-qualified",
+                {
+                    "Release/{}".format(name): digest
+                    for name, digest in closure_metadata[
+                        "extra_file_sha256"].items()
+                },
+            )):
+        invalid_multi_config = json.loads(json.dumps(multi_config_closure))
+        invalid_multi_config["extra_file_sha256"] = artifact_inventory
+        try:
+            validate_build_source_binding(
+                invalid_multi_config, Path("/self-test/source"),
+                closure_source_state, "avx2", require_fresh=False,
+                require_authoritative_closure=True,
+            )
+        except CrossoverError as error:
+            expected = (
+                "authoritative build provenance requires a "
+                "single-configuration CMake generator; found "
+                "'Ninja Multi-Config'"
+            )
+            check(
+                str(error) == expected and "omits" not in str(error),
+                "authoritative multi-config {} inventory is rejected "
+                "before artifact lookup".format(label),
+            )
+        else:
+            raise CrossoverError(
+                "self-test failed: authoritative multi-config {} artifact "
+                "inventory was accepted".format(label)
+            )
 
     closure_mutations = (
         ("tests disabled", lambda metadata: metadata[

@@ -299,6 +299,11 @@ and parallel tests used at most 32 rather than the target-machine maximum of
 128. The historical discovery sweep intentionally used 16 workers, one per
 physical core, to reduce SMT interference; the new non-authoritative screen
 runner defaults to all 32 allowed logical CPUs unless `--workers` overrides it.
+Authoritative crossover acquisition and replay accept only single-configuration
+CMake generators, matching the runner-owned Ninja Release build below.
+Multi-config generators remain valid for non-authoritative screening, but their
+configuration-qualified artifact layouts are not part of the authoritative
+provenance-closure contract.
 
 ```sh
 JOBS="$(nproc)"
@@ -377,6 +382,8 @@ bytes or user ID; acquisition-time execution still verifies the live sealed
 taskset snapshot and held lock. Replay also keeps the Release/tests/canonical-
 Git and required object/archive/link-graph closure checks, while deliberately
 omitting only the original source-versus-executable mtime comparison. The
+authoritative reader rejects multi-config metadata before consulting that
+artifact inventory. The
 compact, committed checkpoint at
 `experiments/leopard2/direct_encode/results/checkpoint.json` preserves the
 promotion evidence needed to resume on another machine, while the much larger
