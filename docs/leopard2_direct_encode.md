@@ -337,7 +337,11 @@ substitute them for `ISO_CPU` and `ISO_SIBLING`, and keep the sibling idle. The
 runner records the allowed affinity set and topology, holds the canonical
 campaign and CPU-pair locks, creates a clean runner-owned Release/explicit-AVX2
 build, freezes its executable, and uses one worker. Do not assume CPU numbers
-are contiguous.
+are contiguous. Controlled-build schema v9 records `/usr/bin/cmake` as its
+lexical `argv[0]` so CMake can locate its installed modules, while a separate
+`/proc/self/fd` executable field proves that the immutable sealed CMake bytes
+were executed. Historical v7 replay retains its original procfd-as-`argv[0]`
+contract.
 
 ```sh
 ISO_CPU=15

@@ -2729,6 +2729,7 @@ def run_process_bounded(
     max_stdout: int = MAX_COMMAND_STDOUT_BYTES,
     max_stderr: int = MAX_COMMAND_STDERR_BYTES,
     inherited_descriptors: Sequence[int] = (),
+    executable: str | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     require(isinstance(arguments, Sequence) and 1 <= len(arguments) <= 512 and
             all(isinstance(item, str) and item and
@@ -2745,6 +2746,20 @@ def run_process_bounded(
         all(type(descriptor) is int and descriptor >= 0
             for descriptor in pass_fds),
         "subprocess inherited descriptor set is invalid")
+    executable_match = (
+        re.fullmatch(r"/proc/self/fd/([1-9][0-9]*)", executable)
+        if isinstance(executable, str) else None
+    )
+    executable_descriptor = (
+        int(executable_match.group(1))
+        if executable_match is not None else -1
+    )
+    require(
+        executable is None or
+        (executable_match is not None and
+         executable_descriptor >= 3 and
+         executable_descriptor in pass_fds),
+        "subprocess executable must be a canonical inherited procfd")
     for descriptor in pass_fds:
         try:
             os.fstat(descriptor)
@@ -2752,6 +2767,9 @@ def run_process_bounded(
             raise EvidenceError(
                 f"subprocess inherited descriptor {descriptor} is invalid: "
                 f"{error}") from error
+    if executable is not None:
+        sealed_executable_identity(
+            executable_descriptor, "subprocess executable")
     process: subprocess.Popen[bytes] | None = None
     selector = selectors.DefaultSelector()
     stdout_fd = -1
@@ -2766,7 +2784,7 @@ def run_process_bounded(
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, start_new_session=True,
                 env=None if environment is None else dict(environment),
-                pass_fds=pass_fds)
+                pass_fds=pass_fds, executable=executable)
             # Store the handle with no intervening injectable helper call.
             containment.spawned_process = process
             containment.observe_spawn(process)

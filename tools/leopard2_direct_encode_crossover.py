@@ -101,9 +101,11 @@ GIT_EXECUTABLE_DESCRIPTOR = 197
 TASKSET_EXECUTABLE_DESCRIPTOR = 196
 CONTROLLED_CMAKE_DESCRIPTOR = 195
 CONTROLLED_NINJA_DESCRIPTOR = 194
+CANONICAL_CMAKE = Path("/usr/bin/cmake")
+CANONICAL_NINJA = Path("/usr/bin/ninja")
 CANONICAL_GIT = Path("/usr/bin/git")
 CONTROLLED_BUILD_SCHEMA_V7 = "leopard2-direct-controlled-build/v7"
-CONTROLLED_BUILD_SCHEMA = "leopard2-direct-controlled-build/v8"
+CONTROLLED_BUILD_SCHEMA = "leopard2-direct-controlled-build/v9"
 BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2 = (
     "leopard2-benchmark-build-configuration-attestation/v2"
 )
@@ -6238,12 +6240,12 @@ def relocate_control_descriptor(control_descriptor, inherited, remaps):
 
 def direct_command_supervisor(arguments):
     """Single-threaded boundary for run_abba's audited Linux subreaper."""
-    if len(arguments) != 9:
+    if len(arguments) != 10:
         raise CrossoverError(
             "direct command supervisor argument count changed"
         )
     try:
-        launch_gate_descriptor = int(arguments[8])
+        launch_gate_descriptor = int(arguments[9])
     except (TypeError, ValueError, OverflowError) as error:
         raise CrossoverError(
             "direct command supervisor launch gate is invalid"
@@ -6269,6 +6271,10 @@ def direct_command_supervisor(arguments):
     launcher_value = decode_json_bytes(
         arguments[7].encode("utf-8"),
         "direct command supervisor launcher"
+    )
+    executable = decode_json_bytes(
+        arguments[8].encode("utf-8"),
+        "direct command supervisor executable"
     )
     launcher = runtime_launcher_from_contract(launcher_value)
     try:
@@ -6316,6 +6322,9 @@ def direct_command_supervisor(arguments):
                 "direct command supervisor descriptor remap is unsafe"
             )
         parsed_remaps[target] = source
+    validate_command_executable(
+        executable, inherited, parsed_remaps, "direct command supervisor"
+    )
     launcher_descriptors = tuple(
         launcher[name]["descriptor"] for name in RUNTIME_LAUNCHER_NAMES
     )
@@ -6384,7 +6393,8 @@ def direct_command_supervisor(arguments):
     try:
         completed = audited_run_process_bounded(
             argv, cwd=Path(arguments[1]), environment=environment,
-            timeout=timeout, inherited_descriptors=inherited
+            timeout=timeout, inherited_descriptors=inherited,
+            executable=executable,
         )
         write_descriptor_all(1, completed.stdout)
         write_descriptor_all(2, completed.stderr)
@@ -6652,6 +6662,24 @@ def procfd_exact_path(held, description,
     return Path("/proc/self/fd") / str(child_descriptor)
 
 
+def validate_command_executable(
+        executable, inherited_descriptors, descriptor_remaps, description):
+    if executable is None:
+        return None
+    match = (
+        re.fullmatch(r"/proc/self/fd/([1-9][0-9]*)", executable)
+        if isinstance(executable, str) else None
+    )
+    descriptor = int(match.group(1)) if match is not None else -1
+    if (descriptor < 3 or descriptor not in descriptor_remaps or
+            descriptor_remaps.get(descriptor) not in inherited_descriptors):
+        raise CrossoverError(
+            "{} executable must be a canonical sealed remap-target "
+            "procfd".format(description)
+        )
+    return executable
+
+
 def cleanup_command_tree(
         process, containment_identity, timed_out,
         adopted_baseline=None, leader_identity=None):
@@ -6824,7 +6852,7 @@ def cleanup_command_tree(
 def _run_command_owned(
         argv, cwd, stdout_path, stderr_path, timeout, environment,
         inherited_lock_descriptor=None, inherited_descriptors=(),
-        descriptor_remaps=None, runtime_launcher=None):
+        descriptor_remaps=None, runtime_launcher=None, executable=None):
     validate_pidfd_runtime("direct command supervisor")
     ensure_child_subreaper()
     adopted_baseline = direct_child_identities()
@@ -6856,6 +6884,10 @@ def _run_command_owned(
         raise CrossoverError(
             "command inherited descriptor remap is invalid"
         )
+    validate_command_executable(
+        executable, inherited_descriptors, descriptor_remaps,
+        "owned command",
+    )
     launcher_identity = validate_runtime_launcher_snapshots(
         runtime_launcher
     )
@@ -6935,6 +6967,7 @@ def _run_command_owned(
                     launcher_contract, ensure_ascii=True,
                     sort_keys=True, separators=(",", ":")
                 ),
+                json.dumps(executable, ensure_ascii=True),
                 str(launch_gate_read),
             ],
             cwd=str(cwd), env=environment,
@@ -7022,7 +7055,7 @@ def _run_command_owned(
             )
         stdout = read_normalized_log(stdout_log, "stdout log")
         stderr = read_normalized_log(stderr_log, "stderr log")
-        return {
+        record = {
             "argv": [str(item) for item in argv],
             "cwd": str(cwd),
             "launcher_identity": launcher_identity,
@@ -7033,6 +7066,9 @@ def _run_command_owned(
             "stdout_sha256": digest_bytes(stdout),
             "timed_out": timed_out,
         }
+        if executable is not None:
+            record["executable"] = executable
+        return record
     except BaseException:
         if process is not None and process.poll() is None:
             try:
@@ -7100,12 +7136,12 @@ def _run_command_owned(
 
 def direct_command_owner(arguments):
     """Run exactly one command inside an isolated subreaper process."""
-    if len(arguments) != 12:
+    if len(arguments) != 13:
         raise CrossoverError(
             "direct command owner argument count changed"
         )
     try:
-        launch_gate_descriptor = int(arguments[11])
+        launch_gate_descriptor = int(arguments[12])
     except (TypeError, ValueError, OverflowError) as error:
         raise CrossoverError(
             "direct command owner launch gate is invalid"
@@ -7129,6 +7165,10 @@ def direct_command_owner(arguments):
     launcher_value = decode_json_bytes(
         arguments[10].encode("utf-8"),
         "direct command owner launcher"
+    )
+    executable = decode_json_bytes(
+        arguments[11].encode("utf-8"),
+        "direct command owner executable"
     )
     launcher = runtime_launcher_from_contract(launcher_value)
     try:
@@ -7171,6 +7211,9 @@ def direct_command_owner(arguments):
                 "direct command owner remap is invalid"
             )
         remaps[target] = source
+    validate_command_executable(
+        executable, inherited, remaps, "direct command owner"
+    )
     lock_descriptor = (
         None if lock_descriptor_value < 0 else lock_descriptor_value
     )
@@ -7183,6 +7226,7 @@ def direct_command_owner(arguments):
             inherited_descriptors=tuple(inherited),
             descriptor_remaps=remaps,
             runtime_launcher=launcher,
+            executable=executable,
         )
         status = {"record": record, "status": "ok"}
     except BaseException as error:
@@ -7205,7 +7249,7 @@ def direct_command_owner(arguments):
 def run_command(
         argv, cwd, stdout_path, stderr_path, timeout, environment,
         inherited_lock_descriptor=None, inherited_descriptors=(),
-        descriptor_remaps=None):
+        descriptor_remaps=None, executable=None):
     """Execute through a per-command owner so concurrent jobs never mix."""
     validate_pidfd_runtime("direct command owner")
     if descriptor_remaps is None:
@@ -7230,6 +7274,10 @@ def run_command(
         raise CrossoverError(
             "command owner execution contract is invalid"
         )
+    validate_command_executable(
+        executable, inherited_descriptors, descriptor_remaps,
+        "command owner",
+    )
     for descriptor in inherited_descriptors:
         try:
             os.fstat(descriptor)
@@ -7320,6 +7368,7 @@ def run_command(
                     launcher_contract, ensure_ascii=True,
                     sort_keys=True, separators=(",", ":")
                 ),
+                json.dumps(executable, ensure_ascii=True),
                 str(launch_gate_read),
             ],
             cwd=str(cwd), env=environment, stdin=subprocess.DEVNULL,
@@ -7492,6 +7541,37 @@ def controlled_avx2_configure_argv(
     return result
 
 
+def controlled_build_command_expectations(manifest_schema, build_tools):
+    outer_schema_contract(manifest_schema)
+    if (not isinstance(build_tools, dict) or
+            not all(isinstance(build_tools.get(name), dict) and
+                    isinstance(build_tools[name].get("path"), str)
+                    for name in ("cmake", "ninja"))):
+        raise CrossoverError(
+            "controlled build tool paths are malformed"
+        )
+    command_keys = frozenset({
+        "argv", "cwd", "environment", "launcher_identity", "returncode",
+        "stderr_log", "stderr_sha256", "stdout_log", "stdout_sha256",
+        "timed_out",
+    })
+    cmake_executable = str(
+        Path("/proc/self/fd") / str(CONTROLLED_CMAKE_DESCRIPTOR)
+    )
+    if manifest_schema == SCHEMA_V7:
+        return command_keys, cmake_executable, None
+    if (build_tools["cmake"]["path"] != str(CANONICAL_CMAKE) or
+            build_tools["ninja"]["path"] != str(CANONICAL_NINJA)):
+        raise CrossoverError(
+            "controlled build tools do not use canonical /usr/bin paths"
+        )
+    return (
+        command_keys | frozenset({"executable"}),
+        str(CANONICAL_CMAKE),
+        cmake_executable,
+    )
+
+
 def controlled_avx2_build(
         source, result_dir, source_state, parallel, validate_guard,
         guard_identity, inherited_lock_descriptor, result_root,
@@ -7588,6 +7668,7 @@ def controlled_avx2_build(
         validate_current_executable_identity(
             build_tools["ninja"], "retained controlled Ninja"
         )
+        controlled_build_command_expectations(SCHEMA, build_tools)
         for command_index, command in enumerate(record["commands"]):
             for stream in ("stdout", "stderr"):
                 relative = command.get(stream + "_log")
@@ -7613,9 +7694,11 @@ def controlled_avx2_build(
         }
     cmake = shutil.which("cmake", path=BENCHMARK_ENVIRONMENT["PATH"])
     ninja = shutil.which("ninja", path=BENCHMARK_ENVIRONMENT["PATH"])
-    if not cmake or not ninja:
+    if (cmake != str(CANONICAL_CMAKE) or
+            ninja != str(CANONICAL_NINJA)):
         raise CrossoverError(
-            "controlled authoritative build requires /usr/bin cmake and ninja"
+            "controlled authoritative build requires canonical "
+            "/usr/bin/cmake and /usr/bin/ninja"
         )
     # These same-UID launchers are snapshotted because they orchestrate every
     # build command.  The compiler/linker paths and their effective flags are
@@ -7634,11 +7717,12 @@ def controlled_avx2_build(
     ninja_procfd = str(
         Path("/proc/self/fd") / str(CONTROLLED_NINJA_DESCRIPTOR)
     )
+    cmake_argv0 = str(CANONICAL_CMAKE)
     configure = controlled_avx2_configure_argv(
-        cmake_procfd, ninja_procfd, source, build_root, selector_overrides
+        cmake_argv0, ninja_procfd, source, build_root, selector_overrides
     )
     build = [
-        cmake_procfd, "--build", str(build_root),
+        cmake_argv0, "--build", str(build_root),
         "--target", "bench_leopard2_direct_encode",
         "--parallel", str(parallel),
     ]
@@ -7647,10 +7731,10 @@ def controlled_avx2_build(
     ninja_snapshot = None
     try:
         cmake_snapshot = open_exact_executable_snapshot(
-            Path(cmake).resolve(), "controlled CMake executable", True
+            CANONICAL_CMAKE, "controlled CMake executable", True
         )
         ninja_snapshot = open_exact_executable_snapshot(
-            Path(ninja).resolve(), "controlled Ninja executable", True
+            CANONICAL_NINJA, "controlled Ninja executable", True
         )
         build_tools = {
             "cmake": sealed_snapshot_identity(cmake_snapshot),
@@ -7705,6 +7789,7 @@ def controlled_avx2_build(
                     CONTROLLED_NINJA_DESCRIPTOR:
                         ninja_snapshot["descriptor"],
                 },
+                executable=cmake_procfd,
             )
             command["environment"] = dict(GIT_ENVIRONMENT)
             command["stdout_log"] = str(stdout_path.relative_to(result_dir))
@@ -9535,14 +9620,12 @@ def validate_controlled_build_held(
     validate_sealed_snapshot_identity(
         build_tools["ninja"], "retained controlled Ninja"
     )
+    command_keys, cmake_argv0, expected_executable = (
+        controlled_build_command_expectations(manifest_schema, build_tools)
+    )
     commands = record.get("commands")
     if not isinstance(commands, list) or len(commands) != 2:
         raise CrossoverError("controlled build command sequence is incomplete")
-    command_keys = {
-        "argv", "cwd", "environment", "launcher_identity", "returncode",
-        "stderr_log",
-        "stderr_sha256", "stdout_log", "stdout_sha256", "timed_out",
-    }
     if any(not isinstance(command, dict) or set(command) != command_keys or
            not isinstance(command.get("argv"), list) or
            not command["argv"] or
@@ -9573,27 +9656,28 @@ def validate_controlled_build_held(
         selector_overrides=selector_overrides,
         require_authoritative_closure=True,
     )
-    cmake = str(
-        Path("/proc/self/fd") / str(CONTROLLED_CMAKE_DESCRIPTOR)
-    )
     ninja = str(
         Path("/proc/self/fd") / str(CONTROLLED_NINJA_DESCRIPTOR)
     )
-    if commands[0]["argv"][0] != cmake or commands[1]["argv"][0] != cmake:
+    if any(
+            command["argv"][0] != cmake_argv0 or
+            command.get("executable") != expected_executable
+            for command in commands):
         raise CrossoverError(
-            "controlled build did not use its sealed CMake descriptor"
+            "controlled build did not execute its sealed CMake descriptor "
+            "with the attested lexical argv[0]"
         )
     configure_argv = (
         controlled_avx2_configure_argv_v7(
-            cmake, ninja, source, build_root)
+            cmake_argv0, ninja, source, build_root)
         if manifest_schema == SCHEMA_V7 else
         controlled_avx2_configure_argv(
-            cmake, ninja, source, build_root, selector_overrides)
+            cmake_argv0, ninja, source, build_root, selector_overrides)
     )
     expected_argv = (
         configure_argv,
         [
-            cmake, "--build", str(build_root), "--target",
+            cmake_argv0, "--build", str(build_root), "--target",
             "bench_leopard2_direct_encode", "--parallel",
             str(min(len(settings["isolation"]["housekeeping_cpu_set"]), 128)),
         ],
@@ -10697,6 +10781,11 @@ def self_test():
     repository_state = source_identity(repository, require_clean=False)
     validate_source_state(repository_state, "self-test repository", False)
     check(
+        outer_schema_contract(SCHEMA)["controlled_build_schema"] ==
+            "leopard2-direct-controlled-build/v9",
+        "current outer schema requires lexical-argv0 controlled builds",
+    )
+    check(
         outer_schema_contract(SCHEMA_V7) == {
             "analysis_schema": ANALYSIS_SCHEMA_V4,
             "build_configuration_attestation_schema":
@@ -10894,6 +10983,48 @@ def self_test():
         else:
             raise CrossoverError(
                 "self-test failed: retained pinned manifest was accepted"
+            )
+    canonical_build_tools = {
+        "cmake": {"path": str(CANONICAL_CMAKE)},
+        "ninja": {"path": str(CANONICAL_NINJA)},
+    }
+    (v7_command_keys, v7_cmake_argv0,
+     v7_command_executable) = controlled_build_command_expectations(
+         SCHEMA_V7, {
+             "cmake": {"path": "/historical/cmake"},
+             "ninja": {"path": "/historical/ninja"},
+         })
+    (current_command_keys, current_cmake_argv0,
+     current_command_executable) = controlled_build_command_expectations(
+         SCHEMA, canonical_build_tools)
+    controlled_cmake_procfd = str(
+        Path("/proc/self/fd") / str(CONTROLLED_CMAKE_DESCRIPTOR)
+    )
+    check(
+        "executable" not in v7_command_keys and
+        v7_cmake_argv0 == controlled_cmake_procfd and
+        v7_command_executable is None and
+        current_command_keys == v7_command_keys | {"executable"} and
+        current_cmake_argv0 == str(CANONICAL_CMAKE) and
+        current_command_executable == controlled_cmake_procfd,
+        "v7 and current controlled-build command contracts are distinct",
+    )
+    for tool_name in ("cmake", "ninja"):
+        tampered_build_tools = json.loads(json.dumps(canonical_build_tools))
+        tampered_build_tools[tool_name]["path"] = "/tmp/untrusted-" + tool_name
+        try:
+            controlled_build_command_expectations(
+                SCHEMA, tampered_build_tools)
+        except CrossoverError as error:
+            check(
+                "canonical /usr/bin paths" in str(error),
+                "current controlled-build {} path rejection is explicit".format(
+                    tool_name),
+            )
+        else:
+            raise CrossoverError(
+                "self-test failed: current controlled-build accepted "
+                "untrusted {} path".format(tool_name)
             )
     mode_zero_configure = controlled_avx2_configure_argv(
         "/usr/bin/cmake", "/usr/bin/ninja",
@@ -14085,9 +14216,67 @@ def self_test():
             [sys.executable, "-c", "print('ok')"], root,
             root / "stdout.log", root / "stderr.log", 5, os.environ.copy()
         )
-        check(record["returncode"] == 0, "self-test subprocess exit")
+        check(
+            record["returncode"] == 0 and "executable" not in record,
+            "self-test subprocess exit and legacy command-record shape",
+        )
         check((root / "stdout.log").read_bytes() == b"ok\n",
               "self-test subprocess output")
+
+        lexical_snapshot = open_current_interpreter_snapshot()
+        try:
+            lexical_descriptor = lexical_snapshot["descriptor"]
+            lexical_argv0 = lexical_snapshot["path"]
+            lexical_executable = str(
+                Path("/proc/self/fd") / str(CONTROLLED_CMAKE_DESCRIPTOR)
+            )
+            for label, invalid_executable, invalid_remaps in (
+                    ("mutable path", lexical_argv0, {
+                        CONTROLLED_CMAKE_DESCRIPTOR: lexical_descriptor}),
+                    ("noncanonical procfd", "/proc/self/fd/0195", {
+                        CONTROLLED_CMAKE_DESCRIPTOR: lexical_descriptor}),
+                    ("non-target procfd", lexical_executable, {})):
+                try:
+                    validate_command_executable(
+                        invalid_executable, (lexical_descriptor,),
+                        invalid_remaps, "self-test sealed command",
+                    )
+                except CrossoverError as error:
+                    check(
+                        "canonical sealed remap-target procfd" in str(error),
+                        "{} executable rejection is explicit".format(label),
+                    )
+                else:
+                    raise CrossoverError(
+                        "self-test failed: {} command executable was "
+                        "accepted".format(label)
+                    )
+            lexical_record = run_command(
+                [
+                    lexical_argv0, *RUNTIME_PYTHON_FLAGS, "-c",
+                    "import os;os.write(1,open('/proc/self/cmdline','rb')"
+                    ".read().split(b'\\0',1)[0])",
+                ],
+                root, root / "lexical-argv0.stdout.log",
+                root / "lexical-argv0.stderr.log", 5,
+                os.environ.copy(),
+                inherited_descriptors=(lexical_descriptor,),
+                descriptor_remaps={
+                    CONTROLLED_CMAKE_DESCRIPTOR: lexical_descriptor,
+                },
+                executable=lexical_executable,
+            )
+            check(
+                lexical_record["returncode"] == 0 and
+                lexical_record["argv"][0] == lexical_argv0 and
+                lexical_record["executable"] == lexical_executable and
+                (root / "lexical-argv0.stdout.log").read_bytes() ==
+                    lexical_argv0.encode("utf-8"),
+                "sealed command execution preserves and records lexical "
+                "argv[0]",
+            )
+        finally:
+            close_sealed_snapshot(lexical_snapshot)
 
         small_read, small_write = os.pipe2(
             getattr(os, "O_CLOEXEC", 0)

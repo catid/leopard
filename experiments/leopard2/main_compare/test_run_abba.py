@@ -6185,6 +6185,42 @@ class MainCompareRunnerTests(unittest.TestCase):
                     os.close(duplicate)
                 os.close(descriptor)
 
+    def test_sealed_executable_preserves_lexical_argv_zero(self) -> None:
+        shell = Path("/bin/sh").resolve()
+        lexical_name = "/synthetic/original/tool-name"
+        expected = runner.artifact_identity(shell, "executable")
+        descriptor, unused_record = runner.capture_sealed_executable(
+            shell, expected, "fixture shell")
+        del unused_record
+        duplicate = -1
+        try:
+            duplicate = runner.duplicate_snapshot_for_execution(
+                descriptor, "fixture shell")
+            procfd = f"/proc/self/fd/{duplicate}"
+            completed = runner.run_process_bounded(
+                [lexical_name, "-c", "printf %s \"$0\""],
+                inherited_descriptors=(duplicate,), executable=procfd)
+            self.assertEqual(completed.returncode, 0)
+            self.assertEqual(completed.stdout, lexical_name.encode("ascii"))
+            self.assertEqual(completed.stderr, b"")
+
+            for invalid in (
+                    str(shell),
+                    f"/proc/self/fd/0{duplicate}",
+                    f"/proc/self/fd/{duplicate + 1}"):
+                with self.subTest(executable=invalid), \
+                     self.assertRaisesRegex(
+                         runner.EvidenceError,
+                         "canonical inherited procfd"):
+                    runner.run_process_bounded(
+                        [lexical_name, "-c", "exit 99"],
+                        inherited_descriptors=(duplicate,),
+                        executable=invalid)
+        finally:
+            if duplicate >= 0:
+                os.close(duplicate)
+            os.close(descriptor)
+
     def test_sealed_capture_copy_seal_and_owner_cleanup_faults(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "benchmark"
