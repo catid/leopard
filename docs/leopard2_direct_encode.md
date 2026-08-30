@@ -380,6 +380,9 @@ the XMM form lost in the whole-call screen. The `K=5,R=5` kernel fixes both
 counts at compile time; other shapes use groups of four outputs. Larger
 eligible shards use the existing source-major multi-output multiply-add
 backend. Partial-output calls retain the mature row-major or transform paths.
+When the separately gated sparse-Q1 candidate below is enabled, qualifying
+large aligned Q=1 calls use that same mature row-major direct executor; they
+never enter this source-major full-output kernel.
 
 AUTO contains only the measured lengths that cleared the same-source
 five-percent discovery gate. `K=5,R=5` has a separate broader region; the
@@ -438,6 +441,42 @@ code: a whole-T=8 callback, two- and three-output grouping, an XMM three-byte
 tail, forced source-loop unrolling, and a generated coefficient-major
 `K=5,R=5` circuit. Each either failed the five-percent whole-call gate or
 regressed through extra source loads, register pressure, or code size.
+
+## Legacy-high GF8/AVX2 sparse-Q1 measurement candidate
+
+Sparse legacy-high direct encoding has an independent, default-off selector:
+
+```sh
+-DLEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=ON
+```
+
+The candidate requires GF8, an explicit AVX2 context, `2 <= K <= 16`,
+`2 <= R <= 16`, exactly one non-null requested recovery output, at least 1,024
+bytes, and a byte count divisible by 64. It prepares the existing bounded
+generator table at codec creation and executes the existing allocation-free
+row-major direct encoder. It adds no arithmetic kernel and does not enter the
+full-output source-major experiment. Every other profile, backend, requested
+output count, ragged byte count, and the legacy-high `R=1` control remains on
+its prior path.
+
+This option extracts sparse behavior that the older full-output option had
+admitted incidentally through the generic Q=1 selector. It is measurement
+machinery, not promotion authority: no performance gain is claimed here, and
+the committed direct-encode checkpoint and LOW-profile production AUTO region
+remain unchanged. Raw direct-versus-transform measurements can be made with:
+
+```sh
+bench_leopard2_direct_encode --profile high --k 2 --r 16 --q 1 \
+    --bytes 4096 --force-direct
+bench_leopard2_direct_encode --profile high --k 2 --r 16 --q 1 \
+    --bytes 4096 --force-transform
+```
+
+An AUTO-path experiment must use an attested build with the option enabled;
+the default-OFF build is its selector control. Any production promotion still
+requires a separately preregistered bounded crossover with a credible gain of
+at least five percent and no unexplained neighboring regression above two
+percent.
 
 ## Promoted GF8/AVX2 T=4 batch-table amortization
 

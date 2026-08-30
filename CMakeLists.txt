@@ -64,6 +64,9 @@ option(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE
 option(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
     "Allow the legacy-high direct-encode experiment to change AUTO dispatch"
     ON)
+option(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE
+    "Enable the default-off candidate legacy-high GF8/AVX2 sparse Q=1 direct encoder"
+    OFF)
 option(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR
     "Disable the promoted AVX2 T=8 encoder for same-source diagnostics"
     OFF)
@@ -361,6 +364,10 @@ if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
     target_compile_definitions(leopard PRIVATE
         LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1
         LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO}>)
+endif()
+if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+    target_compile_definitions(leopard PRIVATE
+        LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1)
 endif()
 target_compile_definitions(leopard PRIVATE
     LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
@@ -829,6 +836,10 @@ if(LEO2_HAVE_AVX2_BACKEND)
         target_compile_definitions(leopard2_backend_avx2 PRIVATE
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
     endif()
+    if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+        target_compile_definitions(leopard2_backend_avx2 PRIVATE
+            LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1)
+    endif()
     if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
         target_compile_definitions(leopard2_backend_avx2 PRIVATE
             LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1)
@@ -1148,6 +1159,10 @@ if(LEO2_BUILD_TESTS)
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO}>)
     endif()
+    if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1)
+    endif()
     target_compile_definitions(leopard_test_hooks PRIVATE
         LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
         LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>
@@ -1236,6 +1251,11 @@ if(LEO2_BUILD_TESTS)
             target_compile_definitions(
                 leopard2_backend_avx2_test_hooks PRIVATE
                 LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
+        endif()
+        if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+            target_compile_definitions(
+                leopard2_backend_avx2_test_hooks PRIVATE
+                LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1)
         endif()
         if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
             target_compile_definitions(
@@ -1780,6 +1800,15 @@ if(LEO2_BUILD_TESTS)
                 leopard2_high_direct_production_test PRIVATE
                 LEO2_EXPECT_HIGH_DIRECT_AUTO=0)
         endif()
+        if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+            target_compile_definitions(
+                leopard2_high_direct_production_test PRIVATE
+                LEO2_EXPECT_HIGH_SPARSE_DIRECT=1)
+        else()
+            target_compile_definitions(
+                leopard2_high_direct_production_test PRIVATE
+                LEO2_EXPECT_HIGH_SPARSE_DIRECT=0)
+        endif()
         if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
             target_compile_definitions(
                 leopard2_high_direct_production_test PRIVATE
@@ -2252,6 +2281,10 @@ if(LEO2_BUILD_TESTS)
                 LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1
                 LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO}>)
         endif()
+        if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+            target_compile_definitions(bench_leopard2_direct_encode PRIVATE
+                LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1)
+        endif()
         target_link_libraries(bench_leopard2_direct_encode leopard_test_hooks)
         leopard2_enable_benchmark_source_attestation(
             bench_leopard2_direct_encode)
@@ -2483,6 +2516,10 @@ if(LEO2_BUILD_TESTS)
         target_compile_definitions(leopard2_direct_encode_test PRIVATE
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO}>)
+    endif()
+    if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+        target_compile_definitions(leopard2_direct_encode_test PRIVATE
+            LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1)
     endif()
     if(LEO2_BACKEND_VARIANT STREQUAL "auto" AND
        LEO2_HAVE_AVX512_BACKEND)

@@ -54,6 +54,14 @@
 #error "The direct-encode test requires LEO2_ENABLE_TEST_HOOKS"
 #endif
 
+#if (defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
+     LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO) || \
+    defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+#define LEO2_TEST_EXPECT_HIGH_SPARSE_Q1 1
+#else
+#define LEO2_TEST_EXPECT_HIGH_SPARSE_Q1 0
+#endif
+
 #ifndef LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN
 #define LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN 1
 #endif
@@ -2717,8 +2725,7 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
     require_result(leo2_test_codec_encode_path(high->codec, 1024, 1, &direct),
         "AUTO high-profile path query");
-#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
-    LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
+#if LEO2_TEST_EXPECT_HIGH_SPARSE_Q1
     const bool measured_high_backend = backend == LEO2_BACKEND_AVX2;
 #else
     const bool measured_high_backend = false;
@@ -2739,7 +2746,7 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
     const Shards historical_original = random_shards(
         2, 4096, UINT64_C(0x484947484b325231));
     for (unsigned recovery_index = 0; recovery_index < 16;
-         recovery_index += 15)
+         ++recovery_index)
     {
         std::vector<uint8_t> requested(16, 0);
         requested[recovery_index] = 1;
@@ -2761,8 +2768,7 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
     }
     delete historical;
 
-#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
-    LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
+#if LEO2_TEST_EXPECT_HIGH_SPARSE_Q1
     leo2_context_options avx2_options = {};
     avx2_options.struct_size = sizeof(avx2_options);
     avx2_options.backend = LEO2_BACKEND_AVX2;
@@ -2784,6 +2790,24 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
                     "high-selector bounded path query");
                 require(direct == 1,
                     "high-selector rejected a bounded diagnostic AVX2 shape");
+                ++counts->dispatch_checks;
+                require_result(leo2_test_codec_encode_path(
+                    bounded->codec, 4095, 1, &direct),
+                    "high-selector ragged-byte path query");
+                require(direct == 0,
+                    "high-selector admitted an unmeasured ragged byte count");
+                ++counts->dispatch_checks;
+                require_result(leo2_test_codec_encode_path(
+                    bounded->codec, 1023, 1, &direct),
+                    "high-selector sub-threshold path query");
+                require(direct == 0,
+                    "high-selector admitted a sub-threshold byte count");
+                ++counts->dispatch_checks;
+                require_result(leo2_test_codec_encode_path(
+                    bounded->codec, 4096, 2, &direct),
+                    "high-selector Q2 path query");
+                require(direct == 0,
+                    "high-selector admitted an unmeasured Q2 request");
                 ++counts->dispatch_checks;
                 delete bounded;
             }
@@ -2870,8 +2894,7 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
         require_result(leo2_test_codec_encode_path(
             control->codec, 1024, 1, &direct),
             "high-selector backend control path query");
-#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
-    LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
+#if LEO2_TEST_EXPECT_HIGH_SPARSE_Q1
         const bool expected_high =
             high_control_backends[i] == LEO2_BACKEND_AVX2;
 #else

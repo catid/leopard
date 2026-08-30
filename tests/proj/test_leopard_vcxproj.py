@@ -28,7 +28,7 @@ BENCHMARK_ATTESTATION_MODULE = \
 BENCHMARK_ATTESTATION_GENERATOR = \
     ROOT / "cmake" / "GenerateBenchmarkSourceAttestation.cmake"
 BENCHMARK_ATTESTATION_MODULE_SHA256 = \
-    "8776f4c9f8cdd6114326f4c5cd1fd672d068113bf0329e475217b1c9ca0f93bb"
+    "c8241539987d30f995339f90079cb1dfe8ca7bb3027ce7c5df43903ac68fbd32"
 BENCHMARK_ATTESTATION_GENERATOR_SHA256 = \
     "21857083921f70d62f44f0d5327d88e375f845906ab97493dbbdecfe3e07a389"
 NS = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
@@ -737,6 +737,10 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO="
             "$<BOOL:${LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO}>")),
         ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1")),
+        ("leopard2_backend_avx2", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1")),
+        ("leopard", "target_compile_definitions", (
             "PRIVATE",
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING="
             "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>",
@@ -1010,6 +1014,10 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO",
             "Allow the legacy-high direct-encode experiment to change AUTO "
             "dispatch", "ON")): 1,
+        ("option", (
+            "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
+            "Enable the default-off candidate legacy-high GF8/AVX2 sparse "
+            "Q=1 direct encoder", "OFF")): 1,
         ("option", (
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
             "Disable the promoted AVX2 T=8 encoder for same-source "
@@ -1525,6 +1533,10 @@ class CMakeProductionGraph(object):
             "Allow the legacy-high direct-encode experiment to change AUTO "
             "dispatch", "ON"))),
         ("trusted", ("option", (
+            "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
+            "Enable the default-off candidate legacy-high GF8/AVX2 sparse "
+            "Q=1 direct encoder", "OFF"))),
+        ("trusted", ("option", (
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
             "Disable the promoted AVX2 T=8 encoder for same-source "
             "diagnostics", "OFF"))),
@@ -1634,6 +1646,8 @@ class CMakeProductionGraph(object):
             "PRIVATE", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1",
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO="
             "$<BOOL:${LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO}>"))),
+        ("mutation", ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE",
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING="
@@ -1787,6 +1801,9 @@ class CMakeProductionGraph(object):
         ("mutation", ("leopard2_backend_avx2",
             "target_compile_definitions", (
                 "PRIVATE", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1"))),
+        ("mutation", ("leopard2_backend_avx2",
+            "target_compile_definitions", (
+                "PRIVATE", "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1"))),
         ("mutation", ("leopard2_backend_avx2",
             "target_compile_definitions", (
                 "PRIVATE", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=1"))),
@@ -2816,6 +2833,12 @@ class CMakeProductionGraph(object):
             ("leopard2_backend_avx2", (
                 "PRIVATE", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1")):
                 "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+            ("leopard", (
+                "PRIVATE", "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1")):
+                "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
+            ("leopard2_backend_avx2", (
+                "PRIVATE", "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1")):
+                "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
             ("leopard2_backend_avx2", (
                 "PRIVATE", "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1")):
                 "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",

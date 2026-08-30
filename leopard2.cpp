@@ -2922,15 +2922,16 @@ static bool CanAutoDirectEncodeCodec(const leo2_codec* codec)
         return false;
     const leo2_backend backend = codec->context->backend;
 
-#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) || \
+    defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
     /*
         This default-off diagnostic eligibility boundary is deliberately
         confined to legacy-high GF8 on an explicit AVX2 context with more than
-        one recovery shard.  The historical campaign only revalidates a prior
-        ceiling; production promotion remains blocked pending a full bounded
-        map or a separately measured narrow predicate and upper bound.
-        Defining the experiment must not silently admit GF16, SSSE3, AVX-512,
-        GFNI, scalar, or the existing R=1 single-side encoder.
+        one recovery shard.  The full-output and sparse-Q=1 candidates share
+        this preparation boundary, but their selectors remain independent.
+        The R>1 guard holds out the measured-negative legacy-high single-side
+        control.  Defining either experiment must not silently admit GF16,
+        SSSE3, AVX-512, GFNI, scalar, or the existing R=1 encoder.
     */
     const bool measured_high =
         codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
@@ -3709,11 +3710,8 @@ static bool AutoDirectEncodePreferred(
         shard_bytes == 0 || shard_bytes > std::numeric_limits<size_t>::max())
         return false;
 
-#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
-#if !LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
-    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
-        return false;
-#else
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
+    LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
     if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->field == LEO2_FIELD_GF8 &&
         codec->context->backend == LEO2_BACKEND_AVX2 &&
@@ -3774,6 +3772,33 @@ static bool AutoDirectEncodePreferred(
         }
     }
 #endif
+
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+    /*
+        Default-off measurement candidate for legacy-high sparse output.  It
+        deliberately reuses the mature row-major executor and admits only the
+        previously screened regular-tile Q=1 region.  The retained ceiling is
+        not broad enough to authorize production promotion, so this predicate
+        remains separately named and disabled by default.
+    */
+    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->context->backend == LEO2_BACKEND_AVX2 &&
+        codec->recovery_count > 1 && requested_recovery_count == 1 &&
+        shard_bytes >= kDirectMinimumMeasuredBytes &&
+        shard_bytes % kDirectSimdTileBytes == 0)
+        return true;
+#endif
+
+#if !defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) || \
+    !LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
+    /*
+        The generic tail below is qualified LOW-profile evidence.  A distinct
+        experiment may open table preparation for legacy-high codecs, but it
+        must not inherit that LOW selector implicitly.
+    */
+    if (codec->profile != LEO2_PROFILE_LOW_V1)
+        return false;
 #endif
 
     if (requested_recovery_count != 1 ||
@@ -16865,6 +16890,15 @@ bool HighT8RaggedBindingEnabled()
 {
 #ifdef LEO_HAS_FF8
     return g_high_t8_ragged_binding_mode == 1U;
+#else
+    return false;
+#endif
+}
+
+bool HighSparseDirectEncodeEnabled()
+{
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+    return true;
 #else
     return false;
 #endif

@@ -653,16 +653,20 @@ static bool ExpectedAutoDirectPath(
     const leo2_backend backend = leo2_context_backend(context);
     if (profile == LEO2_PROFILE_LEGACY_HIGH_V1)
     {
-#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
-    LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
         if (leo2_codec_field(codec) != LEO2_FIELD_GF8 ||
             backend != LEO2_BACKEND_AVX2)
             return false;
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
+    LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
         if (options.k >= 5 && options.k <= 16 &&
             options.r >= 5 && options.r <= 8 &&
             options.q == options.r &&
             ExpectedMeasuredHighFullDirect(options))
             return true;
+#endif
+#if (defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
+     LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO) || \
+    defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
         return options.q == 1 && options.bytes >= 1024 &&
             (options.bytes & 63U) == 0 && options.r > 1;
 #else

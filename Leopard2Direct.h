@@ -600,6 +600,9 @@ bool HighT8TinyBindingEnabled();
 /* Marker for the qualified 65..1024-byte ragged T=8 selector. */
 bool HighT8RaggedBindingEnabled();
 
+/* Marker for the default-off legacy-high sparse-Q1 direct candidate. */
+bool HighSparseDirectEncodeEnabled();
+
 /* Text-layout-neutral marker for equal-rounded GF8/AVX2 multi-loss repair. */
 bool EqualRoundedMultiLossEnabled();
 

@@ -50,6 +50,9 @@
 #if !defined(LEO2_EXPECT_HIGH_DIRECT_AUTO)
 #error "production high-direct AUTO expectation must be explicit"
 #endif
+#if !defined(LEO2_EXPECT_HIGH_SPARSE_DIRECT)
+#error "production high sparse-direct expectation must be explicit"
+#endif
 #if !defined(LEO2_EXPECT_HIGH_T8_VECTOR)
 #error "production high-T8 expectation must be explicit"
 #endif
@@ -138,6 +141,13 @@
 #endif
 
 namespace {
+
+const bool kExpectHighDirectRows =
+    LEO2_EXPECT_HIGH_DIRECT_PRODUCTION != 0 ||
+    LEO2_EXPECT_HIGH_SPARSE_DIRECT != 0;
+const bool kExpectSparseCellDirect =
+    LEO2_EXPECT_HIGH_DIRECT_AUTO != 0 ||
+    LEO2_EXPECT_HIGH_SPARSE_DIRECT != 0;
 
 typedef std::vector<uint8_t> Bytes;
 typedef std::vector<Bytes> Shards;
@@ -1466,13 +1476,9 @@ void ExerciseTinyFullOutputRegion(
                 Require(path.high_t8_two_block_binding_selected ==
                         expected_two_block_binding,
                     "tiny two-block T8 selector differs from expectation");
-#if LEO2_EXPECT_HIGH_DIRECT_PRODUCTION
-                Require(path.direct_generator_rows == r,
-                    "tiny production codec omitted direct generator rows");
-#else
-                Require(path.direct_generator_rows == 0,
-                    "tiny default production codec retained direct rows");
-#endif
+                Require(path.direct_generator_rows ==
+                        (kExpectHighDirectRows ? r : 0),
+                    "tiny production direct-row preparation differs from policy");
                 if (path.auto_direct_selected)
                     ++direct_checks;
                 else
@@ -1547,6 +1553,10 @@ int main()
             leopard2_internal::HighT8RaggedBindingEnabled() ==
                 (LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING != 0),
             "T=8 ragged-binding provenance marker differs from build policy");
+        Require(
+            leopard2_internal::HighSparseDirectEncodeEnabled() ==
+                (LEO2_EXPECT_HIGH_SPARSE_DIRECT != 0),
+            "high sparse-direct provenance marker differs from build policy");
         const uint64_t t4_diagnostic_checks =
             ExerciseT4DiagnosticControl();
 
@@ -1559,20 +1569,11 @@ int main()
         Require(leopard2_internal::GetCodecEncodePathInfo(
             codec, bytes, 1, &path),
             "production encode-path introspection rejected the campaign cell");
-#if LEO2_EXPECT_HIGH_DIRECT_PRODUCTION
-        Require(path.direct_generator_rows == r,
-            "option-ON production codec omitted direct generator rows");
-#else
-        Require(path.direct_generator_rows == 0,
-            "default-OFF production codec retained direct generator rows");
-#endif
-#if LEO2_EXPECT_HIGH_DIRECT_AUTO
-        Require(path.auto_direct_selected,
-            "AUTO-on production codec did not select the direct encoder");
-#else
-        Require(!path.auto_direct_selected,
-            "AUTO-off production codec escaped the transform encoder");
-#endif
+        Require(path.direct_generator_rows ==
+                (kExpectHighDirectRows ? r : 0),
+            "production direct-row preparation differs from build policy");
+        Require(path.auto_direct_selected == kExpectSparseCellDirect,
+            "production sparse-Q1 selection differs from build policy");
 
         const Shards original = MakeOriginal(k, bytes);
         const Shards original_before = original;
@@ -1583,12 +1584,122 @@ int main()
                 leopard2_test::kLegacyHigh, k, r);
         const leopard2_test::Matrix generator =
             leopard2_test::direct_systematic_generator(field, layout);
-        EncodeAndCheck(codec, original, field, generator, 0);
-        EncodeAndCheck(codec, original, field, generator, r - 1);
+        for (unsigned recovery_index = 0;
+             recovery_index < r; ++recovery_index)
+            EncodeAndCheck(
+                codec, original, field, generator, recovery_index);
         Require(original == original_before,
             "production AUTO modified an original shard");
 
+        const struct
+        {
+            size_t shard_bytes;
+            uint32_t requested_count;
+            const char* label;
+        } sparse_negatives[] = {
+            { 4096, 2, "Q2" },
+            { 4096, 16, "full-output" },
+            { 4095, 1, "ragged-byte" },
+            { 1023, 1, "sub-threshold" }
+        };
+        for (size_t i = 0;
+             i < sizeof(sparse_negatives) / sizeof(sparse_negatives[0]); ++i)
+        {
+            leopard2_internal::CodecEncodePathInfo negative_path = {};
+            Require(leopard2_internal::GetCodecEncodePathInfo(
+                codec, sparse_negatives[i].shard_bytes,
+                sparse_negatives[i].requested_count, &negative_path),
+                "sparse negative encode-path introspection failed");
+            Require(!negative_path.auto_direct_selected,
+                sparse_negatives[i].label);
+        }
+
         leo2_codec_destroy(codec);
+
+        leo2_codec* single_side = NULL;
+        RequireResult(leo2_codec_create(context, k, 1,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            NULL, &single_side), "production high R=1 codec");
+        leopard2_internal::CodecEncodePathInfo single_side_path = {};
+        Require(leopard2_internal::GetCodecEncodePathInfo(
+            single_side, bytes, 1, &single_side_path),
+            "production high R=1 path introspection");
+        Require(!single_side_path.auto_direct_selected &&
+                single_side_path.direct_generator_rows == 0,
+            "sparse candidate admitted the high R=1 control");
+        leo2_codec_destroy(single_side);
+
+        leo2_codec* high_gf16 = NULL;
+        const leo2_result high_gf16_result = leo2_codec_create(context, k, r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+            NULL, &high_gf16);
+        if (high_gf16_result == LEO2_UNSUPPORTED)
+        {
+            Require(high_gf16 == NULL,
+                "unsupported GF16 codec creation returned a codec");
+        }
+        else
+        {
+            RequireResult(high_gf16_result, "production high GF16 codec");
+            leopard2_internal::CodecEncodePathInfo high_gf16_path = {};
+            Require(leopard2_internal::GetCodecEncodePathInfo(
+                high_gf16, bytes, 1, &high_gf16_path),
+                "production high GF16 path introspection");
+            Require(!high_gf16_path.auto_direct_selected &&
+                    high_gf16_path.direct_generator_rows == 0,
+                "sparse candidate admitted legacy-high GF16");
+            leo2_codec_destroy(high_gf16);
+        }
+
+        leo2_codec* low = NULL;
+        RequireResult(leo2_codec_create(context, k, r,
+            LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, NULL, &low),
+            "production low-profile control codec");
+        leopard2_internal::CodecEncodePathInfo low_path = {};
+        Require(leopard2_internal::GetCodecEncodePathInfo(
+            low, bytes, 1, &low_path),
+            "production low-profile path introspection");
+        Require(low_path.auto_direct_selected &&
+                low_path.direct_generator_rows == r,
+            "sparse profile fence disturbed the promoted LOW selector");
+        leo2_codec_destroy(low);
+
+        const leo2_backend excluded_backends[] = {
+            LEO2_BACKEND_SCALAR,
+            LEO2_BACKEND_SSSE3,
+            LEO2_BACKEND_AVX512,
+            LEO2_BACKEND_GFNI,
+            LEO2_BACKEND_NEON
+        };
+        for (size_t i = 0;
+             i < sizeof(excluded_backends) / sizeof(excluded_backends[0]); ++i)
+        {
+            leo2_context_options excluded_options = {};
+            excluded_options.struct_size = sizeof(excluded_options);
+            excluded_options.backend = excluded_backends[i];
+            excluded_options.thread_count = 1;
+            leo2_context* excluded_context = NULL;
+            const leo2_result excluded_result =
+                leo2_context_create(&excluded_options, &excluded_context);
+            if (excluded_result == LEO2_UNSUPPORTED)
+                continue;
+            RequireResult(excluded_result,
+                "production sparse excluded-backend context");
+            leo2_codec* excluded_codec = NULL;
+            RequireResult(leo2_codec_create(excluded_context, k, r,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                NULL, &excluded_codec),
+                "production sparse excluded-backend codec");
+            leopard2_internal::CodecEncodePathInfo excluded_path = {};
+            Require(leopard2_internal::GetCodecEncodePathInfo(
+                excluded_codec, bytes, 1, &excluded_path),
+                "production sparse excluded-backend path introspection");
+            Require(!excluded_path.auto_direct_selected &&
+                    excluded_path.direct_generator_rows == 0,
+                "sparse candidate admitted an excluded backend");
+            leo2_codec_destroy(excluded_codec);
+            leo2_context_destroy(excluded_context);
+        }
         uint64_t tiny_codec_checks = 0;
         uint64_t tiny_encode_checks = 0;
         uint64_t tiny_direct_checks = 0;
@@ -1789,11 +1900,16 @@ int main()
 #else
         const char* const t8_two_block_state = "OFF";
 #endif
+#if LEO2_EXPECT_HIGH_SPARSE_DIRECT
+        const char* const sparse_state = "ON";
+#else
+        const char* const sparse_state = "OFF";
+#endif
         std::printf(
             "Leopard2 production high-direct smoke passed: "
-            "tables=%s auto=%s t8_vector=%s t8_partial_binding=%s "
+            "tables=%s auto=%s sparse=%s t8_vector=%s t8_partial_binding=%s "
             "t8_two_block_binding=%s "
-            "K=2 R=16 bytes=4096 Q=1 parity=0,15 "
+            "K=2 R=16 bytes=4096 Q=1 parity=all-16 "
             "tiny_codecs=%llu tiny_encodes=%llu direct=%llu transform=%llu "
             "t4_diagnostic_checks=%llu "
             "t4_binding_checks=%llu t8_binding_checks=%llu "
@@ -1804,7 +1920,7 @@ int main()
             "t8_partial_thread_pool_checks=%llu "
             "t8_two_block_thread_pool_checks=%llu "
             "k9r5_b1024_production_checks=%llu\n",
-            table_state, auto_state, t8_state, t8_partial_state,
+            table_state, auto_state, sparse_state, t8_state, t8_partial_state,
             t8_two_block_state,
             static_cast<unsigned long long>(tiny_codec_checks),
             static_cast<unsigned long long>(tiny_encode_checks),
