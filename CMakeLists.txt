@@ -3214,6 +3214,33 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_k9r5_b1024_runner_optimized_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_k9r5_b1024_terminal_abba.py)
+            # The K65 generation-2 tests freeze the historical v1 projection,
+            # exercise the new exact-main authority/attempt contract, and prove
+            # that only a complete independently finalized summary promotes.
+            add_test(
+                NAME leopard2_k65r65_b64_runner_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_k65r65_b64_packed_terminal_abba.py)
+            add_test(
+                NAME leopard2_k65r65_b64_runner_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_k65r65_b64_packed_terminal_abba.py)
+            add_test(
+                NAME leopard2_k65r65_b64_v2_replay_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_k65r65_b64_packed_terminal_v2_replay.py)
+            add_test(
+                NAME leopard2_k65r65_b64_v2_replay_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_k65r65_b64_packed_terminal_v2_replay.py)
+            set_tests_properties(
+                leopard2_k65r65_b64_runner_self_test
+                leopard2_k65r65_b64_runner_optimized_self_test
+                leopard2_k65r65_b64_v2_replay_self_test
+                leopard2_k65r65_b64_v2_replay_optimized_self_test
+                PROPERTIES
+                    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+                    TIMEOUT 300)
             add_test(
                 NAME leopard2_affinity_supervisor_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}

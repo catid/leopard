@@ -63,6 +63,26 @@ def identity(path: Path) -> dict[str, Any]:
     return BASE.T8_SUPPORT.regular_file_identity(path)
 
 
+def authority_binding() -> dict[str, Any]:
+    return RUNNER.validate_exact_main_authority_binding({
+        "schema": RUNNER.AUTHORITY_BINDING_SCHEMA,
+        "lane_root": "/frozen/exact-main-authority",
+        "authority_schema": RUNNER.EXACT_MAIN_AUTHORITY_SCHEMA,
+        "record_sha256": RUNNER.EXACT_MAIN_AUTHORITY_RECORD_SHA256,
+        "ledger_sha256": RUNNER.EXACT_MAIN_AUTHORITY_LEDGER_SHA256,
+        "verifier_schema": RUNNER.AUTHORITY_VERIFIER.VERIFIER_SCHEMA,
+        "verifier_verdict_sha256": "7" * 64,
+        "executable_sha256": RUNNER.EXACT_MAIN_EXECUTABLE_SHA256,
+        "archive_sha256": RUNNER.EXACT_MAIN_ARCHIVE_SHA256,
+        "combined_sha256": RUNNER.EXACT_MAIN_COMBINED_SHA256,
+        "source_commit": RUNNER.EXACT_MAIN_SOURCE_COMMIT,
+        "source_tree": RUNNER.EXACT_MAIN_SOURCE_TREE,
+        "adapter_commit": RUNNER.EXACT_MAIN_ADAPTER_COMMIT,
+        "pure_avx2": True,
+        "historical_non_authority": list(RUNNER.HISTORICAL_NON_AUTHORITY),
+    })
+
+
 def reset_shared_freezer() -> None:
     K66._SHARED_FROZEN_CANDIDATE = None
     K66._SHARED_FROZEN_PHYSICAL_IDENTITY = None
@@ -712,15 +732,17 @@ def exercise_analysis(cells: list[dict[str, Any]]) -> None:
     target_regression = [
         synthetic_round(order, control=1.04, main=1.06)
         for order in target_orders]
-    require_rejected(
-        lambda: BASE.analyze(cells[0], target_regression),
-        "target below the mature-control floor was accepted")
+    require(
+        BASE.analyze(cells[0], target_regression)
+            ["target_acceptance_validation"]["accepted"] is False,
+        "target below the mature-control floor was not retained as rejected")
     main_regression = [
         synthetic_round(order, control=1.06, main=1.04)
         for order in target_orders]
-    require_rejected(
-        lambda: BASE.analyze(cells[0], main_regression),
-        "target below the exact-main floor was accepted")
+    require(
+        BASE.analyze(cells[0], main_regression)
+            ["target_acceptance_validation"]["accepted"] is False,
+        "target below the exact-main floor was not retained as rejected")
 
     immediate = cells[1]
     inert_rounds = [synthetic_round(order) for order in neighbor_orders]
@@ -738,15 +760,17 @@ def exercise_analysis(cells: list[dict[str, Any]]) -> None:
     leaked = [
         synthetic_round(order, control=1.021)
         for order in neighbor_orders]
-    require_rejected(
-        lambda: BASE.analyze(immediate, leaked),
-        "full CI outside the two-percent equivalence band was accepted")
+    require(
+        BASE.analyze(immediate, leaked)
+            ["neighbor_selector_inertness_validation"]["accepted"] is False,
+        "full CI outside the equivalence band was not retained as rejected")
     leaked_one_shot = [
         synthetic_round(order, one_shot_control=0.979)
         for order in neighbor_orders]
-    require_rejected(
-        lambda: BASE.analyze(immediate, leaked_one_shot),
-        "one-shot CI outside the equivalence band was accepted")
+    require(
+        BASE.analyze(immediate, leaked_one_shot)
+            ["neighbor_selector_inertness_validation"]["accepted"] is False,
+        "one-shot CI outside the band was not retained as rejected")
 
     retained = cells[7]
     retained_rounds = [
@@ -761,9 +785,10 @@ def exercise_analysis(cells: list[dict[str, Any]]) -> None:
     retained_regression = [
         synthetic_round(order, main=0.97)
         for order in target_orders]
-    require_rejected(
-        lambda: BASE.analyze(retained, retained_regression),
-        "retained B8192 exact-main regression was accepted")
+    require(
+        BASE.analyze(retained, retained_regression)
+            ["exact_main_context"]["accepted"] is False,
+        "retained B8192 regression was not retained as rejected")
 
     for balanced in cells[8:10]:
         accepted = BASE.analyze(
@@ -794,13 +819,21 @@ def exercise_arguments_and_commands(cells: list[dict[str, Any]]) -> None:
         "--control-sha256", digest,
         "--main", "/frozen/main",
         "--main-sha256", BASE.CANONICAL_MAIN_SHA256,
+        "--exact-main-authority-lane",
+        "/home/catid/leopard-exact-main-authority-6d4f690-a1/Aauthority",
+        "--generation", "2", "--attempt", "1",
         "--source-commit", "e" * 40,
         "--source-tree", "f" * 40,
         "--output", "/results/k65r65-b64",
         "--cpu", "13", "--sibling", "29",
     ]
     saved_argv = sys.argv
+    saved_bind_authority = RUNNER.bind_exact_main_authority
+    saved_validate_main = RUNNER.validate_exact_main_launch_copy
     try:
+        RUNNER.bind_exact_main_authority = lambda path: authority_binding()
+        RUNNER.validate_exact_main_launch_copy = \
+            lambda path, authority: path
         sys.argv = arguments
         parsed = BASE.parse_arguments()
         require(
@@ -809,6 +842,11 @@ def exercise_arguments_and_commands(cells: list[dict[str, Any]]) -> None:
             parsed.iterations == RUNNER.FIXED_ITERATIONS and
             parsed.warmup == RUNNER.FIXED_WARMUP and
             parsed.rounds == RUNNER.CONFIRMATORY_ROUNDS and
+            parsed.generation == RUNNER.GENERATION and
+            parsed.attempt == 1 and
+            parsed.attempt_preregistration["lineage"] == [] and
+            parsed.exact_main_authority["record_sha256"] ==
+                RUNNER.EXACT_MAIN_AUTHORITY_RECORD_SHA256 and
             parsed.candidate_archive is None and
             parsed.candidate_compile_commands is None,
             "fixed authoritative command-line policy changed")
@@ -830,8 +868,16 @@ def exercise_arguments_and_commands(cells: list[dict[str, Any]]) -> None:
         require_rejected(
             BASE.parse_arguments,
             "different candidate/control SHA-256 values were accepted")
+        wrong_generation = list(arguments)
+        wrong_generation[wrong_generation.index("--generation") + 1] = "1"
+        sys.argv = wrong_generation
+        require_argument_rejected(
+            BASE.parse_arguments,
+            "replay-only generation 1 was accepted for acquisition")
     finally:
         sys.argv = saved_argv
+        RUNNER.bind_exact_main_authority = saved_bind_authority
+        RUNNER.validate_exact_main_launch_copy = saved_validate_main
 
     target = cells[0]
     candidate = BASE.benchmark_command(
@@ -989,9 +1035,9 @@ def main() -> int:
         "derived codec geometry or deterministic loss selection changed")
     require(
         BASE.SCHEMA ==
-            "leopard2-gf8-k65r65-b64-packed-terminal-abba/v1" and
+            "leopard2-gf8-k65r65-b64-packed-terminal-abba/v2" and
         BASE.SUMMARY_SCHEMA ==
-            "leopard2-gf8-k65r65-b64-packed-terminal-summary/v1" and
+            "leopard2-gf8-k65r65-b64-packed-terminal-preliminary-summary/v2" and
         BASE.MODE_SYMBOL ==
             "_ZN12_GLOBAL__N_1L33g_k65r65_b64_packed_terminal_modeE" and
         BASE.CANDIDATE_SCHEMA == "leopard2-benchmark-v31" and
@@ -1011,13 +1057,22 @@ def main() -> int:
         "attribution, schema, retry, or promotion policy changed")
     require(
         BASE.CANONICAL_MAIN_SHA256 ==
-            "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+            RUNNER.EXACT_MAIN_EXECUTABLE_SHA256 and
+        BASE.CANONICAL_MAIN_SHA256 != RUNNER.HISTORICAL_EXECUTABLE_SHA256 and
+        RUNNER._canonical_sha256(cells) == RUNNER.MATRIX_SHA256 and
+        RUNNER._canonical_sha256(RUNNER.generation_projection(1)) ==
+            RUNNER.V1_SEMANTIC_PROJECTION_SHA256,
         "canonical exact-main executable identity changed")
     require(
         BASE.RUNNER_DEPENDENCIES[0] == Path(RUNNER.__file__).resolve() and
         BASE.RUNNER_DEPENDENCIES[0].stat().st_mode & 0o111 and
-        BASE.RUNNER_DEPENDENCIES[1:] ==
+        BASE.RUNNER_DEPENDENCIES[1:1 + len(
+            RUNNER._INHERITED_RUNNER_DEPENDENCIES)] ==
             RUNNER._INHERITED_RUNNER_DEPENDENCIES and
+        BASE.RUNNER_DEPENDENCIES[-3:] == (
+            RUNNER.IDENTITY_CONTRACT_PATH.resolve(),
+            RUNNER.AUTHORITY_RECORD_PATH.resolve(),
+            RUNNER.AUTHORITY_VERIFIER_PATH.resolve()) and
         len(BASE.RUNNER_DEPENDENCIES) ==
             len(set(BASE.RUNNER_DEPENDENCIES)),
         "runner executable mode or source support attestation closure changed")

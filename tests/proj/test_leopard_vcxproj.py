@@ -1139,6 +1139,10 @@ class CMakeProductionGraph(object):
         "leopard2_t8_ragged_runner_optimized_self_test": 1,
         "leopard2_k9r5_b1024_runner_self_test": 1,
         "leopard2_k9r5_b1024_runner_optimized_self_test": 1,
+        "leopard2_k65r65_b64_runner_self_test": 1,
+        "leopard2_k65r65_b64_runner_optimized_self_test": 1,
+        "leopard2_k65r65_b64_v2_replay_self_test": 1,
+        "leopard2_k65r65_b64_v2_replay_optimized_self_test": 1,
         "leopard2_affinity_supervisor_self_test": 1,
         "leopard2_affinity_supervisor_optimized_self_test": 1,
         "leopard2_v17_passive_evidence_self_test": 1,
@@ -1212,6 +1216,10 @@ class CMakeProductionGraph(object):
         "leopard2_t8_ragged_runner_optimized_self_test",
         "leopard2_k9r5_b1024_runner_self_test",
         "leopard2_k9r5_b1024_runner_optimized_self_test",
+        "leopard2_k65r65_b64_runner_self_test",
+        "leopard2_k65r65_b64_runner_optimized_self_test",
+        "leopard2_k65r65_b64_v2_replay_self_test",
+        "leopard2_k65r65_b64_v2_replay_optimized_self_test",
         "leopard2_affinity_supervisor_self_test",
         "leopard2_affinity_supervisor_optimized_self_test",
         "leopard2_v17_passive_evidence_self_test",
@@ -1267,7 +1275,7 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "98c64f19a2ed3861b94434e2adbc276adeb545be371aa4bd38d9b1bec8ca2bec"
+        "9882428f3b60d5ed251c62295d632f698199929b7138ea2b759ce91e980f1bbf"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1299,6 +1307,13 @@ class CMakeProductionGraph(object):
             "PYTHONDONTWRITEBYTECODE=1;"
             "PYTHONWARNINGS=error::ResourceWarning",
             "RUN_SERIAL", "TRUE", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_k65r65_b64_runner_self_test",
+            "leopard2_k65r65_b64_runner_optimized_self_test",
+            "leopard2_k65r65_b64_v2_replay_self_test",
+            "leopard2_k65r65_b64_v2_replay_optimized_self_test",
+            "PROPERTIES", "ENVIRONMENT", "PYTHONDONTWRITEBYTECODE=1",
+            "TIMEOUT", "300")): 1,
         ("set_tests_properties", (
             "leopard2_high_decode_copy_benchmark_smoke", "PROPERTIES",
             "ENVIRONMENT", "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")): 1,
