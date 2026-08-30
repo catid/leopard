@@ -477,7 +477,7 @@ class ExactMainBaselineAuthorityRecordTest(unittest.TestCase):
                          "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198")
         self.assertEqual(
             record["record_sha256"],
-            "fdd2e968c7fd20e6319cdfb9195ef850206f63c0563209359f138cec9eb35d65",
+            "949dd158451daa32e1d99ad531ceda4b9a33d13ec315a241b24822471088c998",
         )
         encoded = identity_contract.canonical_json_bytes(record)
         self.assertEqual(contract.load_baseline_authority_record(encoded),
@@ -508,7 +508,7 @@ class ExactMainBaselineAuthorityRecordTest(unittest.TestCase):
     def test_every_nested_object_rejects_missing_and_extra_keys(self) -> None:
         record = authority_fixture()
         paths = [path for path, item in walk_dicts(record) if item]
-        self.assertEqual(len(paths), 218)
+        self.assertEqual(len(paths), 220)
         for path in paths:
             original = at_path(record, path)
             key = next(iter(original))
@@ -1321,7 +1321,7 @@ class ExactMainBaselineAuthorityRecordTest(unittest.TestCase):
         )
         self.assertEqual(
             verification["record_sha256"],
-            "0484832272ff8c3d0ab5af517c6d0bd1cc237ead082eb9cde507a850aca6d8be",
+            "2c86af5066a3611307f8b0133996220726133667a3dae86d9f428f2ee9ad8b15",
         )
         self.assertFalse(verification["promoted"])
         acquisition_inventory = contract.failure_retained_inventory(acquisition)

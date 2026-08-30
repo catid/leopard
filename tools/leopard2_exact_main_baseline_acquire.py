@@ -8,7 +8,7 @@ import the verifier: a completed lane must be checked by launching that separate
 program after the owner-only seal is complete.
 
 The first public layer is intentionally host-independent.  It validates the
-seven acquisition roots and publishes an already-constructed authority or
+eight acquisition roots and publishes an already-constructed authority or
 failure record through an fd-anchored, exclusive, crash-conservative lane
 writer.  The build/acquisition state machine is layered on these primitives so
 that fault-injection tests and the eventual real acquisition use exactly the
@@ -32,10 +32,12 @@ import re
 import resource
 import secrets
 import selectors
+import shutil
 import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any, Mapping, NoReturn, Sequence
 
@@ -95,6 +97,9 @@ MAX_CONTAINED_PROCESSES = 4096
 MIN_CONTAINED_PROCESSES = 64
 MAX_CPUINFO_BYTES = record_contract.MAX_CPU_COUNT * 4096
 CANONICAL_LOCK_PATH = "/tmp/leopard-gf8-authoritative.lock"
+SOURCE_ACQUISITION_TIMEOUT_SECONDS = 30 * 60
+TOOL_COMMAND_TIMEOUT_SECONDS = 60
+MAX_SOURCE_LOG_BYTES = 16 * 1024 * 1024
 _TREE_METADATA_PATH = "TREE-METADATA.json"
 _SHA256SUMS_PATH = "SHA256SUMS"
 _TERMINAL_PATHS = frozenset(("baseline-authority.json", "FAILED.json"))
@@ -111,6 +116,26 @@ _LDD_VIRTUAL = re.compile(
 
 class AcquisitionError(ExactMainBaselineError):
     """The exact-main producer cannot create one trustworthy lane."""
+
+
+class CommandExecutionError(AcquisitionError):
+    """One exact acquisition command returned a producer-visible failure."""
+
+    def __init__(self, message: str, exit_status: int):
+        super().__init__(message)
+        self.exit_status = exit_status
+
+
+class SourceStageError(AcquisitionError):
+    """A source-stage failure carrying its complete command transcript."""
+
+    def __init__(self, error: BaseException, log: bytes):
+        super().__init__(str(error) or type(error).__name__)
+        self.log = log
+        self.error_kind = "command_error" if isinstance(
+            error, CommandExecutionError) else "acquisition_error"
+        self.exit_status = error.exit_status if isinstance(
+            error, CommandExecutionError) else 1
 
 
 def _fail(message: str) -> NoReturn:
@@ -294,7 +319,7 @@ def _parse_linux_cpu_models(content: bytes) -> dict[int, str]:
 
 @dataclass(frozen=True)
 class LanePlan:
-    """The seven immutable roots and attempt identity for one acquisition."""
+    """The eight immutable roots and attempt identity for one acquisition."""
 
     lane_root: str
     attempt: int
@@ -306,6 +331,7 @@ class LanePlan:
     variant_adapter_root: str
     variant_baseline_root: str
     variant_build_root: str
+    scratch_root: str
 
 
 _PLAN_PATH_FIELDS = (
@@ -318,16 +344,18 @@ _PLAN_PATH_FIELDS = (
     "variant_adapter_root",
     "variant_baseline_root",
     "variant_build_root",
+    "scratch_root",
 )
 
 
 def validate_lane_plan(value: Any) -> LanePlan:
     """Validate and detach one acquisition plan.
 
-    The lane plus the six acquisition roots are mutually non-containing both
-    component-wise and as raw UTF-8 byte strings.  The latter is deliberately
-    stricter than the record contract because the ELF census searches for exact
-    path bytes and must never attribute one root's occurrence to another root.
+    The lane, six build/source roots, and scratch root are mutually
+    non-containing both component-wise and as raw UTF-8 byte strings.  The
+    latter is deliberately stricter than the record contract because the ELF
+    census searches for exact path bytes and must never attribute one root's
+    occurrence to another root.
     """
     _require(isinstance(value, LanePlan), "lane plan has the wrong type")
     paths = {
@@ -340,7 +368,7 @@ def validate_lane_plan(value: Any) -> LanePlan:
         "lane_root",
         "canonical_adapter_root", "canonical_baseline_root",
         "canonical_build_root", "variant_adapter_root",
-        "variant_baseline_root", "variant_build_root",
+        "variant_baseline_root", "variant_build_root", "scratch_root",
     )
     roots = [paths[field] for field in root_fields]
     _require(len(roots) == len(set(roots)), "lane roots contain duplicates")
@@ -373,7 +401,236 @@ def validate_lane_plan(value: Any) -> LanePlan:
         variant_adapter_root=paths["variant_adapter_root"],
         variant_baseline_root=paths["variant_baseline_root"],
         variant_build_root=paths["variant_build_root"],
+        scratch_root=paths["scratch_root"],
     )
+
+
+_GIT_CAPTURE_MODULE_NAME = "_leopard2_exact_main_git_capture"
+_GIT_CAPTURE_RELATIVE_PATH = \
+    "experiments/leopard2/main_compare/git_capture.py"
+_PREPARED_ROOT_FIELDS = (
+    "canonical_adapter_root", "canonical_baseline_root",
+    "canonical_build_root", "variant_adapter_root",
+    "variant_baseline_root", "variant_build_root", "scratch_root",
+)
+
+
+def _path_is_absent(path: str) -> bool:
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return True
+    except OSError as error:
+        raise AcquisitionError(
+            f"cannot inspect acquisition path {path!r}: {error}") from error
+    return False
+
+
+def _load_repository_module(
+    repository: str, module_name: str, relative_path: str,
+) -> Any:
+    """Load one repository controller by an exact, anchored source path."""
+    root = Path(_portable_absolute_path(
+        repository, "repository module root"))
+    _require(module_name == _GIT_CAPTURE_MODULE_NAME and
+             relative_path == _GIT_CAPTURE_RELATIVE_PATH,
+             "repository module request is not allowlisted")
+    try:
+        resolved_root = root.resolve(strict=True)
+        expected = (root / relative_path).resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise AcquisitionError(
+            f"cannot resolve repository module: {error}") from error
+    _require(resolved_root == root and
+             expected == root / relative_path and expected.is_file(),
+             "repository module path is not canonical")
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        observed = Path(getattr(loaded, "__file__", "")).resolve()
+        _require(observed == expected,
+                 "repository module was loaded from another path")
+        return loaded
+    specification = importlib.util.spec_from_file_location(
+        module_name, expected)
+    _require(specification is not None and
+             specification.loader is not None,
+             "repository module could not be loaded")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[module_name] = module
+    try:
+        specification.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    observed = Path(getattr(module, "__file__", "")).resolve()
+    _require(observed == expected,
+             "repository module resolved to another path")
+    return module
+
+
+def frozen_child_environment() -> dict[str, str]:
+    """Return exactly the child environment bound by the frozen profile."""
+    profile = record_contract.exact_main_build_profile()
+    values = profile["environment"]
+    _require(type(values) is list and values and all(
+        type(item) is dict and set(item) == {"name", "value"} and
+        type(item["name"]) is str and type(item["value"]) is str
+        for item in values), "frozen child environment is invalid")
+    result = {item["name"]: item["value"] for item in values}
+    _require(len(result) == len(values),
+             "frozen child environment repeats a name")
+    return _command_environment(result)
+
+
+class PreparedAcquisitionRoots:
+    """Own and revalidate all writable roots other than the sealed lane."""
+
+    def __init__(self, plan: LanePlan):
+        self.plan = validate_lane_plan(plan)
+        self.descriptors: dict[str, int] = {}
+        self.identities: dict[str, tuple[int, int, int, int, int]] = {}
+        self.created: list[str] = []
+        self.entered = False
+
+    @staticmethod
+    def _identity(status: os.stat_result) -> tuple[int, int, int, int, int]:
+        _require(stat.S_ISDIR(status.st_mode) and
+                 status.st_uid == os.geteuid() and
+                 status.st_gid == os.getegid() and
+                 stat.S_IMODE(status.st_mode) == WRITABLE_DIRECTORY_MODE,
+                 "acquisition root has unsafe ownership or mode")
+        return (status.st_dev, status.st_ino, status.st_uid, status.st_gid,
+                stat.S_IMODE(status.st_mode))
+
+    def __enter__(self) -> "PreparedAcquisitionRoots":
+        _require(not self.entered and not self.descriptors,
+                 "acquisition roots are already prepared")
+        _require(getattr(shutil.rmtree, "avoids_symlink_attacks", False),
+                 "safe acquisition-root cleanup is unavailable")
+        try:
+            repository = Path(self.plan.repository)
+            verifier = Path(self.plan.verifier)
+            _require(repository.resolve(strict=True) == repository and
+                     repository.is_dir(),
+                     "controller repository is not a canonical directory")
+            _require(verifier.resolve(strict=True) == verifier and
+                     verifier.is_file(),
+                     "independent verifier is not a canonical file")
+            _require(_path_is_absent(self.plan.lane_root),
+                     "lane root already exists and cannot be reused")
+            for field in _PREPARED_ROOT_FIELDS:
+                path = getattr(self.plan, field)
+                _require(_path_is_absent(path),
+                         f"acquisition root {field} already exists")
+                try:
+                    os.mkdir(path, WRITABLE_DIRECTORY_MODE)
+                except OSError as error:
+                    raise AcquisitionError(
+                        f"cannot create acquisition root {field}: {error}") \
+                        from error
+                self.created.append(field)
+                descriptor = -1
+                try:
+                    descriptor = os.open(
+                        path,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+                        os.O_CLOEXEC)
+                    status = os.fstat(descriptor)
+                    pathname = os.lstat(path)
+                    identity = self._identity(status)
+                    _require(os.path.realpath(path) == path and
+                             (status.st_dev, status.st_ino) ==
+                             (pathname.st_dev, pathname.st_ino),
+                             f"acquisition root {field} is not canonical")
+                    self.descriptors[field] = descriptor
+                    self.identities[field] = identity
+                    descriptor = -1
+                except OSError as error:
+                    raise AcquisitionError(
+                        f"cannot retain acquisition root {field}: {error}") \
+                        from error
+                finally:
+                    if descriptor >= 0:
+                        try:
+                            os.close(descriptor)
+                        except OSError as error:
+                            raise AcquisitionError(
+                                f"cannot release acquisition root {field}: "
+                                f"{error}") from error
+            self.entered = True
+            self.validate_current()
+            return self
+        except BaseException:
+            self._cleanup()
+            raise
+
+    def validate_current(self) -> None:
+        _require(self.entered and
+                 set(self.descriptors) == set(_PREPARED_ROOT_FIELDS),
+                 "acquisition roots are not prepared")
+        for field in _PREPARED_ROOT_FIELDS:
+            path = getattr(self.plan, field)
+            descriptor = os.fstat(self.descriptors[field])
+            try:
+                pathname = os.lstat(path)
+            except OSError as error:
+                raise AcquisitionError(
+                    f"acquisition root {field} disappeared: {error}") \
+                    from error
+            _require(self._identity(descriptor) == self.identities[field] and
+                     (descriptor.st_dev, descriptor.st_ino) ==
+                     (pathname.st_dev, pathname.st_ino) and
+                     os.path.realpath(path) == path,
+                     f"acquisition root {field} was replaced")
+
+    def _cleanup(self) -> None:
+        errors: list[str] = []
+        for field in reversed(self.created):
+            path = getattr(self.plan, field)
+            descriptor = self.descriptors.pop(field, -1)
+            identity = self.identities.pop(field, None)
+            try:
+                if descriptor >= 0:
+                    current = os.fstat(descriptor)
+                    pathname = os.lstat(path)
+                    _require(identity is not None and
+                             self._identity(current) == identity and
+                             (current.st_dev, current.st_ino) ==
+                             (pathname.st_dev, pathname.st_ino),
+                             f"acquisition root {field} changed before cleanup")
+                shutil.rmtree(path)
+                _require(_path_is_absent(path),
+                         f"acquisition root {field} survived cleanup")
+            except BaseException as error:
+                errors.append(f"{field}: {type(error).__name__}: {error}")
+            finally:
+                if descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError as error:
+                        errors.append(f"{field}: close: {error}")
+        self.created.clear()
+        self.entered = False
+        if errors:
+            raise AcquisitionError(
+                "acquisition-root cleanup failed: " + "; ".join(errors))
+
+    def __exit__(self, _kind: object, value: object,
+                 _traceback: object) -> None:
+        try:
+            self._cleanup()
+        except BaseException as cleanup_error:
+            if value is None:
+                raise
+            raise AcquisitionError(
+                f"acquisition-root cleanup failed after "
+                f"{type(value).__name__}: {value}; {cleanup_error}") \
+                from cleanup_error
+
+
+def prepare_acquisition_roots(plan: LanePlan) -> PreparedAcquisitionRoots:
+    """Return the exclusive context that owns one plan's writable roots."""
+    return PreparedAcquisitionRoots(plan)
 
 
 def canonical_ldd_text(rows: Sequence[Mapping[str, Any]]) -> bytes:
@@ -491,6 +748,28 @@ class CommandResult:
     exit_status: int
     stdout: bytes
     stderr: bytes
+
+
+@dataclass(frozen=True)
+class StreamedCommandResult:
+    """One child result whose stdout was streamed to an owned file."""
+
+    exit_status: int
+    stdout_size: int
+    stdout_sha256: str
+    stderr: bytes
+
+
+@dataclass(frozen=True)
+class SourceStageResult:
+    """Detached source/tool evidence plus its retained byte/path projection."""
+
+    source: dict[str, Any]
+    adapter: dict[str, Any]
+    toolchain: dict[str, Any]
+    retained_bytes: dict[str, bytes]
+    retained_paths: dict[str, str]
+    log: bytes
 
 
 def _command_arguments(value: Any) -> list[str]:
@@ -1109,6 +1388,173 @@ class HostEnvironment:
                 if process.stderr is not None:
                     process.stderr.close()
 
+    def run_to_path(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: str,
+        env: Mapping[str, str],
+        timeout: float,
+        destination_fd: int,
+        maximum_bytes: int,
+    ) -> StreamedCommandResult:
+        """Run one child while streaming bounded stdout to an owned file."""
+        arguments = _command_arguments(argv)
+        working_directory = _portable_absolute_path(cwd, "command cwd")
+        environment = _command_environment(env)
+        _require(type(timeout) in (int, float) and type(timeout) is not bool and
+                 math.isfinite(float(timeout)) and
+                 0 < float(timeout) <= MAX_COMMAND_TIMEOUT_SECONDS,
+                 "command timeout is invalid")
+        _require(type(destination_fd) is int and destination_fd >= 0,
+                 "streamed command destination descriptor is invalid")
+        _require(type(maximum_bytes) is int and
+                 0 < maximum_bytes <= MAX_SEALED_FILE_BYTES,
+                 "streamed command output bound is invalid")
+        before = os.fstat(destination_fd)
+        _require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and
+                 before.st_uid == os.geteuid() and
+                 before.st_gid == os.getegid() and
+                 stat.S_IMODE(before.st_mode) == WRITABLE_FILE_MODE and
+                 before.st_size == 0 and
+                 os.lseek(destination_fd, 0, os.SEEK_CUR) == 0,
+                 "streamed command destination is not an empty owned file")
+        process: subprocess.Popen[bytes] | None = None
+        selector = selectors.DefaultSelector()
+        stderr = bytearray()
+        stdout_size = 0
+        stdout_digest = hashlib.sha256()
+        failure: str | None = None
+        try:
+            with _LinuxChildContainment() as containment:
+                try:
+                    process = subprocess.Popen(
+                        arguments,
+                        cwd=working_directory,
+                        env=environment,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        start_new_session=True,
+                        close_fds=True,
+                    )
+                except OSError as error:
+                    raise AcquisitionError(
+                        f"streamed command could not be started: {error}") \
+                        from error
+                containment.attach(process)
+                _require(process.stdout is not None and
+                         process.stderr is not None,
+                         "streamed command pipes were not created")
+                stdout_descriptor = process.stdout.fileno()
+                stderr_descriptor = process.stderr.fileno()
+                for stream in (process.stdout, process.stderr):
+                    os.set_blocking(stream.fileno(), False)
+                    selector.register(stream, selectors.EVENT_READ)
+                deadline = time.monotonic() + float(timeout)
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        failure = "streamed command exceeded its timeout"
+                        break
+                    events = selector.select(min(remaining, 0.1))
+                    for key, _event in events:
+                        descriptor = key.fileobj.fileno()
+                        try:
+                            chunk = os.read(descriptor, READ_CHUNK)
+                        except BlockingIOError:
+                            continue
+                        except OSError as error:
+                            raise AcquisitionError(
+                                f"cannot read streamed command output: "
+                                f"{error}") from error
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            continue
+                        if descriptor == stdout_descriptor:
+                            if stdout_size + len(chunk) > maximum_bytes:
+                                failure = \
+                                    "streamed command exceeded its stdout bound"
+                                break
+                            _write_all(
+                                destination_fd, chunk,
+                                "streamed command stdout")
+                            stdout_digest.update(chunk)
+                            stdout_size += len(chunk)
+                        else:
+                            _require(descriptor == stderr_descriptor,
+                                     "streamed command returned an unknown pipe")
+                            stderr.extend(chunk)
+                            if len(stderr) > MAX_COMMAND_OUTPUT_BYTES:
+                                failure = \
+                                    "streamed command exceeded its stderr bound"
+                                break
+                    if failure is not None:
+                        break
+                if failure is not None:
+                    _fail(failure)
+                remaining = deadline - time.monotonic()
+                _require(remaining > 0,
+                         "streamed command exceeded its timeout after output")
+                try:
+                    exit_status = process.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    _fail("streamed command exceeded its timeout after output")
+                os.fsync(destination_fd)
+                after = os.fstat(destination_fd)
+                _require((after.st_dev, after.st_ino, after.st_uid,
+                          after.st_gid, after.st_nlink,
+                          stat.S_IMODE(after.st_mode)) ==
+                         (before.st_dev, before.st_ino, before.st_uid,
+                          before.st_gid, before.st_nlink,
+                          stat.S_IMODE(before.st_mode)) and
+                         after.st_size == stdout_size,
+                         "streamed command destination changed")
+                result = StreamedCommandResult(
+                    exit_status=exit_status,
+                    stdout_size=stdout_size,
+                    stdout_sha256=stdout_digest.hexdigest(),
+                    stderr=bytes(stderr),
+                )
+            return result
+        finally:
+            selector.close()
+            if process is not None:
+                if process.stdout is not None:
+                    process.stdout.close()
+                if process.stderr is not None:
+                    process.stderr.close()
+
+    def capture_git_identity(
+        self,
+        controller_repository: str,
+        source_root: str,
+        commit: str,
+        *,
+        require_detached: bool,
+    ) -> dict[str, Any]:
+        """Delegate guarded Git capture to the source-bound controller."""
+        repository = _portable_absolute_path(
+            controller_repository, "Git capture controller repository")
+        root = _portable_absolute_path(source_root, "Git capture source root")
+        _require(type(commit) is str and len(commit) == 40 and all(
+            character in "0123456789abcdef" for character in commit),
+            "Git capture commit is invalid")
+        _require(type(require_detached) is bool,
+                 "Git capture detached policy is invalid")
+        module = _load_repository_module(
+            repository, "_leopard2_exact_main_git_capture",
+            "experiments/leopard2/main_compare/git_capture.py")
+        try:
+            result = module.capture_git_identity(
+                root, commit, require_detached=require_detached)
+        except module.GitCaptureError as error:
+            raise AcquisitionError(
+                f"cannot capture Git source identity: {error}") from error
+        _require(type(result) is dict,
+                 "Git capture controller returned a non-object")
+        return copy.deepcopy(result)
+
     def now_utc(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -1342,6 +1788,1032 @@ class AcquisitionLocks:
         finally:
             self.anchor.__exit__(None, None, None)
             self._entered = False
+
+
+def _bytes_identity(relative_path: str, content: bytes) -> dict[str, Any]:
+    relative = _safe_relative_path(relative_path, "retained file path")
+    _require(type(content) is bytes and len(content) <= MAX_SEALED_FILE_BYTES,
+             f"retained file {relative!r} is not bounded bytes")
+    return {
+        "relative_path": relative,
+        "size": len(content),
+        "sha256": _sha256(content),
+    }
+
+
+def _owned_file_identity(
+    path: str, label: str, *, maximum_bytes: int = MAX_SEALED_FILE_BYTES,
+) -> dict[str, Any]:
+    absolute = _portable_absolute_path(path, label)
+    _require(type(maximum_bytes) is int and
+             0 < maximum_bytes <= MAX_SEALED_FILE_BYTES,
+             f"{label} bound is invalid")
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            absolute, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        status = os.fstat(descriptor)
+        pathname = os.lstat(absolute)
+        _require(stat.S_ISREG(status.st_mode) and status.st_nlink == 1 and
+                 status.st_uid == os.geteuid() and
+                 status.st_gid == os.getegid() and
+                 stat.S_IMODE(status.st_mode) == WRITABLE_FILE_MODE and
+                 0 < status.st_size <= maximum_bytes and
+                 (status.st_dev, status.st_ino) ==
+                 (pathname.st_dev, pathname.st_ino),
+                 f"{label} is not one owned regular file")
+        digest = _hash_fd(descriptor, status.st_size, label)
+        after = os.fstat(descriptor)
+        _require((after.st_dev, after.st_ino, after.st_size,
+                  after.st_mtime_ns, after.st_ctime_ns) ==
+                 (status.st_dev, status.st_ino, status.st_size,
+                  status.st_mtime_ns, status.st_ctime_ns),
+                 f"{label} changed while hashed")
+        return {"path": absolute, "size": status.st_size, "sha256": digest}
+    except OSError as error:
+        raise AcquisitionError(f"cannot inspect {label}: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _read_owned_file(
+    path: str, label: str, *, maximum_bytes: int,
+) -> bytes:
+    identity = _owned_file_identity(
+        path, label, maximum_bytes=maximum_bytes)
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            identity["path"], os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        content = bytearray()
+        while len(content) < identity["size"]:
+            chunk = os.read(
+                descriptor, min(READ_CHUNK, identity["size"] - len(content)))
+            _require(bool(chunk), f"{label} ended while read")
+            content.extend(chunk)
+        _require(os.read(descriptor, 1) == b"" and
+                 _sha256(bytes(content)) == identity["sha256"],
+                 f"{label} changed after hashing")
+        return bytes(content)
+    except OSError as error:
+        raise AcquisitionError(f"cannot read {label}: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _owned_files_identical(left: str, right: str, label: str) -> bool:
+    left_identity = _owned_file_identity(left, f"{label} first file")
+    right_identity = _owned_file_identity(right, f"{label} second file")
+    if (left_identity["size"], left_identity["sha256"]) != \
+            (right_identity["size"], right_identity["sha256"]):
+        return False
+    left_descriptor = -1
+    right_descriptor = -1
+    try:
+        left_descriptor = os.open(
+            left, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        right_descriptor = os.open(
+            right, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        remaining = left_identity["size"]
+        while remaining:
+            count = min(READ_CHUNK, remaining)
+            left_chunk = os.read(left_descriptor, count)
+            right_chunk = os.read(right_descriptor, count)
+            _require(len(left_chunk) == count and len(right_chunk) == count,
+                     f"{label} changed while compared")
+            if left_chunk != right_chunk:
+                return False
+            remaining -= count
+        _require(os.read(left_descriptor, 1) == b"" and
+                 os.read(right_descriptor, 1) == b"",
+                 f"{label} grew while compared")
+        return True
+    except OSError as error:
+        raise AcquisitionError(f"cannot compare {label}: {error}") from error
+    finally:
+        if left_descriptor >= 0:
+            os.close(left_descriptor)
+        if right_descriptor >= 0:
+            os.close(right_descriptor)
+
+
+def _one_line_output(content: bytes, label: str) -> str:
+    _require(type(content) is bytes and content.endswith(b"\n") and
+             content.count(b"\n") == 1 and b"\0" not in content and
+             b"\r" not in content,
+             f"{label} is not one LF-terminated line")
+    try:
+        value = content[:-1].decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise AcquisitionError(f"{label} is not strict UTF-8") from error
+    _require(value and len(value) <= record_contract.MAX_TEXT_LENGTH and
+             all(ord(character) >= 0x20 and
+                 not (0x7F <= ord(character) <= 0x9F) and
+                 not (0xD800 <= ord(character) <= 0xDFFF)
+                 for character in value),
+             f"{label} contains unsafe text")
+    return value
+
+
+def _command_log_record(
+    argv: Sequence[str], cwd: str, result: CommandResult | StreamedCommandResult,
+) -> dict[str, Any]:
+    if isinstance(result, StreamedCommandResult):
+        stdout_size = result.stdout_size
+        stdout_sha256 = result.stdout_sha256
+    else:
+        stdout_size = len(result.stdout)
+        stdout_sha256 = _sha256(result.stdout)
+    return {
+        "argv": _command_arguments(argv),
+        "cwd": _portable_absolute_path(cwd, "logged command cwd"),
+        "exit_status": result.exit_status,
+        "stdout": {"size": stdout_size, "sha256": stdout_sha256},
+        "stderr": {"size": len(result.stderr),
+                   "sha256": _sha256(result.stderr)},
+    }
+
+
+def _checked_run(
+    environment: HostEnvironment,
+    argv: Sequence[str],
+    *,
+    cwd: str,
+    child_environment: Mapping[str, str],
+    log: list[dict[str, Any]],
+    label: str,
+    expected_statuses: tuple[int, ...] = (0,),
+    timeout: float = SOURCE_ACQUISITION_TIMEOUT_SECONDS,
+) -> CommandResult:
+    result = environment.run(
+        argv, cwd=cwd, env=child_environment, timeout=timeout,
+        maximum_bytes=MAX_COMMAND_OUTPUT_BYTES)
+    log.append(_command_log_record(argv, cwd, result))
+    _require(type(result.exit_status) is int,
+             f"{label} returned a non-integral status")
+    if result.exit_status not in expected_statuses:
+        detail = result.stderr or result.stdout
+        flattened = " ".join(
+            detail.decode("utf-8", errors="replace").replace("\r", " ").
+            replace("\n", " ").split())[:1024]
+        raise CommandExecutionError(
+            f"{label} failed with status {result.exit_status}" +
+            (f": {flattened}" if flattened else ""),
+            _normalized_exit_status(result.exit_status))
+    return result
+
+
+def _normalized_exit_status(status: int) -> int:
+    _require(type(status) is int, "command exit status is not integral")
+    if status < 0:
+        return min(255, 128 + abs(status))
+    return min(255, max(1, status))
+
+
+def _repository_source_identity(
+    environment: HostEnvironment,
+    plan: LanePlan,
+    child_environment: Mapping[str, str],
+    log: list[dict[str, Any]],
+) -> tuple[str, str, str]:
+    git = "/usr/bin/git"
+    commit_result = _checked_run(
+        environment,
+        [git, "-C", plan.repository, "rev-parse", "--verify",
+         "HEAD^{commit}"],
+        cwd=plan.repository, child_environment=child_environment, log=log,
+        label="adapter repository commit query")
+    tree_result = _checked_run(
+        environment,
+        [git, "-C", plan.repository, "rev-parse", "--verify",
+         "HEAD^{tree}"],
+        cwd=plan.repository, child_environment=child_environment, log=log,
+        label="adapter repository tree query")
+    status_result = _checked_run(
+        environment,
+        [git, "-C", plan.repository, "status", "--porcelain=v1",
+         "--untracked-files=normal", "--ignore-submodules=none"],
+        cwd=plan.repository, child_environment=child_environment, log=log,
+        label="adapter repository status query")
+    _require(status_result.stdout == b"" and status_result.stderr == b"",
+             "adapter repository is not clean")
+    commit = _one_line_output(
+        commit_result.stdout, "adapter repository commit")
+    tree = _one_line_output(tree_result.stdout, "adapter repository tree")
+    _require(len(commit) == 40 and len(tree) == 40 and all(
+        character in "0123456789abcdef" for character in commit + tree),
+        "adapter repository identities are not lowercase Git IDs")
+    submodule_result = _checked_run(
+        environment,
+        [git, "-C", plan.repository, "ls-tree", commit, "--", "sse2neon"],
+        cwd=plan.repository, child_environment=child_environment, log=log,
+        label="adapter repository submodule query")
+    _require(submodule_result.stdout.endswith(b"\n") and
+             submodule_result.stdout.count(b"\n") == 1 and
+             b"\0" not in submodule_result.stdout and
+             b"\r" not in submodule_result.stdout,
+             "adapter repository submodule is not one LF record")
+    try:
+        row = submodule_result.stdout[:-1].decode("ascii", errors="strict")
+    except UnicodeDecodeError as error:
+        raise AcquisitionError(
+            "adapter repository submodule is not strict ASCII") from error
+    match = re.fullmatch(
+        r"160000 commit ([0-9a-f]{40})\tsse2neon", row)
+    _require(match is not None,
+             "adapter repository sse2neon gitlink changed")
+    return commit, tree, match.group(1)
+
+
+def stage_detached_source(
+    environment: HostEnvironment,
+    *,
+    source_repository: str,
+    submodule_repository: str,
+    destination: str,
+    commit: str,
+    tree: str,
+    submodule_commit: str,
+    child_environment: Mapping[str, str],
+    log: list[dict[str, Any]],
+) -> None:
+    """Clone and prove one clean detached source tree without network access."""
+    source = _portable_absolute_path(
+        source_repository, "detached source repository")
+    submodule_source = _portable_absolute_path(
+        submodule_repository, "detached submodule repository")
+    root = _portable_absolute_path(destination, "detached source root")
+    for value, label in ((commit, "commit"), (tree, "tree"),
+                         (submodule_commit, "submodule commit")):
+        _require(type(value) is str and len(value) == 40 and all(
+            character in "0123456789abcdef" for character in value),
+            f"detached source {label} is invalid")
+    try:
+        with os.scandir(root) as entries:
+            _require(next(entries, None) is None,
+                     "detached source destination is not empty")
+    except OSError as error:
+        raise AcquisitionError(
+            f"cannot inspect detached source destination: {error}") from error
+    git = "/usr/bin/git"
+    _checked_run(
+        environment,
+        [git, "clone", "--no-hardlinks", "--no-checkout", source, root],
+        cwd=str(Path(root).parent), child_environment=child_environment,
+        log=log, label="detached source clone")
+    _checked_run(
+        environment,
+        [git, "-C", root, "checkout", "--detach", commit],
+        cwd=root, child_environment=child_environment, log=log,
+        label="detached source checkout")
+    submodule_root = root + "/sse2neon"
+    if not _path_is_absent(submodule_root):
+        try:
+            submodule_status = os.lstat(submodule_root)
+            with os.scandir(submodule_root) as entries:
+                submodule_empty = next(entries, None) is None
+        except OSError as error:
+            raise AcquisitionError(
+                f"cannot inspect detached submodule destination: {error}") \
+                from error
+        _require(stat.S_ISDIR(submodule_status.st_mode) and
+                 not stat.S_ISLNK(submodule_status.st_mode) and
+                 submodule_status.st_uid == os.geteuid() and
+                 submodule_status.st_gid == os.getegid() and submodule_empty,
+                 "detached source submodule path is not one empty directory")
+    _checked_run(
+        environment,
+        [git, "clone", "--no-hardlinks", "--no-checkout",
+         submodule_source, submodule_root],
+        cwd=root, child_environment=child_environment, log=log,
+        label="detached source submodule clone")
+    _checked_run(
+        environment,
+        [git, "-C", submodule_root, "checkout", "--detach",
+         submodule_commit],
+        cwd=submodule_root, child_environment=child_environment, log=log,
+        label="detached source submodule checkout")
+    observed_commit = _one_line_output(_checked_run(
+        environment,
+        [git, "-C", root, "rev-parse", "--verify", "HEAD^{commit}"],
+        cwd=root, child_environment=child_environment, log=log,
+        label="detached source commit verification").stdout,
+        "detached source observed commit")
+    observed_tree = _one_line_output(_checked_run(
+        environment,
+        [git, "-C", root, "rev-parse", "--verify", "HEAD^{tree}"],
+        cwd=root, child_environment=child_environment, log=log,
+        label="detached source tree verification").stdout,
+        "detached source observed tree")
+    observed_submodule = _one_line_output(_checked_run(
+        environment,
+        [git, "-C", root + "/sse2neon", "rev-parse", "--verify",
+         "HEAD^{commit}"],
+        cwd=root + "/sse2neon", child_environment=child_environment,
+        log=log, label="detached source submodule verification").stdout,
+        "detached source observed submodule")
+    _require((observed_commit, observed_tree, observed_submodule) ==
+             (commit, tree, submodule_commit),
+             "detached source identity differs from its frozen request")
+    symbolic = _checked_run(
+        environment,
+        [git, "-C", root, "symbolic-ref", "-q", "HEAD"],
+        cwd=root, child_environment=child_environment, log=log,
+        label="detached source HEAD verification", expected_statuses=(1,))
+    _require(symbolic.stdout == b"" and symbolic.stderr == b"",
+             "detached source HEAD verification emitted output")
+    submodule_symbolic = _checked_run(
+        environment,
+        [git, "-C", submodule_root, "symbolic-ref", "-q", "HEAD"],
+        cwd=submodule_root, child_environment=child_environment, log=log,
+        label="detached source submodule HEAD verification",
+        expected_statuses=(1,))
+    _require(submodule_symbolic.stdout == b"" and
+             submodule_symbolic.stderr == b"",
+             "detached source submodule HEAD verification emitted output")
+    status_result = _checked_run(
+        environment,
+        [git, "-C", root, "status", "--porcelain=v1",
+         "--untracked-files=normal", "--ignore-submodules=none"],
+        cwd=root, child_environment=child_environment, log=log,
+        label="detached source cleanliness verification")
+    _require(status_result.stdout == b"" and status_result.stderr == b"",
+             "detached source is not clean")
+
+
+def _exclusive_output_file(path: str, label: str) -> int:
+    absolute = _portable_absolute_path(path, label)
+    _require(_path_is_absent(absolute), f"{label} already exists")
+    try:
+        return os.open(
+            absolute,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW |
+            os.O_CLOEXEC,
+            WRITABLE_FILE_MODE,
+        )
+    except OSError as error:
+        raise AcquisitionError(f"cannot create {label}: {error}") from error
+
+
+def canonical_git_archive(
+    environment: HostEnvironment,
+    *,
+    source_repository: str,
+    commit: str,
+    prefix: str,
+    scratch_root: str,
+    destination_name: str,
+    child_environment: Mapping[str, str],
+    log: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Write one config-isolated canonical Git archive into scratch."""
+    source = _portable_absolute_path(
+        source_repository, "canonical archive source repository")
+    scratch = _portable_absolute_path(
+        scratch_root, "canonical archive scratch root")
+    _require(type(commit) is str and len(commit) == 40 and all(
+        character in "0123456789abcdef" for character in commit),
+        "canonical archive commit is invalid")
+    _require(prefix in (
+        "leopard-main-source/", "leopard2-adapter-source/",
+        "sse2neon-source/"), "canonical archive prefix is invalid")
+    name = _safe_relative_path(
+        destination_name, "canonical archive destination name")
+    _require("/" not in name and name.endswith(".tar"),
+             "canonical archive destination is not one tar basename")
+    destination = scratch + "/" + name
+    archive_root = ""
+    descriptor = -1
+    try:
+        archive_root = tempfile.mkdtemp(
+            prefix=".leopard-canonical-git-archive.", dir=scratch)
+        _require(os.path.realpath(archive_root) == archive_root,
+                 "canonical archive work root is not canonical")
+        empty_template = archive_root + "/empty-template"
+        os.mkdir(empty_template, WRITABLE_DIRECTORY_MODE)
+        git = "/usr/bin/git"
+        common_result = _checked_run(
+            environment,
+            [git, "-C", source, "rev-parse", "--path-format=absolute",
+             "--git-common-dir"],
+            cwd=source, child_environment={
+                **child_environment, "GIT_ATTR_NOSYSTEM": "1"},
+            log=log, label="canonical archive object-store query")
+        common = _one_line_output(
+            common_result.stdout, "canonical archive common Git directory")
+        common = os.path.realpath(common)
+        objects = os.path.realpath(common + "/objects")
+        _require(Path(objects).is_dir() and ":" not in objects,
+                 "canonical archive object store is invalid")
+        bare = archive_root + "/repository.git"
+        _checked_run(
+            environment,
+            [git, "init", "--bare", "--quiet",
+             "--template=" + empty_template, bare],
+            cwd=archive_root, child_environment={
+                **child_environment, "GIT_ATTR_NOSYSTEM": "1"},
+            log=log, label="canonical archive bare repository creation")
+        _require(_path_is_absent(bare + "/info/attributes"),
+                 "canonical archive bare repository gained attributes")
+        archive_environment = {
+            **child_environment,
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": objects,
+            "GIT_ATTR_NOSYSTEM": "1",
+            "GIT_ATTR_SOURCE": commit,
+            "GIT_DIR": bare,
+        }
+        observed = _one_line_output(_checked_run(
+            environment,
+            [git, "-c", "core.attributesFile=/dev/null",
+             "-c", "tar.umask=0002", "rev-parse", "--verify",
+             commit + "^{commit}"],
+            cwd=archive_root, child_environment=archive_environment,
+            log=log, label="canonical archive commit verification").stdout,
+            "canonical archive observed commit")
+        _require(observed == commit,
+                 "canonical archive resolved another commit")
+        descriptor = _exclusive_output_file(
+            destination, "canonical archive output")
+        argv = [
+            git, "-c", "core.attributesFile=/dev/null",
+            "-c", "tar.umask=0002", "archive", "--format=tar",
+            "--prefix=" + prefix, commit,
+        ]
+        result = environment.run_to_path(
+            argv, cwd=archive_root, env=archive_environment,
+            timeout=SOURCE_ACQUISITION_TIMEOUT_SECONDS,
+            destination_fd=descriptor,
+            maximum_bytes=MAX_SEALED_FILE_BYTES)
+        log.append(_command_log_record(argv, archive_root, result))
+        if result.exit_status != 0:
+            raise CommandExecutionError(
+                f"canonical archive failed with status {result.exit_status}",
+                _normalized_exit_status(result.exit_status))
+        _require(result.stdout_size > 0 and result.stderr == b"",
+                 "canonical archive produced empty bytes or diagnostics")
+        os.close(descriptor)
+        descriptor = -1
+        identity = _owned_file_identity(
+            destination, "canonical archive output")
+        _require(identity["size"] == result.stdout_size and
+                 identity["sha256"] == result.stdout_sha256,
+                 "canonical archive output changed after capture")
+        return identity
+    except OSError as error:
+        raise AcquisitionError(
+            f"cannot produce canonical Git archive: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if archive_root:
+            try:
+                shutil.rmtree(archive_root)
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                raise AcquisitionError(
+                    f"cannot remove canonical archive work root: {error}") \
+                    from error
+
+
+def _read_source_regular(path: str, label: str) -> bytes:
+    absolute = _portable_absolute_path(path, label)
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            absolute, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        status = os.fstat(descriptor)
+        pathname = os.lstat(absolute)
+        _require(stat.S_ISREG(status.st_mode) and status.st_nlink >= 1 and
+                 0 < status.st_size <= MAX_SEALED_FILE_BYTES and
+                 (status.st_dev, status.st_ino) ==
+                 (pathname.st_dev, pathname.st_ino),
+                 f"{label} is not one stable regular file")
+        chunks: list[bytes] = []
+        total = 0
+        while total < status.st_size:
+            chunk = os.read(
+                descriptor, min(READ_CHUNK, status.st_size - total))
+            _require(bool(chunk), f"{label} ended while read")
+            chunks.append(chunk)
+            total += len(chunk)
+        _require(os.read(descriptor, 1) == b"",
+                 f"{label} grew while read")
+        after = os.fstat(descriptor)
+        _require((after.st_dev, after.st_ino, after.st_size,
+                  after.st_mtime_ns, after.st_ctime_ns) ==
+                 (status.st_dev, status.st_ino, status.st_size,
+                  status.st_mtime_ns, status.st_ctime_ns),
+                 f"{label} changed while read")
+        return b"".join(chunks)
+    except OSError as error:
+        raise AcquisitionError(f"cannot read {label}: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _git_blob_sha1(content: bytes) -> str:
+    digest = hashlib.sha1(usedforsecurity=False)
+    digest.update(f"blob {len(content)}\0".encode("ascii"))
+    digest.update(content)
+    return digest.hexdigest()
+
+
+def adapter_inventory(
+    adapter_root: str,
+    capture: Mapping[str, Any],
+) -> tuple[dict[str, Any], bytes]:
+    """Bind the three frozen adapter files to worktree and capture bytes."""
+    root = _portable_absolute_path(adapter_root, "adapter inventory root")
+    _require(type(capture) is dict and
+             type(capture.get("tracked_files")) is list,
+             "adapter Git capture lacks its tracked inventory")
+    tracked: dict[str, Mapping[str, Any]] = {}
+    for item in capture["tracked_files"]:
+        _require(type(item) is dict and type(item.get("path")) is str and
+                 item["path"] not in tracked,
+                 "adapter Git capture has an invalid tracked path")
+        tracked[item["path"]] = item
+    files: list[dict[str, Any]] = []
+    controller = b""
+    for path in record_contract.ADAPTER_PATHS:
+        _safe_relative_path(path, "adapter inventory path")
+        _require(path in tracked and tracked[path].get("kind") == "regular" and
+                 tracked[path].get("git_mode") in ("100644", "100755") and
+                 type(tracked[path].get("object_id")) is str,
+                 f"adapter Git capture does not bind {path!r}")
+        content = _read_source_regular(
+            root + "/" + path, f"adapter file {path}")
+        blob = _git_blob_sha1(content)
+        _require(blob == tracked[path]["object_id"],
+                 f"adapter file {path!r} differs from its Git blob")
+        record = {
+            "path": path,
+            "git_blob_sha1": blob,
+            "size": len(content),
+            "sha256": _sha256(content),
+        }
+        files.append(record)
+        if path == record_contract.ADAPTER_PATHS[2]:
+            controller = content
+    _require(bool(controller), "adapter attestation controller is empty")
+    return ({
+        "minimum_harness_commit": record_contract.MINIMUM_HARNESS_COMMIT,
+        "files": copy.deepcopy(files),
+        "files_sha256": identity_contract.canonical_sha256(files),
+    }, controller)
+
+
+def _archive_record(
+    relative_path: str,
+    prefix: str,
+    original: Mapping[str, Any],
+    replay: Mapping[str, Any],
+) -> dict[str, Any]:
+    _require(type(original) is dict and type(replay) is dict and
+             set(original) == {"path", "size", "sha256"} and
+             set(replay) == {"path", "size", "sha256"} and
+             original["size"] == replay["size"] and
+             original["sha256"] == replay["sha256"] and
+             _owned_files_identical(
+                 original["path"], replay["path"],
+                 f"{relative_path} canonical archive replay"),
+             f"{relative_path} was not replayed byte-identically")
+    return {
+        "relative_path": _safe_relative_path(
+            relative_path, "source archive retained path"),
+        "prefix": prefix,
+        "size": original["size"],
+        "sha256": original["sha256"],
+        "replay_sha256": replay["sha256"],
+        "replay_identical": True,
+    }
+
+
+def capture_source_evidence(
+    environment: HostEnvironment,
+    plan: LanePlan,
+    *,
+    adapter_commit: str,
+    adapter_tree: str,
+    log: list[dict[str, Any]],
+    child_environment: Mapping[str, str],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, bytes],
+           dict[str, str], tuple[dict[str, Any], dict[str, Any]]]:
+    """Capture canonical source archives, Git identities, and adapter files."""
+    baseline_original = canonical_git_archive(
+        environment, source_repository=plan.repository,
+        commit=record_contract.BASELINE_COMMIT,
+        prefix="leopard-main-source/", scratch_root=plan.scratch_root,
+        destination_name="leopard-main-source.original.tar",
+        child_environment=child_environment, log=log)
+    baseline_replay = canonical_git_archive(
+        environment, source_repository=plan.canonical_baseline_root,
+        commit=record_contract.BASELINE_COMMIT,
+        prefix="leopard-main-source/", scratch_root=plan.scratch_root,
+        destination_name="leopard-main-source.replay.tar",
+        child_environment=child_environment, log=log)
+    adapter_original = canonical_git_archive(
+        environment, source_repository=plan.repository,
+        commit=adapter_commit, prefix="leopard2-adapter-source/",
+        scratch_root=plan.scratch_root,
+        destination_name="leopard2-adapter-source.original.tar",
+        child_environment=child_environment, log=log)
+    adapter_replay = canonical_git_archive(
+        environment, source_repository=plan.canonical_adapter_root,
+        commit=adapter_commit, prefix="leopard2-adapter-source/",
+        scratch_root=plan.scratch_root,
+        destination_name="leopard2-adapter-source.replay.tar",
+        child_environment=child_environment, log=log)
+    baseline_capture = environment.capture_git_identity(
+        plan.repository, plan.canonical_baseline_root,
+        record_contract.BASELINE_COMMIT, require_detached=True)
+    adapter_capture = environment.capture_git_identity(
+        plan.repository, plan.canonical_adapter_root,
+        adapter_commit, require_detached=True)
+    _require(baseline_capture.get("head") == record_contract.BASELINE_COMMIT and
+             baseline_capture.get("tree") == record_contract.BASELINE_TREE and
+             baseline_capture.get("path") == plan.canonical_baseline_root and
+             baseline_capture.get("detached") is True and
+             baseline_capture.get("tracked_status") == "clean",
+             "Leopard1 Git capture differs from its frozen source")
+    baseline_submodules = baseline_capture.get("submodules")
+    _require(type(baseline_submodules) is list and
+             len(baseline_submodules) == 1 and
+             baseline_submodules[0].get("path") == "sse2neon" and
+             baseline_submodules[0].get("object_id") ==
+             record_contract.BASELINE_SSE2NEON_COMMIT,
+             "Leopard1 Git capture has another sse2neon identity")
+    _require(adapter_capture.get("head") == adapter_commit and
+             adapter_capture.get("tree") == adapter_tree and
+             adapter_capture.get("path") == plan.canonical_adapter_root and
+             adapter_capture.get("detached") is True and
+             adapter_capture.get("tracked_status") == "clean",
+             "adapter Git capture differs from its frozen source")
+    baseline_capture_bytes = canonical_json_bytes(baseline_capture)
+    adapter_capture_bytes = canonical_json_bytes(adapter_capture)
+    adapter, controller = adapter_inventory(
+        plan.canonical_adapter_root, adapter_capture)
+    baseline_archive = _archive_record(
+        "source/leopard-main-source.tar", "leopard-main-source/",
+        baseline_original, baseline_replay)
+    adapter_archive = _archive_record(
+        "source/leopard2-adapter-source.tar", "leopard2-adapter-source/",
+        adapter_original, adapter_replay)
+    source = {
+        "baseline": {
+            "commit": record_contract.BASELINE_COMMIT,
+            "tree": record_contract.BASELINE_TREE,
+            "submodule": {
+                "path": "sse2neon",
+                "commit": record_contract.BASELINE_SSE2NEON_COMMIT,
+            },
+            "git_capture": _bytes_identity(
+                "source/leopard-main-git-capture.json",
+                baseline_capture_bytes),
+            "archive": baseline_archive,
+        },
+        "adapter_repository": {
+            "commit": adapter_commit,
+            "tree": adapter_tree,
+            "clean": True,
+            "git_capture": _bytes_identity(
+                "source/adapter-git-capture.json", adapter_capture_bytes),
+            "archive": adapter_archive,
+        },
+    }
+    retained_bytes = {
+        "source/leopard-main-git-capture.json": baseline_capture_bytes,
+        "source/adapter-git-capture.json": adapter_capture_bytes,
+        "controllers/test_legacy_main_benchmark.py": controller,
+    }
+    retained_paths = {
+        baseline_archive["relative_path"]: baseline_original["path"],
+        adapter_archive["relative_path"]: adapter_original["path"],
+    }
+    return (copy.deepcopy(source), copy.deepcopy(adapter), retained_bytes,
+            retained_paths, (baseline_capture, adapter_capture))
+
+
+def _tool_requested_paths() -> dict[str, str]:
+    return {
+        "archiver": "/usr/bin/ar",
+        "cmake": "/usr/bin/cmake",
+        "compiler": "/usr/bin/c++",
+        "ctest": "/usr/bin/ctest",
+        "git": "/usr/bin/git",
+        "ldd": "/usr/bin/ldd",
+        "linker": "/usr/bin/ld",
+        "make": "/usr/bin/make",
+        "python": _portable_absolute_path(
+            sys.executable, "acquisition Python executable"),
+        "ranlib": "/usr/bin/ranlib",
+    }
+
+
+def _tool_record(role: str, path: str) -> dict[str, Any]:
+    requested = _portable_absolute_path(path, f"{role} tool path")
+    resolved = os.path.realpath(requested)
+    _portable_absolute_path(resolved, f"{role} resolved tool path")
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        status = os.fstat(descriptor)
+        pathname = os.stat(requested)
+        _require(stat.S_ISREG(status.st_mode) and status.st_size > 0 and
+                 status.st_size <= MAX_SEALED_FILE_BYTES and
+                 stat.S_IMODE(status.st_mode) & 0o111 != 0 and
+                 (status.st_dev, status.st_ino) ==
+                 (pathname.st_dev, pathname.st_ino),
+                 f"{role} tool is not one executable regular file")
+        digest = _hash_fd(descriptor, status.st_size, f"{role} tool")
+        return {
+            "role": role,
+            "path": requested,
+            "resolved_path": resolved,
+            "size": status.st_size,
+            "mode": stat.S_IMODE(status.st_mode),
+            "sha256": digest,
+        }
+    except OSError as error:
+        raise AcquisitionError(f"cannot capture {role} tool: {error}") \
+            from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def resolve_toolchain(
+    environment: HostEnvironment,
+    plan: LanePlan,
+    *,
+    child_environment: Mapping[str, str],
+    log: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, bytes]]:
+    """Resolve, hash, version, and retain the frozen build tool inventory."""
+    requested = _tool_requested_paths()
+    _require(tuple(requested) == record_contract.TOOL_ROLES,
+             "producer tool role order differs from the record contract")
+    tools = [_tool_record(role, requested[role])
+             for role in record_contract.TOOL_ROLES]
+    compiler = next(item for item in tools if item["role"] == "compiler")
+    subtool_programs = {
+        "assembler": "as", "cc1plus": "cc1plus", "collect2": "collect2"}
+    subtools: list[dict[str, Any]] = []
+    for role in record_contract.SUBTOOL_ROLES:
+        program = subtool_programs[role]
+        result = _checked_run(
+            environment,
+            [compiler["resolved_path"], "-print-prog-name=" + program],
+            cwd=plan.repository, child_environment=child_environment,
+            log=log, label=f"{role} compiler-subtool query",
+            timeout=TOOL_COMMAND_TIMEOUT_SECONDS)
+        observed = _one_line_output(
+            result.stdout, f"{role} compiler-subtool path")
+        _require(result.stderr == b"" and
+                 ("/" not in observed or observed.startswith("/")),
+                 f"{role} compiler-subtool query returned diagnostics")
+        if not observed.startswith("/"):
+            located = shutil.which(observed, path="/usr/bin:/bin")
+            _require(located is not None,
+                     f"{role} compiler subtool is not in the frozen path")
+            observed = located
+        subtools.append(_tool_record(role, observed))
+    role_records = {
+        item["role"]: item for item in tools + subtools}
+    _require(tuple(sorted(role_records)) == record_contract.VERSION_ROLES,
+             "producer version role inventory differs from the contract")
+    retained: dict[str, bytes] = {}
+    versions: list[dict[str, Any]] = []
+    for role in record_contract.VERSION_ROLES:
+        argv = [role_records[role]["resolved_path"], "--version"]
+        result = _checked_run(
+            environment, argv, cwd=plan.repository,
+            child_environment=child_environment, log=log,
+            label=f"{role} version query",
+            timeout=TOOL_COMMAND_TIMEOUT_SECONDS)
+        stdout_path = f"toolchain/versions/{role}.stdout"
+        stderr_path = f"toolchain/versions/{role}.stderr"
+        retained[stdout_path] = result.stdout
+        retained[stderr_path] = result.stderr
+        versions.append({
+            "role": role,
+            "argv": argv,
+            "stdout": _bytes_identity(stdout_path, result.stdout),
+            "stderr": _bytes_identity(stderr_path, result.stderr),
+            "exit_status": 0,
+        })
+    return ({
+        "tools": copy.deepcopy(tools),
+        "subtools": copy.deepcopy(subtools),
+        "versions": versions,
+    }, retained)
+
+
+def _capture_git_tool_binding(
+    captures: Sequence[Mapping[str, Any]], toolchain: Mapping[str, Any],
+) -> None:
+    git = next(item for item in toolchain["tools"] if item["role"] == "git")
+    for capture in captures:
+        executable = capture.get("git_executable")
+        _require(type(executable) is dict and
+                 type(executable.get("source")) is dict,
+                 "Git capture omits its executable identity")
+        source = executable["source"]
+        _require(source.get("path") == git["resolved_path"] and
+                 source.get("size") == git["size"] and
+                 source.get("mode") == git["mode"] and
+                 source.get("sha256") == git["sha256"],
+                 "Git capture and toolchain name different executables")
+
+
+def _source_stage_log_bytes(
+    status: str,
+    commands: Sequence[Mapping[str, Any]],
+    *,
+    adapter_commit: str | None,
+    adapter_tree: str | None,
+    retained_byte_paths: Sequence[str],
+    retained_path_sources: Sequence[str],
+    error: BaseException | None,
+) -> bytes:
+    _require(status in ("complete", "failed"),
+             "source acquisition log status is invalid")
+    value = canonical_json_bytes({
+        "schema": "leopard2-exact-main-source-acquisition-log/v1",
+        "status": status,
+        "command_count": len(commands),
+        "commands": copy.deepcopy(list(commands)),
+        "adapter_commit": adapter_commit,
+        "adapter_tree": adapter_tree,
+        "retained_byte_paths": sorted(retained_byte_paths),
+        "retained_path_sources": sorted(retained_path_sources),
+        "error": None if error is None else _safe_failure_message(error),
+    })
+    _require(0 < len(value) <= MAX_SOURCE_LOG_BYTES,
+             "source acquisition log exceeds its byte bound")
+    return value
+
+
+def acquire_source_stage(
+    environment: HostEnvironment,
+    plan: LanePlan,
+    prepared: PreparedAcquisitionRoots,
+) -> SourceStageResult:
+    """Run the complete no-build source/tool acquisition stage."""
+    canonical_plan = validate_lane_plan(plan)
+    _require(isinstance(environment, HostEnvironment) and
+             isinstance(prepared, PreparedAcquisitionRoots) and
+             prepared.plan == canonical_plan,
+             "source acquisition dependencies are invalid")
+    prepared.validate_current()
+    child_environment = frozen_child_environment()
+    log: list[dict[str, Any]] = []
+    adapter_commit: str | None = None
+    adapter_tree: str | None = None
+    retained_bytes: dict[str, bytes] = {}
+    retained_paths: dict[str, str] = {}
+    try:
+        adapter_commit, adapter_tree, adapter_submodule = \
+            _repository_source_identity(
+                environment, canonical_plan, child_environment, log)
+        submodule_repository = canonical_plan.repository + "/sse2neon"
+        _require(Path(submodule_repository).resolve(strict=True) ==
+                 Path(submodule_repository) and
+                 Path(submodule_repository).is_dir(),
+                 "controller sse2neon source is not canonical")
+        for destination, commit, tree, submodule in (
+            (canonical_plan.canonical_adapter_root, adapter_commit,
+             adapter_tree, adapter_submodule),
+            (canonical_plan.canonical_baseline_root,
+             record_contract.BASELINE_COMMIT, record_contract.BASELINE_TREE,
+             record_contract.BASELINE_SSE2NEON_COMMIT),
+            (canonical_plan.variant_adapter_root, adapter_commit,
+             adapter_tree, adapter_submodule),
+            (canonical_plan.variant_baseline_root,
+             record_contract.BASELINE_COMMIT, record_contract.BASELINE_TREE,
+             record_contract.BASELINE_SSE2NEON_COMMIT),
+        ):
+            stage_detached_source(
+                environment,
+                source_repository=canonical_plan.repository,
+                submodule_repository=submodule_repository,
+                destination=destination, commit=commit, tree=tree,
+                submodule_commit=submodule,
+                child_environment=child_environment, log=log)
+            prepared.validate_current()
+        source, adapter, retained_bytes, retained_paths, captures = \
+            capture_source_evidence(
+                environment, canonical_plan, adapter_commit=adapter_commit,
+                adapter_tree=adapter_tree, log=log,
+                child_environment=child_environment)
+        toolchain, version_bytes = resolve_toolchain(
+            environment, canonical_plan,
+            child_environment=child_environment, log=log)
+        _capture_git_tool_binding(captures, toolchain)
+        retained_bytes.update(version_bytes)
+        log_bytes = _source_stage_log_bytes(
+            "complete", log, adapter_commit=adapter_commit,
+            adapter_tree=adapter_tree,
+            retained_byte_paths=tuple(retained_bytes),
+            retained_path_sources=tuple(retained_paths), error=None)
+        prepared.validate_current()
+        return SourceStageResult(
+            source=copy.deepcopy(source), adapter=copy.deepcopy(adapter),
+            toolchain=copy.deepcopy(toolchain),
+            retained_bytes=copy.deepcopy(retained_bytes),
+            retained_paths=copy.deepcopy(retained_paths), log=log_bytes)
+    except SourceStageError:
+        raise
+    except (ExactMainBaselineError, OSError) as error:
+        log_bytes = _source_stage_log_bytes(
+            "failed", log, adapter_commit=adapter_commit,
+            adapter_tree=adapter_tree,
+            retained_byte_paths=tuple(retained_bytes),
+            retained_path_sources=tuple(retained_paths), error=error)
+        raise SourceStageError(error, log_bytes) from error
+
+
+def _safe_failure_message(error: BaseException) -> str:
+    raw = str(error) or type(error).__name__
+    flattened = " ".join(raw.replace("\r", " ").replace("\n", " ").split())
+    safe = "".join(
+        character if 0x20 <= ord(character) <= 0x7E else "?"
+        for character in flattened)
+    return (safe or "source acquisition failed")[:4096]
+
+
+def seal_source_acquisition_failure(
+    environment: HostEnvironment,
+    plan: LanePlan,
+    error: BaseException,
+    *,
+    log: bytes | None = None,
+    diagnostics: Mapping[str, bytes] | None = None,
+) -> dict[str, Any]:
+    """Seal one immutable stage-0 failure that the offline verifier accepts."""
+    canonical_plan = validate_lane_plan(plan)
+    _require(isinstance(environment, HostEnvironment) and
+             isinstance(error, BaseException),
+             "source failure inputs are invalid")
+    message = _safe_failure_message(error)
+    stage_path = "logs/00-source_acquisition.log"
+    inherited_log = error.log if isinstance(error, SourceStageError) else None
+    stage_bytes = log if log is not None else inherited_log
+    if stage_bytes is None:
+        stage_bytes = _source_stage_log_bytes(
+            "failed", (), adapter_commit=None, adapter_tree=None,
+            retained_byte_paths=(), retained_path_sources=(), error=error)
+    _require(type(stage_bytes) is bytes and
+             0 < len(stage_bytes) <= MAX_SOURCE_LOG_BYTES,
+             "source acquisition failure log is invalid")
+    retained: dict[str, bytes] = {stage_path: stage_bytes}
+    claims: list[dict[str, Any]] = []
+    diagnostic_values = {} if diagnostics is None else diagnostics
+    _require(type(diagnostic_values) is dict,
+             "source failure diagnostics are not a mapping")
+    for path in sorted(diagnostic_values):
+        relative = _safe_relative_path(path, "source failure diagnostic path")
+        content = diagnostic_values[path]
+        _require(relative.startswith("diagnostics/") and
+                 type(content) is bytes and content and
+                 len(content) <= MAX_SEALED_FILE_BYTES,
+                 f"source failure diagnostic {relative!r} is invalid")
+        retained[relative] = content
+        claims.append(_bytes_identity(relative, content))
+    stage_identity = _bytes_identity(stage_path, stage_bytes)
+    lane = {
+        "root": canonical_plan.lane_root,
+        "attempt": canonical_plan.attempt,
+        "attempt_budget": 3,
+        "record_relative_path": "FAILED.json",
+        "seal_protocol": record_contract.SEAL_PROTOCOL,
+        "stages": [{
+            "name": "source_acquisition", "status": "failed",
+            "log": stage_identity,
+        }],
+    }
+    is_command_error = isinstance(error, CommandExecutionError) or (
+        isinstance(error, SourceStageError) and
+        error.error_kind == "command_error")
+    exit_status = error.exit_status if is_command_error else 1
+    record = record_contract.baseline_acquisition_failure_record(
+        created_utc=environment.now_utc(), lane=lane,
+        stage="source_acquisition",
+        error={
+            "kind": "command_error" if is_command_error else
+            "acquisition_error",
+            "message": message,
+            "exit_status": _normalized_exit_status(exit_status),
+        },
+        retained_files=claims,
+    )
+    with LaneWriter(canonical_plan.lane_root) as writer:
+        return writer.seal_record(record, retained)
 
 
 def build_closure_document(
@@ -1672,6 +3144,132 @@ class LaneWriter:
         self._published[relative] = identity
         return copy.deepcopy(identity)
 
+    def publish_path(
+        self, relative_path: str, source_path: str,
+    ) -> dict[str, Any]:
+        """Stream one owner-only source file into the lane without buffering."""
+        self._require_open()
+        relative = _safe_relative_path(relative_path, "lane file path")
+        source = _portable_absolute_path(
+            source_path, f"lane source for {relative!r}")
+        _require(relative not in self._published,
+                 f"lane file {relative!r} was already published")
+        parent, basename = self._ensure_parent(relative)
+        staging = ".leopard-stage-" + secrets.token_hex(16)
+        source_descriptor = -1
+        destination_descriptor = -1
+        linked = False
+        try:
+            source_descriptor = os.open(
+                source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            source_before = os.fstat(source_descriptor)
+            source_pathname = os.lstat(source)
+            _require(stat.S_ISREG(source_before.st_mode) and
+                     source_before.st_nlink == 1 and
+                     source_before.st_uid == os.geteuid() and
+                     source_before.st_gid == os.getegid() and
+                     stat.S_IMODE(source_before.st_mode) ==
+                     WRITABLE_FILE_MODE and
+                     0 < source_before.st_size <= MAX_SEALED_FILE_BYTES and
+                     (source_before.st_dev, source_before.st_ino) ==
+                     (source_pathname.st_dev, source_pathname.st_ino) and
+                     os.path.realpath(source) == source,
+                     f"lane source for {relative!r} is not one owned file")
+            destination_descriptor = os.open(
+                staging,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW |
+                os.O_CLOEXEC,
+                WRITABLE_FILE_MODE,
+                dir_fd=parent,
+            )
+            digest = hashlib.sha256()
+            copied = 0
+            while copied < source_before.st_size:
+                chunk = os.read(
+                    source_descriptor,
+                    min(READ_CHUNK, source_before.st_size - copied))
+                _require(bool(chunk),
+                         f"lane source for {relative!r} ended while copied")
+                _write_all(destination_descriptor, chunk, relative)
+                digest.update(chunk)
+                copied += len(chunk)
+            _require(os.read(source_descriptor, 1) == b"",
+                     f"lane source for {relative!r} grew while copied")
+            source_after = os.fstat(source_descriptor)
+            _require((source_after.st_dev, source_after.st_ino,
+                      source_after.st_size, source_after.st_mtime_ns,
+                      source_after.st_ctime_ns) ==
+                     (source_before.st_dev, source_before.st_ino,
+                      source_before.st_size, source_before.st_mtime_ns,
+                      source_before.st_ctime_ns),
+                     f"lane source for {relative!r} changed while copied")
+            content_digest = digest.hexdigest()
+            os.fsync(destination_descriptor)
+            staged = os.fstat(destination_descriptor)
+            _require(stat.S_ISREG(staged.st_mode) and staged.st_nlink == 1 and
+                     staged.st_uid == os.geteuid() and
+                     staged.st_gid == os.getegid() and
+                     stat.S_IMODE(staged.st_mode) == WRITABLE_FILE_MODE and
+                     staged.st_size == copied,
+                     f"staged lane file {relative!r} changed")
+            os.close(destination_descriptor)
+            destination_descriptor = -1
+            os.close(source_descriptor)
+            source_descriptor = -1
+            try:
+                os.link(staging, basename, src_dir_fd=parent,
+                        dst_dir_fd=parent, follow_symlinks=False)
+            except FileExistsError as error:
+                raise AcquisitionError(
+                    f"lane file {relative!r} already exists") from error
+            linked = True
+            os.unlink(staging, dir_fd=parent)
+            linked = False
+            os.fsync(parent)
+            final_descriptor = os.open(
+                basename, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=parent)
+            try:
+                final = os.fstat(final_descriptor)
+                _require(stat.S_ISREG(final.st_mode) and final.st_nlink == 1 and
+                         final.st_dev == os.fstat(
+                             self._root_descriptor).st_dev and
+                         final.st_uid == os.geteuid() and
+                         final.st_gid == os.getegid() and
+                         stat.S_IMODE(final.st_mode) == WRITABLE_FILE_MODE and
+                         final.st_size == copied and
+                         _hash_fd(final_descriptor, final.st_size, relative) ==
+                         content_digest,
+                         f"published lane file {relative!r} changed")
+            finally:
+                os.close(final_descriptor)
+        except BaseException as error:
+            if destination_descriptor >= 0:
+                os.close(destination_descriptor)
+            if source_descriptor >= 0:
+                os.close(source_descriptor)
+            try:
+                os.unlink(staging, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+            if linked:
+                # Preserve a fail-closed final inode if staging unlink failed.
+                pass
+            if isinstance(error, OSError):
+                raise AcquisitionError(
+                    f"cannot publish lane source {relative!r}: {error}") \
+                    from error
+            raise
+        finally:
+            os.close(parent)
+        identity = {
+            "relative_path": relative,
+            "size": copied,
+            "sha256": content_digest,
+        }
+        self._published[relative] = identity
+        return copy.deepcopy(identity)
+
     def _open_placeholder(self, relative: str) -> int:
         parent_path, basename = relative.rsplit("/", 1) \
             if "/" in relative else (".", relative)
@@ -1853,8 +3451,10 @@ class LaneWriter:
         self,
         record: Mapping[str, Any],
         retained_files: Mapping[str, bytes],
+        *,
+        retained_paths: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Publish and seal one validated terminal plus its exact inventory."""
+        """Publish and seal bytes/path sources plus their exact terminal."""
         self._require_open()
         _require(type(record) is dict, "lane terminal is not a JSON object")
         schema = record.get("schema")
@@ -1878,8 +3478,13 @@ class LaneWriter:
                  "lane terminal path changed")
         _require(type(retained_files) is dict,
                  "retained lane files are not a path-to-bytes mapping")
+        path_files = {} if retained_paths is None else retained_paths
+        _require(type(path_files) is dict and
+                 set(retained_files).isdisjoint(path_files),
+                 "retained path-backed lane files are invalid")
         expected = {item["relative_path"]: item for item in inventory}
-        _require(set(expected) == set(retained_files) | {terminal},
+        _require(set(expected) ==
+                 set(retained_files) | set(path_files) | {terminal},
                  "retained lane files differ from the terminal inventory")
         for path, content in retained_files.items():
             relative = _safe_relative_path(path, "retained lane path")
@@ -1891,9 +3496,25 @@ class LaneWriter:
             _require(claim["size"] == len(content) and
                      claim["sha256"] == _sha256(content),
                      f"retained lane file {relative!r} differs from its claim")
+        for path, source in path_files.items():
+            relative = _safe_relative_path(path, "retained lane path")
+            _require(relative not in _TERMINAL_PATHS and type(source) is str,
+                     "retained path-backed lane file is invalid")
+            identity = _owned_file_identity(
+                source, f"retained path-backed lane file {relative!r}")
+            claim = expected[relative]
+            _require(claim["size"] == identity["size"] and
+                     claim["sha256"] == identity["sha256"],
+                     f"retained lane file {relative!r} differs from its claim")
         terminal_content = canonical_json_bytes(validated)
         for path in sorted(retained_files):
             self.publish_bytes(path, retained_files[path])
+        for path in sorted(path_files):
+            published = self.publish_path(path, path_files[path])
+            claim = expected[path]
+            _require(published["size"] == claim["size"] and
+                     published["sha256"] == claim["sha256"],
+                     f"retained lane file {path!r} changed before publication")
         self.publish_bytes(terminal, terminal_content)
         self.publish_bytes(_TREE_METADATA_PATH, b"")
         self.publish_bytes(_SHA256SUMS_PATH, b"")
@@ -1952,18 +3573,31 @@ __all__ = (
     "BUILD_CLOSURE_SCHEMA",
     "CANONICAL_LOCK_PATH",
     "CanonicalFileLock",
+    "CommandExecutionError",
     "CommandResult",
     "HostEnvironment",
     "LANE_DIRECTORY_MODE",
     "LANE_FILE_MODE",
     "LanePlan",
     "LaneWriter",
+    "PreparedAcquisitionRoots",
+    "SourceStageError",
+    "SourceStageResult",
     "StableLeaseAnchor",
+    "StreamedCommandResult",
     "TREE_METADATA_SCHEMA",
+    "acquire_source_stage",
+    "adapter_inventory",
     "build_closure_document",
+    "canonical_git_archive",
     "canonical_ldd_text",
     "expected_sha256sums",
     "expected_tree_metadata",
+    "frozen_child_environment",
     "normalize_ldd_output",
+    "prepare_acquisition_roots",
+    "resolve_toolchain",
+    "seal_source_acquisition_failure",
+    "stage_detached_source",
     "validate_lane_plan",
 )

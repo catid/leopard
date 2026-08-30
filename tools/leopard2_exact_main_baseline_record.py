@@ -644,6 +644,7 @@ def exact_main_build_profile() -> dict[str, Any]:
             "LEO_MAIN_PURE_AVX2_PROFILE=1",
         ],
         "environment": [
+            {"name": "GIT_ATTR_NOSYSTEM", "value": "1"},
             {"name": "GIT_CONFIG_GLOBAL", "value": "/dev/null"},
             {"name": "GIT_CONFIG_NOSYSTEM", "value": "1"},
             {"name": "GIT_CONFIG_SYSTEM", "value": "/dev/null"},
@@ -651,6 +652,7 @@ def exact_main_build_profile() -> dict[str, Any]:
             {"name": "GIT_OPTIONAL_LOCKS", "value": "0"},
             {"name": "LANG", "value": "C"},
             {"name": "LC_ALL", "value": "C"},
+            {"name": "PATH", "value": "/usr/bin:/bin"},
             {"name": "TZ", "value": "UTC"},
         ],
         "cache_requirements": [
