@@ -3139,6 +3139,23 @@ if(LEO2_BUILD_TESTS)
             set_tests_properties(
                 leopard2_exact_main_baseline_verifier_optimized_self_test
                 PROPERTIES TIMEOUT 300)
+            # Acquisition and sealing mutate only owner-controlled temporary
+            # lanes, and exercise Linux fd/mode/link semantics.  The tests use
+            # synthetic retained artifacts and perform no build or timing.
+            add_test(
+                NAME leopard2_exact_main_baseline_acquire_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_acquire_test.py)
+            add_test(
+                NAME leopard2_exact_main_baseline_acquire_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_acquire_test.py)
+            set_tests_properties(
+                leopard2_exact_main_baseline_acquire_self_test
+                PROPERTIES TIMEOUT 300)
+            set_tests_properties(
+                leopard2_exact_main_baseline_acquire_optimized_self_test
+                PROPERTIES TIMEOUT 300)
             add_test(
                 NAME leopard2_allk_gap_identity_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}

@@ -1166,6 +1166,8 @@ class CMakeProductionGraph(object):
         "leopard2_exact_main_baseline_elf_oracle_optimized_self_test": 1,
         "leopard2_exact_main_baseline_verifier_self_test": 1,
         "leopard2_exact_main_baseline_verifier_optimized_self_test": 1,
+        "leopard2_exact_main_baseline_acquire_self_test": 1,
+        "leopard2_exact_main_baseline_acquire_optimized_self_test": 1,
         "leopard2_lab_self_test": 1,
         "leopard2_fuzz_campaign_self_test": 1,
         "leopard2_gf16_neighbor_evidence_self_test": 1,
@@ -1225,6 +1227,8 @@ class CMakeProductionGraph(object):
         "leopard2_v18_replay_compatibility_self_test",
         "leopard2_exact_main_baseline_verifier_self_test",
         "leopard2_exact_main_baseline_verifier_optimized_self_test",
+        "leopard2_exact_main_baseline_acquire_self_test",
+        "leopard2_exact_main_baseline_acquire_optimized_self_test",
         "leopard2_lab_self_test",
         "leopard2_fuzz_campaign_self_test",
         "leopard2_gf16_neighbor_evidence_self_test",
@@ -1255,7 +1259,7 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "b8081eafb9a960b7c0cca2ce39c9d9c92f75966a2c0422de93e6d22aa6de1623"
+        "a61bb0927d86b14bd5c29278ae4506f11e747b02d5d130f86887d5b9fe01ab3c"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1368,6 +1372,12 @@ class CMakeProductionGraph(object):
             "TIMEOUT", "300")): 1,
         ("set_tests_properties", (
             "leopard2_exact_main_baseline_verifier_optimized_self_test",
+            "PROPERTIES", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_exact_main_baseline_acquire_self_test", "PROPERTIES",
+            "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_exact_main_baseline_acquire_optimized_self_test",
             "PROPERTIES", "TIMEOUT", "300")): 1,
     })
     # CMake is an imperative language: proving that each security-sensitive
