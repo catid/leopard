@@ -3225,6 +3225,26 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_k65_gen3_freeze_boundaries_optimized_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_k65_gen3_freeze_boundaries.py)
+            # Generation 3 remains offline and non-executable here.  These tests
+            # bind the closed v2 lineage, the explicitly unratified template,
+            # the three-budget state machine, and all 1,650 planned child argv
+            # vectors without scanning the host or launching a benchmark.
+            add_test(
+                NAME leopard2_k65_gen3_preregistration_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_k65_gen3_preregistration.py)
+            add_test(
+                NAME leopard2_k65_gen3_preregistration_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_k65_gen3_preregistration.py)
+            add_test(
+                NAME leopard2_k65_gen3_plan_runner_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_k65r65_b64_packed_terminal_gen3_abba.py)
+            add_test(
+                NAME leopard2_k65_gen3_plan_runner_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_k65r65_b64_packed_terminal_gen3_abba.py)
             set_tests_properties(
                 leopard2_pair_qualification_acquire_self_test
                 leopard2_pair_qualification_acquire_optimized_self_test
@@ -3234,6 +3254,10 @@ if(LEO2_BUILD_TESTS)
                 leopard2_pair_qualification_verify_optimized_self_test
                 leopard2_k65_gen3_freeze_boundaries_self_test
                 leopard2_k65_gen3_freeze_boundaries_optimized_self_test
+                leopard2_k65_gen3_preregistration_self_test
+                leopard2_k65_gen3_preregistration_optimized_self_test
+                leopard2_k65_gen3_plan_runner_self_test
+                leopard2_k65_gen3_plan_runner_optimized_self_test
                 PROPERTIES TIMEOUT 300)
             add_test(
                 NAME leopard2_allk_gap_identity_self_test
