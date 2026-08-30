@@ -3122,6 +3122,23 @@ if(LEO2_BUILD_TESTS)
                     leopard2_exact_main_baseline_elf_oracle_optimized_self_test
                     PROPERTIES TIMEOUT 300)
             endif()
+            # Offline lane verification depends on Linux owner/link/mode and
+            # O_NOFOLLOW semantics.  It remains read-only and executes no
+            # retained artifact or acquisition controller.
+            add_test(
+                NAME leopard2_exact_main_baseline_verifier_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_verifier_test.py)
+            add_test(
+                NAME leopard2_exact_main_baseline_verifier_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_verifier_test.py)
+            set_tests_properties(
+                leopard2_exact_main_baseline_verifier_self_test
+                PROPERTIES TIMEOUT 300)
+            set_tests_properties(
+                leopard2_exact_main_baseline_verifier_optimized_self_test
+                PROPERTIES TIMEOUT 300)
             add_test(
                 NAME leopard2_allk_gap_identity_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
