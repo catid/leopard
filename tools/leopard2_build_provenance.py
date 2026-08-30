@@ -280,8 +280,14 @@ BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V13 = \
     "leopard2-benchmark-build-configuration/v13"
 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V14 = \
     "leopard2-benchmark-build-configuration/v14"
-BENCHMARK_BUILD_CONFIGURATION_SCHEMA = \
+BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V15 = \
     "leopard2-benchmark-build-configuration/v15"
+# The suffixed current-generation alias exists for outer evidence contracts
+# that must pin this exact generation.  Keep provenance's own current-version
+# branches on the unsuffixed name so the next bump remains a single explicit
+# transition instead of duplicating equal set members throughout this module.
+BENCHMARK_BUILD_CONFIGURATION_SCHEMA = \
+    BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V15
 REPRODUCIBLE_BUILD_PROOF_SCHEMA_V2 = \
     "leopard2-reproducible-build-proof/v2"
 REPRODUCIBLE_BUILD_PROOF_SCHEMA = \

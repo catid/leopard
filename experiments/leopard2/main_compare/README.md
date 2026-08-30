@@ -132,10 +132,12 @@ executable to the exact clean source commit/tree.  Timed calls then use the
 distinct schema-v3 decode-path report, so summaries record the implementation
 actually selected instead of inferring a potentially stale route from K/R.
 
-The current all-K run-contract and manifest generation is v13. It requires the
+The current all-K run-contract and manifest generation is v18. It requires the
 production-default exact T32/B256 terminal and T16/Q2 fused selectors to be
-`ON`. Historical v12 remains replayable with the T32/B256 terminal `ON` but no
-T16/Q2 selector; relabeling either body as the other generation is rejected.
+`ON`, the legacy-high sparse direct encoder to be `OFF`, and legacy-high direct
+AUTO routing to be `ON`. Historical v16 remains pinned to benchmark
+configuration v13, while v17 binds configuration v14 and the default-off sparse
+selector; relabeling any body as another generation is rejected.
 The 2,522-cell matrix uses 4 KiB and 64 KiB shards, so the exact 256-byte
 T32 terminal and at-most-64-byte T16/Q2 kernel cannot affect a timed cell, but
 their values still belong to the authenticated production selector identity.
@@ -154,8 +156,8 @@ that residual and the previously exhausted safe specialization candidates.
 ## Counterbalanced comparison
 
 `run_abba.py` supplies the other half of the comparison. Its current evidence
-contract is raw/manifest/failure version 17; version 16 remains the frozen
-effective-AVX2 predecessor. It accepts only fresh Release
+contract is raw/manifest/failure version 18; version 17 remains the frozen
+native-main AUTO GF16-GFNI predecessor. It accepts only fresh Release
 artifacts with the expected compile, object, archive, link, source,
 runtime-library, field/profile, and requested decoder-path identities. Each cell
 runs three independent
