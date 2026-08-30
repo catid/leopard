@@ -75,6 +75,7 @@ from leopard2_exact_main_baseline_record import (
     CANONICAL_LDD_NORMALIZATION,
     SEAL_PROTOCOL,
     VERIFICATION_FAILURE_SCHEMA,
+    VERIFIER_VERDICT_SCHEMA,
     authority_retained_inventory,
     failure_retained_inventory,
     load_baseline_authority_record,
@@ -87,8 +88,7 @@ from leopard2_exact_main_baseline_record import (
 )
 
 
-VERIFIER_SCHEMA = \
-    "leopard2-gf8-exact-main-pure-avx2-baseline-verification/v1"
+VERIFIER_SCHEMA = VERIFIER_VERDICT_SCHEMA
 TREE_METADATA_SCHEMA = "leopard2-exact-main-baseline-tree-metadata/v1"
 GIT_CAPTURE_SCHEMA = "leopard2-git-source-capture/v2"
 LANE_FILE_MODE = 0o400

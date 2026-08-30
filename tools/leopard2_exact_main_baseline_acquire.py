@@ -102,8 +102,16 @@ TOOL_COMMAND_TIMEOUT_SECONDS = 60
 MAX_SOURCE_LOG_BYTES = 16 * 1024 * 1024
 BUILD_TIMEOUT_SECONDS = 2 * 60 * 60
 ATTESTATION_TIMEOUT_SECONDS = 30 * 60
+VERIFICATION_TIMEOUT_SECONDS = 30 * 60
 BUILD_LOG_SCHEMA = "leopard2-exact-main-build-command-log/v1"
 BUILD_STAGE_LOG_SCHEMA = "leopard2-exact-main-build-stage-log/v1"
+ASSEMBLY_LOG_SCHEMA = "leopard2-exact-main-authority-assembly-log/v1"
+VERIFICATION_LOG_SCHEMA = \
+    "leopard2-exact-main-independent-verification-log/v1"
+VERIFICATION_FAILURE_LOG_SCHEMA = \
+    "leopard2-exact-main-independent-verification-failure-log/v1"
+SEAL_LOG_SCHEMA = "leopard2-exact-main-seal-log/v1"
+ACQUISITION_REPORT_SCHEMA = "leopard2-exact-main-acquisition-report/v1"
 _TREE_METADATA_PATH = "TREE-METADATA.json"
 _SHA256SUMS_PATH = "SHA256SUMS"
 _TERMINAL_PATHS = frozenset(("baseline-authority.json", "FAILED.json"))
@@ -154,6 +162,42 @@ class BuildStageError(AcquisitionError):
             error, CommandExecutionError) else "acquisition_error"
         self.exit_status = error.exit_status if isinstance(
             error, CommandExecutionError) else 1
+
+
+class VerificationError(AcquisitionError):
+    """Independent verification failed with retained exact child streams."""
+
+    def __init__(
+        self, message: str, *, exit_status: int,
+        stdout: bytes, stderr: bytes,
+        process_result_observed: bool = True,
+    ) -> None:
+        super().__init__(message)
+        _require(type(process_result_observed) is bool,
+                 "verification process-result state is not boolean")
+        self.observed_exit_status = exit_status if type(exit_status) is int \
+            else None
+        self.exit_status = exit_status if (
+            type(exit_status) is int and 1 <= exit_status <= 255) else 1
+        self.stdout = stdout
+        self.stderr = stderr
+        self.process_result_observed = process_result_observed
+
+
+@dataclass(frozen=True)
+class AcquisitionOutcome:
+    """One sealed terminal outcome from the complete acquisition driver."""
+
+    outcome: str
+    lane_root: str
+    terminal: str
+    seal: dict[str, Any]
+    verdict: dict[str, Any] | None
+    authority_lane_root: str | None
+    authority_record_sha256: str | None
+    verification_program: dict[str, Any] | None
+    verification_exit_status: int | None
+    message: str | None
 
 
 def _fail(message: str) -> NoReturn:
@@ -337,9 +381,10 @@ def _parse_linux_cpu_models(content: bytes) -> dict[int, str]:
 
 @dataclass(frozen=True)
 class LanePlan:
-    """The eight immutable roots and attempt identity for one acquisition."""
+    """The nine immutable roots and attempt identity for one acquisition."""
 
     lane_root: str
+    failure_lane_root: str
     attempt: int
     repository: str
     verifier: str
@@ -354,6 +399,7 @@ class LanePlan:
 
 _PLAN_PATH_FIELDS = (
     "lane_root",
+    "failure_lane_root",
     "repository",
     "verifier",
     "canonical_adapter_root",
@@ -383,7 +429,7 @@ def validate_lane_plan(value: Any) -> LanePlan:
     _require(type(value.attempt) is int and 1 <= value.attempt <= 3,
              "lane attempt is outside the frozen three-attempt budget")
     root_fields = (
-        "lane_root",
+        "lane_root", "failure_lane_root",
         "canonical_adapter_root", "canonical_baseline_root",
         "canonical_build_root", "variant_adapter_root",
         "variant_baseline_root", "variant_build_root", "scratch_root",
@@ -410,6 +456,7 @@ def validate_lane_plan(value: Any) -> LanePlan:
                  "lane root overlaps its controller repository")
     return LanePlan(
         lane_root=paths["lane_root"],
+        failure_lane_root=paths["failure_lane_root"],
         attempt=value.attempt,
         repository=paths["repository"],
         verifier=paths["verifier"],
@@ -534,8 +581,9 @@ class PreparedAcquisitionRoots:
             _require(verifier.resolve(strict=True) == verifier and
                      verifier.is_file(),
                      "independent verifier is not a canonical file")
-            _require(_path_is_absent(self.plan.lane_root),
-                     "lane root already exists and cannot be reused")
+            _require(_path_is_absent(self.plan.lane_root) and
+                     _path_is_absent(self.plan.failure_lane_root),
+                     "lane or failure root already exists and cannot be reused")
             for field in _PREPARED_ROOT_FIELDS:
                 path = getattr(self.plan, field)
                 _require(_path_is_absent(path),
@@ -1352,6 +1400,12 @@ class HostEnvironment:
             runtime, "global evidence lease anchor")
         self.canonical_lock_path = _portable_absolute_path(
             canonical_lock_path, "canonical evidence lock")
+
+    def independent_verifier_argv(
+        self, *, interpreter: str, verifier: str, lane_root: str,
+    ) -> list[str]:
+        """Return the exact fresh-process independent-verifier invocation."""
+        return [interpreter, "-I", "-S", "-B", verifier, lane_root]
 
     def run(
         self,
@@ -3136,15 +3190,24 @@ def seal_stage_failure(
     retained_bytes: Mapping[str, bytes] | None = None,
     retained_paths: Mapping[str, str] | None = None,
     diagnostics: Mapping[str, bytes] | None = None,
+    lane_root: str | None = None,
+    authority_record_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Seal one immutable acquisition failure through build stage three."""
+    """Seal one immutable acquisition or independent-verification failure."""
     canonical_plan = validate_lane_plan(plan)
     _require(isinstance(environment, HostEnvironment) and
              isinstance(error, BaseException),
              "stage failure inputs are invalid")
     _require(type(stage) is str and
-             stage in record_contract.STAGE_NAMES[:4],
-             "acquisition failure stage is invalid")
+             stage in record_contract.FAILURE_STAGES and
+             ((stage == "independent_verification") ==
+              (authority_record_sha256 is not None)),
+             "failure stage and authority binding are inconsistent")
+    target_root = canonical_plan.lane_root if lane_root is None else \
+        _portable_absolute_path(lane_root, "failure lane root")
+    _require(target_root in (
+                 canonical_plan.lane_root, canonical_plan.failure_lane_root),
+             "failure lane root is outside the acquisition plan")
     if isinstance(error, SourceStageError):
         _require(stage == "source_acquisition",
                  "source-stage error was assigned to another stage")
@@ -3223,31 +3286,56 @@ def seal_stage_failure(
     _require(len(claims) <= record_contract.MAX_RETAINED_FILES,
              "failure retained file inventory exceeds its bound")
     lane = {
-        "root": canonical_plan.lane_root,
+        "root": target_root,
         "attempt": canonical_plan.attempt,
         "attempt_budget": 3,
         "record_relative_path": "FAILED.json",
         "seal_protocol": record_contract.SEAL_PROTOCOL,
         "stages": stages,
     }
+    is_verification_error = isinstance(error, VerificationError)
     is_command_error = isinstance(error, CommandExecutionError) or (
         isinstance(error, (SourceStageError, BuildStageError)) and
         error.error_kind == "command_error")
-    exit_status = error.exit_status if is_command_error else 1
-    record = record_contract.baseline_acquisition_failure_record(
-        created_utc=environment.now_utc(), lane=lane,
-        stage=stage,
-        error={
-            "kind": "command_error" if is_command_error else
-            "acquisition_error",
-            "message": message,
-            "exit_status": _normalized_exit_status(exit_status),
-        },
-        retained_files=claims,
-    )
-    with LaneWriter(canonical_plan.lane_root) as writer:
+    exit_status = error.exit_status if (
+        is_command_error or is_verification_error) else 1
+    error_record = {
+        "kind": ("verification_error" if is_verification_error else
+                 "command_error" if is_command_error else
+                 "acquisition_error"),
+        "message": message,
+        "exit_status": _normalized_exit_status(exit_status),
+    }
+    if authority_record_sha256 is None:
+        record = record_contract.baseline_acquisition_failure_record(
+            created_utc=environment.now_utc(), lane=lane,
+            stage=stage, error=error_record, retained_files=claims)
+    else:
+        record = record_contract.baseline_verification_failure_record(
+            created_utc=environment.now_utc(), lane=lane,
+            stage=stage, error=error_record, retained_files=claims,
+            authority_record_sha256=authority_record_sha256)
+    with LaneWriter(target_root) as writer:
         return writer.seal_record(
             record, retained, retained_paths=canonical_paths)
+
+
+def seal_verification_failure(
+    environment: HostEnvironment,
+    plan: LanePlan,
+    error: BaseException,
+    *,
+    stage_logs: Mapping[str, bytes],
+    authority_record_sha256: str,
+    retained_bytes: Mapping[str, bytes] | None = None,
+    diagnostics: Mapping[str, bytes] | None = None,
+) -> dict[str, Any]:
+    """Seal a stage-4 failure beside an already claimed authority lane."""
+    return seal_stage_failure(
+        environment, plan, error, stage="independent_verification",
+        stage_logs=stage_logs, retained_bytes=retained_bytes,
+        diagnostics=diagnostics, lane_root=plan.failure_lane_root,
+        authority_record_sha256=authority_record_sha256)
 
 
 def seal_source_acquisition_failure(
@@ -4364,9 +4452,1228 @@ class LaneWriter:
         }
 
 
+def _verification_file_identity(
+    role: str, path: str, *, executable: bool,
+) -> dict[str, Any]:
+    """Hash one canonical verifier trust input with stable pathname binding."""
+    _require(type(role) is str and role in (
+                 "verifier", "identity_contract", "record_contract", "python"),
+             "verification trust role is invalid")
+    absolute = _portable_absolute_path(path, f"{role} verification program")
+    _require(os.path.realpath(absolute) == absolute,
+             f"{role} verification program is not canonical")
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            absolute, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        before = os.fstat(descriptor)
+        pathname = os.lstat(absolute)
+        mode = stat.S_IMODE(before.st_mode)
+        _require(stat.S_ISREG(before.st_mode) and
+                 0 < before.st_size <= MAX_SEALED_FILE_BYTES and
+                 (not executable or mode & 0o111 != 0) and
+                 (before.st_dev, before.st_ino) ==
+                 (pathname.st_dev, pathname.st_ino),
+                 f"{role} verification program is not one stable file")
+        digest = _hash_fd(descriptor, before.st_size, role)
+        after = os.fstat(descriptor)
+        pathname_after = os.lstat(absolute)
+        fingerprint = (before.st_dev, before.st_ino, before.st_size,
+                       before.st_mtime_ns, before.st_ctime_ns)
+        _require((after.st_dev, after.st_ino, after.st_size,
+                  after.st_mtime_ns, after.st_ctime_ns) == fingerprint and
+                 (pathname_after.st_dev, pathname_after.st_ino,
+                  pathname_after.st_size, pathname_after.st_mtime_ns,
+                  pathname_after.st_ctime_ns) == fingerprint,
+                 f"{role} verification program changed while hashed")
+        return {
+            "role": role,
+            "path": absolute,
+            "size": before.st_size,
+            "mode": mode,
+            "sha256": digest,
+        }
+    except OSError as error:
+        raise AcquisitionError(
+            f"cannot inspect {role} verification program: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def verification_program_identity(
+    plan: LanePlan,
+    toolchain: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Bind the verifier, its two pure contracts, and its interpreter."""
+    canonical_plan = validate_lane_plan(plan)
+    tools_directory = Path(__file__).resolve().parent
+    verifier_path = str(
+        tools_directory / "leopard2_exact_main_baseline_verifier.py")
+    identity_path = str(
+        tools_directory / "leopard2_exact_main_baseline.py")
+    record_path = str(
+        tools_directory / "leopard2_exact_main_baseline_record.py")
+    _require(canonical_plan.verifier == verifier_path,
+             "lane verifier is not the source-bound independent verifier")
+    python_record: Mapping[str, Any] | None = None
+    interpreter = os.path.realpath(sys.executable)
+    if toolchain is not None:
+        _require(type(toolchain) is dict and
+                 type(toolchain.get("tools")) is list,
+                 "verification toolchain is invalid")
+        matches = [item for item in toolchain["tools"]
+                   if type(item) is dict and item.get("role") == "python"]
+        _require(len(matches) == 1,
+                 "verification toolchain has no unique Python interpreter")
+        python_record = matches[0]
+        interpreter = _portable_absolute_path(
+            python_record.get("resolved_path"),
+            "verification Python interpreter")
+    files = [
+        _verification_file_identity(
+            "verifier", verifier_path, executable=False),
+        _verification_file_identity(
+            "identity_contract", identity_path, executable=False),
+        _verification_file_identity(
+            "record_contract", record_path, executable=False),
+        _verification_file_identity(
+            "python", interpreter, executable=True),
+    ]
+    if python_record is not None:
+        observed = files[-1]
+        _require(
+            observed["path"] == python_record.get("resolved_path") and
+            observed["size"] == python_record.get("size") and
+            observed["mode"] == python_record.get("mode") and
+            observed["sha256"] == python_record.get("sha256"),
+            "verification interpreter differs from the acquired toolchain")
+    return {
+        "schema": "leopard2-exact-main-verification-program/v1",
+        "files": files,
+    }
+
+
+def verification_argv(
+    environment: HostEnvironment,
+    plan: LanePlan,
+    *,
+    interpreter: str,
+    lane_root: str | None = None,
+) -> list[str]:
+    """Build and constrain one injectable independent-verifier argv."""
+    canonical_plan = validate_lane_plan(plan)
+    target = canonical_plan.lane_root if lane_root is None else \
+        _portable_absolute_path(lane_root, "verification lane root")
+    _require(target in (
+                 canonical_plan.lane_root, canonical_plan.failure_lane_root),
+             "verification lane root is outside the acquisition plan")
+    python = _portable_absolute_path(interpreter, "verification interpreter")
+    argv = _command_arguments(environment.independent_verifier_argv(
+        interpreter=python, verifier=canonical_plan.verifier,
+        lane_root=target))
+    _require(argv[0] == python and argv[-1] == target,
+             "independent verifier argv changed its interpreter or lane")
+    return argv
+
+
+def verification_plan_log_bytes(
+    *,
+    argv: Sequence[str],
+    program: Mapping[str, Any],
+    cwd: str,
+    child_environment: Mapping[str, str],
+) -> bytes:
+    """Freeze the stage-4 policy before the authority lane is sealed."""
+    arguments = _command_arguments(argv)
+    working_directory = _portable_absolute_path(cwd, "verification plan cwd")
+    values = _command_environment(child_environment)
+    content = canonical_json_bytes({
+        "schema": VERIFICATION_LOG_SCHEMA,
+        "status": "planned",
+        "program": copy.deepcopy(dict(program)),
+        "argv": arguments,
+        "cwd": working_directory,
+        "environment": [
+            {"name": name, "value": values[name]} for name in sorted(values)
+        ],
+        "policy": {
+            "expected_exit_status": 0,
+            "expected_verdict_schema":
+                record_contract.VERIFIER_VERDICT_SCHEMA,
+            "expected_outcome": "promoted_authority",
+            "expected_promoted": True,
+            "bind_record_sha256": True,
+            "bind_seal_counts_and_digests": True,
+            "canonical_stdout_required": True,
+            "trust_inputs_rehashed_after_run": True,
+        },
+    })
+    _require(0 < len(content) <= MAX_SOURCE_LOG_BYTES,
+             "independent verification plan log exceeds its byte bound")
+    return content
+
+
+def seal_plan_log_bytes(
+    plan: LanePlan,
+    *,
+    terminal: str,
+    retained_byte_paths: Sequence[str],
+    retained_path_sources: Sequence[str],
+) -> bytes:
+    """Freeze the stage-5 path and final-mode policy without circular hashes."""
+    canonical_plan = validate_lane_plan(plan)
+    _require(terminal == "baseline-authority.json",
+             "seal plan terminal is invalid")
+    byte_paths = sorted(
+        _safe_relative_path(path, "seal plan retained byte path")
+        for path in retained_byte_paths)
+    path_sources = sorted(
+        _safe_relative_path(path, "seal plan retained source path")
+        for path in retained_path_sources)
+    _require(len(byte_paths) == len(set(byte_paths)) and
+             len(path_sources) == len(set(path_sources)) and
+             set(byte_paths).isdisjoint(path_sources),
+             "seal plan retained paths overlap")
+    content = canonical_json_bytes({
+        "schema": SEAL_LOG_SCHEMA,
+        "status": "planned",
+        "seal_protocol": record_contract.SEAL_PROTOCOL,
+        "lane_root": canonical_plan.lane_root,
+        "attempt": canonical_plan.attempt,
+        "terminal_relative_path": terminal,
+        "retained_byte_paths": byte_paths,
+        "retained_path_sources": path_sources,
+        "retained_byte_count": len(byte_paths),
+        "retained_path_source_count": len(path_sources),
+        "file_mode": f"{LANE_FILE_MODE:04o}",
+        "directory_mode": f"{LANE_DIRECTORY_MODE:04o}",
+        "final_mode_policy": "owner-only tree with all write bits removed",
+    })
+    _require(0 < len(content) <= MAX_SOURCE_LOG_BYTES,
+             "seal plan log exceeds its byte bound")
+    return content
+
+
+def assembly_failure_log_bytes(
+    build_stage_log: bytes, error: BaseException,
+    *,
+    authority_lane_root: str | None = None,
+    authority_record_sha256: str | None = None,
+) -> bytes:
+    """Represent a post-build gate/seal failure without a contradictory log."""
+    _require(type(build_stage_log) is bytes and
+             0 < len(build_stage_log) <= MAX_SOURCE_LOG_BYTES,
+             "completed path-variant build log is invalid")
+    _require((authority_lane_root is None) ==
+             (authority_record_sha256 is None),
+             "assembly failure authority binding is incomplete")
+    authority = None
+    if authority_lane_root is not None:
+        root = _portable_absolute_path(
+            authority_lane_root, "assembly failure authority lane")
+        _require(type(authority_record_sha256) is str and
+                 re.fullmatch(
+                     r"[0-9a-f]{64}", authority_record_sha256) is not None,
+                 "assembly failure authority SHA-256 is invalid")
+        authority = {
+            "lane_root": root,
+            "record_sha256": authority_record_sha256,
+        }
+    content = canonical_json_bytes({
+        "schema": ASSEMBLY_LOG_SCHEMA,
+        "status": "failed",
+        "authority": authority,
+        "completed_build_log": _bytes_identity(
+            "diagnostics/completed-path-variant-build.log", build_stage_log),
+        "error": _safe_failure_message(error),
+    })
+    _require(0 < len(content) <= MAX_SOURCE_LOG_BYTES,
+             "authority assembly failure log exceeds its byte bound")
+    return content
+
+
+def verification_failure_log_bytes(
+    *,
+    planned_log: bytes,
+    argv: Sequence[str],
+    program: Mapping[str, Any],
+    error: VerificationError,
+    authority_record_sha256: str,
+    authority_seal: Mapping[str, Any],
+) -> bytes:
+    """Record a stage-4 failure with exact retained child-stream claims."""
+    _require(type(planned_log) is bytes and planned_log and
+             isinstance(error, VerificationError),
+             "verification failure log inputs are invalid")
+    content = canonical_json_bytes({
+        "schema": VERIFICATION_FAILURE_LOG_SCHEMA,
+        "status": "failed",
+        "planned_log": _bytes_identity(
+            "verification/planned-independent-verification.log",
+            planned_log),
+        "program": copy.deepcopy(dict(program)),
+        "argv": _command_arguments(argv),
+        "authority": {
+            "lane_root": authority_seal["root"],
+            "record_sha256": authority_record_sha256,
+            "tree_metadata_sha256":
+                authority_seal["tree_metadata_sha256"],
+            "sha256sums_sha256": authority_seal["sha256sums_sha256"],
+        },
+        "result": {
+            "exit_status": error.observed_exit_status,
+            "stdout": _bytes_identity(
+                "verification/verifier.stdout", error.stdout),
+            "stderr": _bytes_identity(
+                "verification/verifier.stderr", error.stderr),
+        },
+        "error": _safe_failure_message(error),
+    })
+    _require(0 < len(content) <= MAX_SOURCE_LOG_BYTES,
+             "verification failure log exceeds its byte bound")
+    return content
+
+
+def assemble_authority_record(
+    environment: HostEnvironment,
+    plan: LanePlan,
+    *,
+    host: Mapping[str, Any],
+    source_stage: SourceStageResult,
+    results: Sequence[BuildStageResult],
+    stage_logs: Mapping[str, bytes],
+) -> dict[str, Any]:
+    """Derive every cross-build gate and call the sole authority constructor."""
+    canonical_plan = validate_lane_plan(plan)
+    _require(isinstance(environment, HostEnvironment) and
+             isinstance(source_stage, SourceStageResult) and
+             type(stage_logs) is dict and
+             list(stage_logs) == list(record_contract.STAGE_NAMES) and
+             type(results) in (list, tuple) and len(results) == 3,
+             "authority assembly inputs are invalid")
+    role_results = {result.role: result for result in results
+                    if isinstance(result, BuildStageResult)}
+    _require(tuple(role_results) == record_contract.BUILD_ROLES,
+             "authority build result order changed")
+    first = role_results["canonical_first"]
+    second = role_results["canonical_second"]
+    variant = role_results["path_variant"]
+    canonical_identity_equal = identity_contract.exact_json_equal(
+        first.identity, second.identity)
+    canonical_archive_equal = (
+        first.build["archive"]["size"] == second.build["archive"]["size"] and
+        first.build["archive"]["sha256"] ==
+        second.build["archive"]["sha256"])
+    variant_raw_differs = (
+        variant.identity["artifact"]["sha256"] !=
+        first.identity["artifact"]["sha256"])
+    combined = first.identity["combined_sha256"]
+    normalized_match = all(
+        result.identity["combined_sha256"] == combined for result in results)
+    census_zero = all(_identity_census_is_zero(result.identity)
+                      for result in results)
+    failures = []
+    if not canonical_identity_equal:
+        failures.append("same-path normalized identities differ")
+    if not canonical_archive_equal:
+        failures.append("same-path archives differ")
+    if not variant_raw_differs:
+        failures.append("path-variant raw executable did not differ")
+    if not normalized_match:
+        failures.append("path-variant normalized identity changed")
+    if not census_zero:
+        failures.append("selected ELF sections retain an acquisition root")
+    _require(not failures,
+             "authority promotion gates failed: " + "; ".join(failures))
+    controller_path = "controllers/test_legacy_main_benchmark.py"
+    _require(controller_path in source_stage.retained_bytes,
+             "source stage omitted the attestation controller")
+    controller = _bytes_identity(
+        controller_path, source_stage.retained_bytes[controller_path])
+    lane = {
+        "root": canonical_plan.lane_root,
+        "attempt": canonical_plan.attempt,
+        "attempt_budget": 3,
+        "record_relative_path": "baseline-authority.json",
+        "seal_protocol": record_contract.SEAL_PROTOCOL,
+        "stages": [{
+            "name": name,
+            "status": "complete",
+            "log": _bytes_identity(
+                f"logs/{index:02d}-{name}.log", stage_logs[name]),
+        } for index, name in enumerate(record_contract.STAGE_NAMES)],
+    }
+    identities = {role: role_results[role].identity
+                  for role in record_contract.BUILD_ROLES}
+    return record_contract.baseline_authority_record(
+        created_utc=environment.now_utc(), host=copy.deepcopy(dict(host)),
+        lane=lane, source=source_stage.source, adapter=source_stage.adapter,
+        toolchain=source_stage.toolchain,
+        builds={role: role_results[role].build
+                for role in record_contract.BUILD_ROLES},
+        runtime_closure={
+            "schema": record_contract.RUNTIME_CLOSURE_SCHEMA,
+            "normalization": record_contract.CANONICAL_LDD_NORMALIZATION,
+            "records": [role_results[role].runtime
+                        for role in record_contract.BUILD_ROLES],
+        },
+        attestation={
+            "schema": record_contract.ATTESTATION_SCHEMA,
+            "test_controller": controller,
+            "records": [role_results[role].attestation
+                        for role in record_contract.BUILD_ROLES],
+        },
+        identity={
+            **identities,
+            "combined_sha256": combined,
+            "canonical_raw_bytes_identical": canonical_identity_equal,
+            "path_variant_raw_bytes_differ": variant_raw_differs,
+            "normalized_match": normalized_match,
+        },
+    )
+
+
+def _verification_program_interpreter(
+    value: Mapping[str, Any],
+) -> str:
+    _require(type(value) is dict and set(value) == {"schema", "files"} and
+             value["schema"] == "leopard2-exact-main-verification-program/v1" and
+             type(value["files"]) is list and len(value["files"]) == 4,
+             "independent verification program identity is invalid")
+    expected_roles = (
+        "verifier", "identity_contract", "record_contract", "python")
+    _require(tuple(item.get("role") if type(item) is dict else None
+                   for item in value["files"]) == expected_roles,
+             "independent verification program role order changed")
+    for index, item in enumerate(value["files"]):
+        _require(type(item) is dict and set(item) == {
+                     "role", "path", "size", "mode", "sha256"} and
+                 type(item["size"]) is int and item["size"] > 0 and
+                 type(item["mode"]) is int and 0 <= item["mode"] <= 0o7777 and
+                 type(item["sha256"]) is str and
+                 re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) is not None,
+                 f"independent verification program file {index} is invalid")
+        _portable_absolute_path(
+            item["path"], f"independent verification program file {index}")
+    return value["files"][-1]["path"]
+
+
+def _load_sealed_terminal_record(
+    lane_root: str, terminal: str,
+) -> dict[str, Any]:
+    """Read one just-sealed terminal without relaxing its independent replay."""
+    root = _portable_absolute_path(lane_root, "sealed terminal lane")
+    _require(terminal in _TERMINAL_PATHS,
+             "sealed terminal name is invalid")
+    path = root + "/" + terminal
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        status = os.fstat(descriptor)
+        pathname = os.lstat(path)
+        _require(stat.S_ISREG(status.st_mode) and status.st_nlink == 1 and
+                 status.st_uid == os.geteuid() and
+                 status.st_gid == os.getegid() and
+                 stat.S_IMODE(status.st_mode) == LANE_FILE_MODE and
+                 0 < status.st_size <= MAX_SOURCE_LOG_BYTES and
+                 (status.st_dev, status.st_ino) ==
+                 (pathname.st_dev, pathname.st_ino),
+                 "sealed terminal is not one owner-only regular file")
+        chunks: list[bytes] = []
+        remaining = status.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(READ_CHUNK, remaining))
+            _require(bool(chunk), "sealed terminal ended while read")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        _require(os.read(descriptor, 1) == b"",
+                 "sealed terminal grew while read")
+        content = b"".join(chunks)
+    except OSError as error:
+        raise AcquisitionError(
+            f"cannot read sealed terminal {terminal!r}: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    try:
+        if terminal == "baseline-authority.json":
+            return record_contract.load_baseline_authority_record(content)
+        return record_contract.load_baseline_failure_record(content)
+    except ExactMainBaselineError as error:
+        raise AcquisitionError("sealed terminal record is invalid") from error
+
+
+def run_independent_verification(
+    environment: HostEnvironment,
+    plan: LanePlan,
+    *,
+    record: Mapping[str, Any],
+    seal: Mapping[str, Any] | None,
+    toolchain: Mapping[str, Any] | None = None,
+    program: Mapping[str, Any] | None = None,
+    lane_root: str | None = None,
+) -> dict[str, Any]:
+    """Launch and fully cross-bind the source-bound verifier process."""
+    canonical_plan = validate_lane_plan(plan)
+    _require(isinstance(environment, HostEnvironment) and
+             type(record) is dict and (seal is None or type(seal) is dict),
+             "independent verification inputs are invalid")
+    try:
+        if record.get("schema") == record_contract.AUTHORITY_SCHEMA:
+            validated = record_contract.validate_baseline_authority_record(
+                record)
+            expected_terminal = "baseline-authority.json"
+            expected_status = 0
+            expected_outcome = "promoted_authority"
+            expected_promoted = True
+        else:
+            validated = record_contract.validate_baseline_failure_record(
+                record)
+            expected_terminal = "FAILED.json"
+            expected_status = 3
+            expected_outcome = "verified_failure"
+            expected_promoted = False
+    except ExactMainBaselineError as error:
+        raise AcquisitionError(
+            "independent verification record is invalid") from error
+    target = canonical_plan.lane_root if lane_root is None else \
+        _portable_absolute_path(lane_root, "independent verification lane")
+    _require(target in (
+                 canonical_plan.lane_root, canonical_plan.failure_lane_root) and
+             validated["lane"]["root"] == target,
+             "independent verification target differs from its record")
+    if seal is not None:
+        _require(set(seal) == {
+                     "root", "terminal", "terminal_record_sha256",
+                     "file_count", "directory_count",
+                     "tree_metadata_sha256", "sha256sums_sha256"} and
+                 seal["root"] == target and
+                 seal["terminal"] == expected_terminal and
+                 seal["terminal_record_sha256"] ==
+                    validated["record_sha256"],
+                 "independent verification target differs from its seal")
+    before = verification_program_identity(canonical_plan, toolchain) \
+        if program is None else copy.deepcopy(dict(program))
+    interpreter = _verification_program_interpreter(before)
+    argv = verification_argv(
+        environment, canonical_plan, interpreter=interpreter,
+        lane_root=target)
+    child_environment = frozen_child_environment()
+    try:
+        result = environment.run(
+            argv, cwd=canonical_plan.scratch_root, env=child_environment,
+            timeout=VERIFICATION_TIMEOUT_SECONDS,
+            maximum_bytes=MAX_COMMAND_OUTPUT_BYTES)
+    except BaseException as error:
+        raise VerificationError(
+            "independent verifier could not run: " +
+            _safe_failure_message(error), exit_status=1,
+            stdout=b"", stderr=b"", process_result_observed=False) from error
+    if not isinstance(result, CommandResult):
+        raise VerificationError(
+            "independent verifier returned an invalid process result",
+            exit_status=1, stdout=b"", stderr=b"",
+            process_result_observed=False)
+    if type(result.exit_status) is not int or not (
+            0 <= result.exit_status <= 255) or \
+            type(result.stdout) is not bytes or \
+            type(result.stderr) is not bytes or \
+            len(result.stdout) + len(result.stderr) > MAX_COMMAND_OUTPUT_BYTES:
+        raise VerificationError(
+            "independent verifier returned malformed process metadata",
+            exit_status=(result.exit_status
+                         if type(result.exit_status) is int else 1),
+            stdout=(result.stdout if type(result.stdout) is bytes else b""),
+            stderr=(result.stderr if type(result.stderr) is bytes else b""),
+            process_result_observed=False)
+
+    def reject(message: str) -> NoReturn:
+        raise VerificationError(
+            message, exit_status=result.exit_status,
+            stdout=result.stdout, stderr=result.stderr)
+
+    try:
+        if result.exit_status != expected_status:
+            reject(
+                f"independent verifier returned status {result.exit_status}; "
+                f"expected {expected_status}")
+        if result.stderr != b"":
+            reject("independent verifier wrote stderr")
+        verdict = identity_contract.strict_json_loads(
+            result.stdout, "independent verifier verdict JSON")
+        if canonical_json_bytes(verdict) != result.stdout:
+            reject("independent verifier verdict is not canonical JSON")
+        if type(verdict) is not dict or set(verdict) != {
+                "schema", "outcome", "promoted", "record", "seal",
+                "recomputed", "producer_attested", "verdict_sha256"}:
+            reject("independent verifier verdict has an unexpected key set")
+        if verdict["schema"] != record_contract.VERIFIER_VERDICT_SCHEMA or \
+                verdict["outcome"] != expected_outcome or \
+                verdict["promoted"] is not expected_promoted:
+            reject("independent verifier returned the wrong terminal outcome")
+        record_view = verdict["record"]
+        if type(record_view) is not dict or set(record_view) != {
+                "relative_path", "schema", "record_sha256",
+                "canonical_bytes_identical"} or \
+                record_view["relative_path"] != expected_terminal or \
+                record_view["schema"] != validated["schema"] or \
+                record_view["record_sha256"] != validated["record_sha256"] or \
+                record_view["canonical_bytes_identical"] is not True:
+            reject("independent verifier did not bind the terminal record")
+        seal_view = verdict["seal"]
+        if type(seal_view) is not dict or set(seal_view) != {
+                "protocol", "tree_metadata_schema", "tree_metadata_sha256",
+                "sha256sums_sha256", "directory_count", "file_count",
+                "checksum_line_count", "metadata_entry_count"} or \
+                seal_view["protocol"] != record_contract.SEAL_PROTOCOL or \
+                seal_view["tree_metadata_schema"] != TREE_METADATA_SCHEMA or \
+                type(seal_view["file_count"]) is not int or \
+                seal_view["file_count"] <= 0 or \
+                type(seal_view["directory_count"]) is not int or \
+                seal_view["directory_count"] <= 0 or \
+                type(seal_view["checksum_line_count"]) is not int or \
+                seal_view["checksum_line_count"] != \
+                    seal_view["file_count"] - 1 or \
+                type(seal_view["metadata_entry_count"]) is not int or \
+                seal_view["metadata_entry_count"] != \
+                    (seal_view["file_count"] +
+                     seal_view["directory_count"] - 1) or \
+                any(type(seal_view[name]) is not str or
+                    re.fullmatch(r"[0-9a-f]{64}", seal_view[name]) is None
+                    for name in (
+                        "tree_metadata_sha256", "sha256sums_sha256")):
+            reject("independent verifier did not bind the sealed tree")
+        if seal is not None and (
+                seal_view["tree_metadata_sha256"] !=
+                    seal["tree_metadata_sha256"] or
+                seal_view["sha256sums_sha256"] !=
+                    seal["sha256sums_sha256"] or
+                seal_view["file_count"] != seal["file_count"] or
+                seal_view["directory_count"] != seal["directory_count"]):
+            reject("independent verifier did not bind the producer seal")
+        expected_verdict_sha256 = identity_contract.canonical_sha256({
+            key: copy.deepcopy(value) for key, value in verdict.items()
+            if key != "verdict_sha256"
+        })
+        if verdict["verdict_sha256"] != expected_verdict_sha256:
+            reject("independent verifier verdict SHA-256 is inconsistent")
+        after = verification_program_identity(canonical_plan, toolchain)
+        if not identity_contract.exact_json_equal(before, after):
+            reject("independent verification program changed during replay")
+    except VerificationError:
+        raise
+    except BaseException as error:
+        reject("independent verifier output is invalid: " +
+               _safe_failure_message(error))
+    return copy.deepcopy(verdict)
+
+
+def _seal_result_from_verdict(
+    lane_root: str,
+    terminal: str,
+    record: Mapping[str, Any],
+    verdict: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Recover the producer seal view only after trusted independent replay."""
+    root = _portable_absolute_path(lane_root, "recovered authority lane")
+    _require(terminal in _TERMINAL_PATHS and type(record) is dict and
+             type(verdict) is dict and type(verdict.get("seal")) is dict and
+             type(record.get("record_sha256")) is str,
+             "recovered authority seal inputs are invalid")
+    seal = verdict["seal"]
+    return {
+        "root": root,
+        "terminal": terminal,
+        "terminal_record_sha256": record["record_sha256"],
+        "file_count": seal["file_count"],
+        "directory_count": seal["directory_count"],
+        "tree_metadata_sha256": seal["tree_metadata_sha256"],
+        "sha256sums_sha256": seal["sha256sums_sha256"],
+    }
+
+
+def _merge_retained_evidence(
+    source_stage: SourceStageResult | None,
+    results: Sequence[BuildStageResult],
+) -> tuple[dict[str, bytes], dict[str, str]]:
+    retained_bytes: dict[str, bytes] = {}
+    retained_paths: dict[str, str] = {}
+
+    def merge_bytes(values: Mapping[str, bytes]) -> None:
+        _require(type(values) is dict,
+                 "retained byte evidence is not a mapping")
+        for path, content in values.items():
+            relative = _safe_relative_path(path, "retained byte evidence path")
+            _require(relative not in retained_bytes and
+                     relative not in retained_paths and type(content) is bytes,
+                     f"retained evidence path {relative!r} is duplicated")
+            retained_bytes[relative] = content
+
+    def merge_paths(values: Mapping[str, str]) -> None:
+        _require(type(values) is dict,
+                 "retained path evidence is not a mapping")
+        for path, source in values.items():
+            relative = _safe_relative_path(path, "retained path evidence path")
+            _require(relative not in retained_bytes and
+                     relative not in retained_paths and type(source) is str,
+                     f"retained evidence path {relative!r} is duplicated")
+            retained_paths[relative] = source
+
+    if source_stage is not None:
+        _require(isinstance(source_stage, SourceStageResult),
+                 "source-stage retained evidence is invalid")
+        merge_bytes(source_stage.retained_bytes)
+        merge_paths(source_stage.retained_paths)
+    for result in results:
+        _require(isinstance(result, BuildStageResult),
+                 "build-stage retained evidence is invalid")
+        merge_bytes(result.retained_bytes)
+        merge_paths(result.retained_paths)
+    return retained_bytes, retained_paths
+
+
+def _seal_and_verify_failure(
+    environment: HostEnvironment,
+    plan: LanePlan,
+    error: BaseException,
+    *,
+    stage: str,
+    stage_logs: Mapping[str, bytes],
+    retained_bytes: Mapping[str, bytes] | None = None,
+    retained_paths: Mapping[str, str] | None = None,
+    diagnostics: Mapping[str, bytes] | None = None,
+    lane_root: str | None = None,
+    authority_record_sha256: str | None = None,
+    validate_state: Any = None,
+) -> AcquisitionOutcome:
+    """Seal one failure and require a second-process nonpromotion verdict."""
+    canonical_plan = validate_lane_plan(plan)
+    target = canonical_plan.lane_root if lane_root is None else \
+        _portable_absolute_path(lane_root, "failed acquisition lane")
+    seal = seal_stage_failure(
+        environment, canonical_plan, error, stage=stage,
+        stage_logs=stage_logs, retained_bytes=retained_bytes,
+        retained_paths=retained_paths, diagnostics=diagnostics,
+        lane_root=target,
+        authority_record_sha256=authority_record_sha256)
+    _require(validate_state is None or callable(validate_state),
+             "failure-state validator is not callable")
+    if validate_state is not None:
+        validate_state()
+    record = _load_sealed_terminal_record(target, "FAILED.json")
+    if validate_state is not None:
+        validate_state()
+    program = verification_program_identity(canonical_plan, None)
+    verdict = run_independent_verification(
+        environment, canonical_plan, record=record, seal=seal,
+        program=program, lane_root=target)
+    if validate_state is not None:
+        validate_state()
+    return AcquisitionOutcome(
+        outcome=("verification_failure" if authority_record_sha256 is not None
+                 else "acquisition_failure"),
+        lane_root=target, terminal="FAILED.json",
+        seal=copy.deepcopy(seal), verdict=copy.deepcopy(verdict),
+        authority_lane_root=(canonical_plan.lane_root
+                             if authority_record_sha256 is not None else None),
+        authority_record_sha256=authority_record_sha256,
+        verification_program=copy.deepcopy(program),
+        verification_exit_status=3,
+        message=_safe_failure_message(error),
+    )
+
+
+def acquire_exact_main_baseline(
+    environment: HostEnvironment,
+    plan: LanePlan,
+    *,
+    mode: str,
+) -> AcquisitionOutcome:
+    """Run the exact no-performance-timing acquisition state machine."""
+    canonical_plan = validate_lane_plan(plan)
+    _require(isinstance(environment, HostEnvironment),
+             "acquisition environment is invalid")
+    _require(type(mode) is str and mode in ("rehearsal", "authoritative"),
+             "acquisition mode is invalid")
+
+    with AcquisitionLocks(environment, blocking=False) as locks:
+        with prepare_acquisition_roots(canonical_plan) as prepared:
+            def checkpoint() -> None:
+                locks.validate_current()
+                prepared.validate_current()
+
+            checkpoint()
+            try:
+                host = environment.host_facts()
+            except BaseException as error:
+                source_log = _source_stage_log_bytes(
+                    "failed", (), adapter_commit=None, adapter_tree=None,
+                    retained_byte_paths=(), retained_path_sources=(),
+                    error=error)
+                checkpoint()
+                outcome = _seal_and_verify_failure(
+                    environment, canonical_plan, error,
+                    stage="source_acquisition",
+                    stage_logs={"source_acquisition": source_log},
+                    validate_state=checkpoint)
+                checkpoint()
+                return outcome
+            checkpoint()
+
+            try:
+                source_stage = acquire_source_stage(
+                    environment, canonical_plan, prepared)
+            except SourceStageError as error:
+                checkpoint()
+                outcome = _seal_and_verify_failure(
+                    environment, canonical_plan, error,
+                    stage="source_acquisition",
+                    stage_logs={"source_acquisition": error.log},
+                    validate_state=checkpoint)
+                checkpoint()
+                return outcome
+            except BaseException as error:
+                wrapped = SourceStageError(
+                    error, _source_stage_log_bytes(
+                        "failed", (), adapter_commit=None, adapter_tree=None,
+                        retained_byte_paths=(), retained_path_sources=(),
+                        error=error))
+                checkpoint()
+                outcome = _seal_and_verify_failure(
+                    environment, canonical_plan, wrapped,
+                    stage="source_acquisition",
+                    stage_logs={"source_acquisition": wrapped.log},
+                    validate_state=checkpoint)
+                checkpoint()
+                return outcome
+            checkpoint()
+
+            controller_path = "controllers/test_legacy_main_benchmark.py"
+            _require(controller_path in source_stage.retained_bytes,
+                     "source stage omitted the attestation controller")
+            controller_sha256 = _sha256(
+                source_stage.retained_bytes[controller_path])
+            stage_logs: dict[str, bytes] = {
+                "source_acquisition": source_stage.log,
+            }
+            results: list[BuildStageResult] = []
+
+            def build_role(role: str) -> AcquisitionOutcome | None:
+                stage = role + "_build"
+                try:
+                    result = acquire_build_stage(
+                        environment, canonical_plan, prepared, role=role,
+                        toolchain=source_stage.toolchain,
+                        controller_sha256=controller_sha256)
+                except BuildStageError as error:
+                    stage_logs[stage] = error.log
+                    retained, paths = _merge_retained_evidence(
+                        source_stage, results)
+                    checkpoint()
+                    return _seal_and_verify_failure(
+                        environment, canonical_plan, error, stage=stage,
+                        stage_logs=stage_logs, retained_bytes=retained,
+                        retained_paths=paths, validate_state=checkpoint)
+                except BaseException as error:
+                    failed_log = _build_stage_log_bytes(
+                        role, "failed", (),
+                        controller_sha256=controller_sha256, error=error)
+                    wrapped = BuildStageError(role, error, failed_log)
+                    stage_logs[stage] = failed_log
+                    retained, paths = _merge_retained_evidence(
+                        source_stage, results)
+                    checkpoint()
+                    return _seal_and_verify_failure(
+                        environment, canonical_plan, wrapped, stage=stage,
+                        stage_logs=stage_logs, retained_bytes=retained,
+                        retained_paths=paths, validate_state=checkpoint)
+                results.append(result)
+                stage_logs[stage] = result.log
+                checkpoint()
+                return None
+
+            outcome = build_role("canonical_first")
+            if outcome is not None:
+                checkpoint()
+                return outcome
+
+            try:
+                prepared.reset_root("canonical_build_root")
+            except BaseException as error:
+                failed_log = _build_stage_log_bytes(
+                    "canonical_second", "failed", (),
+                    controller_sha256=controller_sha256, error=error)
+                wrapped = BuildStageError(
+                    "canonical_second", error, failed_log)
+                stage_logs["canonical_second_build"] = failed_log
+                retained, paths = _merge_retained_evidence(
+                    source_stage, results)
+                checkpoint()
+                outcome = _seal_and_verify_failure(
+                    environment, canonical_plan, wrapped,
+                    stage="canonical_second_build", stage_logs=stage_logs,
+                    retained_bytes=retained, retained_paths=paths,
+                    validate_state=checkpoint)
+                checkpoint()
+                return outcome
+            checkpoint()
+
+            outcome = build_role("canonical_second")
+            if outcome is not None:
+                checkpoint()
+                return outcome
+            outcome = build_role("path_variant")
+            if outcome is not None:
+                checkpoint()
+                return outcome
+
+            retained_bytes, retained_paths = _merge_retained_evidence(
+                source_stage, results)
+            completed_path_variant_log = stage_logs["path_variant_build"]
+            try:
+                program = verification_program_identity(
+                    canonical_plan, source_stage.toolchain)
+                interpreter = _verification_program_interpreter(program)
+                verifier_arguments = verification_argv(
+                    environment, canonical_plan, interpreter=interpreter)
+                child_environment = frozen_child_environment()
+                stage_logs["independent_verification"] = \
+                    verification_plan_log_bytes(
+                        argv=verifier_arguments, program=program,
+                        cwd=canonical_plan.scratch_root,
+                        child_environment=child_environment)
+                all_log_paths = [
+                    f"logs/{index:02d}-{name}.log"
+                    for index, name in enumerate(record_contract.STAGE_NAMES)
+                ]
+                stage_logs["seal"] = seal_plan_log_bytes(
+                    canonical_plan, terminal="baseline-authority.json",
+                    retained_byte_paths=(
+                        list(retained_bytes) + all_log_paths),
+                    retained_path_sources=list(retained_paths))
+                authority = assemble_authority_record(
+                    environment, canonical_plan, host=host,
+                    source_stage=source_stage, results=results,
+                    stage_logs=stage_logs)
+                for index, name in enumerate(record_contract.STAGE_NAMES):
+                    path = f"logs/{index:02d}-{name}.log"
+                    _require(path not in retained_bytes and
+                             path not in retained_paths,
+                             "authority stage log collides with evidence")
+                    retained_bytes[path] = stage_logs[name]
+            except BaseException as error:
+                failed_log = assembly_failure_log_bytes(
+                    completed_path_variant_log, error)
+                failure_stage_logs = {
+                    name: stage_logs[name]
+                    for name in record_contract.STAGE_NAMES[:3]
+                }
+                failure_stage_logs["path_variant_build"] = failed_log
+                diagnostics = {
+                    "diagnostics/completed-path-variant-build.log":
+                        completed_path_variant_log,
+                }
+                checkpoint()
+                outcome = _seal_and_verify_failure(
+                    environment, canonical_plan, error,
+                    stage="path_variant_build",
+                    stage_logs=failure_stage_logs,
+                    retained_bytes=retained_bytes,
+                    retained_paths=retained_paths,
+                    diagnostics=diagnostics, validate_state=checkpoint)
+                checkpoint()
+                return outcome
+            checkpoint()
+
+            try:
+                with LaneWriter(canonical_plan.lane_root) as writer:
+                    authority_seal = writer.seal_record(
+                        authority, retained_bytes,
+                        retained_paths=retained_paths)
+            except BaseException as error:
+                primary_verification_error: VerificationError | None = None
+                primary_terminal = canonical_plan.lane_root + \
+                    "/baseline-authority.json"
+                if not _path_is_absent(primary_terminal):
+                    # A writer exception can occur after every byte and final
+                    # mode is already correct.  Let the source-bound verifier
+                    # classify that state before emitting any contrary lane.
+                    checkpoint()
+                    try:
+                        recovered_verdict = run_independent_verification(
+                            environment, canonical_plan, record=authority,
+                            seal=None, toolchain=source_stage.toolchain,
+                            program=program)
+                    except VerificationError as recovery_error:
+                        if not recovery_error.process_result_observed:
+                            raise AcquisitionError(
+                                "authority seal failed and the primary lane "
+                                "could not be independently classified: " +
+                                _safe_failure_message(error) + "; " +
+                                _safe_failure_message(recovery_error)) \
+                                from recovery_error
+                        primary_verification_error = recovery_error
+                    except BaseException as recovery_error:
+                        raise AcquisitionError(
+                            "authority seal failed and the primary lane could "
+                            "not be independently classified: " +
+                            _safe_failure_message(error) + "; " +
+                            _safe_failure_message(recovery_error)) \
+                            from recovery_error
+                    else:
+                        recovered_seal = _seal_result_from_verdict(
+                            canonical_plan.lane_root,
+                            "baseline-authority.json", authority,
+                            recovered_verdict)
+                        checkpoint()
+                        return AcquisitionOutcome(
+                            outcome="promoted_authority",
+                            lane_root=canonical_plan.lane_root,
+                            terminal="baseline-authority.json",
+                            seal=copy.deepcopy(recovered_seal),
+                            verdict=copy.deepcopy(recovered_verdict),
+                            authority_lane_root=canonical_plan.lane_root,
+                            authority_record_sha256=
+                                authority["record_sha256"],
+                            verification_program=copy.deepcopy(program),
+                            verification_exit_status=0, message=None)
+                failed_log = assembly_failure_log_bytes(
+                    completed_path_variant_log, error,
+                    authority_lane_root=canonical_plan.lane_root,
+                    authority_record_sha256=authority["record_sha256"])
+                failure_stage_logs = {
+                    name: stage_logs[name]
+                    for name in record_contract.STAGE_NAMES[:3]
+                }
+                failure_stage_logs["path_variant_build"] = failed_log
+                diagnostics = {
+                    "diagnostics/completed-path-variant-build.log":
+                        completed_path_variant_log,
+                }
+                # The primary root has been claimed and is never reused, even
+                # when independent replay rejected its terminal.
+                failure_retained = {
+                    path: content for path, content in retained_bytes.items()
+                    if not path.startswith("logs/")
+                }
+                if primary_verification_error is not None:
+                    failure_retained.update({
+                        "verification/primary-verifier.stdout":
+                            primary_verification_error.stdout,
+                        "verification/primary-verifier.stderr":
+                            primary_verification_error.stderr,
+                    })
+                checkpoint()
+                outcome = _seal_and_verify_failure(
+                    environment, canonical_plan, error,
+                    stage="path_variant_build",
+                    stage_logs=failure_stage_logs,
+                    retained_bytes=failure_retained,
+                    retained_paths=retained_paths,
+                    diagnostics=diagnostics,
+                    lane_root=canonical_plan.failure_lane_root,
+                    validate_state=checkpoint)
+                checkpoint()
+                return outcome
+            checkpoint()
+
+            try:
+                verdict = run_independent_verification(
+                    environment, canonical_plan, record=authority,
+                    seal=authority_seal, toolchain=source_stage.toolchain,
+                    program=program)
+            except BaseException as observed_error:
+                error = observed_error if isinstance(
+                    observed_error, VerificationError) else VerificationError(
+                        _safe_failure_message(observed_error), exit_status=1,
+                        stdout=b"", stderr=b"")
+                failed_log = verification_failure_log_bytes(
+                    planned_log=stage_logs["independent_verification"],
+                    argv=verifier_arguments, program=program, error=error,
+                    authority_record_sha256=authority["record_sha256"],
+                    authority_seal=authority_seal)
+                failure_stage_logs = {
+                    name: stage_logs[name]
+                    for name in record_contract.STAGE_NAMES[:4]
+                }
+                failure_stage_logs["independent_verification"] = failed_log
+                failure_retained = {
+                    "verification/planned-independent-verification.log":
+                        stage_logs["independent_verification"],
+                    "verification/verifier.stdout": error.stdout,
+                    "verification/verifier.stderr": error.stderr,
+                }
+                checkpoint()
+                outcome = _seal_and_verify_failure(
+                    environment, canonical_plan, error,
+                    stage="independent_verification",
+                    stage_logs=failure_stage_logs,
+                    retained_bytes=failure_retained,
+                    lane_root=canonical_plan.failure_lane_root,
+                    authority_record_sha256=authority["record_sha256"],
+                    validate_state=checkpoint)
+                checkpoint()
+                return outcome
+            checkpoint()
+            return AcquisitionOutcome(
+                outcome="promoted_authority",
+                lane_root=canonical_plan.lane_root,
+                terminal="baseline-authority.json",
+                seal=copy.deepcopy(authority_seal),
+                verdict=copy.deepcopy(verdict),
+                authority_lane_root=canonical_plan.lane_root,
+                authority_record_sha256=authority["record_sha256"],
+                verification_program=copy.deepcopy(program),
+                verification_exit_status=0, message=None)
+
+
+_CLI_PATH_OPTIONS = (
+    "lane-root", "failure-lane-root", "repository", "verifier",
+    "canonical-adapter-root", "canonical-baseline-root",
+    "canonical-build-root", "variant-adapter-root",
+    "variant-baseline-root", "variant-build-root", "scratch-root",
+)
+_CLI_OPTIONS = ("mode", "attempt") + _CLI_PATH_OPTIONS
+_USAGE = (
+    "usage: leopard2_exact_main_baseline_acquire.py "
+    "--mode {rehearsal|authoritative} --attempt {1|2|3} "
+    "--lane-root P --failure-lane-root P --repository P --verifier P "
+    "--canonical-adapter-root P --canonical-baseline-root P "
+    "--canonical-build-root P --variant-adapter-root P "
+    "--variant-baseline-root P --variant-build-root P --scratch-root P"
+)
+
+
+def _parse_acquisition_cli(
+    arguments: Sequence[str],
+) -> tuple[str, LanePlan]:
+    _require(type(arguments) in (list, tuple) and
+             len(arguments) == 2 * len(_CLI_OPTIONS),
+             "acquisition CLI requires every option exactly once")
+    values: dict[str, str] = {}
+    for index in range(0, len(arguments), 2):
+        option = arguments[index]
+        value = arguments[index + 1]
+        _require(type(option) is str and option.startswith("--") and
+                 option[2:] in _CLI_OPTIONS and option[2:] not in values and
+                 type(value) is str and bool(value),
+                 "acquisition CLI has an unknown, duplicate, or empty option")
+        values[option[2:]] = value
+    _require(set(values) == set(_CLI_OPTIONS),
+             "acquisition CLI option set is incomplete")
+    _require(values["mode"] in ("rehearsal", "authoritative"),
+             "acquisition mode must be rehearsal or authoritative")
+    _require(values["attempt"] in ("1", "2", "3"),
+             "acquisition attempt must be 1, 2, or 3")
+    plan = LanePlan(
+        lane_root=values["lane-root"],
+        failure_lane_root=values["failure-lane-root"],
+        attempt=int(values["attempt"], 10),
+        repository=values["repository"], verifier=values["verifier"],
+        canonical_adapter_root=values["canonical-adapter-root"],
+        canonical_baseline_root=values["canonical-baseline-root"],
+        canonical_build_root=values["canonical-build-root"],
+        variant_adapter_root=values["variant-adapter-root"],
+        variant_baseline_root=values["variant-baseline-root"],
+        variant_build_root=values["variant-build-root"],
+        scratch_root=values["scratch-root"],
+    )
+    return values["mode"], validate_lane_plan(plan)
+
+
+def acquisition_report(
+    plan: LanePlan,
+    outcome: AcquisitionOutcome,
+    *,
+    mode: str,
+) -> dict[str, Any]:
+    """Build the canonical no-performance-timing operator report."""
+    canonical_plan = validate_lane_plan(plan)
+    _require(isinstance(outcome, AcquisitionOutcome) and
+             type(mode) is str and mode in ("rehearsal", "authoritative") and
+             outcome.outcome in (
+                 "promoted_authority", "acquisition_failure",
+                 "verification_failure") and
+             outcome.lane_root in (
+                 canonical_plan.lane_root, canonical_plan.failure_lane_root) and
+             outcome.terminal in _TERMINAL_PATHS and
+             type(outcome.seal) is dict and
+             outcome.seal.get("root") == outcome.lane_root and
+             outcome.seal.get("terminal") == outcome.terminal and
+             type(outcome.verdict) is dict and
+             type(outcome.verification_program) is dict and
+             outcome.verification_exit_status in (0, 3),
+             "acquisition outcome cannot be reported")
+    _verification_program_interpreter(outcome.verification_program)
+    verdict_sha256 = outcome.verdict.get("verdict_sha256")
+    _require(type(verdict_sha256) is str and
+             re.fullmatch(r"[0-9a-f]{64}", verdict_sha256) is not None,
+             "acquisition verdict SHA-256 is invalid")
+    return {
+        "schema": ACQUISITION_REPORT_SCHEMA,
+        "mode": mode,
+        "authoritative": mode == "authoritative",
+        "outcome": outcome.outcome,
+        "lane_roots": {
+            "authority": canonical_plan.lane_root,
+            "failure": canonical_plan.failure_lane_root,
+        },
+        "terminal": {
+            "lane_root": outcome.lane_root,
+            "relative_path": outcome.terminal,
+            "record_sha256": outcome.seal["terminal_record_sha256"],
+        },
+        "authority_record_sha256": outcome.authority_record_sha256,
+        "seal": {
+            "protocol": record_contract.SEAL_PROTOCOL,
+            "file_count": outcome.seal["file_count"],
+            "directory_count": outcome.seal["directory_count"],
+            "tree_metadata_sha256":
+                outcome.seal["tree_metadata_sha256"],
+            "sha256sums_sha256": outcome.seal["sha256sums_sha256"],
+        },
+        "verification": {
+            "exit_status": outcome.verification_exit_status,
+            "verdict_sha256": verdict_sha256,
+            "program": copy.deepcopy(outcome.verification_program),
+        },
+        "message": outcome.message,
+    }
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        mode, plan = _parse_acquisition_cli(arguments)
+    except BaseException as error:
+        sys.stderr.write(_USAGE + "\n" + _safe_failure_message(error) + "\n")
+        return 2
+    try:
+        outcome = acquire_exact_main_baseline(
+            HostEnvironment(), plan, mode=mode)
+        report = acquisition_report(plan, outcome, mode=mode)
+        sys.stdout.buffer.write(canonical_json_bytes(report))
+        sys.stdout.buffer.flush()
+    except BaseException as error:
+        sys.stderr.write(
+            "exact-main baseline acquisition failed: " +
+            _safe_failure_message(error) + "\n")
+        return 1
+    if outcome.outcome != "promoted_authority":
+        sys.stderr.write((outcome.message or "acquisition did not promote") +
+                         "\n")
+        return 3
+    return 0
+
+
 __all__ = (
     "AcquisitionLocks",
     "AcquisitionError",
+    "AcquisitionOutcome",
+    "ACQUISITION_REPORT_SCHEMA",
+    "ASSEMBLY_LOG_SCHEMA",
     "ATTESTATION_TIMEOUT_SECONDS",
     "BUILD_CLOSURE_SCHEMA",
     "BUILD_LOG_SCHEMA",
@@ -4389,9 +5696,18 @@ __all__ = (
     "StableLeaseAnchor",
     "StreamedCommandResult",
     "TREE_METADATA_SCHEMA",
+    "VERIFICATION_FAILURE_LOG_SCHEMA",
+    "VERIFICATION_LOG_SCHEMA",
+    "VERIFICATION_TIMEOUT_SECONDS",
+    "VerificationError",
+    "SEAL_LOG_SCHEMA",
+    "acquire_exact_main_baseline",
     "acquire_build_stage",
     "acquire_source_stage",
     "adapter_inventory",
+    "acquisition_report",
+    "assemble_authority_record",
+    "assembly_failure_log_bytes",
     "build_closure_document",
     "build_role_roots",
     "build_root_census",
@@ -4406,7 +5722,18 @@ __all__ = (
     "resolve_toolchain",
     "seal_stage_failure",
     "seal_source_acquisition_failure",
+    "seal_verification_failure",
+    "seal_plan_log_bytes",
     "stage_build_output",
     "stage_detached_source",
     "validate_lane_plan",
+    "verification_argv",
+    "verification_failure_log_bytes",
+    "verification_plan_log_bytes",
+    "verification_program_identity",
+    "run_independent_verification",
 )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

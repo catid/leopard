@@ -93,6 +93,7 @@ def fixture_for_root(root: Path, kind: str) -> tuple[dict[str, bytes], dict]:
 def lane_plan(root: str = "/tmp/leopard-exact-main-lane-a1") -> acquire.LanePlan:
     return acquire.LanePlan(
         lane_root=root,
+        failure_lane_root="/tmp/leopard-exact-main-failed-a1",
         attempt=1,
         repository="/home/catid/leopard",
         verifier=(
@@ -110,7 +111,8 @@ def lane_plan(root: str = "/tmp/leopard-exact-main-lane-a1") -> acquire.LanePlan
 
 def temporary_lane_plan(parent: Path) -> acquire.LanePlan:
     return acquire.LanePlan(
-        lane_root=str(parent / "sealed-lane"), attempt=1,
+        lane_root=str(parent / "sealed-lane"),
+        failure_lane_root=str(parent / "failed-lane"), attempt=1,
         repository=str(TOOLS.parent),
         verifier=str(TOOLS / "leopard2_exact_main_baseline_verifier.py"),
         canonical_adapter_root=str(parent / "canonical-adapter"),
@@ -206,6 +208,7 @@ class ExactMainBaselineAcquireTest(unittest.TestCase):
         for mutation in (
                 {"attempt": 0}, {"attempt": 4},
                 {"lane_root": "relative/lane"},
+                {"failure_lane_root": plan.lane_root + "-failure"},
                 {"variant_build_root": plan.canonical_build_root + "/child"},
                 {"variant_build_root": "/var" + plan.canonical_build_root +
                  "-suffix"},
@@ -944,6 +947,7 @@ class ExactMainBaselineAcquireTest(unittest.TestCase):
             work.mkdir(mode=0o700)
             plan = acquire.LanePlan(
                 lane_root=str(work / "sealed-lane"), attempt=1,
+                failure_lane_root=str(work / "failed-lane"),
                 repository=str(repository),
                 verifier=str(repository / "tools/verifier.py"),
                 canonical_adapter_root=str(work / "canonical-adapter"),

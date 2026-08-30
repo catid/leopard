@@ -3173,6 +3173,23 @@ if(LEO2_BUILD_TESTS)
             set_tests_properties(
                 leopard2_exact_main_baseline_build_stage_optimized_self_test
                 PROPERTIES TIMEOUT 300)
+            # The complete state-machine test uses scripted build artifacts but
+            # launches the independent lane verifier in a fresh process.  It
+            # performs no benchmark timing or compiler invocation.
+            add_test(
+                NAME leopard2_exact_main_baseline_orchestrator_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_orchestrator_test.py)
+            add_test(
+                NAME leopard2_exact_main_baseline_orchestrator_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_orchestrator_test.py)
+            set_tests_properties(
+                leopard2_exact_main_baseline_orchestrator_self_test
+                PROPERTIES TIMEOUT 300)
+            set_tests_properties(
+                leopard2_exact_main_baseline_orchestrator_optimized_self_test
+                PROPERTIES TIMEOUT 300)
             add_test(
                 NAME leopard2_allk_gap_identity_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}

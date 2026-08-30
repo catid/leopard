@@ -32,6 +32,8 @@ ACQUISITION_FAILURE_SCHEMA = \
     "leopard2-gf8-exact-main-pure-avx2-baseline-acquisition-failure/v1"
 VERIFICATION_FAILURE_SCHEMA = \
     "leopard2-gf8-exact-main-pure-avx2-baseline-verification-failure/v1"
+VERIFIER_VERDICT_SCHEMA = \
+    "leopard2-gf8-exact-main-pure-avx2-baseline-verification/v1"
 BUILD_PROFILE_SCHEMA = \
     "leopard2-gf8-exact-main-pure-avx2-build-profile/v1"
 RUNTIME_CLOSURE_SCHEMA = \
@@ -2231,6 +2233,7 @@ __all__ = (
     "CLOSURE_FILE_KEYS",
     "CTEST_SUMMARY_LINE",
     "ExactMainBaselineRecordError",
+    "FAILURE_STAGES",
     "HISTORICAL_ARCHIVE_SHA256",
     "HISTORICAL_EXECUTABLE_SHA256",
     "MINIMUM_HARNESS_COMMIT",
@@ -2243,6 +2246,7 @@ __all__ = (
     "SUBTOOL_ROLES",
     "TOOL_ROLES",
     "VERIFICATION_FAILURE_SCHEMA",
+    "VERIFIER_VERDICT_SCHEMA",
     "VERSION_ROLES",
     "baseline_acquisition_failure_record",
     "baseline_authority_record",
