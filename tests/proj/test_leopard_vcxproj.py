@@ -1162,6 +1162,10 @@ class CMakeProductionGraph(object):
         "leopard2_v18_replay_compatibility_self_test": 1,
         "leopard2_pair_qualification_contract_self_test": 1,
         "leopard2_pair_qualification_contract_optimized_self_test": 1,
+        "leopard2_pair_qualification_acquire_self_test": 1,
+        "leopard2_pair_qualification_acquire_optimized_self_test": 1,
+        "leopard2_k65_gen3_freeze_boundaries_self_test": 1,
+        "leopard2_k65_gen3_freeze_boundaries_optimized_self_test": 1,
         "leopard2_exact_main_baseline_contract_self_test": 1,
         "leopard2_exact_main_baseline_contract_optimized_self_test": 1,
         "leopard2_exact_main_baseline_record_self_test": 1,
@@ -1237,6 +1241,10 @@ class CMakeProductionGraph(object):
         "leopard2_v18_passive_auditor_optimized_self_test",
         "leopard2_v18_passive_wrapper_contract_self_test",
         "leopard2_v18_replay_compatibility_self_test",
+        "leopard2_pair_qualification_acquire_self_test",
+        "leopard2_pair_qualification_acquire_optimized_self_test",
+        "leopard2_k65_gen3_freeze_boundaries_self_test",
+        "leopard2_k65_gen3_freeze_boundaries_optimized_self_test",
         "leopard2_exact_main_baseline_verifier_self_test",
         "leopard2_exact_main_baseline_verifier_optimized_self_test",
         "leopard2_exact_main_baseline_acquire_self_test",
@@ -1275,7 +1283,7 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "9882428f3b60d5ed251c62295d632f698199929b7138ea2b759ce91e980f1bbf"
+        "d8c6b57236b218d5f0aa8c3684290dcaaccf1089d0d8f37590985f811b816956"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1371,6 +1379,12 @@ class CMakeProductionGraph(object):
             "TIMEOUT", "300")): 1,
         ("set_tests_properties", (
             "leopard2_pair_qualification_contract_optimized_self_test",
+            "PROPERTIES", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_pair_qualification_acquire_self_test",
+            "leopard2_pair_qualification_acquire_optimized_self_test",
+            "leopard2_k65_gen3_freeze_boundaries_self_test",
+            "leopard2_k65_gen3_freeze_boundaries_optimized_self_test",
             "PROPERTIES", "TIMEOUT", "300")): 1,
         ("set_tests_properties", (
             "leopard2_exact_main_baseline_contract_self_test", "PROPERTIES",
