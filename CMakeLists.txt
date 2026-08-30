@@ -3202,6 +3202,22 @@ if(LEO2_BUILD_TESTS)
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_pair_qualification_acquire.py)
             add_test(
+                NAME leopard2_pair_qualification_bridge_contract_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_pair_qualification_bridge_contract.py)
+            add_test(
+                NAME leopard2_pair_qualification_bridge_contract_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_pair_qualification_bridge_contract.py)
+            add_test(
+                NAME leopard2_pair_qualification_verify_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_pair_qualification_verify.py)
+            add_test(
+                NAME leopard2_pair_qualification_verify_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_pair_qualification_verify.py)
+            add_test(
                 NAME leopard2_k65_gen3_freeze_boundaries_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_k65_gen3_freeze_boundaries.py)
@@ -3212,6 +3228,10 @@ if(LEO2_BUILD_TESTS)
             set_tests_properties(
                 leopard2_pair_qualification_acquire_self_test
                 leopard2_pair_qualification_acquire_optimized_self_test
+                leopard2_pair_qualification_bridge_contract_self_test
+                leopard2_pair_qualification_bridge_contract_optimized_self_test
+                leopard2_pair_qualification_verify_self_test
+                leopard2_pair_qualification_verify_optimized_self_test
                 leopard2_k65_gen3_freeze_boundaries_self_test
                 leopard2_k65_gen3_freeze_boundaries_optimized_self_test
                 PROPERTIES TIMEOUT 300)

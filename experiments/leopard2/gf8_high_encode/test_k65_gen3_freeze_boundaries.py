@@ -15,11 +15,13 @@ MAIN_COMPARE = HERE.parent / "main_compare"
 RUNNER_PATH = HERE / "run_k65r65_b64_packed_terminal_abba.py"
 CONTRACT_PATH = MAIN_COMPARE / "pair_qualification_contract.py"
 CONTRACT_TEST_PATH = MAIN_COMPARE / "test_pair_qualification_contract.py"
+ACQUISITION_PATH = MAIN_COMPARE / "pair_qualification_acquire.py"
 
 FROZEN_SHA256 = {
     RUNNER_PATH: "2a5489ba7c1866135e5fc1577c3f4290e851bb41837d0e46e1118ac7699397ca",
     CONTRACT_PATH: "70a0d477ff947aaa301775ecee3370be42bb7b2e4d84a1ff372a411ee9eb8900",
     CONTRACT_TEST_PATH: "f670a4bcbaa3d6df784e81e163fa618d65780a135d234d8e5c27360e953199f1",
+    ACQUISITION_PATH: "d26d926a9afabcedada5d96c3beb9d8b02c0751a169e00635a6080557f053f00",
 }
 GENERATION2_PROJECTION_SHA256 = \
     "50a56a31ff68fb1143347d1bef51701e16371a458e4b20a15e2c31999aae1ee6"
@@ -65,11 +67,17 @@ class K65Generation3FreezeBoundaryTest(unittest.TestCase):
             runner.generation_projection(3)
 
     def test_new_acquisition_is_additive_and_does_not_import_the_v2_runner(self) -> None:
-        acquisition = MAIN_COMPARE / "pair_qualification_acquire.py"
-        text = acquisition.read_text("utf-8")
-        self.assertNotIn("run_k65r65_b64_packed_terminal_abba", text)
-        self.assertNotIn("generation_projection", text)
-        self.assertNotIn("ATTEMPT_BUDGET", text)
+        additive_paths = (
+            ACQUISITION_PATH,
+            MAIN_COMPARE / "pair_qualification_bridge_contract.py",
+            MAIN_COMPARE / "pair_qualification_verify.py",
+        )
+        for path in additive_paths:
+            with self.subTest(path=str(path)):
+                text = path.read_text("utf-8")
+                self.assertNotIn("run_k65r65_b64_packed_terminal_abba", text)
+                self.assertNotIn("generation_projection", text)
+                self.assertNotIn("ATTEMPT_BUDGET", text)
 
 
 if __name__ == "__main__":
