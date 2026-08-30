@@ -3156,6 +3156,23 @@ if(LEO2_BUILD_TESTS)
             set_tests_properties(
                 leopard2_exact_main_baseline_acquire_optimized_self_test
                 PROPERTIES TIMEOUT 300)
+            # The build-stage producer is exercised with a scripted host edge
+            # and synthetic ELF artifacts.  These tests launch no compiler,
+            # CMake, CTest, benchmark, or performance timing.
+            add_test(
+                NAME leopard2_exact_main_baseline_build_stage_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_build_stage_test.py)
+            add_test(
+                NAME leopard2_exact_main_baseline_build_stage_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_exact_main_baseline_build_stage_test.py)
+            set_tests_properties(
+                leopard2_exact_main_baseline_build_stage_self_test
+                PROPERTIES TIMEOUT 300)
+            set_tests_properties(
+                leopard2_exact_main_baseline_build_stage_optimized_self_test
+                PROPERTIES TIMEOUT 300)
             add_test(
                 NAME leopard2_allk_gap_identity_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}

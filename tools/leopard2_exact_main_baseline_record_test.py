@@ -1725,6 +1725,79 @@ class ExactMainBaselineAuthorityRecordTest(unittest.TestCase):
             self.assertEqual(contract.load_baseline_failure_record(
                 contract.canonical_json_bytes(verification)), verification)
 
+    def test_shared_build_shapes_match_the_authority_validators(self) -> None:
+        tools = {item["role"]: item["resolved_path"]
+                 for item in toolchain_fixture()["tools"]}
+        build = build_fixture(
+            "canonical_first",
+            executable_sha256=digest("shared-executable"),
+            archive_sha256=digest("shared-archive"))
+        roots = build["roots"]
+        self.assertEqual(build["configure_argv"],
+                         contract.exact_main_configure_argv(
+                             cmake=tools["cmake"],
+                             compiler=tools["compiler"], roots=roots))
+        self.assertEqual(build["build_argv"], contract.exact_main_build_argv(
+            cmake=tools["cmake"], roots=roots))
+        self.assertEqual(
+            attestation_fixture(
+                {"canonical_first": build,
+                 "canonical_second": build_fixture(
+                     "canonical_second",
+                     executable_sha256=digest("shared-executable"),
+                     archive_sha256=digest("shared-archive")),
+                 "path_variant": build_fixture(
+                     "path_variant",
+                     executable_sha256=digest("shared-variant-executable"),
+                     archive_sha256=digest("shared-variant-archive"))},
+                adapter_fixture())["records"][0]["argv"],
+            contract.exact_main_benchmark_argv(
+                executable_path=roots["build_root"] +
+                "/leopard_main_benchmark"))
+        self.assertEqual(
+            contract.exact_main_ctest_argv(
+                ctest=tools["ctest"], build_root=roots["build_root"]),
+            [tools["ctest"], "--test-dir", roots["build_root"],
+             "--output-on-failure", "-R",
+             "^leopard_main_benchmark_smoke$"])
+
+        commands = []
+        for source in contract.exact_main_compile_sources(roots):
+            argv, output = contract.exact_main_compile_command_argv(
+                roots=roots, compiler=tools["compiler"], source=source)
+            commands.append({
+                "directory": roots["build_root"], "file": source,
+                "output": output, "arguments": argv,
+            })
+        self.assertEqual(contract.validate_compile_commands(
+            commands, roots=roots, compiler=tools["compiler"],
+            profile=contract.exact_main_build_profile()),
+            tuple(item["file"] for item in commands))
+        cache = (
+            "CMAKE_BUILD_TYPE:STRING=Release\n"
+            "CMAKE_CXX_FLAGS:STRING=\n"
+            "CMAKE_CXX_FLAGS_RELEASE:STRING=-g -O0 -O3\n"
+            f"LEOPARD_MAIN_SOURCE_DIR:PATH={roots['baseline_source_root']}\n"
+            "LEO_MAIN_PURE_AVX2:BOOL=ON\n"
+        ).encode("utf-8")
+        self.assertEqual(
+            contract.validate_cmake_cache(cache, roots)["LEO_MAIN_PURE_AVX2"],
+            ("BOOL", "ON"))
+
+        closure = {
+            "schema": contract.BUILD_CLOSURE_SCHEMA,
+            "role": "canonical_first", "build_root": roots["build_root"],
+            "files": sorted([{
+                "relative_path": artifact["build_relative_path"],
+                "size": artifact["size"], "sha256": artifact["sha256"],
+            } for artifact in (build["executable"], build["archive"])],
+                key=lambda item: item["relative_path"]),
+            "file_count": 2,
+        }
+        build["closure"]["file_count"] = 2
+        self.assertEqual(contract.validate_build_closure(
+            closure, role="canonical_first", build=build), closure)
+
 
 if __name__ == "__main__":
     unittest.main()

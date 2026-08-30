@@ -42,6 +42,10 @@ PROMOTION_GATE = \
     "same-path-bytes-path-variant-normalized-zero-census/v1"
 SEAL_PROTOCOL = "owner-only-tree-sha256sums/v1"
 CANONICAL_LDD_NORMALIZATION = "canonical-ldd-C-v1"
+BUILD_CLOSURE_SCHEMA = \
+    "leopard2-gf8-exact-main-pure-avx2-build-closure/v1"
+BENCHMARK_SCHEMA = "leopard-main-benchmark-v1"
+CTEST_SUMMARY_LINE = "100% tests passed, 0 tests failed out of 1"
 
 BEAD_ID = "leopard-79h.38.5.12.1"
 BASELINE_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
@@ -89,6 +93,9 @@ ADAPTER_PATHS = (
     "experiments/leopard2/main_compare/CMakeLists.txt",
     "experiments/leopard2/main_compare/legacy_main_benchmark.cpp",
     "experiments/leopard2/main_compare/test_legacy_main_benchmark.py",
+)
+BASELINE_CPP_SOURCES = (
+    "leopard.cpp", "LeopardCommon.cpp", "LeopardFF8.cpp", "LeopardFF16.cpp",
 )
 
 AUTHORITY_KEYS = frozenset((
@@ -155,6 +162,10 @@ BUILD_ARTIFACT_KEYS = frozenset((
 CLOSURE_KEYS = frozenset((
     "relative_path", "size", "sha256", "file_count",
 ))
+BUILD_CLOSURE_KEYS = frozenset((
+    "schema", "role", "build_root", "files", "file_count",
+))
+CLOSURE_FILE_KEYS = frozenset(("relative_path", "size", "sha256"))
 RUNTIME_KEYS = frozenset(("schema", "normalization", "records"))
 RUNTIME_RECORD_KEYS = frozenset((
     "role", "executable_sha256", "canonical_ldd_output", "dependencies",
@@ -326,13 +337,15 @@ def _text_identity(value: Any, label: str,
 
 
 def _file(value: Any, label: str, *,
-          expected_path: str | None = None) -> dict[str, Any]:
+          expected_path: str | None = None,
+          minimum_size: int = 1) -> dict[str, Any]:
     record = _dict(value, FILE_KEYS, label)
     path = _relative_path(record["relative_path"], f"{label} path")
     if expected_path is not None:
         _require(path == expected_path, f"{label} path changed")
     size, digest = _byte_identity(
-        record["size"], record["sha256"], label, minimum_size=1)
+        record["size"], record["sha256"], label,
+        minimum_size=minimum_size)
     return {
         "relative_path": path,
         "size": size,
@@ -688,6 +701,393 @@ def exact_main_build_cache_requirements(
     return tuple(requirements)
 
 
+def _validated_build_roots(roots: Mapping[str, Any]) -> dict[str, str]:
+    roots_value = _dict(roots, ROOTS_KEYS, "exact-main build roots")
+    canonical = {
+        key: _absolute_path(roots_value[key], f"exact-main {key}")
+        for key in ("adapter_source_root", "baseline_source_root", "build_root")
+    }
+    _require_independent_paths(list(canonical.values()),
+                               "exact-main build roots")
+    return canonical
+
+
+def _validated_tool_path(value: Any, label: str) -> str:
+    return _absolute_path(value, label)
+
+
+def exact_main_configure_argv(
+    *, cmake: str, compiler: str, roots: Mapping[str, Any],
+) -> list[str]:
+    """Return the frozen CMake configure argv for one exact-main build."""
+    canonical = _validated_build_roots(roots)
+    cmake_path = _validated_tool_path(cmake, "exact-main CMake path")
+    compiler_path = _validated_tool_path(
+        compiler, "exact-main compiler path")
+    return [
+        cmake_path,
+        "-S", canonical["adapter_source_root"] +
+        "/experiments/leopard2/main_compare",
+        "-B", canonical["build_root"],
+        "-G", "Unix Makefiles",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DLEO_MAIN_PURE_AVX2=ON",
+        "-DLEOPARD_MAIN_SOURCE_DIR=" + canonical["baseline_source_root"],
+        "-DCMAKE_CXX_COMPILER=" + compiler_path,
+    ]
+
+
+def exact_main_build_argv(
+    *, cmake: str, roots: Mapping[str, Any],
+) -> list[str]:
+    """Return the frozen serial CMake build argv."""
+    canonical = _validated_build_roots(roots)
+    cmake_path = _validated_tool_path(cmake, "exact-main CMake path")
+    return [
+        cmake_path, "--build", canonical["build_root"],
+        "--target", "leopard_main_benchmark", "--", "-j1",
+    ]
+
+
+def exact_main_benchmark_argv(*, executable_path: str) -> list[str]:
+    """Return the fixed correctness-only benchmark attestation argv."""
+    executable = _absolute_path(
+        executable_path, "exact-main benchmark executable path")
+    return [
+        executable,
+        "--k", "8", "--r", "4", "--bytes", "64", "--loss", "1",
+        "--batch", "2", "--reuse", "1", "--iterations", "2",
+        "--warmup", "1", "--threads", "1", "--seed", "7",
+        "--json", "-",
+    ]
+
+
+def exact_main_ctest_argv(
+    *, ctest: str, build_root: str,
+) -> list[str]:
+    """Return the frozen single-smoke-test CTest argv."""
+    ctest_path = _validated_tool_path(ctest, "exact-main CTest path")
+    root = _absolute_path(build_root, "exact-main CTest build root")
+    return [
+        ctest_path, "--test-dir", root,
+        "--output-on-failure", "-R", "^leopard_main_benchmark_smoke$",
+    ]
+
+
+def exact_main_compile_sources(
+    roots: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Return the exact source inventory in deterministic compile order."""
+    canonical = _validated_build_roots(roots)
+    return (
+        canonical["adapter_source_root"] +
+        "/experiments/leopard2/main_compare/legacy_main_benchmark.cpp",
+        *(canonical["baseline_source_root"] + "/" + source
+          for source in BASELINE_CPP_SOURCES),
+    )
+
+
+def exact_main_compile_command_argv(
+    *,
+    roots: Mapping[str, Any],
+    compiler: str,
+    source: str,
+) -> tuple[list[str], str]:
+    """Return the exact compile argv and CMake-relative output for one TU."""
+    canonical = _validated_build_roots(roots)
+    compiler_path = _validated_tool_path(
+        compiler, "exact-main compiler path")
+    sources = exact_main_compile_sources(canonical)
+    _require(type(source) is str and source in sources,
+             "exact-main compile source is outside the frozen inventory")
+    adapter_source = sources[0]
+    is_adapter = source == adapter_source
+    profile = exact_main_build_profile()
+    output = (
+        "CMakeFiles/leopard_main_benchmark.dir/"
+        "legacy_main_benchmark.cpp.o" if is_adapter else
+        "CMakeFiles/leopard_main_exact.dir" + source + ".o")
+    argv = [
+        compiler_path,
+        *(["-D" + definition
+           for definition in profile["adapter_definitions"]]
+          if is_adapter else []),
+        "-I" + canonical["baseline_source_root"],
+        *profile["release_flags"],
+        "-std=" + profile["language"],
+        *profile["isa_flags"],
+        *profile["warning_flags"],
+        *(["-fopenmp"] if profile["openmp"] is True else []),
+        "-o", output,
+        "-c", source,
+    ]
+    return argv, output
+
+
+def parse_cmake_cache(content: bytes) -> dict[str, tuple[str, str]]:
+    """Parse the strict LF-framed CMake cache grammar used by v1."""
+    _require(type(content) is bytes and len(content) <= MAX_FILE_BYTES,
+             "CMakeCache.txt is not bounded bytes")
+    try:
+        text = content.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise ExactMainBaselineRecordError(
+            "CMakeCache.txt is not strict UTF-8") from error
+    _require(text.endswith("\n") and "\r" not in text and "\0" not in text,
+             "CMakeCache.txt is not canonical LF text")
+    result: dict[str, tuple[str, str]] = {}
+    for line in text[:-1].split("\n"):
+        if not line or line.startswith("//") or line.startswith("#"):
+            continue
+        head, separator, value = line.partition("=")
+        name, typed, entry_type = head.partition(":")
+        _require(bool(separator) and bool(typed) and name and entry_type and
+                 name not in result,
+                 "CMakeCache.txt contains a malformed or duplicate entry")
+        result[name] = (entry_type, value)
+    return result
+
+
+def validate_cmake_cache(
+    content: bytes, roots: Mapping[str, Any],
+) -> dict[str, tuple[str, str]]:
+    """Validate and return the exact required cache projection."""
+    cache = parse_cmake_cache(content)
+    _require(cache.get("CMAKE_CXX_FLAGS") == ("STRING", ""),
+             "CMake cache injects global C++ flags")
+    for requirement in exact_main_build_cache_requirements(roots):
+        _require(cache.get(requirement["name"]) ==
+                 (requirement["type"], requirement["value"]),
+                 f"CMake cache changed {requirement['name']}")
+    return copy.deepcopy(cache)
+
+
+def _compile_argv(entry: Mapping[str, Any], label: str) -> list[str]:
+    if set(entry) == {"directory", "file", "output", "arguments"}:
+        _require(type(entry["arguments"]) is list and
+                 all(type(argument) is str for argument in entry["arguments"]),
+                 f"{label} arguments are invalid")
+        return list(entry["arguments"])
+    _require(set(entry) == {"directory", "file", "output", "command"} and
+             type(entry["command"]) is str,
+             f"{label} has an unexpected shape")
+    command = entry["command"]
+    arguments: list[str] = []
+    current: list[str] = []
+    state = "plain"
+    quoted = False
+    index = 0
+    while index < len(command):
+        character = command[index]
+        if state == "plain":
+            if character in " \t\n":
+                if current or quoted:
+                    arguments.append("".join(current))
+                    current = []
+                    quoted = False
+            elif character == "'":
+                state = "single"
+                quoted = True
+            elif character == '"':
+                state = "double"
+                quoted = True
+            elif character == "\\":
+                index += 1
+                _require(index < len(command),
+                         f"{label} command cannot be parsed")
+                current.append(command[index])
+            else:
+                current.append(character)
+        elif state == "single":
+            if character == "'":
+                state = "plain"
+            else:
+                current.append(character)
+        else:
+            if character == '"':
+                state = "plain"
+            elif character == "\\":
+                index += 1
+                _require(index < len(command),
+                         f"{label} command cannot be parsed")
+                escaped = command[index]
+                if escaped in ('"', "\\", "$", "`"):
+                    current.append(escaped)
+                elif escaped == "\n":
+                    pass
+                else:
+                    current.extend(("\\", escaped))
+            else:
+                current.append(character)
+        index += 1
+    _require(state == "plain", f"{label} command cannot be parsed")
+    if current or quoted:
+        arguments.append("".join(current))
+    _require(bool(arguments), f"{label} command cannot be parsed")
+    return arguments
+
+
+def validate_compile_commands(
+    value: Any,
+    *,
+    roots: Mapping[str, Any],
+    compiler: str,
+    profile: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Validate the exact five-TU compile closure for one build."""
+    canonical_roots = _validated_build_roots(roots)
+    compiler_path = _validated_tool_path(
+        compiler, "exact-main compiler path")
+    _require(type(profile) is dict and
+             exact_json_equal(profile, exact_main_build_profile()),
+             "exact-main compile profile changed")
+    _require(type(value) is list and 1 <= len(value) <= 4096,
+             "exact-main compile command inventory is invalid")
+    expected_sources = set(exact_main_compile_sources(canonical_roots))
+    observed_sources: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(value):
+        _require(type(raw) is dict,
+                 f"exact-main compile command {index} is invalid")
+        argv = _compile_argv(raw, f"exact-main compile command {index}")
+        source = raw.get("file")
+        _require(type(source) is str and source in expected_sources and
+                 source not in observed_sources,
+                 f"exact-main compile command {index} differs from the profile")
+        expected_argv, expected_output = exact_main_compile_command_argv(
+            roots=canonical_roots, compiler=compiler_path, source=source)
+        _require(raw.get("directory") == canonical_roots["build_root"] and
+                 raw.get("output") == expected_output and
+                 argv == expected_argv,
+                 f"exact-main compile command {index} differs from the profile")
+        observed_sources.add(source)
+        normalized.append(copy.deepcopy(raw))
+    _require(observed_sources == expected_sources,
+             "exact-main compile closure changed its exact source set")
+    return tuple(raw["file"] for raw in normalized)
+
+
+def validate_build_closure(
+    value: Any, *, role: str, build: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate a canonical build-tree census and its two artifact joins."""
+    _require(role in BUILD_ROLES and type(role) is str,
+             "build closure role is invalid")
+    _require(type(build) is dict and "roots" in build and
+             "closure" in build and "executable" in build and
+             "archive" in build,
+             f"{role} build is missing closure claims")
+    closure = _dict(value, BUILD_CLOSURE_KEYS, f"{role} build closure")
+    build_root = _validated_build_roots(build["roots"])["build_root"]
+    closure_claim = _dict(
+        build["closure"], CLOSURE_KEYS, f"{role} build closure claim")
+    _require(closure["schema"] == BUILD_CLOSURE_SCHEMA and
+             closure["role"] == role and
+             closure["build_root"] == build_root and
+             type(closure["file_count"]) is int and
+             1 <= closure["file_count"] <= MAX_CLOSURE_FILES and
+             closure["file_count"] == closure_claim["file_count"] and
+             type(closure["files"]) is list and
+             len(closure["files"]) == closure["file_count"],
+             f"{role} build closure header changed")
+    files: list[dict[str, Any]] = []
+    for index, raw in enumerate(closure["files"]):
+        item = _dict(raw, CLOSURE_FILE_KEYS,
+                     f"{role} closure file {index}")
+        relative_path = _relative_path(
+            item["relative_path"], f"{role} closure file {index} path")
+        size, digest = _byte_identity(
+            item["size"], item["sha256"],
+            f"{role} closure file {index}", minimum_size=0)
+        files.append({"relative_path": relative_path,
+                      "size": size, "sha256": digest})
+    paths = [item["relative_path"] for item in files]
+    _require(paths == sorted(set(paths)),
+             f"{role} build closure paths are not sorted and unique")
+    by_path = {item["relative_path"]: item for item in files}
+    for artifact_name in ("executable", "archive"):
+        artifact = build[artifact_name]
+        path = artifact["build_relative_path"]
+        _require(path in by_path and
+                 by_path[path]["size"] == artifact["size"] and
+                 by_path[path]["sha256"] == artifact["sha256"],
+                 f"{role} build closure does not bind its {artifact_name}")
+    return {
+        "schema": BUILD_CLOSURE_SCHEMA,
+        "role": role,
+        "build_root": build_root,
+        "files": files,
+        "file_count": len(files),
+    }
+
+
+def _argv_options(argv: Sequence[str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    index = 1
+    while index < len(argv):
+        option = argv[index]
+        _require(option.startswith("--") and index + 1 < len(argv),
+                 "attestation argv is malformed")
+        _require(option not in result, "attestation argv repeats an option")
+        result[option] = argv[index + 1]
+        index += 2
+    return result
+
+
+def validate_attestation_stdout(
+    value: Any, *, argv: Sequence[str], reported_schema: str,
+) -> None:
+    """Validate correctness/profile claims in benchmark JSON, not timing."""
+    arguments = _arguments(argv, "attestation argv")
+    schema = _fixed_text(
+        reported_schema, BENCHMARK_SCHEMA, "benchmark reported schema")
+    _require(type(value) is dict and
+             value.get("schema") == schema and
+             value.get("schema") == BENCHMARK_SCHEMA and
+             type(value.get("build")) is dict and
+             value["build"].get("main_source_commit") == BASELINE_COMMIT and
+             value["build"].get("pure_avx2") is True and
+             type(value.get("correctness")) is dict and
+             value["correctness"].get("round_trip") is True and
+             type(value.get("parameters")) is dict,
+             "retained benchmark attestation claims changed")
+    options = _argv_options(arguments)
+    try:
+        expected = {
+            "K": int(options["--k"]),
+            "R": int(options["--r"]),
+            "shard_bytes": int(options["--bytes"]),
+            "loss_count": int(options["--loss"]),
+            "batch": int(options["--batch"]),
+            "reuse": int(options["--reuse"]),
+            "iterations": int(options["--iterations"]),
+            "warmup": int(options["--warmup"]),
+            "thread_count": int(options["--threads"]),
+            "seed": int(options["--seed"]),
+        }
+    except (KeyError, ValueError) as error:
+        raise ExactMainBaselineRecordError(
+            "attestation argv is malformed") from error
+    _require(all(type(value["parameters"].get(key)) is int and
+                 value["parameters"].get(key) == expected_value
+                 for key, expected_value in expected.items()),
+             "retained benchmark attestation parameters changed")
+    return None
+
+
+def validate_exact_main_build(
+    value: Any, *, role: str, tools: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Public pure validator for one exact-main build record."""
+    _require(type(tools) is dict and
+             set(("cmake", "compiler")).issubset(tools),
+             "exact-main build tool map is incomplete")
+    return _build(value, role, {
+        key: _validated_tool_path(raw, f"exact-main {key} path")
+        for key, raw in tools.items()
+    })
+
+
 def _profile(value: Any) -> dict[str, Any]:
     _dict(value, PROFILE_KEYS, "exact-main build profile")
     expected = exact_main_build_profile()
@@ -735,24 +1135,13 @@ def _build(value: Any, role: str,
     _require_independent_paths(list(roots.values()), f"{role} build roots")
     configure_argv = _arguments(
         build["configure_argv"], f"{role} configure argv")
-    expected_configure = [
-        tools["cmake"],
-        "-S", roots["adapter_source_root"] +
-        "/experiments/leopard2/main_compare",
-        "-B", roots["build_root"],
-        "-G", "Unix Makefiles",
-        "-DCMAKE_BUILD_TYPE=Release",
-        "-DLEO_MAIN_PURE_AVX2=ON",
-        "-DLEOPARD_MAIN_SOURCE_DIR=" + roots["baseline_source_root"],
-        "-DCMAKE_CXX_COMPILER=" + tools["compiler"],
-    ]
+    expected_configure = exact_main_configure_argv(
+        roots=roots, cmake=tools["cmake"], compiler=tools["compiler"])
     _require(configure_argv == expected_configure,
              f"{role} configure command changed")
     build_argv = _arguments(build["build_argv"], f"{role} build argv")
-    expected_build = [
-        tools["cmake"], "--build", roots["build_root"],
-        "--target", "leopard_main_benchmark", "--", "-j1",
-    ]
+    expected_build = exact_main_build_argv(
+        roots=roots, cmake=tools["cmake"])
     _require(build_argv == expected_build, f"{role} build command changed")
     role_path = role.replace("_", "-")
     executable = _build_artifact(
@@ -1265,22 +1654,15 @@ def _attestation(value: Any, builds: Mapping[str, Mapping[str, Any]],
         _require(record["role"] == role and type(record["role"]) is str,
                  "attestation record order changed")
         build = builds[role]
-        executable_path = (
+        expected_argv = exact_main_benchmark_argv(executable_path=(
             build["roots"]["build_root"] + "/" +
-            build["executable"]["build_relative_path"])
-        expected_argv = [
-            executable_path,
-            "--k", "8", "--r", "4", "--bytes", "64", "--loss", "1",
-            "--batch", "2", "--reuse", "1", "--iterations", "2",
-            "--warmup", "1", "--threads", "1", "--seed", "7",
-            "--json", "-",
-        ]
+            build["executable"]["build_relative_path"]))
         argv = _arguments(record["argv"], f"{role} attestation argv")
         _require(argv == expected_argv, f"{role} attestation argv changed")
         _require(record["exit_status"] == 0 and
                  type(record["exit_status"]) is int,
                  f"{role} attestation command failed")
-        _require(record["reported_schema"] == "leopard-main-benchmark-v1" and
+        _require(record["reported_schema"] == BENCHMARK_SCHEMA and
                  type(record["reported_schema"]) is str,
                  f"{role} benchmark schema changed")
         _require(record["main_source_commit"] == BASELINE_COMMIT and
@@ -1306,10 +1688,8 @@ def _attestation(value: Any, builds: Mapping[str, Mapping[str, Any]],
                           f"{role} CTest attestation")
         ctest_argv = _arguments(
             ctest_raw["argv"], f"{role} CTest argv")
-        expected_ctest = [
-            tools["ctest"], "--test-dir", build["roots"]["build_root"],
-            "--output-on-failure", "-R", "^leopard_main_benchmark_smoke$",
-        ]
+        expected_ctest = exact_main_ctest_argv(
+            ctest=tools["ctest"], build_root=build["roots"]["build_root"])
         _require(ctest_argv == expected_ctest,
                  f"{role} CTest command changed")
         _require(ctest_raw["exit_status"] == 0 and
@@ -1335,7 +1715,7 @@ def _attestation(value: Any, builds: Mapping[str, Mapping[str, Any]],
             "stdout": stdout,
             "stderr": stderr,
             "exit_status": 0,
-            "reported_schema": "leopard-main-benchmark-v1",
+            "reported_schema": BENCHMARK_SCHEMA,
             "main_source_commit": BASELINE_COMMIT,
             "pure_avx2": True,
             "round_trip": True,
@@ -1679,7 +2059,9 @@ def _failure_record(value: Any, schema: str) -> dict[str, Any]:
     _require(type(retained_value) is list and
              len(retained_value) <= MAX_RETAINED_FILES,
              "baseline retained failure file inventory is invalid")
-    retained = [_file(item, f"baseline retained failure file {index}")
+    retained = [_file(
+                    item, f"baseline retained failure file {index}",
+                    minimum_size=0)
                 for index, item in enumerate(retained_value)]
     paths = [item["relative_path"] for item in retained]
     _require(paths == sorted(set(paths)),
@@ -1836,12 +2218,18 @@ __all__ = (
     "ATTESTATION_SCHEMA",
     "AUTHORITY_SCHEMA",
     "BASELINE_COMMIT",
+    "BASELINE_CPP_SOURCES",
     "BASELINE_SSE2NEON_COMMIT",
     "BASELINE_TREE",
+    "BENCHMARK_SCHEMA",
     "BEAD_ID",
+    "BUILD_CLOSURE_KEYS",
+    "BUILD_CLOSURE_SCHEMA",
     "BUILD_PROFILE_SCHEMA",
     "BUILD_ROLES",
     "CANONICAL_LDD_NORMALIZATION",
+    "CLOSURE_FILE_KEYS",
+    "CTEST_SUMMARY_LINE",
     "ExactMainBaselineRecordError",
     "HISTORICAL_ARCHIVE_SHA256",
     "HISTORICAL_EXECUTABLE_SHA256",
@@ -1861,13 +2249,25 @@ __all__ = (
     "baseline_verification_failure_record",
     "authority_retained_inventory",
     "canonical_json_bytes",
+    "exact_main_benchmark_argv",
+    "exact_main_build_argv",
     "exact_main_build_cache_requirements",
     "exact_main_build_profile",
+    "exact_main_compile_command_argv",
+    "exact_main_compile_sources",
+    "exact_main_configure_argv",
+    "exact_main_ctest_argv",
     "failure_retained_inventory",
     "load_baseline_authority_record",
     "load_baseline_failure_record",
     "parse_canonical_ldd_output",
+    "parse_cmake_cache",
     "superseded_historical_references",
+    "validate_attestation_stdout",
     "validate_baseline_authority_record",
     "validate_baseline_failure_record",
+    "validate_build_closure",
+    "validate_cmake_cache",
+    "validate_compile_commands",
+    "validate_exact_main_build",
 )

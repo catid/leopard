@@ -1668,7 +1668,7 @@ class ExactMainBaselineVerifierTest(unittest.TestCase):
         }
         self.assertEqual(imports, {
             "__future__", "base64", "binascii", "copy", "hashlib",
-            "importlib", "os", "shlex", "stat", "sys", "typing",
+            "importlib", "os", "stat", "sys", "typing",
             "leopard2_exact_main_baseline",
             "leopard2_exact_main_baseline_record",
         })

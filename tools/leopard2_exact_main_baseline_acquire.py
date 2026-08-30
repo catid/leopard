@@ -17,6 +17,7 @@ same sealing implementation.
 
 from __future__ import annotations
 
+import base64
 import copy
 import ctypes
 from dataclasses import dataclass
@@ -76,8 +77,7 @@ canonical_json_bytes = identity_contract.canonical_json_bytes
 
 
 TREE_METADATA_SCHEMA = "leopard2-exact-main-baseline-tree-metadata/v1"
-BUILD_CLOSURE_SCHEMA = \
-    "leopard2-gf8-exact-main-pure-avx2-build-closure/v1"
+BUILD_CLOSURE_SCHEMA = record_contract.BUILD_CLOSURE_SCHEMA
 LANE_FILE_MODE = 0o400
 LANE_DIRECTORY_MODE = 0o500
 WRITABLE_FILE_MODE = 0o600
@@ -100,6 +100,10 @@ CANONICAL_LOCK_PATH = "/tmp/leopard-gf8-authoritative.lock"
 SOURCE_ACQUISITION_TIMEOUT_SECONDS = 30 * 60
 TOOL_COMMAND_TIMEOUT_SECONDS = 60
 MAX_SOURCE_LOG_BYTES = 16 * 1024 * 1024
+BUILD_TIMEOUT_SECONDS = 2 * 60 * 60
+ATTESTATION_TIMEOUT_SECONDS = 30 * 60
+BUILD_LOG_SCHEMA = "leopard2-exact-main-build-command-log/v1"
+BUILD_STAGE_LOG_SCHEMA = "leopard2-exact-main-build-stage-log/v1"
 _TREE_METADATA_PATH = "TREE-METADATA.json"
 _SHA256SUMS_PATH = "SHA256SUMS"
 _TERMINAL_PATHS = frozenset(("baseline-authority.json", "FAILED.json"))
@@ -131,6 +135,20 @@ class SourceStageError(AcquisitionError):
 
     def __init__(self, error: BaseException, log: bytes):
         super().__init__(str(error) or type(error).__name__)
+        self.log = log
+        self.error_kind = "command_error" if isinstance(
+            error, CommandExecutionError) else "acquisition_error"
+        self.exit_status = error.exit_status if isinstance(
+            error, CommandExecutionError) else 1
+
+
+class BuildStageError(AcquisitionError):
+    """A per-role build-stage failure with its complete stage transcript."""
+
+    def __init__(self, role: str, error: BaseException, log: bytes):
+        super().__init__(str(error) or type(error).__name__)
+        self.role = role
+        self.stage = role + "_build"
         self.log = log
         self.error_kind = "command_error" if isinstance(
             error, CommandExecutionError) else "acquisition_error"
@@ -583,6 +601,40 @@ class PreparedAcquisitionRoots:
                      os.path.realpath(path) == path,
                      f"acquisition root {field} was replaced")
 
+    def reset_root(self, field: str) -> None:
+        """Empty one build root in place without changing its identity."""
+        _require(field in ("canonical_build_root", "variant_build_root") and
+                 type(field) is str,
+                 "only an exact-main build root may be reset")
+        self.validate_current()
+        descriptor = self.descriptors[field]
+        try:
+            names = sorted(os.listdir(descriptor))
+            _require(len(names) <= MAX_TREE_NODES,
+                     "build root exceeds the reset node bound")
+            for name in names:
+                _require(type(name) is str and name not in ("", ".", "..") and
+                         "/" not in name and "\0" not in name,
+                         "build root contains an unsafe entry name")
+                status = os.stat(
+                    name, dir_fd=descriptor, follow_symlinks=False)
+                if stat.S_ISDIR(status.st_mode):
+                    # ``shutil.rmtree(dir_fd=...)`` is only available from
+                    # Python 3.12, while the repository supports Python 3.10.
+                    # The prepared-root identity and the no-follow stat above
+                    # establish the same canonical child for this producer
+                    # boundary before using the portable pathname form.
+                    shutil.rmtree(getattr(self.plan, field) + "/" + name)
+                else:
+                    os.unlink(name, dir_fd=descriptor)
+            os.fsync(descriptor)
+            _require(os.listdir(descriptor) == [],
+                     "build root is not empty after reset")
+            self.validate_current()
+        except OSError as error:
+            raise AcquisitionError(
+                f"cannot reset acquisition root {field}: {error}") from error
+
     def _cleanup(self) -> None:
         errors: list[str] = []
         for field in reversed(self.created):
@@ -767,6 +819,20 @@ class SourceStageResult:
     source: dict[str, Any]
     adapter: dict[str, Any]
     toolchain: dict[str, Any]
+    retained_bytes: dict[str, bytes]
+    retained_paths: dict[str, str]
+    log: bytes
+
+
+@dataclass(frozen=True)
+class BuildStageResult:
+    """One complete role's build, runtime, attestation, and ELF evidence."""
+
+    role: str
+    build: dict[str, Any]
+    runtime: dict[str, Any]
+    attestation: dict[str, Any]
+    identity: dict[str, Any]
     retained_bytes: dict[str, bytes]
     retained_paths: dict[str, str]
     log: bytes
@@ -1837,6 +1903,253 @@ def _owned_file_identity(
             os.close(descriptor)
 
 
+def _host_file_identity(
+    path: str, label: str, *, maximum_bytes: int = MAX_SEALED_FILE_BYTES,
+    minimum_size: int = 1,
+) -> dict[str, Any]:
+    """Hash one stable regular host file without owner or mode assumptions."""
+    absolute = _portable_absolute_path(path, label)
+    _require(type(maximum_bytes) is int and
+             0 < maximum_bytes <= MAX_SEALED_FILE_BYTES and
+             minimum_size in (0, 1),
+             f"{label} bound is invalid")
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            absolute, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        status = os.fstat(descriptor)
+        pathname = os.lstat(absolute)
+        _require(stat.S_ISREG(status.st_mode) and
+                 minimum_size <= status.st_size <= maximum_bytes and
+                 (status.st_dev, status.st_ino) ==
+                 (pathname.st_dev, pathname.st_ino),
+                 f"{label} is not one stable regular file")
+        digest = _hash_fd(descriptor, status.st_size, label)
+        after = os.fstat(descriptor)
+        _require((after.st_dev, after.st_ino, after.st_size,
+                  after.st_mtime_ns, after.st_ctime_ns) ==
+                 (status.st_dev, status.st_ino, status.st_size,
+                  status.st_mtime_ns, status.st_ctime_ns),
+                 f"{label} changed while hashed")
+        return {"path": absolute, "size": status.st_size, "sha256": digest}
+    except OSError as error:
+        raise AcquisitionError(f"cannot inspect {label}: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _runtime_dependency_identity(
+    path: str, label: str, *, maximum_bytes: int = MAX_SEALED_FILE_BYTES,
+) -> dict[str, Any]:
+    """Hash the target named by one exact path printed by frozen ``ldd``.
+
+    Dynamic-linker SONAME paths are normally symlinks.  The record must keep
+    the path printed by ``ldd`` while binding the regular target bytes, so this
+    narrowly scoped reader follows the final link and then proves that the
+    pathname still resolves to the opened file before and after hashing.
+    Other host-file readers remain no-follow boundaries.
+    """
+    absolute = _portable_absolute_path(path, label)
+    _require(type(maximum_bytes) is int and
+             0 < maximum_bytes <= MAX_SEALED_FILE_BYTES,
+             f"{label} bound is invalid")
+    descriptor = -1
+    try:
+        descriptor = os.open(absolute, os.O_RDONLY | os.O_CLOEXEC)
+        status = os.fstat(descriptor)
+        pathname = os.stat(absolute, follow_symlinks=True)
+        _require(stat.S_ISREG(status.st_mode) and
+                 0 < status.st_size <= maximum_bytes and
+                 (status.st_dev, status.st_ino) ==
+                 (pathname.st_dev, pathname.st_ino),
+                 f"{label} does not resolve to one stable regular file")
+        digest = _hash_fd(descriptor, status.st_size, label)
+        after = os.fstat(descriptor)
+        pathname_after = os.stat(absolute, follow_symlinks=True)
+        fingerprint = (status.st_dev, status.st_ino, status.st_size,
+                       status.st_mtime_ns, status.st_ctime_ns)
+        _require((after.st_dev, after.st_ino, after.st_size,
+                  after.st_mtime_ns, after.st_ctime_ns) == fingerprint and
+                 (pathname_after.st_dev, pathname_after.st_ino,
+                  pathname_after.st_size, pathname_after.st_mtime_ns,
+                  pathname_after.st_ctime_ns) == fingerprint,
+                 f"{label} changed while hashed")
+        return {"path": absolute, "size": status.st_size, "sha256": digest}
+    except OSError as error:
+        raise AcquisitionError(f"cannot inspect {label}: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _read_host_file(
+    path: str, label: str, *, maximum_bytes: int,
+) -> bytes:
+    identity = _host_file_identity(path, label, maximum_bytes=maximum_bytes)
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            identity["path"], os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        content = bytearray()
+        while len(content) < identity["size"]:
+            chunk = os.read(
+                descriptor, min(READ_CHUNK, identity["size"] - len(content)))
+            _require(bool(chunk), f"{label} ended while read")
+            content.extend(chunk)
+        _require(os.read(descriptor, 1) == b"" and
+                 _sha256(bytes(content)) == identity["sha256"],
+                 f"{label} changed after hashing")
+        return bytes(content)
+    except OSError as error:
+        raise AcquisitionError(f"cannot read {label}: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def stage_build_output(
+    source_path: str,
+    destination_path: str,
+    label: str,
+    *,
+    maximum_bytes: int = MAX_SEALED_FILE_BYTES,
+) -> dict[str, Any]:
+    """Copy one stable build artifact into an owner-only scratch file."""
+    source = _portable_absolute_path(source_path, f"{label} source")
+    destination = _portable_absolute_path(
+        destination_path, f"{label} destination")
+    _require(type(maximum_bytes) is int and
+             0 < maximum_bytes <= MAX_SEALED_FILE_BYTES,
+             f"{label} bound is invalid")
+    source_descriptor = -1
+    destination_descriptor = -1
+    created = False
+    published = False
+    try:
+        source_descriptor = os.open(
+            source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        before = os.fstat(source_descriptor)
+        pathname = os.lstat(source)
+        _require(stat.S_ISREG(before.st_mode) and before.st_nlink >= 1 and
+                 0 < before.st_size <= maximum_bytes and
+                 (before.st_dev, before.st_ino) ==
+                 (pathname.st_dev, pathname.st_ino),
+                 f"{label} source is not one stable regular file")
+        destination_descriptor = _exclusive_output_file(
+            destination, f"{label} staged output")
+        created = True
+        digest = hashlib.sha256()
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(
+                source_descriptor, min(READ_CHUNK, remaining))
+            _require(bool(chunk), f"{label} source ended while copied")
+            _write_all(destination_descriptor, chunk, f"{label} staged output")
+            digest.update(chunk)
+            remaining -= len(chunk)
+        _require(os.read(source_descriptor, 1) == b"",
+                 f"{label} source grew while copied")
+        after = os.fstat(source_descriptor)
+        _require((after.st_dev, after.st_ino, after.st_size,
+                  after.st_mtime_ns, after.st_ctime_ns) ==
+                 (before.st_dev, before.st_ino, before.st_size,
+                  before.st_mtime_ns, before.st_ctime_ns),
+                 f"{label} source changed while copied")
+        os.fsync(destination_descriptor)
+        os.close(destination_descriptor)
+        destination_descriptor = -1
+        identity = _owned_file_identity(
+            destination, f"{label} staged output", maximum_bytes=maximum_bytes)
+        _require(identity["size"] == before.st_size and
+                 identity["sha256"] == digest.hexdigest(),
+                 f"{label} staged output changed after copy")
+        published = True
+        return identity
+    except OSError as error:
+        raise AcquisitionError(f"cannot stage {label}: {error}") from error
+    finally:
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+        if destination_descriptor >= 0:
+            os.close(destination_descriptor)
+        if created and not published:
+            try:
+                os.unlink(destination)
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                raise AcquisitionError(
+                    f"cannot remove failed {label} staging output: {error}") \
+                    from error
+
+
+def build_root_census(
+    build_root: str, role: str,
+) -> tuple[dict[str, Any], bytes]:
+    """Derive the bounded exact regular-file census of one build tree."""
+    root = _portable_absolute_path(build_root, "build census root")
+    _require(role in record_contract.BUILD_ROLES and type(role) is str,
+             "build census role is invalid")
+    try:
+        root_status = os.lstat(root)
+    except OSError as error:
+        raise AcquisitionError(f"cannot inspect build census root: {error}") \
+            from error
+    _require(stat.S_ISDIR(root_status.st_mode) and
+             not stat.S_ISLNK(root_status.st_mode),
+             "build census root is not a directory")
+    files: list[dict[str, Any]] = []
+    node_count = 0
+    total_bytes = 0
+
+    def visit(directory: str, relative_directory: str, depth: int) -> None:
+        nonlocal node_count, total_bytes
+        _require(depth <= MAX_TREE_DEPTH,
+                 "build closure exceeds the depth bound")
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda item: item.name)
+        except OSError as error:
+            raise AcquisitionError(
+                f"cannot scan build closure directory: {error}") from error
+        for entry in entries:
+            node_count += 1
+            _require(node_count <= record_contract.MAX_CLOSURE_FILES,
+                     "build closure exceeds the node bound")
+            relative = entry.name if not relative_directory else \
+                relative_directory + "/" + entry.name
+            _safe_relative_path(relative, "build closure path")
+            status = entry.stat(follow_symlinks=False)
+            _require(not stat.S_ISLNK(status.st_mode),
+                     "build closure contains a symbolic link")
+            if stat.S_ISDIR(status.st_mode):
+                visit(entry.path, relative, depth + 1)
+                continue
+            _require(stat.S_ISREG(status.st_mode) and status.st_nlink == 1,
+                     "build closure contains a non-regular or linked file")
+            identity = _host_file_identity(
+                entry.path, f"build closure file {relative}", minimum_size=0)
+            total_bytes += identity["size"]
+            _require(total_bytes <= MAX_SEALED_TOTAL_BYTES,
+                     "build closure exceeds the total-byte bound")
+            files.append({
+                "relative_path": relative,
+                "size": identity["size"],
+                "sha256": identity["sha256"],
+            })
+
+    visit(root, "", 0)
+    _require(0 < len(files) <= record_contract.MAX_CLOSURE_FILES,
+             "build closure contains no regular files")
+    files.sort(key=lambda item: item["relative_path"])
+    closure = build_closure_document(role, root, files)
+    content = canonical_json_bytes(closure)
+    _require(0 < len(content) <= MAX_SEALED_FILE_BYTES,
+             "build closure document exceeds its byte bound")
+    return closure, content
+
+
 def _read_owned_file(
     path: str, label: str, *, maximum_bytes: int,
 ) -> bytes:
@@ -1934,6 +2247,72 @@ def _command_log_record(
         "stderr": {"size": len(result.stderr),
                    "sha256": _sha256(result.stderr)},
     }
+
+
+def _command_transcript_bytes(
+    argv: Sequence[str], cwd: str, result: CommandResult,
+) -> bytes:
+    """Serialize exact command streams without timing fields."""
+    _require(isinstance(result, CommandResult),
+             "command transcript result has the wrong type")
+    arguments = _command_arguments(argv)
+    working_directory = _portable_absolute_path(cwd, "command transcript cwd")
+    _require(type(result.exit_status) is int,
+             "command transcript exit status is not integral")
+
+    def stream(content: bytes) -> dict[str, Any]:
+        _require(type(content) is bytes and
+                 len(content) <= MAX_COMMAND_OUTPUT_BYTES,
+                 "command transcript stream exceeds its bound")
+        return {
+            "size": len(content),
+            "sha256": _sha256(content),
+            "base64": base64.b64encode(content).decode("ascii"),
+        }
+
+    content = canonical_json_bytes({
+        "schema": BUILD_LOG_SCHEMA,
+        "argv": arguments,
+        "cwd": working_directory,
+        "exit_status": result.exit_status,
+        "stdout": stream(result.stdout),
+        "stderr": stream(result.stderr),
+    })
+    _require(0 < len(content) <= MAX_SOURCE_LOG_BYTES,
+             "command transcript exceeds its byte bound")
+    return content
+
+
+def _build_stage_log_bytes(
+    role: str,
+    status: str,
+    commands: Sequence[Mapping[str, Any]],
+    *,
+    controller_sha256: str,
+    error: BaseException | None,
+) -> bytes:
+    _require(role in record_contract.BUILD_ROLES and type(role) is str,
+             "build stage role is invalid")
+    _require(status in ("complete", "failed"),
+             "build stage log status is invalid")
+    _require(type(controller_sha256) is str and
+             len(controller_sha256) == 64 and all(
+                 character in "0123456789abcdef"
+                 for character in controller_sha256),
+             "build stage controller SHA-256 is invalid")
+    content = canonical_json_bytes({
+        "schema": BUILD_STAGE_LOG_SCHEMA,
+        "role": role,
+        "stage": role + "_build",
+        "status": status,
+        "command_count": len(commands),
+        "commands": copy.deepcopy(list(commands)),
+        "controller_sha256": controller_sha256,
+        "error": None if error is None else _safe_failure_message(error),
+    })
+    _require(0 < len(content) <= MAX_SOURCE_LOG_BYTES,
+             "build stage log exceeds its byte bound")
+    return content
 
 
 def _checked_run(
@@ -2747,63 +3126,117 @@ def _safe_failure_message(error: BaseException) -> str:
     return (safe or "source acquisition failed")[:4096]
 
 
-def seal_source_acquisition_failure(
+def seal_stage_failure(
     environment: HostEnvironment,
     plan: LanePlan,
     error: BaseException,
     *,
-    log: bytes | None = None,
+    stage: str,
+    stage_logs: Mapping[str, bytes],
+    retained_bytes: Mapping[str, bytes] | None = None,
+    retained_paths: Mapping[str, str] | None = None,
     diagnostics: Mapping[str, bytes] | None = None,
 ) -> dict[str, Any]:
-    """Seal one immutable stage-0 failure that the offline verifier accepts."""
+    """Seal one immutable acquisition failure through build stage three."""
     canonical_plan = validate_lane_plan(plan)
     _require(isinstance(environment, HostEnvironment) and
              isinstance(error, BaseException),
-             "source failure inputs are invalid")
+             "stage failure inputs are invalid")
+    _require(type(stage) is str and
+             stage in record_contract.STAGE_NAMES[:4],
+             "acquisition failure stage is invalid")
+    if isinstance(error, SourceStageError):
+        _require(stage == "source_acquisition",
+                 "source-stage error was assigned to another stage")
+    if isinstance(error, BuildStageError):
+        _require(error.stage == stage,
+                 "build-stage error was assigned to another stage")
+    stage_index = record_contract.STAGE_NAMES.index(stage)
+    expected_stage_names = record_contract.STAGE_NAMES[:stage_index + 1]
+    _require(type(stage_logs) is dict and
+             list(stage_logs) == list(expected_stage_names),
+             "acquisition failure stage-log prefix changed")
     message = _safe_failure_message(error)
-    stage_path = "logs/00-source_acquisition.log"
-    inherited_log = error.log if isinstance(error, SourceStageError) else None
-    stage_bytes = log if log is not None else inherited_log
-    if stage_bytes is None:
-        stage_bytes = _source_stage_log_bytes(
-            "failed", (), adapter_commit=None, adapter_tree=None,
-            retained_byte_paths=(), retained_path_sources=(), error=error)
-    _require(type(stage_bytes) is bytes and
-             0 < len(stage_bytes) <= MAX_SOURCE_LOG_BYTES,
-             "source acquisition failure log is invalid")
-    retained: dict[str, bytes] = {stage_path: stage_bytes}
-    claims: list[dict[str, Any]] = []
+    retained: dict[str, bytes] = {}
+    path_sources = {} if retained_paths is None else dict(retained_paths)
+    byte_sources = {} if retained_bytes is None else dict(retained_bytes)
+    _require(type(byte_sources) is dict and type(path_sources) is dict,
+             "acquisition failure retained sources are invalid")
+    _require(set(byte_sources).isdisjoint(path_sources),
+             "acquisition failure retained sources overlap")
+    for path in sorted(byte_sources):
+        relative = _safe_relative_path(path, "failure retained byte path")
+        content = byte_sources[path]
+        _require(not relative.startswith("logs/") and
+                 type(content) is bytes and
+                 len(content) <= MAX_SEALED_FILE_BYTES,
+                 f"failure retained byte {relative!r} is invalid")
+        retained[relative] = content
+    canonical_paths: dict[str, str] = {}
+    for path in sorted(path_sources):
+        relative = _safe_relative_path(path, "failure retained path source")
+        source = path_sources[path]
+        _require(not relative.startswith("logs/") and type(source) is str,
+                 f"failure retained path {relative!r} is invalid")
+        canonical_paths[relative] = source
     diagnostic_values = {} if diagnostics is None else diagnostics
     _require(type(diagnostic_values) is dict,
-             "source failure diagnostics are not a mapping")
+             "failure diagnostics are not a mapping")
     for path in sorted(diagnostic_values):
-        relative = _safe_relative_path(path, "source failure diagnostic path")
+        relative = _safe_relative_path(path, "failure diagnostic path")
         content = diagnostic_values[path]
         _require(relative.startswith("diagnostics/") and
                  type(content) is bytes and content and
-                 len(content) <= MAX_SEALED_FILE_BYTES,
-                 f"source failure diagnostic {relative!r} is invalid")
+                 len(content) <= MAX_SEALED_FILE_BYTES and
+                 relative not in retained and relative not in canonical_paths,
+                 f"failure diagnostic {relative!r} is invalid")
         retained[relative] = content
-        claims.append(_bytes_identity(relative, content))
-    stage_identity = _bytes_identity(stage_path, stage_bytes)
+
+    stages: list[dict[str, Any]] = []
+    for index, name in enumerate(expected_stage_names):
+        content = stage_logs[name]
+        _require(type(content) is bytes and
+                 0 < len(content) <= MAX_SOURCE_LOG_BYTES,
+                 f"{name} stage failure log is invalid")
+        path = f"logs/{index:02d}-{name}.log"
+        _require(path not in retained and path not in canonical_paths,
+                 "failure stage log collides with retained evidence")
+        retained[path] = content
+        stages.append({
+            "name": name,
+            "status": "failed" if index == stage_index else "complete",
+            "log": _bytes_identity(path, content),
+        })
+
+    claims = [_bytes_identity(path, retained[path])
+              for path in sorted(retained)
+              if not path.startswith("logs/")]
+    for path in sorted(canonical_paths):
+        identity = _owned_file_identity(
+            canonical_paths[path], f"failure retained path {path!r}")
+        claims.append({
+            "relative_path": path,
+            "size": identity["size"],
+            "sha256": identity["sha256"],
+        })
+    claims.sort(key=lambda item: item["relative_path"])
+    _require(len(claims) <= record_contract.MAX_RETAINED_FILES,
+             "failure retained file inventory exceeds its bound")
     lane = {
         "root": canonical_plan.lane_root,
         "attempt": canonical_plan.attempt,
         "attempt_budget": 3,
         "record_relative_path": "FAILED.json",
         "seal_protocol": record_contract.SEAL_PROTOCOL,
-        "stages": [{
-            "name": "source_acquisition", "status": "failed",
-            "log": stage_identity,
-        }],
+        "stages": stages,
     }
     is_command_error = isinstance(error, CommandExecutionError) or (
-        isinstance(error, SourceStageError) and
+        isinstance(error, (SourceStageError, BuildStageError)) and
         error.error_kind == "command_error")
     exit_status = error.exit_status if is_command_error else 1
     record = record_contract.baseline_acquisition_failure_record(
         created_utc=environment.now_utc(), lane=lane,
-        stage="source_acquisition",
+        stage=stage,
         error={
             "kind": "command_error" if is_command_error else
             "acquisition_error",
@@ -2813,7 +3246,29 @@ def seal_source_acquisition_failure(
         retained_files=claims,
     )
     with LaneWriter(canonical_plan.lane_root) as writer:
-        return writer.seal_record(record, retained)
+        return writer.seal_record(
+            record, retained, retained_paths=canonical_paths)
+
+
+def seal_source_acquisition_failure(
+    environment: HostEnvironment,
+    plan: LanePlan,
+    error: BaseException,
+    *,
+    log: bytes | None = None,
+    diagnostics: Mapping[str, bytes] | None = None,
+) -> dict[str, Any]:
+    """Seal one immutable stage-0 failure that the offline verifier accepts."""
+    inherited_log = error.log if isinstance(error, SourceStageError) else None
+    stage_bytes = log if log is not None else inherited_log
+    if stage_bytes is None:
+        stage_bytes = _source_stage_log_bytes(
+            "failed", (), adapter_commit=None, adapter_tree=None,
+            retained_byte_paths=(), retained_path_sources=(), error=error)
+    return seal_stage_failure(
+        environment, plan, error, stage="source_acquisition",
+        stage_logs={"source_acquisition": stage_bytes},
+        diagnostics=diagnostics)
 
 
 def build_closure_document(
@@ -2861,6 +3316,348 @@ def build_closure_document(
         "files": copy.deepcopy(canonical),
         "file_count": len(canonical),
     }
+
+
+def build_role_roots(plan: LanePlan, role: str) -> dict[str, str]:
+    """Resolve one oriented build role to its frozen source/build roots."""
+    canonical_plan = validate_lane_plan(plan)
+    _require(role in record_contract.BUILD_ROLES and type(role) is str,
+             "exact-main build role is invalid")
+    if role == "path_variant":
+        roots = {
+            "adapter_source_root": canonical_plan.variant_adapter_root,
+            "baseline_source_root": canonical_plan.variant_baseline_root,
+            "build_root": canonical_plan.variant_build_root,
+        }
+    else:
+        roots = {
+            "adapter_source_root": canonical_plan.canonical_adapter_root,
+            "baseline_source_root": canonical_plan.canonical_baseline_root,
+            "build_root": canonical_plan.canonical_build_root,
+        }
+    record_contract.exact_main_build_cache_requirements(roots)
+    return roots
+
+
+def _tool_paths_from_toolchain(toolchain: Mapping[str, Any]) -> dict[str, str]:
+    _require(type(toolchain) is dict and type(toolchain.get("tools")) is list,
+             "exact-main toolchain is missing its tool inventory")
+    result: dict[str, str] = {}
+    for index, item in enumerate(toolchain["tools"]):
+        _require(type(item) is dict and type(item.get("role")) is str and
+                 type(item.get("resolved_path")) is str,
+                 f"exact-main tool {index} is invalid")
+        role = item["role"]
+        _require(role in record_contract.TOOL_ROLES and role not in result,
+                 "exact-main tool inventory is not unique")
+        result[role] = _portable_absolute_path(
+            item["resolved_path"], f"exact-main {role} resolved path")
+    _require(set(result) == set(record_contract.TOOL_ROLES),
+             "exact-main tool inventory changed")
+    return result
+
+
+def parse_ctest_success_summary(content: bytes) -> tuple[int, int]:
+    """Validate only CTest's fixed pass/fail summary; ignore timing lines."""
+    _require(type(content) is bytes and
+             0 < len(content) <= MAX_COMMAND_OUTPUT_BYTES,
+             "CTest stdout is not bounded non-empty bytes")
+    try:
+        text = content.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise AcquisitionError("CTest stdout is not strict UTF-8") from error
+    _require(text.endswith("\n") and "\r" not in text and "\0" not in text,
+             "CTest stdout is not canonical LF text")
+    summaries = [
+        line for line in text[:-1].split("\n")
+        if re.fullmatch(
+            r"[0-9]+% tests passed, [0-9]+ tests failed out of [0-9]+",
+            line)
+    ]
+    _require(summaries == [record_contract.CTEST_SUMMARY_LINE],
+             "CTest stdout lacks the exact one-test success summary")
+    return (1, 0)
+
+
+def _identity_census_is_zero(identity: Mapping[str, Any]) -> bool:
+    return all(
+        root["occurrences"] == 0 and all(
+            row["occurrences"] == 0 for row in root["sections"])
+        for root in identity["path_string_census"]["roots"]
+    )
+
+
+def acquire_build_stage(
+    environment: HostEnvironment,
+    plan: LanePlan,
+    prepared: PreparedAcquisitionRoots,
+    *,
+    role: str,
+    toolchain: Mapping[str, Any],
+    controller_sha256: str,
+) -> BuildStageResult:
+    """Acquire one complete build/runtime/correctness evidence role."""
+    canonical_plan = validate_lane_plan(plan)
+    _require(isinstance(environment, HostEnvironment) and
+             isinstance(prepared, PreparedAcquisitionRoots) and
+             prepared.plan == canonical_plan and
+             role in record_contract.BUILD_ROLES and type(role) is str,
+             "build-stage dependencies are invalid")
+    _require(type(controller_sha256) is str and
+             len(controller_sha256) == 64 and all(
+                 character in "0123456789abcdef"
+                 for character in controller_sha256),
+             "build-stage controller SHA-256 is invalid")
+    prepared.validate_current()
+    roots = build_role_roots(canonical_plan, role)
+    tools = _tool_paths_from_toolchain(toolchain)
+    role_path = role.replace("_", "-")
+    build_field = "variant_build_root" if role == "path_variant" else \
+        "canonical_build_root"
+    _require(os.listdir(prepared.descriptors[build_field]) == [],
+             f"{role} build root is not empty")
+    child_environment = frozen_child_environment()
+    commands: list[dict[str, Any]] = []
+    retained_bytes: dict[str, bytes] = {}
+    retained_paths: dict[str, str] = {}
+    try:
+        configure_argv = record_contract.exact_main_configure_argv(
+            cmake=tools["cmake"], compiler=tools["compiler"], roots=roots)
+        configure_result = _checked_run(
+            environment, configure_argv, cwd=canonical_plan.scratch_root,
+            child_environment=child_environment, log=commands,
+            label=f"{role} CMake configure", timeout=BUILD_TIMEOUT_SECONDS)
+        retained_bytes[f"builds/{role_path}/configure.log"] = \
+            _command_transcript_bytes(
+                configure_argv, canonical_plan.scratch_root, configure_result)
+        prepared.validate_current()
+
+        build_argv = record_contract.exact_main_build_argv(
+            cmake=tools["cmake"], roots=roots)
+        build_result = _checked_run(
+            environment, build_argv, cwd=canonical_plan.scratch_root,
+            child_environment=child_environment, log=commands,
+            label=f"{role} serial build", timeout=BUILD_TIMEOUT_SECONDS)
+        retained_bytes[f"builds/{role_path}/build.log"] = \
+            _command_transcript_bytes(
+                build_argv, canonical_plan.scratch_root, build_result)
+        prepared.validate_current()
+
+        cache_path = roots["build_root"] + "/CMakeCache.txt"
+        cache_bytes = _read_host_file(
+            cache_path, f"{role} CMake cache",
+            maximum_bytes=MAX_COMMAND_OUTPUT_BYTES)
+        record_contract.validate_cmake_cache(cache_bytes, roots)
+        retained_bytes[f"builds/{role_path}/CMakeCache.txt"] = cache_bytes
+        prepared.validate_current()
+
+        compile_path = roots["build_root"] + "/compile_commands.json"
+        compile_bytes = _read_host_file(
+            compile_path, f"{role} compile commands",
+            maximum_bytes=MAX_COMMAND_OUTPUT_BYTES)
+        compile_value = identity_contract.strict_json_loads(
+            compile_bytes, f"{role} compile commands JSON")
+        record_contract.validate_compile_commands(
+            compile_value, roots=roots, compiler=tools["compiler"],
+            profile=record_contract.exact_main_build_profile())
+        retained_bytes[f"builds/{role_path}/compile_commands.json"] = \
+            compile_bytes
+        prepared.validate_current()
+
+        closure, closure_bytes = build_root_census(roots["build_root"], role)
+        closure_relative = f"builds/{role_path}/build-closure.json"
+        retained_bytes[closure_relative] = closure_bytes
+        prepared.validate_current()
+
+        executable_source = roots["build_root"] + "/leopard_main_benchmark"
+        archive_source = roots["build_root"] + "/libleopard_main_exact.a"
+        executable_stage = canonical_plan.scratch_root + \
+            f"/{role_path}-leopard_main_benchmark"
+        archive_stage = canonical_plan.scratch_root + \
+            f"/{role_path}-libleopard_main_exact.a"
+        executable_identity = stage_build_output(
+            executable_source, executable_stage, f"{role} executable",
+            maximum_bytes=identity_contract.MAX_ELF_INPUT_BYTES)
+        archive_identity = stage_build_output(
+            archive_source, archive_stage, f"{role} archive")
+        executable_relative = \
+            f"artifacts/{role_path}/leopard_main_benchmark"
+        archive_relative = f"artifacts/{role_path}/libleopard_main_exact.a"
+        retained_paths[executable_relative] = executable_stage
+        retained_paths[archive_relative] = archive_stage
+        prepared.validate_current()
+
+        ldd_argv = [tools["ldd"], executable_source]
+        ldd_result = _checked_run(
+            environment, ldd_argv, cwd=canonical_plan.scratch_root,
+            child_environment=child_environment, log=commands,
+            label=f"{role} runtime dependency discovery",
+            timeout=ATTESTATION_TIMEOUT_SECONDS)
+        _require(ldd_result.stderr == b"",
+                 f"{role} runtime dependency discovery emitted diagnostics")
+        ldd_rows = normalize_ldd_output(ldd_result.stdout)
+        ldd_bytes = canonical_ldd_text(ldd_rows)
+        ldd_relative = f"runtime/{role_path}/ldd.txt"
+        retained_bytes[ldd_relative] = ldd_bytes
+        dependencies: list[dict[str, Any]] = []
+        for row in ldd_rows:
+            if row["kind"] == "virtual":
+                dependencies.append({
+                    "soname": row["soname"], "kind": "virtual",
+                    "path": None, "size": None, "sha256": None,
+                })
+            else:
+                dependency = _runtime_dependency_identity(
+                    row["path"], f"{role} runtime dependency {row['soname']}")
+                dependencies.append({
+                    "soname": row["soname"], "kind": "file",
+                    "path": dependency["path"],
+                    "size": dependency["size"],
+                    "sha256": dependency["sha256"],
+                })
+        prepared.validate_current()
+
+        benchmark_argv = record_contract.exact_main_benchmark_argv(
+            executable_path=executable_source)
+        benchmark_result = _checked_run(
+            environment, benchmark_argv, cwd=canonical_plan.scratch_root,
+            child_environment=child_environment, log=commands,
+            label=f"{role} benchmark correctness attestation",
+            timeout=ATTESTATION_TIMEOUT_SECONDS)
+        benchmark_value = identity_contract.strict_json_loads(
+            benchmark_result.stdout, f"{role} benchmark attestation JSON")
+        record_contract.validate_attestation_stdout(
+            benchmark_value, argv=benchmark_argv,
+            reported_schema=record_contract.BENCHMARK_SCHEMA)
+        benchmark_stdout_relative = \
+            f"attestations/{role_path}/benchmark.stdout.json"
+        benchmark_stderr_relative = \
+            f"attestations/{role_path}/benchmark.stderr"
+        retained_bytes[benchmark_stdout_relative] = benchmark_result.stdout
+        retained_bytes[benchmark_stderr_relative] = benchmark_result.stderr
+        prepared.validate_current()
+
+        ctest_argv = record_contract.exact_main_ctest_argv(
+            ctest=tools["ctest"], build_root=roots["build_root"])
+        ctest_result = _checked_run(
+            environment, ctest_argv, cwd=canonical_plan.scratch_root,
+            child_environment=child_environment, log=commands,
+            label=f"{role} CTest correctness attestation",
+            timeout=ATTESTATION_TIMEOUT_SECONDS)
+        passed, failed = parse_ctest_success_summary(ctest_result.stdout)
+        ctest_stdout_relative = f"attestations/{role_path}/ctest.stdout.log"
+        ctest_stderr_relative = f"attestations/{role_path}/ctest.stderr.log"
+        retained_bytes[ctest_stdout_relative] = ctest_result.stdout
+        retained_bytes[ctest_stderr_relative] = ctest_result.stderr
+        prepared.validate_current()
+
+        attested_executable = _host_file_identity(
+            executable_source, f"{role} attested executable",
+            maximum_bytes=identity_contract.MAX_ELF_INPUT_BYTES)
+        _require(attested_executable["size"] == executable_identity["size"] and
+                 attested_executable["sha256"] ==
+                 executable_identity["sha256"],
+                 f"{role} attested executable changed during attestation")
+
+        executable_bytes = _read_owned_file(
+            executable_stage, f"{role} staged executable",
+            maximum_bytes=identity_contract.MAX_ELF_INPUT_BYTES)
+        identity = identity_contract.normalized_code_identity_from_elf_bytes(
+            executable_bytes, roots=roots)
+        _require(identity["artifact"]["size"] == executable_identity["size"] and
+                 identity["artifact"]["sha256"] ==
+                 executable_identity["sha256"],
+                 f"{role} normalized identity changed its artifact")
+        _require(_identity_census_is_zero(identity),
+                 f"{role} selected ELF sections retain an acquisition root")
+
+        build = {
+            "role": role,
+            "roots": copy.deepcopy(roots),
+            "configure_argv": configure_argv,
+            "build_argv": build_argv,
+            "configure_log": _bytes_identity(
+                f"builds/{role_path}/configure.log",
+                retained_bytes[f"builds/{role_path}/configure.log"]),
+            "build_log": _bytes_identity(
+                f"builds/{role_path}/build.log",
+                retained_bytes[f"builds/{role_path}/build.log"]),
+            "cmake_cache": _bytes_identity(
+                f"builds/{role_path}/CMakeCache.txt", cache_bytes),
+            "compile_commands": _bytes_identity(
+                f"builds/{role_path}/compile_commands.json", compile_bytes),
+            "executable": {
+                "name": "leopard_main_benchmark",
+                "build_relative_path": "leopard_main_benchmark",
+                "retained_relative_path": executable_relative,
+                "size": executable_identity["size"],
+                "sha256": executable_identity["sha256"],
+            },
+            "archive": {
+                "name": "libleopard_main_exact.a",
+                "build_relative_path": "libleopard_main_exact.a",
+                "retained_relative_path": archive_relative,
+                "size": archive_identity["size"],
+                "sha256": archive_identity["sha256"],
+            },
+            "closure": {
+                **_bytes_identity(closure_relative, closure_bytes),
+                "file_count": closure["file_count"],
+            },
+        }
+        build = record_contract.validate_exact_main_build(
+            build, role=role, tools=tools)
+        record_contract.validate_build_closure(
+            closure, role=role, build=build)
+
+        runtime = {
+            "role": role,
+            "executable_sha256": executable_identity["sha256"],
+            "canonical_ldd_output": _bytes_identity(
+                ldd_relative, ldd_bytes),
+            "dependencies": dependencies,
+        }
+        attestation = {
+            "role": role,
+            "argv": benchmark_argv,
+            "stdout": _bytes_identity(
+                benchmark_stdout_relative, benchmark_result.stdout),
+            "stderr": _bytes_identity(
+                benchmark_stderr_relative, benchmark_result.stderr),
+            "exit_status": 0,
+            "reported_schema": record_contract.BENCHMARK_SCHEMA,
+            "main_source_commit": record_contract.BASELINE_COMMIT,
+            "pure_avx2": True,
+            "round_trip": True,
+            "ctest": {
+                "argv": ctest_argv,
+                "stdout": _bytes_identity(
+                    ctest_stdout_relative, ctest_result.stdout),
+                "stderr": _bytes_identity(
+                    ctest_stderr_relative, ctest_result.stderr),
+                "exit_status": 0,
+                "passed": passed,
+                "failed": failed,
+            },
+        }
+        log_bytes = _build_stage_log_bytes(
+            role, "complete", commands,
+            controller_sha256=controller_sha256, error=None)
+        prepared.validate_current()
+        return BuildStageResult(
+            role=role, build=copy.deepcopy(build),
+            runtime=copy.deepcopy(runtime),
+            attestation=copy.deepcopy(attestation),
+            identity=copy.deepcopy(identity),
+            retained_bytes=copy.deepcopy(retained_bytes),
+            retained_paths=copy.deepcopy(retained_paths), log=log_bytes)
+    except BuildStageError:
+        raise
+    except (ExactMainBaselineError, OSError) as error:
+        log_bytes = _build_stage_log_bytes(
+            role, "failed", commands,
+            controller_sha256=controller_sha256, error=error)
+        raise BuildStageError(role, error, log_bytes) from error
 
 
 def expected_sha256sums(digests: Mapping[str, str]) -> bytes:
@@ -3570,7 +4367,13 @@ class LaneWriter:
 __all__ = (
     "AcquisitionLocks",
     "AcquisitionError",
+    "ATTESTATION_TIMEOUT_SECONDS",
     "BUILD_CLOSURE_SCHEMA",
+    "BUILD_LOG_SCHEMA",
+    "BUILD_STAGE_LOG_SCHEMA",
+    "BUILD_TIMEOUT_SECONDS",
+    "BuildStageError",
+    "BuildStageResult",
     "CANONICAL_LOCK_PATH",
     "CanonicalFileLock",
     "CommandExecutionError",
@@ -3586,18 +4389,24 @@ __all__ = (
     "StableLeaseAnchor",
     "StreamedCommandResult",
     "TREE_METADATA_SCHEMA",
+    "acquire_build_stage",
     "acquire_source_stage",
     "adapter_inventory",
     "build_closure_document",
+    "build_role_roots",
+    "build_root_census",
     "canonical_git_archive",
     "canonical_ldd_text",
     "expected_sha256sums",
     "expected_tree_metadata",
     "frozen_child_environment",
     "normalize_ldd_output",
+    "parse_ctest_success_summary",
     "prepare_acquisition_roots",
     "resolve_toolchain",
+    "seal_stage_failure",
     "seal_source_acquisition_failure",
+    "stage_build_output",
     "stage_detached_source",
     "validate_lane_plan",
 )
