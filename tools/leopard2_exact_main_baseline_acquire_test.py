@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import copy
+import errno
 import hashlib
 import importlib.util
 import os
@@ -13,6 +14,8 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -171,6 +174,347 @@ class ExactMainBaselineAcquireTest(unittest.TestCase):
             acquire.build_closure_document, "canonical_first",
             "/tmp/exact-main-build", list(reversed(files)))
 
+    def test_raw_ldd_normalization_is_exact_and_fail_closed(self) -> None:
+        raw = (
+            b"\tlinux-vdso.so.1 (0x00007ffe01234000)\n"
+            b"\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 "
+            b"(0x0000700000000000)\n"
+            b"\t/lib64/ld-linux-x86-64.so.2 (0x0000700000100000)\n"
+        )
+        rows = acquire.normalize_ldd_output(raw)
+        self.assertEqual(rows, (
+            {
+                "soname": "ld-linux-x86-64.so.2", "kind": "file",
+                "path": "/lib64/ld-linux-x86-64.so.2",
+            },
+            {
+                "soname": "libc.so.6", "kind": "file",
+                "path": "/lib/x86_64-linux-gnu/libc.so.6",
+            },
+            {
+                "soname": "linux-vdso.so.1", "kind": "virtual",
+                "path": None,
+            },
+        ))
+        self.assertEqual(
+            record_contract.parse_canonical_ldd_output(
+                acquire.canonical_ldd_text(rows)), rows)
+        invalid = (
+            b"libmissing.so => not found\n",
+            b"statically linked\n",
+            raw.replace(b"\n", b"\r\n"),
+            raw.replace(b"linux-vdso.so.1", b"libc.so.6"),
+            raw + raw.splitlines(keepends=True)[1],
+            (
+                b"libalias.so.1 => /lib/x86_64-linux-gnu/libc.so.6 "
+                b"(0x0000700000200000)\n" + raw
+            ),
+            b"\xff\n",
+            b"\n",
+        )
+        for changed in invalid:
+            with self.subTest(changed=changed[:80]):
+                self.assertAcquireError(
+                    acquire.normalize_ldd_output, changed)
+
+    def test_host_command_capture_is_bounded_and_exact(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leopard-exact-main-command.") as temporary:
+            environment = acquire.HostEnvironment(
+                anchor_path=temporary,
+                canonical_lock_path=str(Path(temporary) / "canonical.lock"))
+            subreaper_before = acquire._linux_subreaper_state()
+            command_environment = {
+                "LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin",
+                "TOKEN": "frozen",
+            }
+            result = environment.run(
+                [sys.executable, "-c", (
+                    "import os,sys;"
+                    "sys.stdout.buffer.write(os.environ['TOKEN'].encode());"
+                    "sys.stderr.buffer.write(b'err');"
+                    "raise SystemExit(7)")],
+                cwd=temporary,
+                env=command_environment,
+                timeout=5,
+                maximum_bytes=1024,
+            )
+            self.assertEqual(result, acquire.CommandResult(
+                exit_status=7, stdout=b"frozen", stderr=b"err"))
+            with self.assertRaisesRegex(
+                    acquire.AcquisitionError, "combined output bound"):
+                environment.run(
+                    [sys.executable, "-c",
+                     "import sys;sys.stdout.buffer.write(b'x'*65536)"],
+                    cwd=temporary, env=command_environment,
+                    timeout=5, maximum_bytes=31)
+            with self.assertRaisesRegex(
+                    acquire.AcquisitionError, "timeout"):
+                environment.run(
+                    [sys.executable, "-c", "import time;time.sleep(30)"],
+                    cwd=temporary, env=command_environment,
+                    timeout=0.1, maximum_bytes=1024)
+            started = time.monotonic()
+            with self.assertRaisesRegex(
+                    acquire.AcquisitionError, "timeout"):
+                environment.run(
+                    [sys.executable, "-c",
+                     "import os,time;os.close(1);os.close(2);time.sleep(30)"],
+                    cwd=temporary, env=command_environment,
+                    timeout=0.2, maximum_bytes=1024)
+            self.assertLess(time.monotonic() - started, 2.5)
+            escaped_pid = Path(temporary) / "escaped.pid"
+            child = (
+                "import os,time;"
+                "os.setsid();"
+                f"p={str(escaped_pid)!r};"
+                "fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);"
+                "os.write(fd,str(os.getpid()).encode());os.fsync(fd);os.close(fd);"
+                "time.sleep(30)"
+            )
+            parent = (
+                "import os,subprocess,sys,time;"
+                f"subprocess.Popen([sys.executable,'-c',{child!r}]);"
+                f"p={str(escaped_pid)!r};"
+                "deadline=time.monotonic()+10;"
+                "\nwhile not os.path.isfile(p):\n"
+                "  assert time.monotonic()<deadline\n"
+                "  time.sleep(.01)\n"
+                "time.sleep(30)"
+            )
+            with self.assertRaisesRegex(
+                    acquire.AcquisitionError, "timeout"):
+                environment.run(
+                    [sys.executable, "-c", parent],
+                    cwd=temporary, env=command_environment,
+                    timeout=2, maximum_bytes=1024)
+            self.assertTrue(escaped_pid.is_file())
+            escaped = int(escaped_pid.read_text(encoding="ascii"))
+            self.assertFalse(Path(f"/proc/{escaped}").exists())
+            self.assertEqual(
+                acquire._linux_subreaper_state(), subreaper_before)
+            for invalid in (
+                    {"argv": []},
+                    {"timeout": True},
+                    {"timeout": 0},
+                    {"maximum_bytes": -1},
+                    {"env": {"BAD=NAME": "value"}},
+                    {"env": {1: "value"}},
+                    {"cwd": "relative"}):
+                arguments = {
+                    "argv": [sys.executable, "-c", "pass"],
+                    "cwd": temporary,
+                    "env": command_environment,
+                    "timeout": 5,
+                    "maximum_bytes": 1024,
+                }
+                arguments.update(invalid)
+                with self.subTest(invalid=invalid):
+                    self.assertAcquireError(environment.run, **arguments)
+
+    def test_host_facts_and_timestamp_fit_the_record_contract(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leopard-exact-main-host.") as temporary:
+            environment = acquire.HostEnvironment(
+                anchor_path=temporary,
+                canonical_lock_path=str(Path(temporary) / "canonical.lock"))
+            facts = environment.host_facts()
+            self.assertEqual(set(facts), record_contract.HOST_KEYS)
+            self.assertEqual(facts["architecture"], "x86_64")
+            self.assertEqual(facts["online_cpus"],
+                             sorted(set(facts["online_cpus"])))
+            expected_online = acquire._parse_linux_cpu_list(
+                acquire._read_bounded_system_file(
+                    "/sys/devices/system/cpu/online", 65536,
+                    "test online CPU list"))
+            self.assertEqual(facts["online_cpus"], expected_online)
+            self.assertIn(
+                b"model name",
+                acquire._read_bounded_system_file(
+                    "/proc/cpuinfo", acquire.MAX_CPUINFO_BYTES,
+                    "test CPU identity"))
+            self.assertEqual(record_contract._host(facts), facts)
+            self.assertRegex(
+                environment.now_utc(),
+                r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+                r"[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+
+            cpuinfo = (
+                b"processor : 0\nmodel name : uniform model\n\n"
+                b"processor : 1\nmodel name : uniform model\n")
+            online = b"0-1\n"
+            with mock.patch.object(
+                    acquire, "_read_bounded_system_file",
+                    side_effect=(cpuinfo, online)), \
+                    mock.patch.object(os, "uname", return_value=type(
+                        "Uname", (), {
+                            "nodename": "fixture", "release": "fixture-kernel",
+                            "machine": "x86_64",
+                        })()), \
+                    mock.patch.object(os, "sysconf", return_value=100):
+                synthetic = environment.host_facts()
+            self.assertEqual(synthetic["cpu_model"], "uniform model")
+            self.assertEqual(synthetic["online_cpus"], [0, 1])
+            mixed = cpuinfo.replace(
+                b"processor : 1\nmodel name : uniform model",
+                b"processor : 1\nmodel name : other model")
+            with mock.patch.object(
+                    acquire, "_read_bounded_system_file",
+                    side_effect=(mixed, online)), \
+                    mock.patch.object(os, "uname", return_value=type(
+                        "Uname", (), {
+                            "nodename": "fixture", "release": "fixture-kernel",
+                            "machine": "x86_64",
+                        })()), \
+                    mock.patch.object(os, "sysconf", return_value=100):
+                self.assertAcquireError(environment.host_facts)
+
+    def test_proc_permission_and_pidfd_faults_are_fail_closed(self) -> None:
+        denied = PermissionError(errno.EACCES, "denied")
+        with mock.patch.object(Path, "read_bytes", side_effect=denied), \
+                mock.patch.object(
+                    os, "stat",
+                    return_value=SimpleNamespace(st_uid=os.getuid() + 1)):
+            self.assertIsNone(acquire._linux_process_identity(123456))
+        with mock.patch.object(Path, "read_bytes", side_effect=denied), \
+                mock.patch.object(
+                    os, "stat",
+                    return_value=SimpleNamespace(st_uid=os.getuid())):
+            self.assertAcquireError(
+                acquire._linux_process_identity, 123456)
+        descriptor = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
+        containment = acquire._LinuxChildContainment()
+        with mock.patch.object(
+                acquire, "_linux_pidfd_open", return_value=descriptor), \
+                mock.patch.object(
+                    acquire, "_linux_process_identity",
+                    side_effect=acquire.AcquisitionError("injected stat fault")):
+            self.assertAcquireError(containment._retain, 123456, 1)
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+
+    def test_process_snapshot_tolerates_owner_reparenting(self) -> None:
+        owner = os.getpid()
+        with mock.patch.object(os, "listdir", return_value=[str(owner)]), \
+                mock.patch.object(
+                    acquire, "_linux_process_identity",
+                    side_effect=((100, 123456), (200, 123456))):
+            self.assertEqual(
+                acquire._linux_process_snapshot(),
+                {owner: (100, 123456)})
+        with mock.patch.object(os, "listdir", return_value=[str(owner)]), \
+                mock.patch.object(
+                    acquire, "_linux_process_identity",
+                    side_effect=((100, 123456), (200, 123457))):
+            self.assertAcquireError(acquire._linux_process_snapshot)
+
+    def test_containment_capacity_is_dynamic_and_resource_faults_stick(self) \
+            -> None:
+        with mock.patch.object(
+                acquire.resource, "getrlimit", return_value=(1024, 1024)):
+            with acquire._LinuxChildContainment() as containment:
+                self.assertGreaterEqual(
+                    containment.process_bound,
+                    acquire.MIN_CONTAINED_PROCESSES)
+                self.assertLess(containment.process_bound, 1024)
+        with mock.patch.object(
+                acquire.resource, "getrlimit", return_value=(32, 32)):
+            self.assertAcquireError(
+                acquire._LinuxChildContainment().__enter__)
+
+        containment = acquire._LinuxChildContainment()
+        containment.process_bound = 0
+        containment._retain(os.getpid(), 1)
+        self.assertTrue(containment.containment_bound_reached)
+
+        containment = acquire._LinuxChildContainment()
+        containment.reserve_descriptor = os.open(
+            "/dev/null", os.O_RDONLY | os.O_CLOEXEC)
+        retained_descriptor = os.open(
+            "/dev/null", os.O_RDONLY | os.O_CLOEXEC)
+        with mock.patch.object(
+                acquire, "_linux_pidfd_open",
+                side_effect=(OSError(errno.EMFILE, "full"),
+                             retained_descriptor)), \
+                mock.patch.object(
+                    acquire, "_linux_process_identity",
+                    return_value=(os.getpid(), 1)):
+            containment._retain(os.getpid(), 1)
+        self.assertTrue(containment.pidfd_resource_exhausted)
+        self.assertEqual(containment.reserve_descriptor, -1)
+        self.assertIn((os.getpid(), 1), containment.handles)
+        for descriptor in containment.handles.values():
+            os.close(descriptor)
+        containment.handles.clear()
+
+        self.assertAcquireError(
+            acquire._parse_linux_cpu_list, b"0-2147483647\n")
+
+    def test_acquisition_locks_reject_contention_and_replacement(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leopard-exact-main-lock-parent.") as parent:
+            anchor = Path(parent) / "anchor"
+            anchor.mkdir(mode=0o700)
+            canonical = Path(parent) / "canonical.lock"
+            environment = acquire.HostEnvironment(
+                anchor_path=str(anchor),
+                canonical_lock_path=str(canonical))
+            with acquire.AcquisitionLocks(environment, blocking=False) as locks:
+                locks.validate_current()
+                self.assertAcquireError(
+                    acquire.StableLeaseAnchor(str(anchor)).__enter__)
+                self.assertAcquireError(
+                    acquire.CanonicalFileLock(
+                        str(canonical), blocking=False).__enter__)
+                moved = Path(parent) / "old-anchor"
+                anchor.rename(moved)
+                anchor.mkdir(mode=0o700)
+                self.assertAcquireError(locks.validate_current)
+            canonical.unlink()
+            with acquire.CanonicalFileLock(
+                    str(canonical), blocking=False) as lock:
+                replacement = Path(parent) / "replacement.lock"
+                replacement.write_bytes(b"")
+                replacement.chmod(0o600)
+                os.replace(replacement, canonical)
+                self.assertAcquireError(lock.validate_current)
+
+    def test_lock_metadata_and_path_errors_are_normalized(self) -> None:
+        for kind in ("anchor_mode", "missing_anchor", "lock_mode",
+                     "lock_hardlink", "lock_directory", "lock_symlink"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory(
+                    prefix="leopard-exact-main-lock-metadata.") as parent:
+                anchor = Path(parent) / "anchor"
+                if kind != "missing_anchor":
+                    anchor.mkdir(mode=0o700)
+                if kind == "anchor_mode":
+                    anchor.chmod(0o777)
+                lock_path = Path(parent) / "canonical.lock"
+                if kind == "lock_mode":
+                    lock_path.write_bytes(b"")
+                    lock_path.chmod(0o644)
+                elif kind == "lock_hardlink":
+                    lock_path.write_bytes(b"")
+                    lock_path.chmod(0o600)
+                    os.link(lock_path, Path(parent) / "second-name")
+                elif kind == "lock_directory":
+                    lock_path.mkdir(mode=0o700)
+                elif kind == "lock_symlink":
+                    target = Path(parent) / "target.lock"
+                    target.write_bytes(b"")
+                    target.chmod(0o600)
+                    lock_path.symlink_to(target)
+                environment = acquire.HostEnvironment(
+                    anchor_path=str(anchor),
+                    canonical_lock_path=str(lock_path))
+                if kind in ("anchor_mode", "missing_anchor"):
+                    with self.assertRaises(acquire.AcquisitionError):
+                        acquire.StableLeaseAnchor(str(anchor)).__enter__()
+                else:
+                    with self.assertRaises(acquire.AcquisitionError):
+                        acquire.CanonicalFileLock(
+                            str(lock_path), blocking=False).__enter__()
+
     def test_authority_and_failure_lanes_verify_offline(self) -> None:
         for kind, expected_status in (
                 ("authority", 0),
@@ -287,7 +631,6 @@ class ExactMainBaselineAcquireTest(unittest.TestCase):
                     alias.name.split(".")[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom):
                 imported.add((node.module or "").split(".")[0])
-        self.assertNotIn("subprocess", imported)
         self.assertNotIn(
             "leopard2_exact_main_baseline_verifier", imported)
         contract_calls = [
