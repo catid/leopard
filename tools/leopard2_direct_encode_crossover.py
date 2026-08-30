@@ -9,11 +9,18 @@ does not prove a clean source-to-object-to-archive-to-link closure.
 Release/explicit-AVX2 build while holding the canonical authoritative lock,
 freezes that executable, and only then begins isolated ABBA measurement.  Every
 cell is a resumable JSON job with deterministic input data and retained logs.
+``sparse-high-avx2`` uses the same isolation and clean-build closure, enables
+only the default-off sparse-high selector, and runs a frozen 91-cell discovery
+grid with per-cell batches 1, 4, and 16.  It compares forced direct and forced
+transform encode-execution timing only: it does not exercise production AUTO,
+provide simultaneous campaign-wide inference, or authorize promotion.
 
 Typical use::
 
     tools/leopard2_direct_encode_crossover.py screen --build-root build
     tools/leopard2_direct_encode_crossover.py historical-avx2 \
+        --cpu 16 --sibling 80
+    tools/leopard2_direct_encode_crossover.py sparse-high-avx2 \
         --cpu 16 --sibling 80
     tools/leopard2_direct_encode_crossover.py analyze \
         --result-dir results/leopard2/direct-encode-crossover/historical-avx2
@@ -57,13 +64,28 @@ import unicodedata
 from pathlib import Path
 
 
-SCHEMA = "leopard2-direct-encode-crossover/v7"
-JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v7"
-ANALYSIS_SCHEMA = "leopard2-direct-encode-crossover-analysis/v4"
+SCHEMA_V7 = "leopard2-direct-encode-crossover/v7"
+SCHEMA = "leopard2-direct-encode-crossover/v8"
+JOB_SCHEMA_V7 = "leopard2-direct-encode-crossover-job/v7"
+JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v8"
+ANALYSIS_SCHEMA_V4 = "leopard2-direct-encode-crossover-analysis/v4"
+ANALYSIS_SCHEMA = "leopard2-direct-encode-crossover-analysis/v5"
+CELL_SCHEMA_V1 = "leopard2-direct-encode-crossover-cell/v1"
+CELL_SCHEMA_V2 = "leopard2-direct-encode-crossover-cell/v2"
 BENCHMARK_SCHEMA = "leopard2-direct-encode-benchmark-v2"
 KNOWN_BACKENDS = ("scalar", "ssse3", "avx2", "avx512")
 FROZEN_EXECUTABLE_SCHEMA = "leopard2-frozen-executable/v3"
-AUTHORITATIVE_COMMANDS = ("historical-avx2",)
+SPARSE_HIGH_MODE = "sparse-high-avx2"
+SPARSE_HIGH_CAMPAIGN_NAME = (
+    "legacy-high-sparse-q1-explicit-avx2-forced-path-discovery-v1"
+)
+SPARSE_HIGH_CELL_COUNT = 91
+SPARSE_HIGH_CELLS_SHA256 = (
+    "3e9f2c7b4a9134953e3f450708d34fab5285ab2dcb63c18a090d01eedc528660"
+)
+AUTHORITATIVE_COMMANDS_V7 = ("historical-avx2",)
+RUN_COMMANDS_V7 = ("screen",) + AUTHORITATIVE_COMMANDS_V7
+AUTHORITATIVE_COMMANDS = AUTHORITATIVE_COMMANDS_V7 + (SPARSE_HIGH_MODE,)
 RUN_COMMANDS = ("screen",) + AUTHORITATIVE_COMMANDS
 UNPROVED_PINNED_COMMAND = "pinned"
 AUTHORITATIVE_LOCK = Path("/tmp/leopard-gf8-authoritative.lock")
@@ -80,7 +102,8 @@ TASKSET_EXECUTABLE_DESCRIPTOR = 196
 CONTROLLED_CMAKE_DESCRIPTOR = 195
 CONTROLLED_NINJA_DESCRIPTOR = 194
 CANONICAL_GIT = Path("/usr/bin/git")
-CONTROLLED_BUILD_SCHEMA = "leopard2-direct-controlled-build/v7"
+CONTROLLED_BUILD_SCHEMA_V7 = "leopard2-direct-controlled-build/v7"
+CONTROLLED_BUILD_SCHEMA = "leopard2-direct-controlled-build/v8"
 BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2 = (
     "leopard2-benchmark-build-configuration-attestation/v2"
 )
@@ -96,9 +119,29 @@ BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V5 = (
 BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V6 = (
     "leopard2-benchmark-build-configuration-attestation/v6"
 )
-BUILD_CONFIGURATION_ATTESTATION_SCHEMA = (
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V7 = (
     "leopard2-benchmark-build-configuration-attestation/v7"
 )
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V8 = (
+    "leopard2-benchmark-build-configuration-attestation/v8"
+)
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V9 = (
+    "leopard2-benchmark-build-configuration-attestation/v9"
+)
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V10 = (
+    "leopard2-benchmark-build-configuration-attestation/v10"
+)
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V11 = (
+    "leopard2-benchmark-build-configuration-attestation/v11"
+)
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V12 = (
+    "leopard2-benchmark-build-configuration-attestation/v12"
+)
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13 = (
+    "leopard2-benchmark-build-configuration-attestation/v13"
+)
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA = \
+    BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13
 BUILD_CONFIGURATION_FILE_SCHEMA_V2 = (
     "leopard2-benchmark-build-configuration/v2"
 )
@@ -114,9 +157,28 @@ BUILD_CONFIGURATION_FILE_SCHEMA_V7 = (
 BUILD_CONFIGURATION_FILE_SCHEMA_V8 = (
     "leopard2-benchmark-build-configuration/v8"
 )
-BUILD_CONFIGURATION_FILE_SCHEMA = (
+BUILD_CONFIGURATION_FILE_SCHEMA_V9 = (
     "leopard2-benchmark-build-configuration/v9"
 )
+BUILD_CONFIGURATION_FILE_SCHEMA_V10 = (
+    "leopard2-benchmark-build-configuration/v10"
+)
+BUILD_CONFIGURATION_FILE_SCHEMA_V11 = (
+    "leopard2-benchmark-build-configuration/v11"
+)
+BUILD_CONFIGURATION_FILE_SCHEMA_V12 = (
+    "leopard2-benchmark-build-configuration/v12"
+)
+BUILD_CONFIGURATION_FILE_SCHEMA_V13 = (
+    "leopard2-benchmark-build-configuration/v13"
+)
+BUILD_CONFIGURATION_FILE_SCHEMA_V14 = (
+    "leopard2-benchmark-build-configuration/v14"
+)
+BUILD_CONFIGURATION_FILE_SCHEMA_V15 = (
+    "leopard2-benchmark-build-configuration/v15"
+)
+BUILD_CONFIGURATION_FILE_SCHEMA = BUILD_CONFIGURATION_FILE_SCHEMA_V15
 BUILD_CONFIGURATION_RELATIVE_PATH = (
     "generated/leopard2-benchmark-attestation/"
     "leopard2_benchmark_build_configuration.txt"
@@ -170,11 +232,30 @@ BUILD_CONFIGURATION_VARIABLES_V8 = (
     *BUILD_CONFIGURATION_VARIABLES_V7,
     "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
 )
-BUILD_CONFIGURATION_VARIABLES = (
+BUILD_CONFIGURATION_VARIABLES_V9 = (
     *BUILD_CONFIGURATION_VARIABLES_V8,
     "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
     "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK",
 )
+BUILD_CONFIGURATION_VARIABLES_V10 = (
+    *BUILD_CONFIGURATION_VARIABLES_V9[:17],
+    "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
+    *BUILD_CONFIGURATION_VARIABLES_V9[17:],
+)
+BUILD_CONFIGURATION_VARIABLES_V11 = BUILD_CONFIGURATION_VARIABLES_V10
+BUILD_CONFIGURATION_VARIABLES_V12 = BUILD_CONFIGURATION_VARIABLES_V11
+BUILD_CONFIGURATION_VARIABLES_V13 = BUILD_CONFIGURATION_VARIABLES_V12
+BUILD_CONFIGURATION_VARIABLES_V14 = (
+    *BUILD_CONFIGURATION_VARIABLES_V13[:23],
+    "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
+    *BUILD_CONFIGURATION_VARIABLES_V13[23:],
+)
+BUILD_CONFIGURATION_VARIABLES_V15 = (
+    *BUILD_CONFIGURATION_VARIABLES_V14[:23],
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO",
+    *BUILD_CONFIGURATION_VARIABLES_V14[23:],
+)
+BUILD_CONFIGURATION_VARIABLES = BUILD_CONFIGURATION_VARIABLES_V15
 BUILD_CONFIGURATION_EXPERIMENT_SELECTORS = (
     *BUILD_CONFIGURATION_VARIABLES[16:],
 )
@@ -184,6 +265,20 @@ BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V7 = \
     BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V6
 BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V8 = \
     tuple(BUILD_CONFIGURATION_VARIABLES_V8[16:])
+BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V9 = \
+    tuple(BUILD_CONFIGURATION_VARIABLES_V9[16:])
+BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V10 = \
+    tuple(BUILD_CONFIGURATION_VARIABLES_V10[16:])
+BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V11 = \
+    tuple(BUILD_CONFIGURATION_VARIABLES_V11[16:])
+BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V12 = \
+    tuple(BUILD_CONFIGURATION_VARIABLES_V12[16:])
+BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V13 = \
+    tuple(BUILD_CONFIGURATION_VARIABLES_V13[16:])
+BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V14 = \
+    tuple(BUILD_CONFIGURATION_VARIABLES_V14[16:])
+BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V15 = \
+    tuple(BUILD_CONFIGURATION_VARIABLES_V15[16:])
 BUILD_CONFIGURATION_CANONICAL_SELECTORS_V2 = {
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
@@ -215,11 +310,33 @@ BUILD_CONFIGURATION_CANONICAL_SELECTORS_V8 = {
     **BUILD_CONFIGURATION_CANONICAL_SELECTORS_V7,
     "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
 }
-BUILD_CONFIGURATION_CANONICAL_SELECTORS = {
+BUILD_CONFIGURATION_CANONICAL_SELECTORS_V9 = {
     **BUILD_CONFIGURATION_CANONICAL_SELECTORS_V8,
     "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
     "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
 }
+BUILD_CONFIGURATION_CANONICAL_SELECTORS_V10 = {
+    **BUILD_CONFIGURATION_CANONICAL_SELECTORS_V9,
+    "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
+}
+BUILD_CONFIGURATION_CANONICAL_SELECTORS_V11 = {
+    **BUILD_CONFIGURATION_CANONICAL_SELECTORS_V10,
+    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "ON",
+}
+BUILD_CONFIGURATION_CANONICAL_SELECTORS_V12 = \
+    BUILD_CONFIGURATION_CANONICAL_SELECTORS_V11
+BUILD_CONFIGURATION_CANONICAL_SELECTORS_V13 = \
+    BUILD_CONFIGURATION_CANONICAL_SELECTORS_V12
+BUILD_CONFIGURATION_CANONICAL_SELECTORS_V14 = {
+    **BUILD_CONFIGURATION_CANONICAL_SELECTORS_V13,
+    "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "OFF",
+}
+BUILD_CONFIGURATION_CANONICAL_SELECTORS_V15 = {
+    **BUILD_CONFIGURATION_CANONICAL_SELECTORS_V14,
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO": "ON",
+}
+BUILD_CONFIGURATION_CANONICAL_SELECTORS = \
+    BUILD_CONFIGURATION_CANONICAL_SELECTORS_V15
 CMAKE_CACHE_ENTRY_TYPES = frozenset((
     "BOOL", "FILEPATH", "INTERNAL", "PATH", "STATIC", "STRING",
     "UNINITIALIZED",
@@ -233,6 +350,9 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
         frozenset(("INTERNAL",)),
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": frozenset(("BOOL",)),
     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK":
@@ -253,7 +373,7 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
     "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": frozenset(("BOOL",)),
 }
-BENCHMARK_ENVIRONMENT = {
+BENCHMARK_ENVIRONMENT_V7 = {
     "LANG": "C",
     "LC_ALL": "C",
     "OMP_DYNAMIC": "FALSE",
@@ -263,20 +383,41 @@ BENCHMARK_ENVIRONMENT = {
     "PATH": "/usr/bin:/bin",
     "TZ": "UTC",
 }
-GIT_ENVIRONMENT = dict(BENCHMARK_ENVIRONMENT)
-GIT_ENVIRONMENT.update({
+BENCHMARK_ENVIRONMENT = dict(BENCHMARK_ENVIRONMENT_V7)
+GIT_ENVIRONMENT_V7 = dict(BENCHMARK_ENVIRONMENT_V7)
+GIT_ENVIRONMENT_V7.update({
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_CONFIG_SYSTEM": "/dev/null",
     "GIT_NO_REPLACE_OBJECTS": "1",
     "GIT_OPTIONAL_LOCKS": "0",
 })
+GIT_ENVIRONMENT = dict(GIT_ENVIRONMENT_V7)
 SOURCE_IDENTITY_LOCK = threading.Lock()
-RUNTIME_LAUNCHER_NAMES = (
+RUNTIME_LAUNCHER_NAMES_V7 = (
     "python", "script", "build_provenance", "git_capture",
     "link_common", "containment",
 )
+RUNTIME_LAUNCHER_NAMES = RUNTIME_LAUNCHER_NAMES_V7
+RUNTIME_LAUNCHER_SOURCE_PATHS_V7 = {
+    "script": "tools/leopard2_direct_encode_crossover.py",
+    "build_provenance": "tools/leopard2_build_provenance.py",
+    "git_capture": "experiments/leopard2/main_compare/git_capture.py",
+    "link_common": (
+        "experiments/leopard2/decoder_dispatch/balanced_evidence_common.py"
+    ),
+    "containment": "experiments/leopard2/main_compare/run_abba.py",
+}
+RUNTIME_LAUNCHER_SOURCE_PATHS = RUNTIME_LAUNCHER_SOURCE_PATHS_V7
 RUNTIME_PYTHON_FLAGS = ("-I", "-S", "-B")
+RETAINED_PAIR_LEASE_SCHEMA_V1 = "leopard2-cpu-pair-lease/v1"
+RETAINED_ISOLATION_SCHEMA_V1 = "leopard2-main-compare-isolation/v1"
+RETAINED_CPU_STAT_FIELDS_V1 = (
+    "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal",
+)
+RETAINED_CPU_STAT_IDLE_FIELDS_V1 = ("idle", "iowait")
+RETAINED_MAX_CPU_ID_V1 = 1_048_575
+RETAINED_MAX_SIBLING_NONIDLE_JIFFIES_V1 = 0
 
 
 class CrossoverError(Exception):
@@ -1097,6 +1238,209 @@ def current_runtime_launcher_identity():
             close_runtime_launcher_snapshots(launcher)
 
 
+def retained_runtime_launcher_contract(manifest_schema):
+    if manifest_schema == SCHEMA_V7:
+        return (
+            RUNTIME_LAUNCHER_NAMES_V7,
+            RUNTIME_LAUNCHER_SOURCE_PATHS_V7,
+        )
+    if manifest_schema == SCHEMA:
+        return RUNTIME_LAUNCHER_NAMES, RUNTIME_LAUNCHER_SOURCE_PATHS
+    raise CrossoverError("retained launcher schema is unsupported")
+
+
+def validate_retained_runtime_launcher_identity(
+        identity, source_state, source_root, description,
+        manifest_schema=SCHEMA):
+    launcher_names, source_paths = retained_runtime_launcher_contract(
+        manifest_schema)
+    if (not isinstance(identity, dict) or
+            set(identity) != set(launcher_names)):
+        raise CrossoverError("{} has an invalid launcher identity".format(
+            description))
+    try:
+        source_root = checked_absolute_path(
+            source_root, description + " source root")
+        source_files = source_state["files"]
+    except (CrossoverError, KeyError, TypeError):
+        raise CrossoverError(
+            "{} omits its retained source closure".format(description)
+        )
+    for name in launcher_names:
+        component = validate_sealed_snapshot_identity(
+            identity.get(name), "{} {}".format(description, name))
+        if name == "python":
+            continue
+        relative = source_paths[name]
+        source_record = source_files.get(relative)
+        expected_path = str(Path(os.path.abspath(source_root / relative)))
+        if (not isinstance(source_record, dict) or
+                source_record.get("index_mode") not in ("100644", "100755") or
+                component["path"] != expected_path or
+                component["sha256"] != source_record.get("worktree_sha256")):
+            raise CrossoverError(
+                "{} {} differs from the captured source closure".format(
+                    description, name
+                )
+            )
+    return identity
+
+
+def validate_retained_pair_lease_identity(value, cpu, sibling):
+    expected_keys = {
+        "device", "directory_device", "directory_inode", "inode", "lock",
+        "path", "payload", "sha256",
+    }
+    if (type(cpu) is not int or type(sibling) is not int or
+            cpu < 0 or sibling < 0 or cpu > RETAINED_MAX_CPU_ID_V1 or
+            sibling > RETAINED_MAX_CPU_ID_V1 or cpu == sibling or
+            not isinstance(value, dict) or set(value) != expected_keys):
+        raise CrossoverError("retained CPU pair lease identity is invalid")
+    payload = value.get("payload")
+    if (not isinstance(payload, dict) or
+            set(payload) != {"cpus", "schema", "uid"} or
+            payload.get("schema") != RETAINED_PAIR_LEASE_SCHEMA_V1 or
+            payload.get("cpus") != sorted((cpu, sibling)) or
+            any(type(item) is not int or item < 0 or
+                item > RETAINED_MAX_CPU_ID_V1
+                for item in payload.get("cpus", [])) or
+            type(payload.get("uid")) is not int or payload["uid"] < 0):
+        raise CrossoverError(
+            "retained CPU pair lease payload differs from the campaign"
+        )
+    first, second = sorted((cpu, sibling))
+    expected_path = (
+        Path("/run/user") / str(payload["uid"]) / "leopard2-cpu-leases" /
+        "leopard2-cpu-pair-{}-{}-{}.lock".format(
+            payload["uid"], first, second)
+    )
+    if (not isinstance(value.get("path"), str) or
+            Path(value["path"]) != expected_path or
+            any(type(value.get(name)) is not int or value[name] < 0
+                for name in (
+                    "device", "directory_device", "directory_inode", "inode"
+                )) or
+            value.get("lock") != "exclusive_nonblocking_pair_wide" or
+            value.get("sha256") != digest_bytes(canonical_bytes(payload))):
+        raise CrossoverError(
+            "retained CPU pair lease filesystem identity is invalid"
+        )
+    return value
+
+
+def retained_cpu_stat_delta(before, after, expected_cpu):
+    def validate_snapshot(value):
+        fields = value.get("fields") if isinstance(value, dict) else None
+        if (not isinstance(value, dict) or
+                set(value) != {"cpu", "fields", "total_jiffies"} or
+                type(value.get("cpu")) is not int or
+                value["cpu"] != expected_cpu or not isinstance(fields, dict) or
+                set(fields) != set(RETAINED_CPU_STAT_FIELDS_V1) or
+                any(type(fields[name]) is not int or fields[name] < 0
+                    for name in RETAINED_CPU_STAT_FIELDS_V1) or
+                type(value.get("total_jiffies")) is not int or
+                value["total_jiffies"] != sum(fields.values())):
+            raise CrossoverError("retained CPU stat snapshot is malformed")
+        return fields
+
+    before_fields = validate_snapshot(before)
+    after_fields = validate_snapshot(after)
+    deltas = {}
+    for name in RETAINED_CPU_STAT_FIELDS_V1:
+        if after_fields[name] < before_fields[name]:
+            raise CrossoverError(
+                "retained CPU stat counter {} moved backwards".format(name)
+            )
+        deltas[name] = after_fields[name] - before_fields[name]
+    idle = sum(
+        deltas[name] for name in RETAINED_CPU_STAT_IDLE_FIELDS_V1)
+    nonidle = sum(
+        deltas[name] for name in RETAINED_CPU_STAT_FIELDS_V1
+        if name not in RETAINED_CPU_STAT_IDLE_FIELDS_V1)
+    return {
+        "cpu": expected_cpu,
+        "fields": deltas,
+        "idle_jiffies": idle,
+        "nonidle_jiffies": nonidle,
+        "total_jiffies": idle + nonidle,
+    }
+
+
+def validate_retained_isolation_v1(
+        value, cpu, sibling, require_accepted=True):
+    expected_keys = {
+        "accepted", "after", "before", "benchmark_cpu", "delta",
+        "pair_lease", "policy", "reserved_sibling", "schema",
+    }
+    if (type(cpu) is not int or type(sibling) is not int or cpu == sibling or
+            not isinstance(value, dict) or set(value) != expected_keys or
+            value.get("schema") != RETAINED_ISOLATION_SCHEMA_V1 or
+            type(value.get("benchmark_cpu")) is not int or
+            value["benchmark_cpu"] != cpu or
+            type(value.get("reserved_sibling")) is not int or
+            value["reserved_sibling"] != sibling):
+        raise CrossoverError("retained isolation CPU identity is invalid")
+    pair_lease = validate_retained_pair_lease_identity(
+        value.get("pair_lease"), cpu, sibling)
+    policy = {
+        "counter_source": "/proc/stat",
+        "idle_fields": list(RETAINED_CPU_STAT_IDLE_FIELDS_V1),
+        "nonidle_fields": [
+            name for name in RETAINED_CPU_STAT_FIELDS_V1
+            if name not in RETAINED_CPU_STAT_IDLE_FIELDS_V1
+        ],
+        "reserved_sibling_max_nonidle_jiffies":
+            RETAINED_MAX_SIBLING_NONIDLE_JIFFIES_V1,
+    }
+    if value.get("policy") != policy:
+        raise CrossoverError("retained isolation policy was edited")
+    before = value.get("before")
+    after = value.get("after")
+    endpoint_keys = {"benchmark_cpu", "monotonic_ns", "reserved_sibling"}
+    if (not isinstance(before, dict) or set(before) != endpoint_keys or
+            not isinstance(after, dict) or set(after) != endpoint_keys or
+            type(before.get("monotonic_ns")) is not int or
+            before["monotonic_ns"] < 0 or
+            type(after.get("monotonic_ns")) is not int or
+            after["monotonic_ns"] < 0):
+        raise CrossoverError("retained isolation snapshots are incomplete")
+    benchmark_delta = retained_cpu_stat_delta(
+        before.get("benchmark_cpu"), after.get("benchmark_cpu"), cpu)
+    sibling_delta = retained_cpu_stat_delta(
+        before.get("reserved_sibling"), after.get("reserved_sibling"),
+        sibling)
+    accepted = (
+        after["monotonic_ns"] > before["monotonic_ns"] and
+        benchmark_delta["nonidle_jiffies"] > 0 and
+        sibling_delta["total_jiffies"] > 0 and
+        sibling_delta["nonidle_jiffies"] <=
+            RETAINED_MAX_SIBLING_NONIDLE_JIFFIES_V1
+    )
+    expected = {
+        "accepted": accepted,
+        "after": after,
+        "before": before,
+        "benchmark_cpu": cpu,
+        "delta": {
+            "benchmark_cpu": benchmark_delta,
+            "reserved_sibling": sibling_delta,
+        },
+        "pair_lease": pair_lease,
+        "policy": policy,
+        "reserved_sibling": sibling,
+        "schema": RETAINED_ISOLATION_SCHEMA_V1,
+    }
+    if canonical_bytes(value) != canonical_bytes(expected):
+        raise CrossoverError(
+            "retained isolation deltas or acceptance were edited"
+        )
+    if require_accepted and value["accepted"] is not True:
+        raise CrossoverError(
+            "reserved SMT sibling performed non-idle work during the campaign"
+        )
+    return value
+
+
 def validate_current_executable_identity(identity, description):
     identity = validate_sealed_snapshot_identity(identity, description)
     snapshot = None
@@ -1140,13 +1484,65 @@ def load_sealed_python_module(snapshot, module_name, description):
     return module
 
 
-def evidence_contract(frozen_executable_required):
-    return {
+def outer_schema_contract(manifest_schema):
+    if manifest_schema == SCHEMA:
+        return {
+            "analysis_schema": ANALYSIS_SCHEMA,
+            "build_configuration_attestation_schema":
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+            "build_configuration_file_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
+            "controlled_build_schema": CONTROLLED_BUILD_SCHEMA,
+            "job_schema": JOB_SCHEMA,
+        }
+    if manifest_schema == SCHEMA_V7:
+        return {
+            "analysis_schema": ANALYSIS_SCHEMA_V4,
+            "build_configuration_attestation_schema":
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V7,
+            "build_configuration_file_schema": BUILD_CONFIGURATION_FILE_SCHEMA_V9,
+            "controlled_build_schema": CONTROLLED_BUILD_SCHEMA_V7,
+            "job_schema": JOB_SCHEMA_V7,
+        }
+    raise CrossoverError("direct-encode crossover outer schema is unsupported")
+
+
+def authoritative_commands_for_schema(manifest_schema):
+    outer_schema_contract(manifest_schema)
+    return (AUTHORITATIVE_COMMANDS if manifest_schema == SCHEMA
+            else AUTHORITATIVE_COMMANDS_V7)
+
+
+def run_commands_for_schema(manifest_schema):
+    outer_schema_contract(manifest_schema)
+    return RUN_COMMANDS if manifest_schema == SCHEMA else RUN_COMMANDS_V7
+
+
+def retained_environment_contract(manifest_schema):
+    outer_schema_contract(manifest_schema)
+    if manifest_schema == SCHEMA_V7:
+        return BENCHMARK_ENVIRONMENT_V7, GIT_ENVIRONMENT_V7
+    return BENCHMARK_ENVIRONMENT, GIT_ENVIRONMENT
+
+
+def configuration_selector_overrides_for_mode(mode, manifest_schema=SCHEMA):
+    if mode not in run_commands_for_schema(manifest_schema):
+        raise CrossoverError("runner mode has no build-selector contract")
+    if manifest_schema == SCHEMA and mode == SPARSE_HIGH_MODE:
+        return {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"}
+    return {}
+
+
+def evidence_contract(
+        frozen_executable_required, manifest_schema=SCHEMA,
+        selector_overrides=None, mode=None):
+    schemas = outer_schema_contract(manifest_schema)
+    selector_overrides = {} if selector_overrides is None else selector_overrides
+    result = {
         "benchmark_schema": BENCHMARK_SCHEMA,
         "build_configuration_attestation_schema":
-            BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+            schemas["build_configuration_attestation_schema"],
         "build_configuration_file_schema":
-            BUILD_CONFIGURATION_FILE_SCHEMA,
+            schemas["build_configuration_file_schema"],
         "execution_mad_path": (
             "metrics.encode_execution.mad_us_per_batch_call"
         ),
@@ -1166,6 +1562,32 @@ def evidence_contract(frozen_executable_required):
             "unrequested_outputs_untouched",
         ],
     }
+    if manifest_schema == SCHEMA:
+        if mode not in RUN_COMMANDS:
+            raise CrossoverError("current evidence runner mode is invalid")
+        if (not isinstance(selector_overrides, dict) or
+                selector_overrides !=
+                configuration_selector_overrides_for_mode(
+                    mode, manifest_schema)):
+            raise CrossoverError("current evidence selector override is invalid")
+        result["build_configuration_selector_overrides"] = dict(
+            selector_overrides)
+        decision = analysis_decision_contract(mode)
+        result.update({
+            "campaign_mode": mode,
+            "measurement_scope": decision["metric_scope"],
+            "production_auto_route_evaluated":
+                decision["production_auto_route_evaluated"],
+            "production_promotion_authorized":
+                decision["production_promotion_authorized"],
+        })
+    else:
+        if mode not in RUN_COMMANDS_V7:
+            raise CrossoverError("historical evidence runner mode is invalid")
+        if selector_overrides:
+            raise CrossoverError(
+                "historical evidence cannot add selector overrides")
+    return result
 
 
 def decode_json_bytes(value, description):
@@ -2826,7 +3248,8 @@ def source_identity(source, require_clean):
             close_canonical_git_snapshot(git_tool)
 
 
-def validate_source_state(value, description, require_clean):
+def validate_source_state(
+        value, description, require_clean, require_current_git_tool=True):
     if (not isinstance(value, dict) or
             set(value) != {
                 "digest", "files", "git", "git_tool",
@@ -2987,7 +3410,9 @@ def validate_source_state(value, description, require_clean):
             git["worktree_clean"] is not True or not submodules_clean or
             not tracked_files_clean or not controls_clean):
         raise CrossoverError("{} is not a clean Git source".format(description))
-    if canonical_bytes(git_tool) != canonical_bytes(canonical_git_identity()):
+    if (require_current_git_tool and
+            canonical_bytes(git_tool) !=
+            canonical_bytes(canonical_git_identity())):
         raise CrossoverError(
             "{} used a different canonical Git executable".format(description)
         )
@@ -3062,7 +3487,43 @@ def build_configuration_contract(attestation_schema):
         return (
             BUILD_CONFIGURATION_FILE_SCHEMA,
             BUILD_CONFIGURATION_VARIABLES,
-            BUILD_CONFIGURATION_EXPERIMENT_SELECTORS,
+            BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V15,
+        )
+    if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V12:
+        return (
+            BUILD_CONFIGURATION_FILE_SCHEMA_V14,
+            BUILD_CONFIGURATION_VARIABLES_V14,
+            BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V14,
+        )
+    if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V11:
+        return (
+            BUILD_CONFIGURATION_FILE_SCHEMA_V13,
+            BUILD_CONFIGURATION_VARIABLES_V13,
+            BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V13,
+        )
+    if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V10:
+        return (
+            BUILD_CONFIGURATION_FILE_SCHEMA_V12,
+            BUILD_CONFIGURATION_VARIABLES_V12,
+            BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V12,
+        )
+    if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V9:
+        return (
+            BUILD_CONFIGURATION_FILE_SCHEMA_V11,
+            BUILD_CONFIGURATION_VARIABLES_V11,
+            BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V11,
+        )
+    if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V8:
+        return (
+            BUILD_CONFIGURATION_FILE_SCHEMA_V10,
+            BUILD_CONFIGURATION_VARIABLES_V10,
+            BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V10,
+        )
+    if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V7:
+        return (
+            BUILD_CONFIGURATION_FILE_SCHEMA_V9,
+            BUILD_CONFIGURATION_VARIABLES_V9,
+            BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V9,
         )
     if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V6:
         return (
@@ -3115,6 +3576,12 @@ def build_configuration_digest(
         )
     if tuple(variables) not in (
             BUILD_CONFIGURATION_VARIABLES,
+            BUILD_CONFIGURATION_VARIABLES_V14,
+            BUILD_CONFIGURATION_VARIABLES_V13,
+            BUILD_CONFIGURATION_VARIABLES_V12,
+            BUILD_CONFIGURATION_VARIABLES_V11,
+            BUILD_CONFIGURATION_VARIABLES_V10,
+            BUILD_CONFIGURATION_VARIABLES_V9,
             BUILD_CONFIGURATION_VARIABLES_V8,
             BUILD_CONFIGURATION_VARIABLES_V7,
             BUILD_CONFIGURATION_VARIABLES_V6,
@@ -3140,6 +3607,9 @@ def build_configuration_digest(
         )
     for selector in (
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+            "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO",
+            "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
+            "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
             "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
         if selector in entries and entries[selector] not in ("ON", "OFF"):
@@ -3190,6 +3660,24 @@ def read_build_configuration_attestation(path):
     if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA:
         attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA
         variables = BUILD_CONFIGURATION_VARIABLES
+    elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V14:
+        attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V12
+        variables = BUILD_CONFIGURATION_VARIABLES_V14
+    elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V13:
+        attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V11
+        variables = BUILD_CONFIGURATION_VARIABLES_V13
+    elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V12:
+        attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V10
+        variables = BUILD_CONFIGURATION_VARIABLES_V12
+    elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V11:
+        attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V9
+        variables = BUILD_CONFIGURATION_VARIABLES_V11
+    elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V10:
+        attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V8
+        variables = BUILD_CONFIGURATION_VARIABLES_V10
+    elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V9:
+        attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V7
+        variables = BUILD_CONFIGURATION_VARIABLES_V9
     elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V8:
         attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V6
         variables = BUILD_CONFIGURATION_VARIABLES_V8
@@ -3250,7 +3738,8 @@ def read_build_configuration_attestation(path):
 
 def validate_build_configuration_attestation(
         value, expected_path=None,
-        expected_schema=BUILD_CONFIGURATION_ATTESTATION_SCHEMA):
+        expected_schema=BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        selector_overrides=None):
     expected_keys = {"entries", "path", "schema", "sha256"}
     if not isinstance(value, dict) or set(value) != expected_keys:
         raise CrossoverError(
@@ -3278,6 +3767,24 @@ def validate_build_configuration_attestation(
                 BUILD_CONFIGURATION_ATTESTATION_SCHEMA):
             canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS
         elif (value.get("schema") ==
+              BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V12):
+            canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V14
+        elif (value.get("schema") ==
+              BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V11):
+            canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V13
+        elif (value.get("schema") ==
+              BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V10):
+            canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V12
+        elif (value.get("schema") ==
+              BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V9):
+            canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V11
+        elif (value.get("schema") ==
+              BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V8):
+            canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V10
+        elif (value.get("schema") ==
+              BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V7):
+            canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V9
+        elif (value.get("schema") ==
               BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V6):
             canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V8
         elif (value.get("schema") ==
@@ -3291,14 +3798,38 @@ def validate_build_configuration_attestation(
             canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V3
         else:
             canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V2
+        selector_overrides = {} if selector_overrides is None else selector_overrides
+        if (not isinstance(selector_overrides, dict) or
+                any(not isinstance(name, str) or not isinstance(expected, str)
+                    for name, expected in selector_overrides.items()) or
+                (selector_overrides and value.get("schema") !=
+                 BUILD_CONFIGURATION_ATTESTATION_SCHEMA) or
+                not set(selector_overrides).issubset({
+                    "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
+                }) or
+                any(expected not in ("ON", "OFF")
+                    for expected in selector_overrides.values())):
+            raise CrossoverError(
+                "benchmark effective-configuration selector override is invalid"
+            )
+        canonical_selectors = dict(canonical_selectors)
+        canonical_selectors.update(selector_overrides)
         valid = (
             re.fullmatch(r"[0-9a-f]{64}", value["sha256"]) is not None and
             value["sha256"] == build_configuration_digest(
                 value.get("entries"), variables
             ) and
             set(canonical_selectors) == set(selectors) and
-            all(value["entries"].get(name) == expected
-                for name, expected in canonical_selectors.items())
+            all(
+                # File-v10 straddled the fallback-default transition before
+                # its schema advanced, so its retained BOOL can be either.
+                (value["entries"].get(name) in ("OFF", "ON"))
+                if (value.get("schema") ==
+                    BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V8 and
+                    name == "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK")
+                else value["entries"].get(name) == expected
+                for name, expected in canonical_selectors.items()
+            )
         )
     except CrossoverError:
         raise
@@ -3358,7 +3889,10 @@ def parse_selected_cmake_cache(cache_bytes, prefixes, description):
     return entries
 
 
-def cmake_build_metadata(executable):
+def cmake_build_metadata(
+        executable,
+        expected_configuration_schema=BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        selector_overrides=None):
     """Fingerprint the CMake inputs nearest an already-built benchmark."""
     executable = checked_path(executable, "benchmark executable")
     cache = None
@@ -3403,7 +3937,8 @@ def cmake_build_metadata(executable):
     validate_build_configuration_attestation(
         build_configuration_attestation,
         build_configuration_path,
-        BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        expected_configuration_schema,
+        selector_overrides,
     )
     (build_configuration_file_schema, unused_variables,
      build_configuration_selectors) = build_configuration_contract(
@@ -3554,7 +4089,15 @@ def validate_embedded_build_type(
 
 
 def validate_build_source_binding(
-        metadata, source, source_state, backend, require_fresh):
+        metadata, source, source_state, backend, require_fresh,
+        expected_configuration_schema=BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        selector_overrides=None, require_authoritative_closure=None):
+    if type(require_fresh) is not bool:
+        raise CrossoverError("build freshness policy is invalid")
+    if require_authoritative_closure is None:
+        require_authoritative_closure = require_fresh
+    if type(require_authoritative_closure) is not bool:
+        raise CrossoverError("build closure policy is invalid")
     if not isinstance(metadata, dict):
         raise CrossoverError("CMake build provenance is not an object")
     entries = metadata.get("entries")
@@ -3577,7 +4120,9 @@ def validate_build_source_binding(
         raise CrossoverError("CMake build provenance omits its build root")
     configuration_sha256 = validate_build_configuration_attestation(
         configuration_attestation,
-        build_root_path / BUILD_CONFIGURATION_RELATIVE_PATH
+        build_root_path / BUILD_CONFIGURATION_RELATIVE_PATH,
+        expected_configuration_schema,
+        selector_overrides,
     )
     (configuration_file_schema, unused_variables,
      configuration_selectors) = build_configuration_contract(
@@ -3618,7 +4163,7 @@ def validate_build_source_binding(
     if configuration_entries.get(
             "LEO2_BUILD_BENCHMARKS", "").upper() not in ("1", "ON", "TRUE"):
         raise CrossoverError("CMake build did not explicitly enable benchmarks")
-    if not require_fresh:
+    if not require_authoritative_closure:
         return
     git = source_state.get("git", {})
     if git.get("worktree_clean") is not True:
@@ -3680,6 +4225,9 @@ def validate_build_source_binding(
     if not any(name in extra for name in (
             "libleopard.a", "libleopard_test_hooks.a")):
         raise CrossoverError("authoritative build provenance omits the linked archive")
+    if not require_fresh:
+        return
+
     def source_mtimes(root, entries):
         for relative, record in entries.items():
             path = root / relative
@@ -3849,7 +4397,9 @@ def validate_frozen_executable(
 
 def freeze_executable(
         result_dir, backend, executable, build_metadata, source_state,
-        result_root=None):
+        result_root=None,
+        expected_configuration_schema=BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        selector_overrides=None):
     executable = Path(executable).resolve()
     try:
         executable_bytes = executable.read_bytes()
@@ -3857,7 +4407,8 @@ def freeze_executable(
         raise CrossoverError(
             "cannot read executable to freeze {}: {}".format(executable, error)
         )
-    current_build_metadata = cmake_build_metadata(executable)
+    current_build_metadata = cmake_build_metadata(
+        executable, expected_configuration_schema, selector_overrides)
     if canonical_bytes(current_build_metadata) != canonical_bytes(build_metadata):
         raise CrossoverError(
             "origin executable or CMake metadata changed before freezing"
@@ -3963,7 +4514,9 @@ def freeze_executable(
             "cannot re-read origin executable after freezing: {}".format(error)
         )
     if (origin_bytes_after != executable_bytes or
-            canonical_bytes(cmake_build_metadata(executable)) !=
+            canonical_bytes(cmake_build_metadata(
+                executable, expected_configuration_schema,
+                selector_overrides)) !=
             canonical_bytes(build_metadata)):
         raise CrossoverError(
             "origin executable or CMake metadata changed while freezing"
@@ -3998,6 +4551,29 @@ def cell(region, backend, k, r, profile, field, shard_bytes, q, mask):
         "region": region,
         "shard_bytes": shard_bytes,
     }
+
+
+def batched_cell(
+        region, backend, k, r, profile, field, shard_bytes, q, mask, batch):
+    value = cell(
+        region, backend, k, r, profile, field, shard_bytes, q, mask)
+    value["batch"] = batch
+    return value
+
+
+def cell_schema_for_mode(mode):
+    return CELL_SCHEMA_V2 if mode == SPARSE_HIGH_MODE else CELL_SCHEMA_V1
+
+
+def cell_batch(cell_value, settings):
+    mode = settings.get("mode")
+    if mode == SPARSE_HIGH_MODE:
+        batch = cell_value.get("batch")
+    else:
+        batch = settings.get("benchmark", {}).get("batch")
+    if type(batch) is not int or batch <= 0:
+        raise CrossoverError("campaign cell batch must be a positive integer")
+    return batch
 
 
 def threshold_k(backend):
@@ -4095,6 +4671,151 @@ def historical_avx2_grid():
     return values
 
 
+def sparse_high_avx2_grid():
+    """Bounded sparse-high discovery map; it does not authorize promotion.
+
+    The map exposes every proposed selector dimension and its nearest practical
+    exclusions while keeping the later isolated campaign finite.  Candidate
+    labels mean only that the cell is inside the current default-off predicate;
+    they do not license interpolation to unmeasured K/R/byte/batch tuples.
+    """
+    values = []
+    seen = set()
+
+    def add(value):
+        identity = digest_value(value)
+        if identity in seen:
+            return
+        seen.add(identity)
+        values.append(value)
+
+    def sparse(
+            region, k, r, shard_bytes, mask="0", batch=1,
+            q=1, profile="high", field="gf8"):
+        add(batched_cell(
+            region, "avx2", k, r, profile, field, shard_bytes,
+            q, mask, batch))
+
+    # Cross the bounded K/R anchors at a stable mid-sized aligned tile.
+    for k in (2, 3, 4, 8, 12, 16):
+        for r in (2, 4, 8, 16):
+            sparse("candidate_sparse_core", k, r, 4096)
+
+    # Byte scaling at the two opposite K/R corners.  The 4032/4160 cells are
+    # immediate aligned neighbors around the historical 4 KiB observation.
+    for k, r in ((2, 16), (16, 2)):
+        for shard_bytes in (1024, 1088, 2048, 4032, 4160, 65536):
+            sparse("candidate_sparse_bytes", k, r, shard_bytes)
+
+    # Coefficient-row position can vary without changing Q.  Sample middle and
+    # last rows at four distinct K/R geometries; correctness tests cover every
+    # parity index independently of this timing campaign.
+    for k, r in ((2, 16), (8, 8), (16, 4), (16, 16)):
+        for parity in (r // 2, r - 1):
+            sparse(
+                "candidate_sparse_mask", k, r, 4096,
+                mask=str(parity))
+
+    # Batch count is an amortization dimension, not an AUTO selector input.
+    for k, r in ((2, 16), (4, 4), (8, 8), (16, 2), (16, 16)):
+        for batch in (4, 16):
+            sparse("candidate_sparse_batch", k, r, 4096, batch=batch)
+
+    # R=1 is the nearest excluded recovery-count boundary.
+    for k in (2, 4, 8, 16):
+        for shard_bytes in (1024, 4096, 65536):
+            sparse("excluded_sparse_r1", k, 1, shard_bytes)
+
+    # K=1 is the nearest original-count boundary rejected before the branch.
+    sparse("excluded_sparse_k1", 1, 16, 4096)
+
+    # Q>1 is outside the candidate even when one requested row is far from the
+    # prefix.  Retain both adjacent prefix and holey controls where possible.
+    for k, r in ((2, 2), (2, 16), (8, 8), (16, 2), (16, 16)):
+        sparse(
+            "excluded_sparse_q2_prefix", k, r, 4096,
+            mask="0-1", q=2)
+        if r > 2:
+            sparse(
+                "excluded_sparse_q2_holey", k, r, 4096,
+                mask="0,{}".format(r - 1), q=2)
+
+    # Threshold and alignment controls immediately surrounding 1024 and 1088.
+    for k, r in ((2, 16), (16, 2)):
+        for shard_bytes in (960, 1023, 1025, 1087, 1089):
+            sparse("excluded_sparse_bytes", k, r, shard_bytes)
+
+    # Field/profile exclusions remain visible without requiring a second
+    # runtime backend build.  Non-AVX2 routing belongs to the production-linked
+    # correctness test rather than this explicit-AVX2 timing executable.
+    for k, r in ((2, 16), (16, 2)):
+        sparse(
+            "excluded_sparse_low_profile", k, r, 4096, profile="low")
+        sparse("excluded_sparse_gf16", k, r, 4096, field="gf16")
+
+    # Verify that batching cannot rescue the excluded R=1 boundary.
+    for batch in (4, 16):
+        sparse("excluded_sparse_r1_batch", 2, 1, 4096, batch=batch)
+
+    values.sort(key=lambda item: (
+        item["region"], item["profile"], item["field"], item["r"],
+        item["k"], item["q"], item["shard_bytes"], item["mask"],
+        item["batch"],
+    ))
+    if len({digest_value(value) for value in values}) != len(values):
+        raise CrossoverError("sparse-high AVX2 campaign contains duplicate cells")
+    if any(
+            item["region"].startswith("candidate") !=
+            sparse_high_selector_matches(item)
+            for item in values):
+        raise CrossoverError(
+            "sparse-high AVX2 region labels differ from the selector predicate"
+        )
+    if (len(values) != SPARSE_HIGH_CELL_COUNT or
+            digest_value(values) != SPARSE_HIGH_CELLS_SHA256):
+        raise CrossoverError(
+            "sparse-high AVX2 campaign differs from its frozen v1 grid"
+        )
+    return values
+
+
+def sparse_high_selector_matches(cell_value):
+    """Mirror the bounded default-off C++ selector for grid classification."""
+    return (
+        isinstance(cell_value, dict) and
+        cell_value.get("backend") == "avx2" and
+        cell_value.get("profile") == "high" and
+        cell_value.get("field") == "gf8" and
+        type(cell_value.get("k")) is int and
+        2 <= cell_value["k"] <= 16 and
+        type(cell_value.get("r")) is int and
+        1 < cell_value["r"] <= 16 and
+        type(cell_value.get("q")) is int and
+        cell_value["q"] == 1 and
+        type(cell_value.get("shard_bytes")) is int and
+        cell_value["shard_bytes"] >= 1024 and
+        cell_value["shard_bytes"] % 64 == 0
+    )
+
+
+def sparse_high_campaign_contract(cells):
+    if (not isinstance(cells, list) or len(cells) != SPARSE_HIGH_CELL_COUNT or
+            digest_value(cells) != SPARSE_HIGH_CELLS_SHA256):
+        raise CrossoverError("sparse-high campaign cells are not the frozen grid")
+    return {
+        "cell_count": SPARSE_HIGH_CELL_COUNT,
+        "cell_schema": CELL_SCHEMA_V2,
+        "cells_sha256": SPARSE_HIGH_CELLS_SHA256,
+        "discovery_threshold_percent": 5.0,
+        "evidence_scope": (
+            "forced-direct versus forced-transform encode-execution timing; "
+            "marginal paired-log Student-t intervals"
+        ),
+        "name": SPARSE_HIGH_CAMPAIGN_NAME,
+        "production_promotion_authorized": False,
+    }
+
+
 def full_grid(backends, r):
     result = compact_grid(backends, r)
     seen = {digest_value(item) for item in result}
@@ -4185,8 +4906,8 @@ def stable_seed(cell_value):
     return int(digest_value({"seed_for": cell_value})[:16], 16) or 1
 
 
-def invocation_order(mode, job_id, abba_rounds):
-    if mode in AUTHORITATIVE_COMMANDS:
+def invocation_order(mode, job_id, abba_rounds, manifest_schema=SCHEMA):
+    if mode in authoritative_commands_for_schema(manifest_schema):
         return ("direct", "transform", "transform", "direct") * abba_rounds
     # Alternating the two-cell screening order prevents one path from always
     # receiving the colder process launch while keeping the order deterministic.
@@ -4241,9 +4962,11 @@ def make_jobs(
     return jobs
 
 
-def benchmark_argv(job, timed_mode, raw_path, settings):
+def benchmark_argv(
+        job, timed_mode, raw_path, settings, manifest_schema=SCHEMA):
     item = job["cell"]
     benchmark = settings["benchmark"]
+    batch = cell_batch(item, settings)
     argv = [
         (
             str(Path("/proc/self/fd") / str(EXECUTABLE_DESCRIPTOR))
@@ -4257,7 +4980,7 @@ def benchmark_argv(job, timed_mode, raw_path, settings):
         "--bytes", str(item["shard_bytes"]),
         "--q", str(item["q"]),
         "--requested-parity", item["mask"],
-        "--batch", str(benchmark["batch"]),
+        "--batch", str(batch),
         "--reuse", str(benchmark["reuse"]),
         "--iterations", str(benchmark["iterations"]),
         "--warmups", str(benchmark["warmups"]),
@@ -4266,7 +4989,7 @@ def benchmark_argv(job, timed_mode, raw_path, settings):
         "--mode", timed_mode,
         "--json", str(raw_path),
     ]
-    if settings["mode"] in AUTHORITATIVE_COMMANDS:
+    if settings["mode"] in authoritative_commands_for_schema(manifest_schema):
         argv = [
             str(Path("/proc/self/fd") / str(
                 TASKSET_EXECUTABLE_DESCRIPTOR
@@ -6706,13 +7429,8 @@ def run_command(
             )
 
 
-def controlled_avx2_configure_argv(cmake, ninja, source, build_root):
-    """Return the stable historical mode-0 configure command.
-
-    The default small-direct mode deliberately remains implicit.  Adding an
-    explicit ``-D...=0`` would make otherwise equivalent historical campaign
-    commands differ even though production compilation is unchanged.
-    """
+def controlled_avx2_configure_argv_v7(cmake, ninja, source, build_root):
+    """Return the frozen v7 historical mode-0 configure command."""
     return [
         str(cmake),
         "-S", str(source),
@@ -6735,9 +7453,35 @@ def controlled_avx2_configure_argv(cmake, ninja, source, build_root):
     ]
 
 
+def controlled_avx2_configure_argv(
+        cmake, ninja, source, build_root, selector_overrides=None):
+    """Return the current stable explicit-AVX2 configure command.
+
+    The default small-direct mode deliberately remains implicit.  Adding an
+    explicit ``-D...=0`` would make otherwise equivalent historical campaign
+    commands differ even though production compilation is unchanged.
+    """
+    selector_overrides = {} if selector_overrides is None else selector_overrides
+    if selector_overrides not in ({}, {
+            "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"}):
+        raise CrossoverError("controlled AVX2 selector override is invalid")
+    result = controlled_avx2_configure_argv_v7(
+        cmake, ninja, source, build_root)
+    if selector_overrides:
+        insertion = result.index(
+            "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF")
+        result.insert(
+            insertion,
+            "-DLEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=ON",
+        )
+    return result
+
+
 def controlled_avx2_build(
         source, result_dir, source_state, parallel, validate_guard,
-        guard_identity, inherited_lock_descriptor, result_root):
+        guard_identity, inherited_lock_descriptor, result_root,
+        selector_overrides=None):
+    selector_overrides = {} if selector_overrides is None else selector_overrides
     if type(parallel) is not int or parallel <= 0 or parallel > 128:
         raise CrossoverError("controlled build parallelism is outside [1,128]")
     if not callable(validate_guard):
@@ -6791,7 +7535,9 @@ def controlled_avx2_build(
                 MAX_RAW_JSON_BYTES, "controlled-build executable",
                 required_mode=0o755,
             )
-            metadata = cmake_build_metadata(executable)
+            metadata = cmake_build_metadata(
+                executable, BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+                selector_overrides)
         except (CrossoverError, KeyError, OSError, TypeError) as error:
             raise CrossoverError(
                 "cannot resume controlled AVX2 build: {}".format(error)
@@ -6841,7 +7587,8 @@ def controlled_avx2_build(
                         "retained controlled-build log hash changed"
                     )
         validate_build_source_binding(
-            metadata, source, source_state, "avx2", require_fresh=True
+            metadata, source, source_state, "avx2", require_fresh=True,
+            selector_overrides=selector_overrides,
         )
         validate_guard()
         return executable, {
@@ -6873,7 +7620,7 @@ def controlled_avx2_build(
         Path("/proc/self/fd") / str(CONTROLLED_NINJA_DESCRIPTOR)
     )
     configure = controlled_avx2_configure_argv(
-        cmake_procfd, ninja_procfd, source, build_root
+        cmake_procfd, ninja_procfd, source, build_root, selector_overrides
     )
     build = [
         cmake_procfd, "--build", str(build_root),
@@ -7000,9 +7747,12 @@ def controlled_avx2_build(
         raise CrossoverError(
             "controlled AVX2 build omitted {}".format(executable)
         )
-    metadata = cmake_build_metadata(executable)
+    metadata = cmake_build_metadata(
+        executable, BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        selector_overrides)
     validate_build_source_binding(
-        metadata, source, source_state, "avx2", require_fresh=True
+        metadata, source, source_state, "avx2", require_fresh=True,
+        selector_overrides=selector_overrides,
     )
     validate_guard()
     executable_bytes = read_result_regular(
@@ -7107,7 +7857,10 @@ def required_finite_metric(value, path, allow_zero):
     return number
 
 
-def validate_raw(raw, job, timed_mode, settings):
+def validate_raw(
+        raw, job, timed_mode, settings,
+        expected_configuration_schema=BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        selector_overrides=None, manifest_schema=SCHEMA):
     raw = require_exact_keys(raw, {
         "build", "correctness", "memory", "methodology", "metrics",
         "operation_model", "parameters", "resolved", "schema",
@@ -7210,7 +7963,9 @@ def validate_raw(raw, job, timed_mode, settings):
     attested_configuration_sha256 = (
         validate_build_configuration_attestation(
             configuration_attestation,
-            build_root_path / BUILD_CONFIGURATION_RELATIVE_PATH
+            build_root_path / BUILD_CONFIGURATION_RELATIVE_PATH,
+            expected_configuration_schema,
+            selector_overrides,
         )
     )
     (configuration_file_schema, unused_variables,
@@ -7231,7 +7986,8 @@ def validate_raw(raw, job, timed_mode, settings):
         )
     validate_embedded_build_type(
         configuration_attestation["entries"], build.get("build_type"),
-        settings.get("mode") in AUTHORITATIVE_COMMANDS
+        settings.get("mode") in
+        authoritative_commands_for_schema(manifest_schema)
     )
     if (build.get("build_configuration_sha256") !=
             attested_configuration_sha256):
@@ -7259,7 +8015,7 @@ def validate_raw(raw, job, timed_mode, settings):
         "requested_profile": ("low_v1" if item["profile"] == "low"
                               else "legacy_high_v1"),
         "requested_field": item["field"],
-        "batch": settings["benchmark"]["batch"],
+        "batch": cell_batch(item, settings),
         "reuse": settings["benchmark"]["reuse"],
         "iterations": settings["benchmark"]["iterations"],
         "warmups": settings["benchmark"]["warmups"],
@@ -7311,7 +8067,7 @@ def validate_raw(raw, job, timed_mode, settings):
     if resolved.get("timed_path_is_direct") is not expected_direct:
         raise CrossoverError("benchmark timed a path other than the forced path")
 
-    batch = settings["benchmark"]["batch"]
+    batch = cell_batch(item, settings)
     direct_terms = item["k"] * item["q"] * batch
     direct_initializations = item["q"] * batch
     direct_accumulations = (item["k"] - 1) * item["q"] * batch
@@ -7375,7 +8131,7 @@ def validate_raw(raw, job, timed_mode, settings):
             execution.get(key), "metrics.encode_execution." + key, True
         )
     hashed_bytes = (
-        settings["benchmark"]["batch"] * item["q"] * item["shard_bytes"]
+        batch * item["q"] * item["shard_bytes"]
     )
     if hashed_bytes <= 0:
         raise CrossoverError("benchmark parity identity covers no output bytes")
@@ -7388,7 +8144,10 @@ def validate_raw(raw, job, timed_mode, settings):
     return median_us, mad_us, parity_identity
 
 
-def validate_execution_inputs(job, result_root=None):
+def validate_execution_inputs(
+        job, result_root=None,
+        expected_configuration_schema=BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        selector_overrides=None):
     executable = Path(job["executable"])
     executable_artifact = job.get("executable_artifact")
     if executable_artifact is not None:
@@ -7412,8 +8171,9 @@ def validate_execution_inputs(job, result_root=None):
         ))
     if executable_sha256 != job["executable_sha256"]:
         raise CrossoverError("benchmark executable changed during the run")
-    if canonical_bytes(cmake_build_metadata(executable)) != canonical_bytes(
-            job["build_metadata"]):
+    if canonical_bytes(cmake_build_metadata(
+            executable, expected_configuration_schema,
+            selector_overrides)) != canonical_bytes(job["build_metadata"]):
         raise CrossoverError("benchmark CMake metadata changed during the run")
 
 
@@ -7432,10 +8192,18 @@ def artifact_path(root, relative, description):
 
 
 def validate_job_artifacts(
-        result_dir, result, expected_job, settings, result_root):
+        result_dir, result, expected_job, settings, result_root,
+        expected_job_schema=JOB_SCHEMA,
+        expected_configuration_schema=BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        selector_overrides=None, expected_launcher_identity=None,
+        manifest_schema=SCHEMA):
     validate_owned_directory(result_root, "canonical result directory")
     result_dir = result_root["path"]
-    if not isinstance(result, dict) or result.get("schema") != JOB_SCHEMA:
+    retained_benchmark_environment, unused_git_environment = \
+        retained_environment_contract(manifest_schema)
+    del unused_git_environment
+    if (not isinstance(result, dict) or
+            result.get("schema") != expected_job_schema):
         raise CrossoverError("job result has a legacy or unknown schema")
     common_keys = {
         "build_metadata", "cell", "commands", "configuration_id",
@@ -7451,21 +8219,17 @@ def validate_job_artifacts(
         raise CrossoverError("passed job result has an invalid v6 shape")
     if result.get("reason") != "" or not isinstance(result.get("resumed"), bool):
         raise CrossoverError("passed job contains inconsistent status metadata")
-    if settings.get("mode") in AUTHORITATIVE_COMMANDS:
+    if settings.get("mode") in authoritative_commands_for_schema(
+            manifest_schema):
         isolation_settings = settings["isolation"]
         try:
-            support = load_isolation_support(
-                expected_job["build_metadata"]["entries"][
-                    "CMAKE_HOME_DIRECTORY"
-                ]
-            )
-            support.validate_isolation(
+            validate_retained_isolation_v1(
                 result.get("isolation"),
                 isolation_settings["benchmark_cpu"],
                 isolation_settings["reserved_sibling"],
                 require_accepted=True,
             )
-            support.validate_pair_lease_identity(
+            validate_retained_pair_lease_identity(
                 isolation_settings["pair_lease"],
                 isolation_settings["benchmark_cpu"],
                 isolation_settings["reserved_sibling"],
@@ -7492,7 +8256,9 @@ def validate_job_artifacts(
                     expected_job["job_id"], key
                 )
             )
-    validate_execution_inputs(expected_job, result_root)
+    validate_execution_inputs(
+        expected_job, result_root, expected_configuration_schema,
+        selector_overrides)
     order = expected_job.get("invocation_order", [])
     commands = result.get("commands")
     measurements = result.get("measurements")
@@ -7517,7 +8283,7 @@ def validate_job_artifacts(
         "stderr_log",
         "stderr_sha256", "stdout_log", "stdout_sha256", "timed_out",
     }
-    expected_launcher_identity = current_runtime_launcher_identity()
+    retained_launcher_identity = None
     measurement_keys = {
         "benchmark_json", "benchmark_json_sha256", "mad_us", "median_us",
         "parity_identity", "sequence_index", "timed_mode",
@@ -7541,7 +8307,7 @@ def validate_job_artifacts(
             Path("/proc/self/fd") / str(RAW_OUTPUT_DESCRIPTOR)
         )
         expected_relative_raw = str(raw_path.relative_to(result_dir.resolve()))
-        expected_environment = dict(BENCHMARK_ENVIRONMENT)
+        expected_environment = dict(retained_benchmark_environment)
         expected_environment["LEO2_EXPECT_BACKEND"] = (
             expected_job["cell"]["backend"]
         )
@@ -7552,10 +8318,9 @@ def validate_job_artifacts(
                 measurement.get("sequence_index") != index or
                 measurement.get("timed_mode") != timed_mode or
                 command.get("argv") != benchmark_argv(
-                    expected_job, timed_mode, child_raw_path, settings
-                ) or canonical_bytes(
-                    command.get("launcher_identity")
-                ) != canonical_bytes(expected_launcher_identity) or
+                    expected_job, timed_mode, child_raw_path, settings,
+                    manifest_schema,
+                ) or
                 command.get("cwd") != str(source) or
                 command.get("environment") != expected_environment or
                 command.get("stdout_log") != label + ".stdout.log" or
@@ -7565,6 +8330,23 @@ def validate_job_artifacts(
                 "passed job {} has an invalid sequence entry {}".format(
                     expected_job["job_id"], index
                 )
+            )
+        launcher_identity = validate_retained_runtime_launcher_identity(
+            command.get("launcher_identity"), expected_job["source_identity"],
+            source, "passed job launcher", manifest_schema,
+        )
+        if (expected_launcher_identity is not None and
+                canonical_bytes(launcher_identity) != canonical_bytes(
+                    expected_launcher_identity)):
+            raise CrossoverError(
+                "passed job launcher differs from its controlled build"
+            )
+        if retained_launcher_identity is None:
+            retained_launcher_identity = launcher_identity
+        elif canonical_bytes(launcher_identity) != canonical_bytes(
+                retained_launcher_identity):
+            raise CrossoverError(
+                "passed job command launchers are not byte-identical"
             )
         for stream in ("stdout", "stderr"):
             name = command.get(stream + "_log")
@@ -7585,7 +8367,9 @@ def validate_job_artifacts(
         if digest_bytes(raw_bytes) != measurement.get("benchmark_json_sha256"):
             raise CrossoverError("{} hash does not match the job record".format(raw_path))
         median_us, mad_us, parity_identity = validate_raw(
-            raw, expected_job, timed_mode, settings
+            raw, expected_job, timed_mode, settings,
+            expected_configuration_schema, selector_overrides,
+            manifest_schema,
         )
         recorded_median = required_finite_metric(
             measurement.get("median_us"),
@@ -7793,6 +8577,7 @@ def run_job(job, context):
             )
 
     result_path = context["result_dir"] / "jobs" / (job["job_id"] + ".json")
+    expected_job_schema = context.get("job_schema", JOB_SCHEMA)
     if context["resume"]:
         try:
             validate_guards()
@@ -7806,7 +8591,7 @@ def run_job(job, context):
                     str(result_path)
                 )
                 if (not isinstance(previous, dict) or
-                        previous.get("schema") != JOB_SCHEMA):
+                        previous.get("schema") != expected_job_schema):
                     raise CrossoverError(
                         "resume job has a legacy or unknown schema"
                     )
@@ -7816,6 +8601,14 @@ def run_job(job, context):
                     validate_job_artifacts(
                         context["result_dir"], previous, job,
                         context["settings"], result_root,
+                        expected_job_schema,
+                        context.get(
+                            "expected_configuration_schema",
+                            BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+                        ),
+                        context.get("selector_overrides"),
+                        context.get("expected_launcher_identity"),
+                        context.get("manifest_schema", SCHEMA),
                     )
                     validate_guards()
                     close_owned_directory(result_root)
@@ -7851,7 +8644,7 @@ def run_job(job, context):
         "measurements": [],
         "reason": "",
         "resumed": False,
-        "schema": JOB_SCHEMA,
+        "schema": expected_job_schema,
         "seed": job["seed"],
         "source_identity": job["source_identity"],
         "status": "failed",
@@ -7899,7 +8692,8 @@ def run_job(job, context):
         raise
     unhandled_error = None
     try:
-        if context["settings"].get("mode") in AUTHORITATIVE_COMMANDS:
+        if context["settings"].get("mode") in authoritative_commands_for_schema(
+                context.get("manifest_schema", SCHEMA)):
             taskset_snapshot = open_exact_executable_snapshot(
                 context["settings"]["taskset"],
                 "authoritative taskset executable", True,
@@ -7968,7 +8762,14 @@ def run_job(job, context):
             )
         for index, timed_mode in enumerate(job["invocation_order"]):
             validate_guards()
-            validate_execution_inputs(job, result_root)
+            validate_execution_inputs(
+                job, result_root,
+                context.get(
+                    "expected_configuration_schema",
+                    BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+                ),
+                context.get("selector_overrides"),
+            )
             label = "{:02d}-{}".format(index, timed_mode)
             raw_path = raw_dir / (label + ".json")
             raw_file = open_exclusive_owned_file(
@@ -7981,7 +8782,8 @@ def run_job(job, context):
                     raw_file, "benchmark JSON"
                 )
                 argv = benchmark_argv(
-                    job, timed_mode, child_raw_path, context["settings"]
+                    job, timed_mode, child_raw_path, context["settings"],
+                    context.get("manifest_schema", SCHEMA),
                 )
                 inherited_descriptors = [raw_file["descriptor"]]
                 descriptor_remaps = {
@@ -8026,7 +8828,14 @@ def run_job(job, context):
                 command["environment"] = dict(environment)
                 result["commands"].append(command)
                 validate_guards()
-                validate_execution_inputs(job, result_root)
+                validate_execution_inputs(
+                    job, result_root,
+                    context.get(
+                        "expected_configuration_schema",
+                        BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+                    ),
+                    context.get("selector_overrides"),
+                )
                 if execution_snapshot is not None:
                     validate_sealed_executable_snapshot(
                         execution_snapshot, job["executable_sha256"],
@@ -8062,7 +8871,13 @@ def run_job(job, context):
                     raise
             raw = decode_json_bytes(raw_bytes, str(raw_path))
             median_us, mad_us, parity_identity = validate_raw(
-                raw, job, timed_mode, context["settings"]
+                raw, job, timed_mode, context["settings"],
+                context.get(
+                    "expected_configuration_schema",
+                    BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+                ),
+                context.get("selector_overrides"),
+                context.get("manifest_schema", SCHEMA),
             )
             parity_identities.add(canonical_bytes(parity_identity))
             result["measurements"].append({
@@ -8283,10 +9098,80 @@ def summarize_region(results, promotion_percent):
     }
 
 
+def analysis_decision_contract(mode):
+    if mode == SPARSE_HIGH_MODE:
+        return {
+            "gate_label": "forced-path discovery threshold",
+            "inference_scope": (
+                "per-cell marginal two-sided 95% Student-t interval at df=2; "
+                "not a simultaneous campaign guarantee"
+            ),
+            "metric_scope": "metrics.encode_execution.median_us_per_batch_call",
+            "production_auto_route_evaluated": False,
+            "production_promotion_authorized": False,
+        }
+    if mode == "historical-avx2":
+        return {
+            "gate_label": "legacy promotion threshold",
+            "inference_scope": (
+                "per-cell marginal two-sided 95% Student-t interval at df=2; "
+                "not a simultaneous campaign guarantee"
+            ),
+            "metric_scope": "metrics.encode_execution.median_us_per_batch_call",
+            "production_auto_route_evaluated": False,
+            "production_promotion_authorized": True,
+        }
+    if mode == "screen":
+        return {
+            "gate_label": "diagnostic screen threshold",
+            "inference_scope": "unpaired diagnostic medians",
+            "metric_scope": "metrics.encode_execution.median_us_per_batch_call",
+            "production_auto_route_evaluated": False,
+            "production_promotion_authorized": False,
+        }
+    raise CrossoverError("analysis mode has no decision contract")
+
+
+def decision_threshold_summary(summary):
+    result = dict(summary)
+    result["confidence_decision_threshold_count"] = result.pop(
+        "confidence_promotion_count")
+    result["decision_threshold_count"] = result.pop("promotion_count")
+    return result
+
+
+def analysis_threshold_percent(analysis):
+    if analysis.get("schema") == ANALYSIS_SCHEMA:
+        key = "decision_threshold_percent"
+    elif analysis.get("schema") == ANALYSIS_SCHEMA_V4:
+        key = "promotion_percent"
+    else:
+        raise CrossoverError("direct-encode analysis schema is unsupported")
+    value = required_finite_number(
+        analysis.get(key), "analysis." + key)
+    if value < 0:
+        raise CrossoverError("analysis retained a negative decision threshold")
+    return value
+
+
+def analysis_candidate_gate_passed(analysis):
+    candidate = required_mapping(analysis.get("candidate"), "analysis.candidate")
+    if analysis.get("schema") == ANALYSIS_SCHEMA:
+        key = "all_cells_confidently_meet_decision_threshold"
+    elif analysis.get("schema") == ANALYSIS_SCHEMA_V4:
+        key = "all_cells_confidently_meet_promotion_threshold"
+    else:
+        raise CrossoverError("direct-encode analysis schema is unsupported")
+    if type(candidate.get(key)) is not bool:
+        raise CrossoverError("analysis candidate gate is invalid")
+    return candidate[key]
+
+
 def analyze_results(
         results, promotion_percent, manifest_configuration_id=None,
         run_status=None, source_changed_during_run=None,
-        execution_input_error=None):
+        execution_input_error=None, analysis_schema=ANALYSIS_SCHEMA,
+        mode="screen"):
     ordered = sorted(results, key=lambda item: item.get("job_id", ""))
     regions = {}
     for item in ordered:
@@ -8300,35 +9185,60 @@ def analyze_results(
         else:
             excluded.extend(values)
     candidate_summary = summarize_region(candidate, promotion_percent)
-    analysis = {
-        "candidate": candidate_summary,
-        "excluded_neighbors": summarize_region(excluded, promotion_percent),
-        "execution_input_error": execution_input_error,
-        "jobs_failed": sum(item.get("status") != "passed" for item in ordered),
-        "jobs_passed": sum(item.get("status") == "passed" for item in ordered),
-        "jobs_total": len(ordered),
-        "manifest_configuration_id": manifest_configuration_id,
-        "promotion_percent": promotion_percent,
-        "regions": {
-            region: summarize_region(values, promotion_percent)
-            for region, values in sorted(regions.items())
-        },
-        "run_status": run_status,
-        "schema": ANALYSIS_SCHEMA,
-        "source_changed_during_run": source_changed_during_run,
+    excluded_summary = summarize_region(excluded, promotion_percent)
+    region_summaries = {
+        region: summarize_region(values, promotion_percent)
+        for region, values in sorted(regions.items())
     }
-    analysis["candidate"]["all_cells_meet_promotion_threshold"] = bool(candidate) and (
+    all_cells_meet = bool(candidate) and (
         candidate_summary["failed_count"] == 0 and
         candidate_summary["promotion_count"] == candidate_summary["cell_count"]
     )
-    analysis["candidate"][
-        "all_cells_confidently_meet_promotion_threshold"
-    ] = bool(candidate) and (
+    all_cells_confidently_meet = bool(candidate) and (
         candidate_summary["failed_count"] == 0 and
         candidate_summary["confidence_interval_missing_count"] == 0 and
         candidate_summary["confidence_promotion_count"] ==
         candidate_summary["cell_count"]
     )
+    if analysis_schema == ANALYSIS_SCHEMA:
+        candidate_summary = decision_threshold_summary(candidate_summary)
+        excluded_summary = decision_threshold_summary(excluded_summary)
+        region_summaries = {
+            region: decision_threshold_summary(summary)
+            for region, summary in region_summaries.items()
+        }
+        threshold_key = "decision_threshold_percent"
+    elif analysis_schema == ANALYSIS_SCHEMA_V4:
+        threshold_key = "promotion_percent"
+    else:
+        raise CrossoverError("direct-encode analysis schema is unsupported")
+    analysis = {
+        "candidate": candidate_summary,
+        "excluded_neighbors": excluded_summary,
+        "execution_input_error": execution_input_error,
+        "jobs_failed": sum(item.get("status") != "passed" for item in ordered),
+        "jobs_passed": sum(item.get("status") == "passed" for item in ordered),
+        "jobs_total": len(ordered),
+        "manifest_configuration_id": manifest_configuration_id,
+        threshold_key: promotion_percent,
+        "regions": region_summaries,
+        "run_status": run_status,
+        "schema": analysis_schema,
+        "source_changed_during_run": source_changed_during_run,
+    }
+    if analysis_schema == ANALYSIS_SCHEMA:
+        analysis["decision_contract"] = analysis_decision_contract(mode)
+        analysis["candidate"][
+            "all_cells_meet_decision_threshold"] = all_cells_meet
+        analysis["candidate"][
+            "all_cells_confidently_meet_decision_threshold"
+        ] = all_cells_confidently_meet
+    else:
+        analysis["candidate"][
+            "all_cells_meet_promotion_threshold"] = all_cells_meet
+        analysis["candidate"][
+            "all_cells_confidently_meet_promotion_threshold"
+        ] = all_cells_confidently_meet
     return analysis
 
 
@@ -8343,11 +9253,15 @@ def manifest_identity(manifest):
     }
 
 
-def validate_cell_value(value, description):
+def validate_cell_value(value, description, cell_schema=CELL_SCHEMA_V1):
     expected_keys = {
         "backend", "field", "k", "mask", "profile", "q", "r", "region",
         "shard_bytes",
     }
+    if cell_schema == CELL_SCHEMA_V2:
+        expected_keys.add("batch")
+    elif cell_schema != CELL_SCHEMA_V1:
+        raise CrossoverError("{} has an unknown cell schema".format(description))
     if not isinstance(value, dict) or set(value) != expected_keys:
         raise CrossoverError("{} has an invalid cell shape".format(description))
     if (value["backend"] not in KNOWN_BACKENDS or
@@ -8356,7 +9270,9 @@ def validate_cell_value(value, description):
             not isinstance(value["region"], str) or not value["region"] or
             not isinstance(value["mask"], str)):
         raise CrossoverError("{} has invalid cell labels".format(description))
-    for key in ("k", "r", "q", "shard_bytes"):
+    for key in (("k", "r", "q", "shard_bytes", "batch")
+                if cell_schema == CELL_SCHEMA_V2
+                else ("k", "r", "q", "shard_bytes")):
         if type(value[key]) is not int or value[key] <= 0:
             raise CrossoverError(
                 "{} cell {} must be a positive integer".format(description, key)
@@ -8369,26 +9285,36 @@ def validate_cell_value(value, description):
         raise CrossoverError("{} mask cardinality differs from Q".format(description))
 
 
-def validate_manifest_settings(settings, jobs, path):
+def validate_manifest_settings(settings, jobs, path, manifest_schema=SCHEMA):
+    schemas = outer_schema_contract(manifest_schema)
+    retained_benchmark_environment, unused_git_environment = \
+        retained_environment_contract(manifest_schema)
+    del unused_git_environment
     core_keys = {
         "abba_rounds", "benchmark", "frozen_executable_required", "mode",
         "pin_cpu", "placement_policy", "taskset", "taskset_sha256",
         "timeout_seconds_per_invocation", "workers",
     }
     mode = settings.get("mode")
-    validate_supported_run_mode(mode, str(path))
+    authoritative_commands = authoritative_commands_for_schema(manifest_schema)
+    validate_supported_run_mode(mode, str(path), manifest_schema)
     expected_keys = set(core_keys)
-    if mode in AUTHORITATIVE_COMMANDS:
+    if mode in authoritative_commands:
         expected_keys.add("isolation")
-    if mode == "historical-avx2":
+    if mode in ("historical-avx2", SPARSE_HIGH_MODE):
         expected_keys.update(("campaign", "controlled_build"))
     if set(settings) != expected_keys:
         raise CrossoverError("{} has invalid v6 settings fields".format(path))
     benchmark = settings.get("benchmark")
+    expected_benchmark_keys = (
+        {"iterations", "reuse", "warmups"}
+        if mode == SPARSE_HIGH_MODE else
+        {"batch", "iterations", "reuse", "warmups"}
+    )
     if (not isinstance(benchmark, dict) or
-            set(benchmark) != {"batch", "iterations", "reuse", "warmups"}):
+            set(benchmark) != expected_benchmark_keys):
         raise CrossoverError("{} has invalid benchmark settings".format(path))
-    for key in ("batch", "iterations", "reuse", "warmups"):
+    for key in expected_benchmark_keys:
         if type(benchmark[key]) is not int or benchmark[key] <= 0:
             raise CrossoverError("{} benchmark {} is invalid".format(path, key))
     for key in ("abba_rounds", "timeout_seconds_per_invocation", "workers"):
@@ -8399,9 +9325,9 @@ def validate_manifest_settings(settings, jobs, path):
     if not isinstance(settings.get("placement_policy"), str):
         raise CrossoverError("{} has invalid placement policy".format(path))
     frozen = settings.get("frozen_executable_required")
-    if type(frozen) is not bool or frozen != (mode in AUTHORITATIVE_COMMANDS):
+    if type(frozen) is not bool or frozen != (mode in authoritative_commands):
         raise CrossoverError("{} has inconsistent frozen policy".format(path))
-    if mode in AUTHORITATIVE_COMMANDS:
+    if mode in authoritative_commands:
         if (settings["abba_rounds"] != 3 or settings["workers"] != 1 or
                 type(settings.get("pin_cpu")) is not int or
                 not isinstance(settings.get("taskset"), str) or
@@ -8411,14 +9337,6 @@ def validate_manifest_settings(settings, jobs, path):
             raise CrossoverError("{} has invalid authoritative ABBA settings".format(
                 path
             ))
-        try:
-            taskset_sha256 = digest_bytes(Path("/usr/bin/taskset").read_bytes())
-        except OSError as error:
-            raise CrossoverError(
-                "{} cannot revalidate /usr/bin/taskset: {}".format(path, error)
-            )
-        if taskset_sha256 != settings["taskset_sha256"]:
-            raise CrossoverError("{} taskset executable changed".format(path))
         isolation = settings.get("isolation")
         isolation_keys = {
             "allowed_cpu_set_at_launch", "benchmark_cpu", "canonical_lock",
@@ -8446,7 +9364,8 @@ def validate_manifest_settings(settings, jobs, path):
             raise CrossoverError(
                 "{} has invalid authoritative CPU-pair settings".format(path)
             )
-        if isolation.get("child_environment") != BENCHMARK_ENVIRONMENT:
+        if (isolation.get("child_environment") !=
+                retained_benchmark_environment):
             raise CrossoverError(
                 "{} has an unsanitized benchmark environment".format(path)
             )
@@ -8455,7 +9374,7 @@ def validate_manifest_settings(settings, jobs, path):
                 "device", "inode", "lock", "mode", "path", "uid"} or
                 lock.get("path") != str(AUTHORITATIVE_LOCK) or
                 lock.get("lock") != "exclusive" or lock.get("mode") != 0o600 or
-                lock.get("uid") != os.getuid() or
+                type(lock.get("uid")) is not int or lock["uid"] < 0 or
                 any(type(lock.get(key)) is not int or lock[key] < 0
                     for key in ("device", "inode"))):
             raise CrossoverError(
@@ -8473,12 +9392,8 @@ def validate_manifest_settings(settings, jobs, path):
                 "{} has invalid physical-pair lease identity".format(path)
             )
         try:
-            source_root = jobs[0]["build_metadata"]["entries"][
-                "CMAKE_HOME_DIRECTORY"
-            ]
-            support = load_isolation_support(source_root)
-            support.validate_pair_lease_identity(pair, cpu, sibling)
-        except Exception as error:
+            validate_retained_pair_lease_identity(pair, cpu, sibling)
+        except CrossoverError as error:
             raise CrossoverError(
                 "{} physical-pair lease failed canonical validation: {}".format(
                     path, error
@@ -8504,10 +9419,23 @@ def validate_manifest_settings(settings, jobs, path):
             raise CrossoverError(
                 "{} is not the exact historical AVX2 campaign".format(path)
             )
+    elif mode == SPARSE_HIGH_MODE:
+        cells = [job.get("cell") for job in jobs]
+        expected_cells = sparse_high_avx2_grid()
+        if (canonical_bytes(cells) != canonical_bytes(expected_cells) or
+                canonical_bytes(settings.get("campaign")) !=
+                canonical_bytes(sparse_high_campaign_contract(expected_cells)) or
+                benchmark != {
+                    "iterations": 15, "reuse": 64, "warmups": 4,
+                }):
+            raise CrossoverError(
+                "{} is not the exact sparse-high AVX2 campaign".format(path)
+            )
+    if mode in ("historical-avx2", SPARSE_HIGH_MODE):
         controlled = settings.get("controlled_build")
         if (not isinstance(controlled, dict) or set(controlled) != {
                 "path", "schema", "sha256"} or
-                controlled.get("schema") != CONTROLLED_BUILD_SCHEMA or
+                controlled.get("schema") != schemas["controlled_build_schema"] or
                 controlled.get("path") != "controlled-build.json" or
                 not isinstance(controlled.get("sha256"), str) or
                 not re.fullmatch(r"[0-9a-f]{64}", controlled["sha256"])):
@@ -8517,9 +9445,18 @@ def validate_manifest_settings(settings, jobs, path):
 
 
 def validate_controlled_build_held(
-        settings, jobs, manifest_path, result_root):
-    if settings.get("mode") != "historical-avx2":
+        settings, jobs, manifest_path, result_root, manifest_schema=SCHEMA):
+    if settings.get("mode") not in ("historical-avx2", SPARSE_HIGH_MODE):
         return
+    schemas = outer_schema_contract(manifest_schema)
+    unused_benchmark_environment, retained_git_environment = \
+        retained_environment_contract(manifest_schema)
+    del unused_benchmark_environment
+    expected_controlled_schema = schemas["controlled_build_schema"]
+    expected_configuration_schema = schemas[
+        "build_configuration_attestation_schema"]
+    selector_overrides = configuration_selector_overrides_for_mode(
+        settings.get("mode"), manifest_schema)
     descriptor = settings["controlled_build"]
     result_dir = result_root["path"]
     record_path = result_dir / descriptor["path"]
@@ -8536,7 +9473,7 @@ def validate_controlled_build_held(
         "executable_sha256", "guard_identity", "schema", "source_identity",
     }
     if (not isinstance(record, dict) or set(record) != expected_keys or
-            record.get("schema") != CONTROLLED_BUILD_SCHEMA or
+            record.get("schema") != expected_controlled_schema or
             record.get("backend") != "avx2"):
         raise CrossoverError("controlled build record has an invalid schema")
     build_root = (result_dir / "controlled-build-avx2").resolve()
@@ -8577,11 +9514,11 @@ def validate_controlled_build_held(
         raise CrossoverError(
             "controlled build tool identity is malformed"
         )
-    validate_current_executable_identity(
-        build_tools["cmake"], "controlled CMake"
+    validate_sealed_snapshot_identity(
+        build_tools["cmake"], "retained controlled CMake"
     )
-    validate_current_executable_identity(
-        build_tools["ninja"], "controlled Ninja"
+    validate_sealed_snapshot_identity(
+        build_tools["ninja"], "retained controlled Ninja"
     )
     commands = record.get("commands")
     if not isinstance(commands, list) or len(commands) != 2:
@@ -8604,15 +9541,22 @@ def validate_controlled_build_held(
         ).resolve()
     except (KeyError, TypeError, ValueError):
         raise CrossoverError("controlled build omits its source directory")
-    current_metadata = cmake_build_metadata(executable)
+    current_metadata = cmake_build_metadata(
+        executable, expected_configuration_schema, selector_overrides)
     if canonical_bytes(current_metadata) != canonical_bytes(
             record["build_metadata"]):
         raise CrossoverError(
             "controlled build CMake/object/link provenance changed"
         )
+    # Retrospective replay cannot preserve the original executable/source
+    # mtimes.  Keep every authoritative closure assertion and relax only the
+    # acquisition-time source/executable timestamp comparison.
     validate_build_source_binding(
         current_metadata, source, record["source_identity"], "avx2",
-        require_fresh=True
+        require_fresh=False,
+        expected_configuration_schema=expected_configuration_schema,
+        selector_overrides=selector_overrides,
+        require_authoritative_closure=True,
     )
     cmake = str(
         Path("/proc/self/fd") / str(CONTROLLED_CMAKE_DESCRIPTOR)
@@ -8624,27 +9568,42 @@ def validate_controlled_build_held(
         raise CrossoverError(
             "controlled build did not use its sealed CMake descriptor"
         )
+    configure_argv = (
+        controlled_avx2_configure_argv_v7(
+            cmake, ninja, source, build_root)
+        if manifest_schema == SCHEMA_V7 else
+        controlled_avx2_configure_argv(
+            cmake, ninja, source, build_root, selector_overrides)
+    )
     expected_argv = (
-        controlled_avx2_configure_argv(cmake, ninja, source, build_root),
+        configure_argv,
         [
             cmake, "--build", str(build_root), "--target",
             "bench_leopard2_direct_encode", "--parallel",
             str(min(len(settings["isolation"]["housekeeping_cpu_set"]), 128)),
         ],
     )
-    expected_launcher_identity = current_runtime_launcher_identity()
+    expected_launcher_identity = None
     for index, command in enumerate(commands):
         if (command.get("argv") != expected_argv[index] or
-                canonical_bytes(
-                    command.get("launcher_identity")
-                ) != canonical_bytes(expected_launcher_identity) or
                 command.get("cwd") != str(source) or
-                command.get("environment") != GIT_ENVIRONMENT or
+                command.get("environment") != retained_git_environment or
                 type(command.get("returncode")) is not int or
                 command.get("returncode") != 0 or
                 command.get("timed_out") is not False):
             raise CrossoverError(
                 "controlled build command {} is invalid".format(index)
+            )
+        launcher_identity = validate_retained_runtime_launcher_identity(
+            command.get("launcher_identity"), record["source_identity"],
+            source, "controlled build launcher", manifest_schema,
+        )
+        if expected_launcher_identity is None:
+            expected_launcher_identity = launcher_identity
+        elif canonical_bytes(launcher_identity) != canonical_bytes(
+                expected_launcher_identity):
+            raise CrossoverError(
+                "controlled build launchers are not byte-identical"
             )
         for stream in ("stdout", "stderr"):
             log_path = result_dir / command[stream + "_log"]
@@ -8655,11 +9614,12 @@ def validate_controlled_build_held(
             )
             if digest_bytes(value) != command[stream + "_sha256"]:
                 raise CrossoverError("controlled build log hash changed")
+    return expected_launcher_identity
 
 
 def validate_controlled_build(
-        settings, jobs, manifest_path, result_root=None):
-    if settings.get("mode") != "historical-avx2":
+        settings, jobs, manifest_path, result_root=None, manifest_schema=SCHEMA):
+    if settings.get("mode") not in ("historical-avx2", SPARSE_HIGH_MODE):
         return
     owns_root = result_root is None
     if result_root is None:
@@ -8669,7 +9629,7 @@ def validate_controlled_build(
         )
     try:
         return validate_controlled_build_held(
-            settings, jobs, manifest_path, result_root
+            settings, jobs, manifest_path, result_root, manifest_schema
         )
     finally:
         if owns_root:
@@ -8682,7 +9642,7 @@ def validate_manifest(manifest, path, result_root=None):
         "machine", "schema", "settings", "source_fingerprint",
     }
     if (not isinstance(manifest, dict) or set(manifest) != expected_keys or
-            manifest.get("schema") != SCHEMA):
+            manifest.get("schema") not in (SCHEMA_V7, SCHEMA)):
         raise CrossoverError(
             "{} has an unknown, legacy, or incomplete schema".format(path)
         )
@@ -8702,14 +9662,22 @@ def validate_manifest(manifest, path, result_root=None):
     if any(not isinstance(job, dict) or set(job) != expected_job_keys
            for job in jobs):
         raise CrossoverError("{} contains an invalid v6 job".format(path))
-    validate_manifest_settings(settings, jobs, path)
-    validate_controlled_build(settings, jobs, path, result_root)
-    contract = evidence_contract(settings.get("frozen_executable_required") is True)
+    manifest_schema = manifest["schema"]
+    validate_manifest_settings(settings, jobs, path, manifest_schema)
+    validate_controlled_build(
+        settings, jobs, path, result_root, manifest_schema)
+    selector_overrides = configuration_selector_overrides_for_mode(
+        settings.get("mode"), manifest_schema)
+    contract = evidence_contract(
+        settings.get("frozen_executable_required") is True, manifest_schema,
+        selector_overrides, settings.get("mode"))
     if canonical_bytes(manifest.get("evidence_contract")) != canonical_bytes(contract):
         raise CrossoverError("{} has a stale or relabeled evidence contract".format(path))
     validate_source_state(
         source_state, str(path) + " source_fingerprint",
-        settings.get("mode") in AUTHORITATIVE_COMMANDS
+        settings.get("mode") in authoritative_commands_for_schema(
+            manifest_schema),
+        require_current_git_tool=False,
     )
     if manifest.get("configuration_id") != digest_value(manifest_identity(manifest)):
         raise CrossoverError("{} configuration ID does not match its content".format(path))
@@ -8719,7 +9687,10 @@ def validate_manifest(manifest, path, result_root=None):
     for job in jobs:
         if not isinstance(job, dict) or set(job) != expected_job_keys:
             raise CrossoverError("{} contains an invalid v6 job".format(path))
-        validate_cell_value(job.get("cell"), "manifest job")
+        validate_cell_value(
+            job.get("cell"), "manifest job",
+            cell_schema_for_mode(settings.get("mode")),
+        )
         identity = job_identity(
             job["cell"], job["executable"], job["executable_artifact"],
             job["executable_sha256"], job["build_metadata"],
@@ -8735,7 +9706,7 @@ def validate_manifest(manifest, path, result_root=None):
                 job.get("seed") != stable_seed(job["cell"]) or
                 job.get("invocation_order") != list(invocation_order(
                     settings.get("mode"), job_id,
-                    settings.get("abba_rounds", 0)
+                    settings.get("abba_rounds", 0), manifest_schema,
                 ))):
             raise CrossoverError("{} contains a stale or duplicate job".format(path))
         frozen_required = settings.get("frozen_executable_required") is True
@@ -8835,11 +9806,22 @@ def require_compatible_result_dir(
 
 
 def load_job_results(result_dir, manifest, result_root=None):
+    schemas = outer_schema_contract(manifest["schema"])
+    expected_job_schema = schemas["job_schema"]
+    expected_configuration_schema = schemas[
+        "build_configuration_attestation_schema"]
+    selector_overrides = configuration_selector_overrides_for_mode(
+        manifest["settings"]["mode"], manifest["schema"])
     owns_root = result_root is None
     if result_root is None:
         result_root = open_existing_canonical_directory(
             result_dir, "job-results canonical result directory"
         )
+    expected_launcher_identity = validate_controlled_build(
+        manifest["settings"], manifest["jobs"],
+        result_root["path"] / "manifest.json", result_root,
+        manifest["schema"],
+    )
     job_dir = result_root["path"] / "jobs"
     expected = {}
     for job in manifest["jobs"]:
@@ -8878,7 +9860,8 @@ def load_job_results(result_dir, manifest, result_root=None):
                 MAX_RAW_JSON_BYTES, "job result JSON",
             )
             item = decode_json_bytes(item_bytes, str(path))
-            if not isinstance(item, dict) or item.get("schema") != JOB_SCHEMA:
+            if (not isinstance(item, dict) or
+                    item.get("schema") != expected_job_schema):
                 raise CrossoverError(
                     "{} has a legacy or unknown job schema".format(path)
                 )
@@ -8894,6 +9877,9 @@ def load_job_results(result_dir, manifest, result_root=None):
             validate_job_artifacts(
                 result_dir, item, expected[job_id],
                 manifest["settings"], result_root,
+                expected_job_schema, expected_configuration_schema,
+                selector_overrides, expected_launcher_identity,
+                manifest["schema"],
             )
             results.append(item)
         final_names = list_result_regular_names(
@@ -8919,16 +9905,19 @@ def write_merged(
     )
     failed = any(item.get("status") != "passed" for item in ordered)
     run_status = "failed" if failed or source_changed or execution_input_error else "passed"
+    schemas = outer_schema_contract(manifest["schema"])
     analysis = analyze_results(
         ordered, promotion_percent, manifest["configuration_id"],
-        run_status, source_changed, execution_input_error or None
+        run_status, source_changed, execution_input_error or None,
+        schemas["analysis_schema"],
+        manifest["settings"]["mode"],
     )
     merged = {
         "analysis": analysis,
         "execution_input_error": execution_input_error or None,
         "jobs": ordered,
         "manifest_configuration_id": manifest["configuration_id"],
-        "schema": SCHEMA,
+        "schema": manifest["schema"],
         "source_changed_during_run": source_changed,
         "source_fingerprint": manifest["source_fingerprint"],
         "source_fingerprint_after": source_end,
@@ -8969,7 +9958,7 @@ def invalidate_authoritative_result_dir_held(result_root, reason):
             str(path),
         )
         if (not isinstance(value, dict) or
-                value.get("schema") != JOB_SCHEMA):
+                value.get("schema") not in (JOB_SCHEMA_V7, JOB_SCHEMA)):
             continue
         if value.get("status") == "passed":
             value.pop("parity_identity", None)
@@ -9012,10 +10001,7 @@ def invalidate_authoritative_result_dir_held(result_root, reason):
             str(manifest_path),
         )
         ordered = [retained[job["job_id"]] for job in manifest["jobs"]]
-        promotion = required_finite_number(
-            matrix["analysis"]["promotion_percent"],
-            "retained failure promotion_percent"
-        )
+        promotion = analysis_threshold_percent(matrix["analysis"])
         write_merged(
             result_dir, manifest, ordered,
             matrix.get("source_fingerprint_after"), promotion,
@@ -9055,25 +10041,37 @@ def invalidate_authoritative_result_dir(result_dir, reason):
 
 def print_analysis(analysis):
     candidate = analysis["candidate"]
+    decision = analysis.get("decision_contract")
+    current_analysis = analysis.get("schema") == ANALYSIS_SCHEMA
+    threshold_percent = analysis_threshold_percent(analysis)
+    threshold_count = candidate[
+        "decision_threshold_count" if current_analysis else "promotion_count"]
+    confidence_threshold_count = candidate[
+        "confidence_decision_threshold_count"
+        if current_analysis else "confidence_promotion_count"]
+    gate_label = (
+        decision["gate_label"]
+        if isinstance(decision, dict) else "promotion gate"
+    )
     print(
         "candidate cells: {}/{} passed; gain min={}; median={}; "
         "regressions={}; >= {:.1f}%={}; 95% lower min={}; "
-        "confident >= threshold={}/{}; promotion gate={}".format(
+        "confident >= threshold={}/{}; {}={}".format(
             candidate["cell_count"] - candidate["failed_count"],
             candidate["cell_count"],
             ("n/a" if candidate["gain_min_percent"] is None else
              "{:.2f}%".format(candidate["gain_min_percent"])),
             ("n/a" if candidate["gain_median_percent"] is None else
              "{:.2f}%".format(candidate["gain_median_percent"])),
-            candidate["regression_count"], analysis["promotion_percent"],
-            candidate["promotion_count"],
+            candidate["regression_count"], threshold_percent,
+            threshold_count,
             ("n/a" if candidate["confidence_worst_lower_gain_percent"] is None
              else "{:.2f}%".format(
                  candidate["confidence_worst_lower_gain_percent"])),
-            candidate["confidence_promotion_count"],
+            confidence_threshold_count,
             candidate["cell_count"],
-            ("passed" if candidate[
-                "all_cells_confidently_meet_promotion_threshold"]
+            gate_label,
+            ("passed" if analysis_candidate_gate_passed(analysis)
              else "not passed"),
         )
     )
@@ -9089,6 +10087,15 @@ def print_analysis(analysis):
             neighbors["regression_count"],
         )
     )
+    if isinstance(decision, dict):
+        print(
+            "decision scope: {}; metric={}; AUTO evaluated={}; production "
+            "promotion authorized={}".format(
+                decision["inference_scope"], decision["metric_scope"],
+                "yes" if decision["production_auto_route_evaluated"] else "no",
+                "yes" if decision["production_promotion_authorized"] else "no",
+            )
+        )
 
 
 def resolve_path(source, value):
@@ -9096,7 +10103,7 @@ def resolve_path(source, value):
     return path.resolve() if path.is_absolute() else (source / path).resolve()
 
 
-def validate_supported_run_mode(command, context):
+def validate_supported_run_mode(command, context, manifest_schema=SCHEMA):
     """Reject modes that cannot prove their claimed build closure."""
     if command == UNPROVED_PINNED_COMMAND:
         raise CrossoverError(
@@ -9105,8 +10112,36 @@ def validate_supported_run_mode(command, context):
             "source/object/archive/link proof; use screen for diagnostics or "
             "historical-avx2 for authoritative evidence".format(context)
         )
-    if command not in RUN_COMMANDS:
+    if command not in run_commands_for_schema(manifest_schema):
         raise CrossoverError("{} has an unknown runner mode".format(context))
+
+
+def validate_sparse_high_arguments(arguments):
+    if arguments.command != SPARSE_HIGH_MODE:
+        return
+    fixed = {
+        "backends": "avx2",
+        "batch": 1,
+        "build_root": "build",
+        "executable_root": None,
+        "full": False,
+        "iterations": 15,
+        "promotion_percent": 5.0,
+        "r": "16",
+        "reuse": 64,
+        "warmups": 4,
+        "workers": 1,
+    }
+    changed = [
+        name for name, expected in fixed.items()
+        if getattr(arguments, name, None) != expected
+    ]
+    if changed:
+        raise CrossoverError(
+            "sparse-high-avx2 has frozen campaign options; changed: {}".format(
+                ", ".join(sorted(changed))
+            )
+        )
 
 
 def run_matrix(arguments):
@@ -9114,6 +10149,7 @@ def run_matrix(arguments):
     # particular, touching an executable linked from stale objects must never
     # turn the old generic pinned path into authoritative evidence.
     validate_supported_run_mode(arguments.command, "runner")
+    validate_sparse_high_arguments(arguments)
     if arguments.command not in AUTHORITATIVE_COMMANDS:
         return run_matrix_body(arguments, None)
     if arguments.cpu is None or arguments.sibling is None:
@@ -9186,6 +10222,7 @@ def run_matrix(arguments):
 def run_matrix_body_held(arguments, isolation, result_root):
     # Defense in depth for tests or callers that invoke the body directly.
     validate_supported_run_mode(arguments.command, "runner")
+    validate_sparse_high_arguments(arguments)
     source = Path(arguments.source).resolve()
     executable_root = resolve_path(
         source, arguments.executable_root or arguments.build_root
@@ -9201,10 +10238,15 @@ def run_matrix_body_held(arguments, isolation, result_root):
             )
 
     validate_campaign_guards()
-    if arguments.command == "historical-avx2" and backends != ["avx2"]:
+    if (arguments.command in ("historical-avx2", SPARSE_HIGH_MODE) and
+            backends != ["avx2"]):
         raise CrossoverError(
-            "historical-avx2 requires exactly --backends avx2"
+            "{} requires exactly --backends avx2".format(arguments.command)
         )
+    selector_overrides = configuration_selector_overrides_for_mode(
+        arguments.command, SCHEMA)
+    expected_configuration_schema = outer_schema_contract(SCHEMA)[
+        "build_configuration_attestation_schema"]
     cpus = (
         list(isolation["allowed"]) if isolation is not None
         else allowed_cpus()
@@ -9234,7 +10276,7 @@ def run_matrix_body_held(arguments, isolation, result_root):
         machine["pinned_cpu_topology"] = cpu_topology(pin_cpu)
         machine["reserved_sibling_topology"] = cpu_topology(arguments.sibling)
     controlled_build = None
-    if arguments.command == "historical-avx2":
+    if arguments.command in ("historical-avx2", SPARSE_HIGH_MODE):
         validate_campaign_guards()
         executable, controlled_build = controlled_avx2_build(
             source, result_dir, source_state,
@@ -9246,6 +10288,7 @@ def run_matrix_body_held(arguments, isolation, result_root):
             },
             isolation["canonical_guard"].descriptor,
             result_root,
+            selector_overrides,
         )
         validate_campaign_guards()
         executables = {"avx2": executable}
@@ -9255,22 +10298,28 @@ def run_matrix_body_held(arguments, isolation, result_root):
             for backend in backends
         }
     build_metadata = {
-        backend: cmake_build_metadata(executable)
+        backend: cmake_build_metadata(
+            executable, expected_configuration_schema,
+            selector_overrides)
         for backend, executable in executables.items()
     }
     for backend in backends:
         validate_build_source_binding(
             build_metadata[backend], source, source_state, backend,
-            require_fresh=authoritative
+            require_fresh=authoritative,
+            expected_configuration_schema=expected_configuration_schema,
+            selector_overrides=selector_overrides,
         )
+    benchmark_settings = {
+        "iterations": arguments.iterations,
+        "reuse": arguments.reuse,
+        "warmups": arguments.warmups,
+    }
+    if arguments.command != SPARSE_HIGH_MODE:
+        benchmark_settings["batch"] = arguments.batch
     settings = {
         "abba_rounds": arguments.abba_rounds if authoritative else 0,
-        "benchmark": {
-            "batch": arguments.batch,
-            "iterations": arguments.iterations,
-            "reuse": arguments.reuse,
-            "warmups": arguments.warmups,
-        },
+        "benchmark": benchmark_settings,
         "mode": arguments.command,
         "frozen_executable_required": authoritative,
         "pin_cpu": pin_cpu,
@@ -9304,6 +10353,10 @@ def run_matrix_body_held(arguments, isolation, result_root):
             "name": "corrected-high-profile-explicit-avx2",
         }
         settings["controlled_build"] = controlled_build
+    elif arguments.command == SPARSE_HIGH_MODE:
+        cells = sparse_high_avx2_grid()
+        settings["campaign"] = sparse_high_campaign_contract(cells)
+        settings["controlled_build"] = controlled_build
     else:
         r_values = parse_r_values(arguments.r)
         cells = sorted_grid(backends, r_values, arguments.full)
@@ -9315,7 +10368,8 @@ def run_matrix_body_held(arguments, isolation, result_root):
             validate_campaign_guards()
             artifact = freeze_executable(
                 result_dir, backend, executables[backend],
-                build_metadata[backend], source_state, result_root
+                build_metadata[backend], source_state, result_root,
+                expected_configuration_schema, selector_overrides,
             )
             validate_campaign_guards()
             executable_artifacts[backend] = artifact
@@ -9328,7 +10382,8 @@ def run_matrix_body_held(arguments, isolation, result_root):
         cells, execution_executables, build_metadata, source_state, machine,
         settings, executable_artifacts
     )
-    contract = evidence_contract(authoritative)
+    contract = evidence_contract(
+        authoritative, SCHEMA, selector_overrides, arguments.command)
     executable_manifest = {
         backend: {
             "build_metadata": build_metadata[backend],
@@ -9380,11 +10435,19 @@ def run_matrix_body_held(arguments, isolation, result_root):
             " pinned={}".format(pin_cpu) if pin_cpu is not None else "",
         ), flush=True
     )
+    expected_launcher_identity = (
+        current_runtime_launcher_identity() if authoritative else None
+    )
     context = {
         "isolation": isolation,
         "result_dir": result_dir,
         "result_root": result_root,
         "resume": not arguments.no_resume,
+        "expected_configuration_schema": expected_configuration_schema,
+        "expected_launcher_identity": expected_launcher_identity,
+        "job_schema": outer_schema_contract(SCHEMA)["job_schema"],
+        "manifest_schema": SCHEMA,
+        "selector_overrides": selector_overrides,
         "settings": settings,
         "source": source,
         "timeout": arguments.timeout,
@@ -9410,7 +10473,9 @@ def run_matrix_body_held(arguments, isolation, result_root):
             key = (job["executable"], job["executable_sha256"])
             if key not in checked:
                 checked.add(key)
-                validate_execution_inputs(job, result_root)
+                validate_execution_inputs(
+                    job, result_root, expected_configuration_schema,
+                    selector_overrides)
     except CrossoverError as error:
         execution_input_error = str(error)
     validate_campaign_guards()
@@ -9421,13 +10486,14 @@ def run_matrix_body_held(arguments, isolation, result_root):
     validate_owned_directory(result_root, "canonical result directory")
     validate_campaign_guards()
     print_analysis(merged["analysis"])
-    promotion_passed = merged["analysis"]["candidate"][
-        "all_cells_confidently_meet_promotion_threshold"
-    ]
+    promotion_passed = analysis_candidate_gate_passed(merged["analysis"])
+    gate_label = merged["analysis"].get(
+        "decision_contract", {}).get("gate_label", "promotion gate")
     print(
-        "matrix integrity: {}; promotion gate: {} ({})".format(
-            merged["status"], "passed" if promotion_passed else "not passed",
-            result_dir / "matrix.json"
+        "matrix integrity: {}; {}: {} ({})".format(
+            merged["status"], gate_label,
+            "passed" if promotion_passed else "not passed",
+            result_dir / "matrix.json",
         )
     )
     if merged["status"] != "passed":
@@ -9471,8 +10537,11 @@ def analyze_command_held(arguments, result_root):
         "manifest_configuration_id", "schema", "source_changed_during_run",
         "source_fingerprint", "source_fingerprint_after", "status",
     }
+    schemas = outer_schema_contract(manifest["schema"])
+    selector_overrides = configuration_selector_overrides_for_mode(
+        manifest["settings"]["mode"], manifest["schema"])
     if (not isinstance(matrix, dict) or set(matrix) != matrix_keys or
-            matrix.get("schema") != SCHEMA or
+            matrix.get("schema") != manifest["schema"] or
             matrix.get("manifest_configuration_id") != manifest["configuration_id"]):
         raise CrossoverError("matrix does not match the current manifest")
     if canonical_bytes(matrix.get("source_fingerprint")) != canonical_bytes(
@@ -9480,7 +10549,8 @@ def analyze_command_held(arguments, result_root):
         raise CrossoverError("matrix source fingerprint does not match the manifest")
     source_after = validate_source_state(
         matrix.get("source_fingerprint_after"),
-        str(matrix_path) + " source_fingerprint_after", False
+        str(matrix_path) + " source_fingerprint_after", False,
+        require_current_git_tool=False,
     )
     matrix_jobs_value = matrix.get("jobs")
     if (not isinstance(matrix_jobs_value, list) or
@@ -9504,7 +10574,10 @@ def analyze_command_held(arguments, result_root):
             key = (job["executable"], job["executable_sha256"])
             if key not in checked:
                 checked.add(key)
-                validate_execution_inputs(job, result_root)
+                validate_execution_inputs(
+                    job, result_root,
+                    schemas["build_configuration_attestation_schema"],
+                    selector_overrides)
     except CrossoverError as error:
         execution_input_error = str(error)
     retained_input_error = matrix.get("execution_input_error")
@@ -9519,22 +10592,21 @@ def analyze_command_held(arguments, result_root):
     if matrix.get("status") != run_status:
         raise CrossoverError("matrix status was not derived from retained evidence")
     retained_analysis = required_mapping(matrix.get("analysis"), "matrix.analysis")
-    retained_promotion = required_finite_number(
-        retained_analysis.get("promotion_percent"),
-        "matrix.analysis.promotion_percent"
-    )
-    if retained_promotion < 0:
-        raise CrossoverError("matrix retained a negative promotion threshold")
+    retained_promotion = analysis_threshold_percent(retained_analysis)
     recomputed_retained_analysis = analyze_results(
         results, retained_promotion, manifest["configuration_id"],
-        run_status, source_changed, execution_input_error or None
+        run_status, source_changed, execution_input_error or None,
+        schemas["analysis_schema"],
+        manifest["settings"]["mode"],
     )
     if canonical_bytes(retained_analysis) != canonical_bytes(
             recomputed_retained_analysis):
         raise CrossoverError("matrix analysis was not derived from retained jobs")
     analysis = analyze_results(
         results, arguments.promotion_percent, manifest["configuration_id"],
-        run_status, source_changed, execution_input_error or None
+        run_status, source_changed, execution_input_error or None,
+        schemas["analysis_schema"],
+        manifest["settings"]["mode"],
     )
     output = Path(arguments.output).resolve() if arguments.output else result_dir / "analysis.json"
     validate_owned_directory(result_root, "canonical result directory")
@@ -9552,9 +10624,9 @@ def analyze_command_held(arguments, result_root):
     print("analysis: {}".format(output))
     if analysis["jobs_failed"] != 0 or run_status != "passed":
         return 1
-    if (manifest["settings"]["mode"] in AUTHORITATIVE_COMMANDS and
-            not analysis["candidate"][
-                "all_cells_confidently_meet_promotion_threshold"]):
+    if (manifest["settings"]["mode"] in
+            authoritative_commands_for_schema(manifest["schema"]) and
+            not analysis_candidate_gate_passed(analysis)):
         return 2
     return 0
 
@@ -9609,6 +10681,87 @@ def self_test():
     repository = Path(__file__).resolve().parents[1]
     repository_state = source_identity(repository, require_clean=False)
     validate_source_state(repository_state, "self-test repository", False)
+    check(
+        outer_schema_contract(SCHEMA_V7) == {
+            "analysis_schema": ANALYSIS_SCHEMA_V4,
+            "build_configuration_attestation_schema":
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V7,
+            "build_configuration_file_schema":
+                BUILD_CONFIGURATION_FILE_SCHEMA_V9,
+            "controlled_build_schema": CONTROLLED_BUILD_SCHEMA_V7,
+            "job_schema": JOB_SCHEMA_V7,
+        } and
+        authoritative_commands_for_schema(SCHEMA_V7) ==
+            ("historical-avx2",) and
+        run_commands_for_schema(SCHEMA_V7) ==
+            ("screen", "historical-avx2"),
+        "v7 outer schema retains its exact historical dialect"
+    )
+    v7_evidence = evidence_contract(
+        True, SCHEMA_V7, {}, "historical-avx2")
+    check(
+        "campaign_mode" not in v7_evidence and
+        "build_configuration_selector_overrides" not in v7_evidence and
+        v7_evidence["build_configuration_attestation_schema"] ==
+            BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V7 and
+        v7_evidence["build_configuration_file_schema"] ==
+            BUILD_CONFIGURATION_FILE_SCHEMA_V9,
+        "v7 evidence preserves its legacy shape"
+    )
+    for invalid_v7_mode in (SPARSE_HIGH_MODE, "unknown"):
+        try:
+            evidence_contract(True, SCHEMA_V7, {}, invalid_v7_mode)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: v7 evidence accepted mode {}".format(
+                    invalid_v7_mode)
+            )
+    historical_launcher = json.loads(json.dumps(
+        current_runtime_launcher_identity()))
+    historical_source_state = json.loads(json.dumps(repository_state))
+    historical_script_hash = "0" * 64
+    historical_source_state["files"][
+        RUNTIME_LAUNCHER_SOURCE_PATHS_V7["script"]
+    ]["worktree_sha256"] = historical_script_hash
+    historical_source_state["digest"] = digest_value({
+        "files": historical_source_state["files"],
+        "repository_controls":
+            historical_source_state["repository_controls"],
+    })
+    historical_launcher["script"]["sha256"] = historical_script_hash
+    check(
+        validate_retained_runtime_launcher_identity(
+            historical_launcher, historical_source_state, repository,
+            "self-test historical launcher", SCHEMA_V7) ==
+            historical_launcher,
+        "v7 launcher replay is bound to retained source rather than live bytes"
+    )
+    launcher_mutations = []
+    missing_launcher = json.loads(json.dumps(historical_launcher))
+    missing_launcher.pop("containment")
+    launcher_mutations.append(("missing component", missing_launcher))
+    extra_launcher = json.loads(json.dumps(historical_launcher))
+    extra_launcher["future_component"] = dict(extra_launcher["script"])
+    launcher_mutations.append(("future component", extra_launcher))
+    wrong_launcher_path = json.loads(json.dumps(historical_launcher))
+    wrong_launcher_path["script"]["path"] = "/self-test/other.py"
+    launcher_mutations.append(("wrong source path", wrong_launcher_path))
+    wrong_launcher_hash = json.loads(json.dumps(historical_launcher))
+    wrong_launcher_hash["script"]["sha256"] = "1" * 64
+    launcher_mutations.append(("wrong source hash", wrong_launcher_hash))
+    for label, invalid_launcher in launcher_mutations:
+        try:
+            validate_retained_runtime_launcher_identity(
+                invalid_launcher, historical_source_state, repository,
+                "self-test historical launcher", SCHEMA_V7)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: v7 launcher accepted {}".format(label)
+            )
     with tempfile.TemporaryDirectory(
             prefix="leo2-crossover-path-shim-") as shim_directory:
         shim = Path(shim_directory) / "git"
@@ -9745,6 +10898,100 @@ def self_test():
         "-DCMAKE_MAKE_PROGRAM=/usr/bin/ninja" in mode_zero_configure,
         "controlled configure binds the selected CMake and Ninja launchers"
     )
+    sparse_configure = controlled_avx2_configure_argv(
+        "/usr/bin/cmake", "/usr/bin/ninja",
+        "/self-test/source", "/self-test/build",
+        {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"},
+    )
+    sparse_selector_argument = (
+        "-DLEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=ON")
+    check(
+        [argument for argument in sparse_configure
+         if argument not in mode_zero_configure] ==
+            [sparse_selector_argument] and
+        [argument for argument in sparse_configure
+         if argument != sparse_selector_argument] == mode_zero_configure and
+        not any("HIGH_DIRECT_ENCODE_AUTO=" in argument
+                for argument in sparse_configure),
+        "sparse controlled configure adds exactly the default-off selector"
+    )
+    for invalid_overrides in (
+            {"LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO": "OFF"},
+            {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "OFF"},
+            {
+                "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON",
+                "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO": "OFF",
+            },
+            ["LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=ON"]):
+        try:
+            controlled_avx2_configure_argv(
+                "/usr/bin/cmake", "/usr/bin/ninja",
+                "/self-test/source", "/self-test/build",
+                invalid_overrides,
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: sparse controlled configure accepted "
+                "invalid selector overrides"
+            )
+    check(
+        controlled_avx2_configure_argv_v7(
+            "/usr/bin/cmake", "/usr/bin/ninja",
+            "/self-test/source", "/self-test/build") ==
+            mode_zero_configure and
+        retained_environment_contract(SCHEMA_V7) == (
+            BENCHMARK_ENVIRONMENT_V7, GIT_ENVIRONMENT_V7),
+        "v7 configure argv and environments are frozen independently"
+    )
+
+    sparse_arguments = parser().parse_args([SPARSE_HIGH_MODE])
+    check(
+        {
+            name: getattr(sparse_arguments, name)
+            for name in (
+                "backends", "batch", "build_root", "executable_root",
+                "full", "iterations", "promotion_percent", "r", "reuse",
+                "warmups", "workers",
+            )
+        } == {
+            "backends": "avx2",
+            "batch": 1,
+            "build_root": "build",
+            "executable_root": None,
+            "full": False,
+            "iterations": 15,
+            "promotion_percent": 5.0,
+            "r": "16",
+            "reuse": 64,
+            "warmups": 4,
+            "workers": 1,
+        },
+        "sparse-high parser defaults freeze the bounded campaign"
+    )
+    validate_sparse_high_arguments(sparse_arguments)
+    for option, changed_value in (
+            ("backends", "scalar"), ("batch", 4),
+            ("build_root", "other-build"),
+            ("executable_root", "other-executables"), ("full", True),
+            ("iterations", 16), ("promotion_percent", 4.0),
+            ("r", "15"), ("reuse", 63), ("warmups", 5),
+            ("workers", 2)):
+        mutated_arguments = argparse.Namespace(**vars(sparse_arguments))
+        setattr(mutated_arguments, option, changed_value)
+        try:
+            validate_sparse_high_arguments(mutated_arguments)
+        except CrossoverError as error:
+            check(
+                option in str(error),
+                "sparse-high option rejection names {}".format(option)
+            )
+        else:
+            raise CrossoverError(
+                "self-test failed: sparse-high accepted changed {}".format(
+                    option)
+            )
 
     historical = historical_avx2_grid()
     exact = [
@@ -9762,6 +11009,411 @@ def self_test():
         "historical_neighbor_sparse_output", "historical_neighbor_q2",
     }.issubset({item["region"] for item in historical}),
           "historical one-coordinate neighbors")
+    retained_cpu = 2
+    retained_sibling = 3
+    retained_uid = 4242
+    retained_pair_payload = {
+        "cpus": [retained_cpu, retained_sibling],
+        "schema": RETAINED_PAIR_LEASE_SCHEMA_V1,
+        "uid": retained_uid,
+    }
+    retained_pair = {
+        "device": 10,
+        "directory_device": 11,
+        "directory_inode": 12,
+        "inode": 13,
+        "lock": "exclusive_nonblocking_pair_wide",
+        "path": (
+            "/run/user/4242/leopard2-cpu-leases/"
+            "leopard2-cpu-pair-4242-2-3.lock"
+        ),
+        "payload": retained_pair_payload,
+        "sha256": digest_bytes(canonical_bytes(retained_pair_payload)),
+    }
+
+    def retained_cpu_snapshot(cpu, **changed):
+        fields = {
+            name: 0 for name in RETAINED_CPU_STAT_FIELDS_V1
+        }
+        fields.update(changed)
+        return {
+            "cpu": cpu,
+            "fields": fields,
+            "total_jiffies": sum(fields.values()),
+        }
+
+    retained_before_cpu = retained_cpu_snapshot(retained_cpu)
+    retained_after_cpu = retained_cpu_snapshot(
+        retained_cpu, user=1, idle=1)
+    retained_before_sibling = retained_cpu_snapshot(retained_sibling)
+    retained_after_sibling = retained_cpu_snapshot(
+        retained_sibling, idle=1)
+    retained_isolation = {
+        "accepted": True,
+        "after": {
+            "benchmark_cpu": retained_after_cpu,
+            "monotonic_ns": 20,
+            "reserved_sibling": retained_after_sibling,
+        },
+        "before": {
+            "benchmark_cpu": retained_before_cpu,
+            "monotonic_ns": 10,
+            "reserved_sibling": retained_before_sibling,
+        },
+        "benchmark_cpu": retained_cpu,
+        "delta": {
+            "benchmark_cpu": {
+                "cpu": retained_cpu,
+                "fields": {
+                    **{name: 0 for name in RETAINED_CPU_STAT_FIELDS_V1},
+                    "user": 1,
+                    "idle": 1,
+                },
+                "idle_jiffies": 1,
+                "nonidle_jiffies": 1,
+                "total_jiffies": 2,
+            },
+            "reserved_sibling": {
+                "cpu": retained_sibling,
+                "fields": {
+                    **{name: 0 for name in RETAINED_CPU_STAT_FIELDS_V1},
+                    "idle": 1,
+                },
+                "idle_jiffies": 1,
+                "nonidle_jiffies": 0,
+                "total_jiffies": 1,
+            },
+        },
+        "pair_lease": retained_pair,
+        "policy": {
+            "counter_source": "/proc/stat",
+            "idle_fields": list(RETAINED_CPU_STAT_IDLE_FIELDS_V1),
+            "nonidle_fields": [
+                name for name in RETAINED_CPU_STAT_FIELDS_V1
+                if name not in RETAINED_CPU_STAT_IDLE_FIELDS_V1
+            ],
+            "reserved_sibling_max_nonidle_jiffies": 0,
+        },
+        "reserved_sibling": retained_sibling,
+        "schema": RETAINED_ISOLATION_SCHEMA_V1,
+    }
+    check(
+        validate_retained_isolation_v1(
+            retained_isolation, retained_cpu, retained_sibling) ==
+            retained_isolation,
+        "retained v1 isolation validates without executing the live helper"
+    )
+    for label, isolation_mutator in (
+            ("edited acceptance", lambda value: value.update({
+                "accepted": False})),
+            ("edited delta", lambda value: value["delta"][
+                "benchmark_cpu"].update({"nonidle_jiffies": 2})),
+            ("edited pair path", lambda value: value["pair_lease"].update({
+                "path": "/run/user/4242/wrong.lock"}))):
+        invalid_isolation = json.loads(json.dumps(retained_isolation))
+        isolation_mutator(invalid_isolation)
+        try:
+            validate_retained_isolation_v1(
+                invalid_isolation, retained_cpu, retained_sibling)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: retained isolation accepted {}".format(
+                    label)
+            )
+    retained_v7_settings = {
+        "abba_rounds": 3,
+        "benchmark": {
+            "batch": 1, "iterations": 15, "reuse": 64, "warmups": 4,
+        },
+        "campaign": {
+            "cell_count": len(historical),
+            "cells_sha256": digest_value(historical),
+            "name": "corrected-high-profile-explicit-avx2",
+        },
+        "controlled_build": {
+            "path": "controlled-build.json",
+            "schema": CONTROLLED_BUILD_SCHEMA_V7,
+            "sha256": "a" * 64,
+        },
+        "frozen_executable_required": True,
+        "isolation": {
+            "allowed_cpu_set_at_launch": [2, 3, 4],
+            "benchmark_cpu": retained_cpu,
+            "canonical_lock": {
+                "device": 1,
+                "inode": 2,
+                "lock": "exclusive",
+                "mode": 0o600,
+                "path": str(AUTHORITATIVE_LOCK),
+                "uid": retained_uid,
+            },
+            "child_environment": dict(BENCHMARK_ENVIRONMENT_V7),
+            "housekeeping_cpu_set": [4],
+            "pair_lease": retained_pair,
+            "reserved_sibling": retained_sibling,
+        },
+        "mode": "historical-avx2",
+        "pin_cpu": retained_cpu,
+        "placement_policy": "external taskset single-CPU pin",
+        "taskset": "/usr/bin/taskset",
+        "taskset_sha256": "b" * 64,
+        "timeout_seconds_per_invocation": 1,
+        "workers": 1,
+    }
+    original_load_isolation_support = globals()["load_isolation_support"]
+
+    def reject_live_isolation_support(*unused_args, **unused_kwargs):
+        raise AssertionError("live isolation helper must not be imported")
+
+    try:
+        globals()["load_isolation_support"] = reject_live_isolation_support
+        validate_manifest_settings(
+            retained_v7_settings,
+            [{"cell": item} for item in historical],
+            Path("/self-test/v7/manifest.json"),
+            SCHEMA_V7,
+        )
+    finally:
+        globals()["load_isolation_support"] = original_load_isolation_support
+
+    sparse_grid = sparse_high_avx2_grid()
+    sparse_candidates = [
+        item for item in sparse_grid
+        if item["region"].startswith("candidate")
+    ]
+    sparse_exclusions = [
+        item for item in sparse_grid
+        if not item["region"].startswith("candidate")
+    ]
+    check(
+        len(sparse_grid) == SPARSE_HIGH_CELL_COUNT == 91 and
+        digest_value(sparse_grid) == SPARSE_HIGH_CELLS_SHA256 and
+        len(sparse_candidates) == 54 and len(sparse_exclusions) == 37 and
+        {item["batch"] for item in sparse_grid} == {1, 4, 16},
+        "sparse-high frozen grid count, digest, labels, and batch anchors"
+    )
+    sparse_region_counts = {
+        region: sum(item["region"] == region for item in sparse_grid)
+        for region in {item["region"] for item in sparse_grid}
+    }
+    check(
+        sparse_region_counts == {
+            "candidate_sparse_batch": 10,
+            "candidate_sparse_bytes": 12,
+            "candidate_sparse_core": 24,
+            "candidate_sparse_mask": 8,
+            "excluded_sparse_bytes": 10,
+            "excluded_sparse_gf16": 2,
+            "excluded_sparse_k1": 1,
+            "excluded_sparse_low_profile": 2,
+            "excluded_sparse_q2_holey": 3,
+            "excluded_sparse_q2_prefix": 5,
+            "excluded_sparse_r1": 12,
+            "excluded_sparse_r1_batch": 2,
+        },
+        "sparse-high frozen grid retains every preregistered region count"
+    )
+    for item in sparse_grid:
+        validate_cell_value(item, "self-test sparse cell", CELL_SCHEMA_V2)
+        check(
+            item["region"].startswith("candidate") ==
+                sparse_high_selector_matches(item),
+            "sparse-high region label mirrors the production selector"
+        )
+        check(
+            cell_batch(item, {
+                "mode": SPARSE_HIGH_MODE,
+                "benchmark": {"iterations": 15, "reuse": 64, "warmups": 4},
+            }) == item["batch"],
+            "sparse-high batch is owned by each frozen cell"
+        )
+    check(
+        sparse_high_campaign_contract(sparse_grid) == {
+            "cell_count": 91,
+            "cell_schema": CELL_SCHEMA_V2,
+            "cells_sha256": SPARSE_HIGH_CELLS_SHA256,
+            "discovery_threshold_percent": 5.0,
+            "evidence_scope": (
+                "forced-direct versus forced-transform encode-execution "
+                "timing; marginal paired-log Student-t intervals"
+            ),
+            "name": SPARSE_HIGH_CAMPAIGN_NAME,
+            "production_promotion_authorized": False,
+        },
+        "sparse-high campaign metadata is exact and non-promotional"
+    )
+    for invalid_cells in (
+            list(reversed(sparse_grid)), sparse_grid[:-1],
+            sparse_grid + [dict(sparse_grid[-1])]):
+        try:
+            sparse_high_campaign_contract(invalid_cells)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: sparse-high campaign accepted a changed grid"
+            )
+    selector_cell = batched_cell(
+        "candidate_sparse_core", "avx2", 2, 2, "high", "gf8",
+        1024, 1, "0", 1)
+    check(
+        sparse_high_selector_matches(selector_cell),
+        "sparse-high selector accepts its inclusive lower boundaries"
+    )
+    for accepted_mutation in (
+            {"k": 16}, {"r": 16}, {"shard_bytes": 1088},
+            {"mask": "1"}, {"batch": 16}):
+        check(
+            sparse_high_selector_matches({
+                **selector_cell, **accepted_mutation}),
+            "sparse-high selector ignores non-selector mask/batch and accepts "
+            "upper/aligned boundaries"
+        )
+    for selector_dimension, selector_value in (
+            ("backend", "scalar"), ("profile", "low"),
+            ("field", "gf16"), ("k", 1), ("k", 17),
+            ("r", 1), ("r", 17), ("q", 2),
+            ("shard_bytes", 960), ("shard_bytes", 1023),
+            ("shard_bytes", 1025), ("shard_bytes", 1087),
+            ("shard_bytes", 1089),
+            ("k", True), ("r", True), ("q", True),
+            ("shard_bytes", True)):
+        mutated_cell = dict(selector_cell)
+        mutated_cell[selector_dimension] = selector_value
+        check(
+            not sparse_high_selector_matches(mutated_cell),
+            "sparse-high selector rejects {}={!r}".format(
+                selector_dimension, selector_value)
+        )
+    validate_cell_value(
+        cell("candidate", "avx2", 2, 2, "high", "gf8", 1024, 1, "0"),
+        "self-test v1 cell", CELL_SCHEMA_V1)
+    invalid_v2_cells = (
+        ("v1 rejects batch", selector_cell, CELL_SCHEMA_V1),
+        ("v2 requires batch", {
+            key: value for key, value in selector_cell.items()
+            if key != "batch"
+        }, CELL_SCHEMA_V2),
+        ("v2 rejects Boolean batch", {**selector_cell, "batch": True},
+         CELL_SCHEMA_V2),
+        ("v2 rejects zero batch", {**selector_cell, "batch": 0},
+         CELL_SCHEMA_V2),
+    )
+    for label, invalid_cell, invalid_schema in invalid_v2_cells:
+        try:
+            validate_cell_value(invalid_cell, label, invalid_schema)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: {} was accepted".format(label)
+            )
+    sparse_argv = benchmark_argv(
+        {
+            "cell": {**selector_cell, "batch": 16},
+            "executable": "/self-test/benchmark",
+            "executable_artifact": None,
+            "seed": 7,
+        },
+        "direct", "/self-test/raw.json",
+        {
+            "benchmark": {"iterations": 15, "reuse": 64, "warmups": 4},
+            "mode": SPARSE_HIGH_MODE,
+            "pin_cpu": 3,
+        },
+    )
+    check(
+        sparse_argv[sparse_argv.index("--batch") + 1] == "16" and
+        sparse_argv[:3] == [
+            str(Path("/proc/self/fd") / str(TASKSET_EXECUTABLE_DESCRIPTOR)),
+            "-c", "3",
+        ],
+        "sparse-high benchmark argv uses the per-cell batch under taskset"
+    )
+    legacy_argv = benchmark_argv(
+        {
+            "cell": cell(
+                "candidate", "avx2", 2, 2, "high", "gf8", 1024, 1, "0"),
+            "executable": "/self-test/benchmark",
+            "executable_artifact": None,
+            "seed": 7,
+        },
+        "direct", "/self-test/raw.json",
+        {
+            "benchmark": {
+                "batch": 7, "iterations": 1, "reuse": 1, "warmups": 0,
+            },
+            "mode": "screen",
+        },
+    )
+    check(
+        legacy_argv[legacy_argv.index("--batch") + 1] == "7",
+        "legacy cells retain the campaign-global batch contract"
+    )
+    sparse_overrides = configuration_selector_overrides_for_mode(
+        SPARSE_HIGH_MODE, SCHEMA)
+    check(
+        sparse_overrides == {
+            "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"},
+        "sparse-high mode owns exactly one build selector override"
+    )
+    sparse_evidence = evidence_contract(
+        True, SCHEMA, sparse_overrides, SPARSE_HIGH_MODE)
+    sparse_decision = analysis_decision_contract(SPARSE_HIGH_MODE)
+    check(
+        sparse_evidence["build_configuration_selector_overrides"] ==
+            sparse_overrides and
+        sparse_evidence["campaign_mode"] == SPARSE_HIGH_MODE and
+        sparse_evidence["measurement_scope"] ==
+            "metrics.encode_execution.median_us_per_batch_call" and
+        sparse_evidence["production_auto_route_evaluated"] is False and
+        sparse_evidence["production_promotion_authorized"] is False and
+        sparse_decision == {
+            "gate_label": "forced-path discovery threshold",
+            "inference_scope": (
+                "per-cell marginal two-sided 95% Student-t interval at df=2; "
+                "not a simultaneous campaign guarantee"
+            ),
+            "metric_scope": (
+                "metrics.encode_execution.median_us_per_batch_call"),
+            "production_auto_route_evaluated": False,
+            "production_promotion_authorized": False,
+        },
+        "sparse-high evidence is forced-path marginal discovery only"
+    )
+    for label, wrong_mode, wrong_overrides in (
+            ("sparse without selector", SPARSE_HIGH_MODE, {}),
+            ("screen with sparse selector", "screen", sparse_overrides),
+            ("historical with sparse selector", "historical-avx2",
+             sparse_overrides)):
+        try:
+            evidence_contract(True, SCHEMA, wrong_overrides, wrong_mode)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: evidence accepted {}".format(label)
+            )
+    sparse_analysis = analyze_results(
+        [], 5.0, analysis_schema=ANALYSIS_SCHEMA, mode=SPARSE_HIGH_MODE)
+    legacy_analysis = analyze_results(
+        [], 5.0, analysis_schema=ANALYSIS_SCHEMA_V4,
+        mode="historical-avx2")
+    check(
+        sparse_analysis["decision_contract"] == sparse_decision and
+        sparse_analysis["decision_threshold_percent"] == 5.0 and
+        "promotion_percent" not in sparse_analysis and
+        "promotion_count" not in sparse_analysis["candidate"] and
+        "decision_threshold_count" in sparse_analysis["candidate"] and
+        "decision_contract" not in legacy_analysis and
+        legacy_analysis["promotion_percent"] == 5.0 and
+        "promotion_count" in legacy_analysis["candidate"] and
+        analysis_candidate_gate_passed(sparse_analysis) is False and
+        analysis_candidate_gate_passed(legacy_analysis) is False,
+        "v5 adds discovery semantics without changing v4 analysis replay"
+    )
 
     self_test_build_root = Path("/self-test/build")
     self_test_effective_entries = {
@@ -9787,17 +11439,12 @@ def self_test():
     self_test_digest = build_configuration_digest(
         self_test_effective_entries
     )
-    for selector in (
-            "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
-            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
-            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
-            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
-            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
-            "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
-            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
+    for selector in BUILD_CONFIGURATION_EXPERIMENT_SELECTORS:
         changed_entries = dict(self_test_effective_entries)
         changed_entries[selector] = (
-            "OFF" if changed_entries[selector] == "ON" else "ON")
+            "1" if selector == "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"
+            else "OFF" if changed_entries[selector] == "ON" else "ON"
+        )
         check(
             build_configuration_digest(changed_entries) != self_test_digest,
             "{} changes the effective-configuration digest".format(selector)
@@ -9830,6 +11477,53 @@ def self_test():
                 self_test_effective_entries,
             "effective configuration comes from the exact CMake sidecar"
         )
+        check(
+            validate_build_configuration_attestation(
+                configuration_attestation, configuration_path) ==
+                self_test_digest,
+            "current canonical attestation keeps sparse direct default-off"
+        )
+        sparse_attestation = {
+            **configuration_attestation,
+            "entries": dict(configuration_attestation["entries"]),
+        }
+        sparse_attestation["entries"][
+            "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE"] = "ON"
+        sparse_attestation["sha256"] = build_configuration_digest(
+            sparse_attestation["entries"])
+        check(
+            validate_build_configuration_attestation(
+                sparse_attestation, configuration_path,
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+                {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"},
+            ) == sparse_attestation["sha256"],
+            "sparse attestation requires the exact mode-owned override"
+        )
+        for label, attestation, overrides in (
+                ("sparse ON without override", sparse_attestation, None),
+                (
+                    "sparse ON with OFF override", sparse_attestation,
+                    {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "OFF"},
+                ),
+                (
+                    "canonical OFF with sparse ON override",
+                    configuration_attestation,
+                    {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"},
+                ),
+                (
+                    "unowned AUTO override", configuration_attestation,
+                    {"LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO": "OFF"},
+                )):
+            try:
+                validate_build_configuration_attestation(
+                    attestation, configuration_path,
+                    BUILD_CONFIGURATION_ATTESTATION_SCHEMA, overrides)
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: attestation accepted {}".format(label)
+                )
         mode_digests = {}
         for mode in ("0", "1", "2"):
             mode_entries = dict(self_test_effective_entries)
@@ -9860,6 +11554,133 @@ def self_test():
         check(
             len(set(mode_digests.values())) == 3,
             "small-direct mode sidecars have distinct digests"
+        )
+        configuration_ladder = (
+            (
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V7,
+                BUILD_CONFIGURATION_FILE_SCHEMA_V9,
+                BUILD_CONFIGURATION_VARIABLES_V9,
+                BUILD_CONFIGURATION_CANONICAL_SELECTORS_V9,
+            ),
+            (
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V8,
+                BUILD_CONFIGURATION_FILE_SCHEMA_V10,
+                BUILD_CONFIGURATION_VARIABLES_V10,
+                BUILD_CONFIGURATION_CANONICAL_SELECTORS_V10,
+            ),
+            (
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V9,
+                BUILD_CONFIGURATION_FILE_SCHEMA_V11,
+                BUILD_CONFIGURATION_VARIABLES_V11,
+                BUILD_CONFIGURATION_CANONICAL_SELECTORS_V11,
+            ),
+            (
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V10,
+                BUILD_CONFIGURATION_FILE_SCHEMA_V12,
+                BUILD_CONFIGURATION_VARIABLES_V12,
+                BUILD_CONFIGURATION_CANONICAL_SELECTORS_V12,
+            ),
+            (
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V11,
+                BUILD_CONFIGURATION_FILE_SCHEMA_V13,
+                BUILD_CONFIGURATION_VARIABLES_V13,
+                BUILD_CONFIGURATION_CANONICAL_SELECTORS_V13,
+            ),
+            (
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V12,
+                BUILD_CONFIGURATION_FILE_SCHEMA_V14,
+                BUILD_CONFIGURATION_VARIABLES_V14,
+                BUILD_CONFIGURATION_CANONICAL_SELECTORS_V14,
+            ),
+            (
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13,
+                BUILD_CONFIGURATION_FILE_SCHEMA_V15,
+                BUILD_CONFIGURATION_VARIABLES_V15,
+                BUILD_CONFIGURATION_CANONICAL_SELECTORS_V15,
+            ),
+        )
+        for (
+                attestation_schema, file_schema, variables,
+                canonical_selectors) in configuration_ladder:
+            check(
+                build_configuration_contract(attestation_schema) == (
+                    file_schema, variables, tuple(variables[16:])
+                ),
+                "{} maps to its exact file/variable contract".format(
+                    attestation_schema)
+            )
+            ladder_entries = {
+                variable: self_test_effective_entries[variable]
+                for variable in variables
+            }
+            ladder_entries.update(canonical_selectors)
+            ladder_digest = build_configuration_digest(
+                ladder_entries, variables)
+            ladder_material = "".join(
+                "{}={}\n".format(variable, ladder_entries[variable])
+                for variable in variables
+            )
+            configuration_path.write_text(
+                "schema={}\nsha256={}\n{}".format(
+                    file_schema, ladder_digest, ladder_material),
+                encoding="utf-8",
+            )
+            ladder_attestation = read_build_configuration_attestation(
+                configuration_path)
+            check(
+                ladder_attestation == {
+                    "entries": ladder_entries,
+                    "path": str(configuration_path.resolve()),
+                    "schema": attestation_schema,
+                    "sha256": ladder_digest,
+                } and
+                validate_build_configuration_attestation(
+                    ladder_attestation, configuration_path,
+                    attestation_schema) == ladder_digest,
+                "{} sidecar round-trips under only its exact contract".format(
+                    file_schema)
+            )
+            mutated_attestation = {
+                **ladder_attestation,
+                "entries": dict(ladder_entries),
+            }
+            mutated_attestation["entries"][
+                "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN"] = "ON"
+            mutated_attestation["sha256"] = build_configuration_digest(
+                mutated_attestation["entries"], variables)
+            try:
+                validate_build_configuration_attestation(
+                    mutated_attestation, configuration_path,
+                    attestation_schema)
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: {} accepted a mutated canonical "
+                    "selector".format(attestation_schema)
+                )
+        compatibility_v10_entries = {
+            variable: self_test_effective_entries[variable]
+            for variable in BUILD_CONFIGURATION_VARIABLES_V10
+        }
+        compatibility_v10_entries.update(
+            BUILD_CONFIGURATION_CANONICAL_SELECTORS_V10)
+        compatibility_v10_entries[
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"] = "ON"
+        compatibility_v10 = {
+            "entries": compatibility_v10_entries,
+            "path": str(configuration_path.resolve()),
+            "schema": BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V8,
+            "sha256": build_configuration_digest(
+                compatibility_v10_entries,
+                BUILD_CONFIGURATION_VARIABLES_V10),
+        }
+        check(
+            validate_build_configuration_attestation(
+                compatibility_v10, configuration_path,
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V8,
+            ) == compatibility_v10["sha256"],
+            "v10 fallback transition accepts both attested BOOL states"
         )
         historical_entries = {
             variable: self_test_effective_entries[variable]
@@ -10138,13 +11959,22 @@ def self_test():
                 "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=ON\n", "", 1
             )
         )
-        for selector, value in (
-                ("LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS", "ON"),
-                ("LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK", "OFF")):
+        for selector in (
+                "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
+                "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO",
+                "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
+                "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
             reject_configuration_file(
                 "missing current " + selector,
                 valid_configuration.replace(
-                    "{}={}\n".format(selector, value), "", 1))
+                    "{}={}\n".format(
+                        selector,
+                        BUILD_CONFIGURATION_CANONICAL_SELECTORS[selector],
+                    ),
+                    "",
+                    1,
+                ))
         reject_configuration_file(
             "duplicate small-direct mode",
             valid_configuration +
@@ -10494,6 +12324,73 @@ def self_test():
             "batch": 1, "iterations": 15, "reuse": 64, "warmups": 4,
         },
     }
+    closure_metadata = json.loads(json.dumps(raw_job["build_metadata"]))
+    closure_metadata["extra_file_sha256"] = {
+        "CMakeFiles/bench_leopard2_direct_encode.dir/"
+        "bench/leopard2/direct_encode_benchmark.cpp.o": "1" * 64,
+        "build.ninja": "2" * 64,
+        "compile_commands.json": "3" * 64,
+        BUILD_CONFIGURATION_RELATIVE_PATH: "4" * 64,
+        "generated/leopard2-benchmark-attestation/"
+        "leopard2_benchmark_source_attestation.h": "5" * 64,
+        "libleopard_test_hooks.a": "6" * 64,
+    }
+    closure_metadata["executable"] = {"mtime_ns": 0}
+    closure_source_state = {"git": {"worktree_clean": True}}
+    validate_build_source_binding(
+        closure_metadata, Path("/self-test/source"), closure_source_state,
+        "avx2", require_fresh=False,
+        require_authoritative_closure=True,
+    )
+
+    def refresh_closure_attestation(metadata):
+        attestation = metadata["effective_configuration_attestation"]
+        attestation["sha256"] = build_configuration_digest(
+            attestation["entries"])
+        metadata["entries"].update({
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
+                attestation["sha256"],
+        })
+
+    closure_mutations = (
+        ("tests disabled", lambda metadata: metadata[
+            "effective_configuration_attestation"]["entries"].update({
+                "LEO2_BUILD_TESTS": "OFF"})),
+        ("noncanonical Git", lambda metadata: metadata[
+            "effective_configuration_attestation"]["entries"].update({
+                "LEO2_BENCHMARK_GIT_EXECUTABLE": "/self-test/git"})),
+        ("missing benchmark object", lambda metadata: metadata[
+            "extra_file_sha256"].pop(
+                "CMakeFiles/bench_leopard2_direct_encode.dir/"
+                "bench/leopard2/direct_encode_benchmark.cpp.o")),
+        ("missing link graph", lambda metadata: metadata[
+            "extra_file_sha256"].pop("build.ninja")),
+        ("missing linked archive", lambda metadata: metadata[
+            "extra_file_sha256"].pop("libleopard_test_hooks.a")),
+    )
+    for label, mutate_closure in closure_mutations:
+        invalid_closure = json.loads(json.dumps(closure_metadata))
+        mutate_closure(invalid_closure)
+        refresh_closure_attestation(invalid_closure)
+        try:
+            validate_build_source_binding(
+                invalid_closure, Path("/self-test/source"),
+                closure_source_state, "avx2", require_fresh=False,
+                require_authoritative_closure=True,
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: retrospective closure accepted {}".format(
+                    label)
+            )
+    screen_metadata_without_closure = json.loads(json.dumps(closure_metadata))
+    screen_metadata_without_closure["extra_file_sha256"] = {}
+    validate_build_source_binding(
+        screen_metadata_without_closure, Path("/self-test/source"),
+        closure_source_state, "avx2", require_fresh=False,
+    )
     raw_fixture = {
         "schema": BENCHMARK_SCHEMA,
         "build": {
@@ -10576,6 +12473,66 @@ def self_test():
         "hashed_bytes": 4096,
         "requested_parity_indices": [0],
     }, "non-vacuous parity identity")
+    sparse_raw_job = json.loads(json.dumps(raw_job))
+    sparse_raw_job["cell"] = {
+        **sparse_raw_job["cell"],
+        "batch": 4,
+    }
+    sparse_raw_entries = dict(self_test_effective_entries)
+    sparse_raw_entries[
+        "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE"] = "ON"
+    sparse_raw_digest = build_configuration_digest(sparse_raw_entries)
+    sparse_raw_attestation = sparse_raw_job["build_metadata"][
+        "effective_configuration_attestation"]
+    sparse_raw_attestation["entries"] = sparse_raw_entries
+    sparse_raw_attestation["sha256"] = sparse_raw_digest
+    sparse_raw_job["build_metadata"]["entries"].update(
+        BUILD_CONFIGURATION_CANONICAL_SELECTORS)
+    sparse_raw_job["build_metadata"]["entries"][
+        "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE"] = "ON"
+    sparse_raw_job["build_metadata"]["entries"][
+        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"] = sparse_raw_digest
+    sparse_raw_fixture = json.loads(json.dumps(raw_fixture))
+    sparse_raw_fixture["build"][
+        "build_configuration_sha256"] = sparse_raw_digest
+    sparse_raw_fixture["parameters"]["batch"] = 4
+    sparse_raw_fixture["operation_model"].update({
+        "direct_output_accumulations": 4,
+        "direct_output_initializations": 4,
+        "direct_row_terms": 8,
+        "fixed_coefficient_symbol_terms_before_unit_specialization": 32768,
+        "modeled_output_bytes_read": 16384,
+        "modeled_output_bytes_written": 32768,
+        "modeled_source_bytes_read": 32768,
+        "xor_accumulation_symbols": 16384,
+    })
+    sparse_raw_settings = {
+        "mode": SPARSE_HIGH_MODE,
+        "benchmark": {"iterations": 15, "reuse": 64, "warmups": 4},
+    }
+    sparse_raw_result = validate_raw(
+        sparse_raw_fixture, sparse_raw_job, "direct", sparse_raw_settings,
+        BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"},
+    )
+    check(
+        sparse_raw_result[2]["hashed_bytes"] == 16384,
+        "sparse per-cell batch scales operation and parity evidence"
+    )
+    malformed_sparse_raw = json.loads(json.dumps(sparse_raw_fixture))
+    malformed_sparse_raw["parameters"]["batch"] = 1
+    try:
+        validate_raw(
+            malformed_sparse_raw, sparse_raw_job, "direct",
+            sparse_raw_settings, BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+            {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"},
+        )
+    except CrossoverError:
+        pass
+    else:
+        raise CrossoverError(
+            "self-test failed: raw sparse batch differed from its frozen cell"
+        )
     for label, encoded in (
             ("duplicate key", b'{"metric": 1, "metric": 2}'),
             ("non-standard NaN", b'{"metric": NaN}'),
@@ -12951,7 +14908,8 @@ def self_test():
         ]
 
         def resume_benchmark_argv(
-                unused_job, unused_mode, output_path, unused_settings):
+                unused_job, unused_mode, output_path, unused_settings,
+                *unused_args, **unused_kwargs):
             return [
                 sys.executable, "-c",
                 "import pathlib,sys;"
@@ -12960,7 +14918,8 @@ def self_test():
             ]
 
         def resume_validate_raw(
-                unused_raw, unused_job, unused_mode, unused_settings):
+                unused_raw, unused_job, unused_mode, unused_settings,
+                *unused_args, **unused_kwargs):
             return 1.0, 0.0, {
                 "algorithm": "fixture",
                 "digest": "stable",
@@ -12971,7 +14930,7 @@ def self_test():
         try:
             globals()["benchmark_argv"] = resume_benchmark_argv
             globals()["validate_execution_inputs"] = (
-                lambda unused_job, unused_root=None: None
+                lambda *unused_args, **unused_kwargs: None
             )
             globals()["validate_raw"] = resume_validate_raw
             globals()["summarize_measurements"] = (
@@ -14103,7 +16062,7 @@ def parser():
     pinned_help = (
         "Disabled legacy command: external artifacts cannot prove clean "
         "source/object/archive/link closure. Use screen for diagnostics or "
-        "historical-avx2 for authoritative evidence."
+        "a runner-owned AVX2 campaign for authoritative evidence."
     )
     pinned = subparsers.add_parser(
         "pinned", help=pinned_help, description=pinned_help,
@@ -14138,6 +16097,27 @@ def parser():
     historical.add_argument(
         "--abba-rounds", type=exactly_three_abba_rounds, default=3
     )
+    sparse_high = subparsers.add_parser(
+        SPARSE_HIGH_MODE,
+        help=(
+            "run the frozen legacy-high sparse-Q1 explicit-AVX2 forced-path "
+            "discovery grid"
+        ),
+    )
+    add_run_arguments(
+        sparse_high,
+        "results/leopard2/direct-encode-crossover/sparse-high-avx2",
+    )
+    sparse_high.set_defaults(
+        backends="avx2", batch=1, iterations=15, warmups=4, reuse=64,
+        workers=1,
+    )
+    sparse_high.add_argument("--cpu", type=int, default=None)
+    sparse_high.add_argument("--sibling", type=int, default=None)
+    sparse_high.add_argument("--taskset", default="taskset")
+    sparse_high.add_argument(
+        "--abba-rounds", type=exactly_three_abba_rounds, default=3
+    )
     analyze = subparsers.add_parser(
         "analyze", help="deterministically reanalyze completed job JSON"
     )
@@ -14160,7 +16140,7 @@ def main():
             return self_test()
         if arguments.command == "analyze":
             return analyze_command(arguments)
-        if arguments.command in ("screen", "pinned", "historical-avx2"):
+        if arguments.command in RUN_COMMANDS or arguments.command == "pinned":
             numeric = (
                 arguments.batch, arguments.reuse, arguments.iterations,
                 arguments.warmups, arguments.timeout, arguments.workers,
@@ -14177,6 +16157,11 @@ def main():
                     arguments.abba_rounds != 3):
                 raise CrossoverError(
                     "authoritative paired-log inference requires --abba-rounds 3"
+                )
+            if arguments.command == SPARSE_HIGH_MODE and arguments.batch != 1:
+                raise CrossoverError(
+                    "sparse-high-avx2 stores batch only in each frozen cell; "
+                    "--batch must remain 1"
                 )
             return run_matrix(arguments)
         parser().print_help()

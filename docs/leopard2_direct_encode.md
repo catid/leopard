@@ -325,33 +325,59 @@ python3 tools/leopard2_direct_encode_crossover.py analyze \
     --result-dir results/leopard2/direct-encode-crossover/screen
 ```
 
-Screening is intentionally concurrent and non-authoritative. Before the pinned
-phase, stop the screen and every other compute- or memory-intensive job. Choose
-one allowed physical CPU, keep its SMT sibling idle, and substitute that CPU for
-`ISO_CPU`; the runner records the allowed affinity set and topology and uses one
-worker. Do not assume CPU numbers are contiguous.
+Screening is intentionally concurrent and non-authoritative. Before an
+authoritative phase, stop the screen and every other compute- or
+memory-intensive job. Choose one allowed physical CPU and its SMT sibling,
+substitute them for `ISO_CPU` and `ISO_SIBLING`, and keep the sibling idle. The
+runner records the allowed affinity set and topology, holds the canonical
+campaign and CPU-pair locks, creates a clean runner-owned Release/explicit-AVX2
+build, freezes its executable, and uses one worker. Do not assume CPU numbers
+are contiguous.
 
 ```sh
 ISO_CPU=15
-python3 tools/leopard2_direct_encode_crossover.py pinned \
-    --source . --build-root build \
-    --result-dir results/leopard2/direct-encode-crossover/pinned \
-    --backends scalar,ssse3,avx2 --r 1,16 \
-    --cpu "$ISO_CPU" --abba-rounds 3 \
-    --iterations 15 --warmups 4 --reuse 64
+ISO_SIBLING=47
+python3 tools/leopard2_direct_encode_crossover.py historical-avx2 \
+    --source . --cpu "$ISO_CPU" --sibling "$ISO_SIBLING"
 python3 tools/leopard2_direct_encode_crossover.py analyze \
-    --result-dir results/leopard2/direct-encode-crossover/pinned
+    --result-dir results/leopard2/direct-encode-crossover/historical-avx2
 ```
 
-This compact pinned boundary program is 75 cells and 900 benchmark process
-launches. Adding `--full` expands it to 1,444 cells and 17,328 launches; treat
-that as an optional long isolated campaign, not the ordinary reproduction step.
+The separate sparse-high discovery campaign is intentionally frozen: its 91
+cells include exact K/R/byte/mask boundaries and batches 1, 4, and 16. The
+runner enables only `LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=ON`; changing its
+backend, grid, batch, iterations, warmups, reuse, threshold, or worker count is
+rejected before topology or artifact handling.
+
+```sh
+python3 tools/leopard2_direct_encode_crossover.py sparse-high-avx2 \
+    --source . --cpu "$ISO_CPU" --sibling "$ISO_SIBLING"
+python3 tools/leopard2_direct_encode_crossover.py analyze \
+    --result-dir results/leopard2/direct-encode-crossover/sparse-high-avx2
+```
+
+This campaign is a forced-direct versus forced-transform discovery study over
+`metrics.encode_execution.median_us_per_batch_call`. Its 95% Student-t
+intervals are marginal per-cell intervals with two degrees of freedom, not a
+simultaneous guarantee. Production AUTO is not measured and the results do not
+authorize a dispatcher or production promotion. Current v5 analysis therefore
+uses neutral decision-threshold field names for sparse, historical, and screen
+results; historical v4 artifacts retain their original field names for replay.
+Exit status 2 means that an authoritative decision threshold was not met. For
+`sparse-high-avx2`, that is a valid discovery outcome and is not a statement
+that a production promotion failed or was even evaluated.
 
 Each result directory is configuration-specific and resumable. Reusing a
 directory with changed source, flags, executables, grid settings, or machine
 identity is rejected instead of mixing evidence. Passed jobs retain hashed raw
 benchmark JSON and stdout/stderr; analysis revalidates those hashes and semantic
-parameters. The compact, committed checkpoint at
+parameters. Replay validates the recorded taskset digest and lock UID
+structurally instead of requiring the current host to have the same taskset
+bytes or user ID; acquisition-time execution still verifies the live sealed
+taskset snapshot and held lock. Replay also keeps the Release/tests/canonical-
+Git and required object/archive/link-graph closure checks, while deliberately
+omitting only the original source-versus-executable mtime comparison. The
+compact, committed checkpoint at
 `experiments/leopard2/direct_encode/results/checkpoint.json` preserves the
 promotion evidence needed to resume on another machine, while the much larger
 raw result trees remain generated artifacts.
