@@ -380,6 +380,51 @@ decision threshold was not met. For `sparse-high-avx2`, that is a valid
 discovery outcome and is not a statement that a production promotion failed or
 was even evaluated.
 
+The separately versioned production-AUTO qualification mode consumes the
+ordinary no-hook benchmark rather than either forced path. It creates one clean
+Release/Ninja explicit-AVX2 build with tests off, GF8 on, sparse tables on,
+sparse AUTO compiled-default off, full-output high direct off, OpenMP on, and
+GF16 off.
+The runner proves that `bench_leopard2_high_sparse_auto` links the ordinary
+`libleopard.a` plus its independent oracle object, rejects every test-hook
+object/archive/definition, and freezes the executable and archive together.
+
+```sh
+python3 tools/leopard2_direct_encode_crossover.py \
+    sparse-high-production-auto-avx2 \
+    --source . --cpu "$ISO_CPU" --sibling "$ISO_SIBLING"
+python3 tools/leopard2_direct_encode_crossover.py analyze \
+    --result-dir \
+    results/leopard2/direct-encode-crossover/production-auto-avx2
+```
+
+The v10 campaign is fixed at 88 logical cells. Its 74 candidates cover all 36
+qualified tuples through one-shot row zero, eight middle/last-row samples, and
+batch plus binding APIs at batches 1, 4, and 16 over five anchor shapes. Its 14
+route-negative controls cross all seven API/batch lanes at `(2,16,4096,row0)`
+for caller-explicit AVX2/thread one and caller-AUTO/thread four. Every omitted
+row, API/tuple cross, reuse count, backend, thread count, hardware target, and
+out-of-table neighbor is explicitly outside the authorization scope. The
+ordered grid has SHA-256
+`ff6ab52d98a915afd1a86003cd6820dae1a63c66faa3276a8d97b056155db6d2`;
+changed timing, grid, build, threshold, timeout, or worker options are rejected
+before topology, locking, source capture, or building.
+
+Each cell executes three rounds containing two ABBA blocks. The first compares
+tables-on/AUTO-on with tables-on/AUTO-off to measure the actual production
+route; the second compares tables-on/AUTO-off with tables-off/AUTO-off to expose
+table preparation and setup cost. The primary observation is
+`metrics.amortized.derived_median_us_per_api_call`; execution, codec setup, and
+binding setup remain in every raw record. Route, preparation, and their
+round-wise summed net contrast use marginal two-sided 95% Student-t intervals
+at two degrees of freedom. A candidate qualifies only if both route and net
+lower bounds reach five percent. All controls remain visible, and an unexplained
+net regression worse than two percent prevents a passing decision. Reanalysis
+cannot lower the preregistered five-percent gate, and every policy invocation
+must retain the same non-vacuous input and parity checksums. This mode does not
+flip a compiled default or authorize a production promotion; exit status 2
+records that the evidence gate was not met.
+
 Each result directory is configuration-specific and resumable. Reusing a
 directory with changed source, flags, executables, grid settings, or machine
 identity is rejected instead of mixing evidence. Passed jobs retain hashed raw
@@ -552,7 +597,9 @@ bench_leopard2_high_sparse_auto --api binding --batch 4 \
 
 Every raw document says `"authoritative": false`: a pinned paired runner must
 still freeze and hash the executable and archive, establish CPU isolation, and
-apply the qualification decision rule. The strict smoke parser runs normally
+apply the qualification decision rule. That runner is
+`sparse-high-production-auto-avx2`, described above. The strict smoke parser
+runs normally
 and with Python assertions disabled, independently re-derives schema keys,
 layout, memory, route counts, setup/amortization formulas, and the full oracle
 result. Neither the target nor its tests change the installed API or production
