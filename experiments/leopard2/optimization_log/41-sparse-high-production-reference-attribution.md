@@ -51,12 +51,17 @@ The source establishes four independent facts:
    dense schedule, admitting `ff8_high_encode_small`; a nonempty forced sparse
    plan bypasses that fast path and reaches `ExecuteSparseForwardPlan`. The
    AVX2 implementation behind `ff8_high_encode_small` routes side two through
-   `AVX2FF8HighEncodeT2Direct<2/3>` or the two-output butterfly path. The AVX2
-   backend source blob is byte-identical at the discovery source
+   `AVX2FF8HighEncodeT2Direct<2>` or `AVX2FF8HighEncodeT2Direct<3>`, or through
+   the two-output butterfly path. Both the AVX2 backend and `LeopardFF8.cpp`
+   source blobs are byte-identical at the discovery source
    `c462f0ddef75979749c8cdd8e7199326ff1be892` and production source
-   `b455108e61017c711e238ccf159d45da50e77ca2` (Git blob
-   `9b592eb30dba82f473d1c0a9b8d9e6b270dfa05f`), so the reversal was not caused
-   by an AVX2 backend source change between campaigns.
+   `b455108e61017c711e238ccf159d45da50e77ca2` (Git blobs
+   `9b592eb30dba82f473d1c0a9b8d9e6b270dfa05f` and
+   `9f95f143feaaa6d67f6c860e2fdac7a8e47619b6`). The
+   `ExecuteDirectEncodeRows` body is also unchanged. The source therefore
+   attributes the reversal to selection of a different reference mechanism,
+   not to a changed direct executor or transform implementation; the campaigns
+   did not perform a same-binary three-arm timing isolation.
 
 The relevant implementation sites are `IsHighSparseDirectEncodeShape`,
 `TestForcesSparseEncodeSchedule`, `TestBuildReservesSparseEncodeSchedule`,
@@ -75,13 +80,13 @@ microseconds are not compared or subtracted across campaigns: discovery ran on
 different frozen binaries and CPU pairs even though both hosts report the same
 Threadripper PRO 9985WX model.
 
-| Shape/API pairing | Forced exact-schedule contrast | Production AUTO vs ordinary prefix | Production table contrast |
+| Shape/API pairing | Forced exact-schedule contrast | Production AUTO vs ordinary prefix | Production table point estimate (95% interval) |
 | --- | ---: | ---: | ---: |
-| `K=3,R=2`, 4096 B: diagnostic batch 1 / production one-shot | +55.81% (42.39% to 78.37%) | -27.06% (-31.88% to -21.90%) | +2.65% |
-| `K=16,R=2`, 4096 B: diagnostic batch 1 / production one-shot | +45.62% (40.10% to 52.37%) | -22.92% (-26.03% to -19.67%) | +1.32% |
-| `K=16,R=2`, 4096 B: diagnostic batch 1 / production batch 1 | +45.62% (40.10% to 52.37%) | -24.65% (-30.37% to -18.44%) | -0.70% |
-| batch 16 `K=16,R=2`, 4096 B | +40.74% (32.03% to 52.29%) | -10.94% (-12.38% to -9.48%) | -0.06% |
-| `K=16,R=4`, 4096 B: diagnostic batch 1 / production one-shot | +105.73% (104.43% to 107.26%) | +21.74% (14.73% to 29.19%) | -0.29% |
+| `K=3,R=2`, 4096 B: diagnostic batch 1 / production one-shot | +55.81% (42.39% to 78.37%) | -27.06% (-31.88% to -21.90%) | +2.65% (-9.39% to +16.30%) |
+| `K=16,R=2`, 4096 B: diagnostic batch 1 / production one-shot | +45.62% (40.10% to 52.37%) | -22.92% (-26.03% to -19.67%) | +1.32% (-5.12% to +8.20%) |
+| `K=16,R=2`, 4096 B: diagnostic batch 1 / production batch 1 | +45.62% (40.10% to 52.37%) | -24.65% (-30.37% to -18.44%) | -0.70% (-1.43% to +0.03%) |
+| batch 16 `K=16,R=2`, 4096 B | +40.74% (32.03% to 52.29%) | -10.94% (-12.38% to -9.48%) | -0.06% (-1.17% to +1.07%) |
+| `K=16,R=4`, 4096 B: diagnostic batch 1 / production one-shot | +105.73% (104.43% to 107.26%) | +21.74% (14.73% to 29.19%) | -0.29% (-2.77% to +2.27%) |
 
 All twelve production one-shot failures are R=2, including every 4096-byte
 K in `{2,3,4,8,12,16}` and the six additional K=16/R=2 byte boundaries. All
@@ -91,8 +96,9 @@ lower bound was 14.73 percent. That separation supports the T=2 mechanism as a
 candidate-design boundary, but those already-observed cells remain exploratory
 for the redesign and cannot be reused as promotion evidence.
 
-Moving generator-table setup cannot explain the loss. The production table
-contrast is near zero in the decisive K=16/R=2 public-API cells while the route
+Moving generator-table setup cannot explain the loss: the production route
+contrast holds tables enabled on both arms. The near-zero table contrasts in
+the decisive K=16/R=2 public-API cells support that conclusion while the route
 loss persists from batch 1 through batch 16. Binding creation already prepares
 and validates reusable state before its timed execute path, yet the same R=2
 loss remains.

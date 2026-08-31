@@ -2800,7 +2800,7 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
                         LEO2_BACKEND_AVX2 &&
                     (k == 2 || k == 3 || k == 4 || k == 8 ||
                      k == 12 || k == 16) &&
-                    (r == 2 || r == 4 || r == 8 || r == 16);
+                    (r == 4 || r == 8 || r == 16);
                 require(direct == (measured_shape ? 1 : 0),
                     "high-selector differed from its measured shape grid");
                 ++counts->dispatch_checks;

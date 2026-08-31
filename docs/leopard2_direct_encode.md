@@ -631,11 +631,18 @@ dispatcher, and is rejected unless table preparation is also enabled.
 AUTO dispatch is deliberately narrower than table preparation. It requires a
 caller-requested AUTO context that resolves to AVX2, one context thread, GF8
 legacy-high native layout, flags zero, and exactly one non-null parity output.
-The attested tuple set is exactly:
+The mechanism-bounded tuple set is exactly:
 
-- 4,096-byte shards, `K` in `{2,3,4,8,12,16}`, and `R` in `{2,4,8,16}`;
-- `(K,R)` equal to `(2,16)` or `(16,2)`, with shard bytes in
+- 4,096-byte shards, `K` in `{2,3,4,8,12,16}`, and `R` in `{4,8,16}`;
+- `(K,R)` equal to `(2,16)`, with shard bytes in
   `{1024,1088,2048,4032,4160,65536}`.
+
+Padded side two (`R=2`) retains the mature transform and does not prepare the
+sparse-high generator rows. The production T=2 encoder computes both transform
+rows together; report 41 records why the generic Q=1 direct executor loses to
+that reference even though it beat the hook-only exact sparse schedule. The
+24-tuple boundary above is a fresh measurement candidate, not promotion
+authority, and AUTO remains compiled-default `OFF`.
 
 Explicit backend requests, pooled contexts, extra parity outputs, flags,
 ragged sizes, and every unlisted K/R/byte tuple retain the transform path. The
@@ -664,7 +671,8 @@ evidence gate; see [Production-AUTO qualification outcome](#production-auto-qual
 The standalone `bench_leopard2_high_sparse_auto` target supplies the no-hook
 telemetry input for that qualification. It links the ordinary production
 archive and the independent direct systematic generator oracle, rejects cells
-outside the exact 36-tuple sparse-high table, and emits
+outside the 36-cell measurement envelope (24 R in `{4,8,16}` candidates plus
+12 padded-side-two structural controls), and emits
 `leopard2-high-sparse-auto-benchmark-v1`. Its three context-local policies are
 `tables-off-auto-off`, `tables-on-auto-off`, and `tables-on-auto-on`; the first
 two are production-route controls and the third exercises ordinary AUTO. The

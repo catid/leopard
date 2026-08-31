@@ -90,7 +90,7 @@ def is_hex(value: object, digits: int, prefix: bool = False) -> bool:
     return all(character in "0123456789abcdef" for character in body)
 
 
-def is_qualified_sparse_high_tuple(k: object, r: object, shard_bytes: object) -> bool:
+def is_sparse_high_campaign_tuple(k: object, r: object, shard_bytes: object) -> bool:
     if not (is_int(k) and is_int(r) and is_int(shard_bytes)):
         return False
     qualified_shape = k in {2, 3, 4, 8, 12, 16} and r in {2, 4, 8, 16}
@@ -317,9 +317,9 @@ def validate(
         require(is_int(parameters[name]), f"parameters.{name} is not an integer")
     require(0 <= parameters["parity_index"] < parameters["R"], "parity row invalid")
     require(
-        is_qualified_sparse_high_tuple(
+        is_sparse_high_campaign_tuple(
             parameters["K"], parameters["R"], parameters["shard_bytes"]),
-        "cell is outside the 36 qualified sparse-high tuples",
+        "cell is outside the 36-cell sparse-high campaign envelope",
     )
 
     resolved = exact_keys(

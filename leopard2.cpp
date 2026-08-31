@@ -2943,12 +2943,20 @@ static bool IsEffectiveAVX2Context(const leo2_context* context)
 #if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
 static bool IsHighSparseDirectEncodeShape(const leo2_codec* codec)
 {
+    /*
+        Keep padded side two on the mature transform.  Its AVX2 T=2 encoder
+        computes both rows together, so the generic one-row direct executor
+        loses even though it beats the test-only exact sparse schedule.
+        R=3 also remains excluded: padded side four alone does not supply
+        evidence for a shape outside the frozen R anchors.
+    */
     return codec &&
+        codec->padded_side >= 4 &&
         (codec->original_count == 2 || codec->original_count == 3 ||
          codec->original_count == 4 || codec->original_count == 8 ||
          codec->original_count == 12 || codec->original_count == 16) &&
-        (codec->recovery_count == 2 || codec->recovery_count == 4 ||
-         codec->recovery_count == 8 || codec->recovery_count == 16);
+        (codec->recovery_count == 4 || codec->recovery_count == 8 ||
+         codec->recovery_count == 16);
 }
 
 static bool IsHighSparseDirectEncodeTuple(
@@ -2960,8 +2968,7 @@ static bool IsHighSparseDirectEncodeTuple(
     if (shard_bytes == 4096)
         return true;
     const bool boundary_shape =
-        (codec->original_count == 2 && codec->recovery_count == 16) ||
-        (codec->original_count == 16 && codec->recovery_count == 2);
+        codec->original_count == 2 && codec->recovery_count == 16;
     return boundary_shape &&
         (shard_bytes == 1024 || shard_bytes == 1088 ||
          shard_bytes == 2048 || shard_bytes == 4032 ||
@@ -3840,7 +3847,7 @@ static bool AutoDirectEncodePreferred(
 #if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
     /*
         Default-off measurement candidate for legacy-high sparse output.  It
-        deliberately reuses the mature row-major executor and admits only 36
+        deliberately reuses the mature row-major executor and admits only 24
         previously screened (K,R,B) tuples at Q=1.  The finite decision table
         is not broad enough to authorize production promotion, so both table
         preparation and AUTO dispatch remain independently controllable.

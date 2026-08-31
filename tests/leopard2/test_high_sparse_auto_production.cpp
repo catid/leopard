@@ -349,24 +349,15 @@ void ExerciseTransformWitness(
 std::vector<Cell> CandidateCells()
 {
     static const Cell cells[] = {
-        { 2, 2, 4096 }, { 2, 4, 4096 },
-        { 2, 8, 4096 }, { 2, 16, 4096 },
-        { 3, 2, 4096 }, { 3, 4, 4096 },
-        { 3, 8, 4096 }, { 3, 16, 4096 },
-        { 4, 2, 4096 }, { 4, 4, 4096 },
-        { 4, 8, 4096 }, { 4, 16, 4096 },
-        { 8, 2, 4096 }, { 8, 4, 4096 },
-        { 8, 8, 4096 }, { 8, 16, 4096 },
-        { 12, 2, 4096 }, { 12, 4, 4096 },
-        { 12, 8, 4096 }, { 12, 16, 4096 },
-        { 16, 2, 4096 }, { 16, 4, 4096 },
-        { 16, 8, 4096 }, { 16, 16, 4096 },
+        { 2, 4, 4096 }, { 2, 8, 4096 }, { 2, 16, 4096 },
+        { 3, 4, 4096 }, { 3, 8, 4096 }, { 3, 16, 4096 },
+        { 4, 4, 4096 }, { 4, 8, 4096 }, { 4, 16, 4096 },
+        { 8, 4, 4096 }, { 8, 8, 4096 }, { 8, 16, 4096 },
+        { 12, 4, 4096 }, { 12, 8, 4096 }, { 12, 16, 4096 },
+        { 16, 4, 4096 }, { 16, 8, 4096 }, { 16, 16, 4096 },
         { 2, 16, 1024 }, { 2, 16, 1088 },
         { 2, 16, 2048 }, { 2, 16, 4032 },
-        { 2, 16, 4160 }, { 2, 16, 65536 },
-        { 16, 2, 1024 }, { 16, 2, 1088 },
-        { 16, 2, 2048 }, { 16, 2, 4032 },
-        { 16, 2, 4160 }, { 16, 2, 65536 }
+        { 2, 16, 4160 }, { 2, 16, 65536 }
     };
     std::vector<Cell> result(cells, cells + sizeof(cells) / sizeof(cells[0]));
     for (size_t i = 0; i < result.size(); ++i)
@@ -378,20 +369,34 @@ std::vector<Cell> CandidateCells()
     return result;
 }
 
+std::vector<Cell> Side2ControlCells()
+{
+    static const Cell cells[] = {
+        { 2, 2, 4096 }, { 3, 2, 4096 }, { 4, 2, 4096 },
+        { 8, 2, 4096 }, { 12, 2, 4096 }, { 16, 2, 4096 },
+        { 16, 2, 1024 }, { 16, 2, 1088 },
+        { 16, 2, 2048 }, { 16, 2, 4032 },
+        { 16, 2, 4160 }, { 16, 2, 65536 }
+    };
+    return std::vector<Cell>(
+        cells, cells + sizeof(cells) / sizeof(cells[0]));
+}
+
 uint64_t ExerciseBatchEntry(
     leo2_context* context,
     unsigned k,
     unsigned r,
     size_t bytes,
     size_t item_count,
-    bool use_binding);
+    bool use_binding,
+    bool expected_direct);
 
 uint64_t ExerciseCandidateCells(
     leo2_context* context,
     uint64_t& route_checks_out)
 {
     const std::vector<Cell> cells = CandidateCells();
-    Require(cells.size() == 36, "sparse-high candidate cell count changed");
+    Require(cells.size() == 24, "sparse-high candidate cell count changed");
     const leopard2_test::BinaryField field =
         leopard2_test::make_legacy_gf8();
     uint64_t parity_checks = 0;
@@ -421,9 +426,9 @@ uint64_t ExerciseCandidateCells(
         leo2_codec_destroy(codec);
         route_checks_out += cell.r;
         route_checks_out += ExerciseBatchEntry(
-            context, cell.k, cell.r, cell.bytes, cell.r, false);
+            context, cell.k, cell.r, cell.bytes, cell.r, false, true);
         route_checks_out += ExerciseBatchEntry(
-            context, cell.k, cell.r, cell.bytes, cell.r, true);
+            context, cell.k, cell.r, cell.bytes, cell.r, true, true);
     }
     return parity_checks;
 }
@@ -469,7 +474,8 @@ uint64_t ExerciseBatchEntry(
     unsigned r,
     size_t bytes,
     size_t item_count,
-    bool use_binding)
+    bool use_binding,
+    bool expected_direct)
 {
     leo2_codec* codec = CreateCodec(context, k, r);
     size_t scratch_bytes = 0;
@@ -506,7 +512,9 @@ uint64_t ExerciseBatchEntry(
     }
     const uint64_t expected_calls = use_binding
         ? 2U * item_count : item_count;
-    CheckWitness(context, expected_calls, 0);
+    CheckWitness(context,
+        expected_direct ? expected_calls : 0,
+        expected_direct ? 0 : expected_calls);
 
     const leopard2_test::BinaryField field =
         leopard2_test::make_legacy_gf8();
@@ -529,6 +537,36 @@ uint64_t ExerciseBatchEntry(
     }
     leo2_codec_destroy(codec);
     return expected_calls;
+}
+
+uint64_t ExerciseSide2Controls(leo2_context* context)
+{
+    const std::vector<Cell> cells = Side2ControlCells();
+    Require(cells.size() == 12,
+        "sparse-high side-two control cell count changed");
+    uint64_t route_checks = 0;
+    for (size_t cell_index = 0; cell_index < cells.size(); ++cell_index)
+    {
+        const Cell& cell = cells[cell_index];
+        leo2_codec* codec = CreateCodec(context, cell.k, cell.r);
+        CheckPath(codec, cell.bytes, 1,
+            LEO2_EXPECT_HIGH_DIRECT_PRODUCTION ? cell.r : 0, false,
+            "sparse-high side-two control path query");
+        ExerciseTransformWitness(context, codec, cell.k, cell.r, cell.bytes,
+            UINT64_C(0x5349444532435452) + cell_index);
+        ++route_checks;
+        leo2_codec_destroy(codec);
+    }
+
+    static const size_t batches[] = { 1, 4, 16 };
+    for (size_t i = 0; i < sizeof(batches) / sizeof(batches[0]); ++i)
+    {
+        route_checks += ExerciseBatchEntry(
+            context, 16, 2, 4096, batches[i], false, false);
+        route_checks += ExerciseBatchEntry(
+            context, 16, 2, 4096, batches[i], true, false);
+    }
+    return route_checks;
 }
 
 void ExerciseExclusions(leo2_context* context)
@@ -698,25 +736,31 @@ int main()
         uint64_t route_checks = 0;
         const uint64_t parity_checks =
             ExerciseCandidateCells(context, route_checks);
-        Require(parity_checks == 288,
+        Require(parity_checks == 264,
             "sparse-high candidate parity-row count changed");
         Require(route_checks == 4U * parity_checks,
             "sparse-high candidate API route count changed");
         route_checks += ExerciseBatchEntry(
-            context, 2, 16, 4096, 1, false);
+            context, 2, 16, 4096, 1, false, true);
         route_checks += ExerciseBatchEntry(
-            context, 2, 16, 4096, 1, true);
+            context, 2, 16, 4096, 1, true, true);
+        const uint64_t side2_route_checks = ExerciseSide2Controls(context);
+        Require(side2_route_checks == 75,
+            "sparse-high side-two control route count changed");
+        route_checks += side2_route_checks;
         ExerciseExclusions(context);
         leo2_context_destroy(context);
         ExerciseContextExclusions();
 
         std::printf(
             "Leopard2 sparse-high production policy passed: "
-            "states=3 tuples=36 parity_rows=%llu routes=%llu "
-            "apis=one-shot,batch1,batch2,batch4,batch8,batch16,"
-            "binding1,binding2,binding4,binding8,binding16 "
+            "states=3 candidate_tuples=24 candidate_parity_rows=%llu "
+            "side2_control_tuples=12 side2_control_routes=%llu routes=%llu "
+            "apis=one-shot,batch1,batch4,batch8,batch16,"
+            "binding1,binding4,binding8,binding16 "
             "binding_reuse=2\n",
             static_cast<unsigned long long>(parity_checks),
+            static_cast<unsigned long long>(side2_route_checks),
             static_cast<unsigned long long>(route_checks));
         return 0;
     }

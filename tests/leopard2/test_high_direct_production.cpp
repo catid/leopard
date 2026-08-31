@@ -155,7 +155,7 @@ bool ExpectHighDirectRows(unsigned k, unsigned r)
     const bool sparse_shape =
         (k == 2 || k == 3 || k == 4 || k == 8 ||
          k == 12 || k == 16) &&
-        (r == 2 || r == 4 || r == 8 || r == 16);
+        (r == 4 || r == 8 || r == 16);
     return LEO2_EXPECT_HIGH_DIRECT_PRODUCTION != 0 ||
         (LEO2_EXPECT_HIGH_SPARSE_DIRECT != 0 && sparse_shape);
 }

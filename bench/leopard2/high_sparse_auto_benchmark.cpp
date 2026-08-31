@@ -247,7 +247,7 @@ leo2_backend ParseBackend(const std::string& text)
     return LEO2_BACKEND_AUTO;
 }
 
-bool IsQualifiedSparseHighTuple(
+bool IsSparseHighCampaignTuple(
     uint32_t original_count,
     uint32_t recovery_count,
     uint64_t shard_bytes)
@@ -266,6 +266,24 @@ bool IsQualifiedSparseHighTuple(
         (original_count == 2 && recovery_count == 16) ||
         (original_count == 16 && recovery_count == 2);
     return boundary_shape &&
+        (shard_bytes == 1024 || shard_bytes == 1088 ||
+         shard_bytes == 2048 || shard_bytes == 4032 ||
+         shard_bytes == 4160 || shard_bytes == 65536);
+}
+
+bool IsSparseHighDirectCandidateTuple(
+    uint32_t original_count,
+    uint32_t recovery_count,
+    uint64_t shard_bytes)
+{
+    if (recovery_count != 4 && recovery_count != 8 &&
+        recovery_count != 16)
+        return false;
+    if (shard_bytes == 4096)
+        return original_count == 2 || original_count == 3 ||
+            original_count == 4 || original_count == 8 ||
+            original_count == 12 || original_count == 16;
+    return original_count == 2 && recovery_count == 16 &&
         (shard_bytes == 1024 || shard_bytes == 1088 ||
          shard_bytes == 2048 || shard_bytes == 4032 ||
          shard_bytes == 4160 || shard_bytes == 65536);
@@ -420,9 +438,10 @@ Options ParseOptions(int argc, char** argv)
         Fail("--backend is required");
     if (options.k == 0 || options.r == 0 || options.shard_bytes == 0)
         Fail("K, R, and shard bytes must be positive");
-    if (!IsQualifiedSparseHighTuple(
+    if (!IsSparseHighCampaignTuple(
             options.k, options.r, options.shard_bytes))
-        Fail("K, R, and shard bytes are outside the 36 qualified sparse-high tuples");
+        Fail("K, R, and shard bytes are outside the 36-cell sparse-high "
+            "campaign envelope (24 candidates plus 12 side-two controls)");
     if (options.shard_bytes > std::numeric_limits<size_t>::max())
         Fail("--bytes must fit in size_t");
     if (options.parity_index >= options.r)
@@ -942,8 +961,11 @@ int Run(const Options& options)
     Require(leopard2_internal::GetCodecEncodePathInfo(
         codec.get(), options.shard_bytes, 1, &path),
         "cannot query production encode path");
-    const size_t expected_rows = PolicyTablesEnabled(options.policy)
-        ? static_cast<size_t>(options.r) : 0;
+    const size_t expected_rows =
+        PolicyTablesEnabled(options.policy) &&
+        IsSparseHighDirectCandidateTuple(
+            options.k, options.r, options.shard_bytes)
+            ? static_cast<size_t>(options.r) : 0;
     if (path.direct_generator_rows != expected_rows)
         Fail("prepared direct rows differ from the selected sparse-table policy");
     if (!PolicyAutoEnabled(options.policy) && path.auto_direct_selected)
