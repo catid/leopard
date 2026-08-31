@@ -132,6 +132,7 @@ Scratch falls with all of it: encode 1073.8 MB -> 8.5 MB (126x) at legacy-high
 | 40 | Legacy-high sparse-Q1 production-AUTO qualification | gate not met; no promotion, AUTO remains default-off | 56/74 candidates cleared both 5% lower bounds; 1/14 controls triggered guard |
 | 41 | Sparse-high production-reference attribution | mechanism identified; fresh R in {4,8,16} campaign required | all 18 candidate failures are R=2; table contrast near zero |
 | 42 | Sparse-high R4+ production campaign versioning | **implemented; fresh run open** | v11 keeps 56 candidates, 18 R2 structural controls, and 14 performance controls; v10 replay frozen |
+| 43 | Sparse-high R4+ production-AUTO qualification | gate not met; no promotion, AUTO remains default-off | 56/56 candidates and 18/18 structural controls passed; 1/14 performance controls triggered guard |
 
 ## Method notes worth keeping
 

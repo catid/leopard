@@ -80,4 +80,5 @@ correctness gates, not timing evidence.
 Report 41 supplies the mechanism attribution behind the R>=4 boundary. The
 remaining work is to acquire and replay all 88 fresh cells from sealed binaries
 under the canonical timing and CPU-pair locks, then make a decision from that
-new corpus only.
+new corpus only. Report 43 records the resulting complete acquisition and its
+negative no-promotion decision.

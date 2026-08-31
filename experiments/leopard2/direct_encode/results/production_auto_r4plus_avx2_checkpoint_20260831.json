@@ -1,0 +1,250 @@
+{
+  "schema": "leopard2-sparse-high-production-auto-checkpoint/v2",
+  "date_utc": "2026-08-31",
+  "bead": "leopard-79h.42.10.4",
+  "parent_bead": "leopard-79h.42.10",
+  "status": "qualification_gate_not_met",
+  "scope": "Fresh bounded legacy-high GF8 sparse-Q1 R>=4 production-AUTO qualification on explicit AVX2, with 56 candidates, 18 R=2 structural controls, and 14 performance controls",
+  "disposition": {
+    "production_change": "none",
+    "correctness_gates_passed": true,
+    "production_auto_route_evaluated": true,
+    "qualification_threshold_passed": false,
+    "production_default_flip_authorized": false,
+    "production_promotion_authorized": false,
+    "compiled_default": "OFF",
+    "reason": "All 56 candidates and 18 structural controls passed, but one of 14 performance controls crossed the prespecified minus-two-percent net point-regression guard."
+  },
+  "source": {
+    "topic_branch": "codex/leopard2-gfni-t128-larger-shards",
+    "acquisition_branch": null,
+    "commit": "09ef2c6191671e72874828384eb73a5e7fcdc5d7",
+    "tree": "1fe65a93b9e79ed11795d9f156bbca8435749440",
+    "sse2neon_commit": "cad518a93b326f0f644b7972d488d04eaa2b0475",
+    "fingerprint_digest": "e16688fb7d692f633e839092cdbdbb76327bbdf31dfd3191b5021bb18bc36296",
+    "fingerprint_file_count": 1201,
+    "repository_controls": {
+      "head_index_match": true,
+      "head_tree_sha256": "0e20dd5ac995369977a36af6bf0a6ae09eb85cc0b873b0c7af9955696d4ca9f6",
+      "index_entry_count": 1201,
+      "index_flags": "all ls-files -v/-f tags are canonical H",
+      "index_sha256": "0e20dd5ac995369977a36af6bf0a6ae09eb85cc0b873b0c7af9955696d4ca9f6",
+      "legacy_grafts_absent": true,
+      "replace_refs": []
+    },
+    "worktree_clean": true,
+    "source_changed_during_run": false,
+    "source_fingerprint_after_equal": true,
+    "runner": {
+      "path": "tools/leopard2_direct_encode_crossover.py",
+      "sha256": "93e4c2037e70e538281a8c848418053e03a3f8374391ae46d20df09493b5610e"
+    }
+  },
+  "host": {
+    "node": "foureyes",
+    "cpu_model": "AMD Ryzen Threadripper PRO 9985WX 64-Cores",
+    "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.39",
+    "allowed_cpu_list": "0-127",
+    "logical_cpus_allowed": 128,
+    "memory_total": "1055750308 kB",
+    "benchmark_cpu": 109,
+    "reserved_smt_sibling": 45,
+    "benchmark_cpu_topology": {
+      "core_id": "45",
+      "cpu": 109,
+      "package_id": "0",
+      "scaling_governor": "powersave",
+      "thread_siblings": "45,109"
+    },
+    "reserved_sibling_topology": {
+      "core_id": "45",
+      "cpu": 45,
+      "package_id": "0",
+      "scaling_governor": "powersave",
+      "thread_siblings": "45,109"
+    },
+    "quiet_pair_preflight": {
+      "duration_seconds": 20,
+      "benchmark_cpu_nonidle_jiffies": 0,
+      "reserved_sibling_nonidle_jiffies": 0,
+      "observer_affinity": "0-44,46-108,110-127"
+    },
+    "accepted_isolation": {
+      "all_jobs_accepted": true,
+      "reserved_sibling_nonidle_jiffies_min": 0,
+      "reserved_sibling_nonidle_jiffies_max": 0,
+      "benchmark_cpu_nonidle_jiffies_min": 25,
+      "benchmark_cpu_nonidle_jiffies_max": 110,
+      "discarded_attempt_count": 0,
+      "resumed_job_count": 0
+    },
+    "canonical_lock_path": "/tmp/leopard-gf8-authoritative.lock",
+    "pair_lease_path": "/run/user/1000/leopard2-cpu-leases/leopard2-cpu-pair-1000-45-109.lock"
+  },
+  "contracts": {
+    "outer_schema": "leopard2-direct-encode-crossover/v11",
+    "job_schema": "leopard2-direct-encode-crossover-job/v11",
+    "analysis_schema": "leopard2-direct-encode-crossover-analysis/v7",
+    "cell_schema": "leopard2-direct-encode-crossover-cell/v4",
+    "raw_benchmark_schema": "leopard2-high-sparse-auto-benchmark-v2",
+    "controlled_build_schema": "leopard2-production-auto-controlled-build/v1"
+  },
+  "campaign": {
+    "name": "legacy-high-sparse-q1-production-auto-padded-side-ge4-qualification-v2",
+    "mode": "sparse-high-production-auto-avx2",
+    "configuration_id": "517c0ce3e492bd6d315d4a165486a0e24ceb8388f1c5350799054eb8ba121a2d",
+    "cell_count": 88,
+    "candidate_cell_count": 56,
+    "structural_control_cell_count": 18,
+    "performance_control_cell_count": 14,
+    "cells_sha256": "5cb8acb9cdb2fc00de22753c9789f59bed4b515d0f62a663d45c2934c3e8b627",
+    "decision_gate": {
+      "candidate_net_lower_gain_percent": 5.0,
+      "candidate_route_lower_gain_percent": 5.0,
+      "control_material_regression_percent": 2.0,
+      "control_regressions_retained": true,
+      "structural_controls_retained": true
+    },
+    "primary_metric": "metrics.amortized.derived_median_us_per_api_call",
+    "abba_rounds": 3,
+    "iterations": 15,
+    "warmups": 4,
+    "setup_iterations": 15,
+    "calls_per_sample": 4,
+    "reuse": 64,
+    "workers": 1,
+    "timeout_seconds_per_invocation": 120,
+    "raw_records_per_cell": 24,
+    "raw_record_count": 2112
+  },
+  "build": {
+    "controlled_build_sha256": "6a0838999f63b6cb5c70b3ddddc10d2c25897f952d4aec1fc90b09a2e9f2cffb",
+    "effective_configuration_schema": "leopard2-benchmark-build-configuration-attestation/v14",
+    "effective_configuration_sha256": "c6e8ff9aecf9954c0b89ec896ae187b8208df47382c2a1e49929150295d61893",
+    "executable_sha256": "8760337e91224d6f946a0b0a5f6847ed8c4346387e86b0c1e1f409b966a160ae",
+    "ordinary_archive_sha256": "86bf8861b8acf398f61e1343f2364564f8eae58492cddf66349b6aba40a74782",
+    "test_hooks_linked": false,
+    "sparse_tables": "ON",
+    "sparse_auto_compiled_default": "OFF"
+  },
+  "decision": {
+    "jobs_total": 88,
+    "jobs_passed": 88,
+    "jobs_failed": 0,
+    "candidate": {
+      "cell_count": 56,
+      "qualified_candidate_count": 56,
+      "failed_count": 0,
+      "route_gain_min_percent": 21.407856026850247,
+      "route_worst_lower_gain_percent": 12.673031990810957,
+      "net_gain_min_percent": 20.231180658431324,
+      "net_worst_lower_gain_percent": 10.904403153516062,
+      "all_candidates_qualified": true
+    },
+    "structural_controls": {
+      "cell_count": 18,
+      "failed_count": 0,
+      "all_structural_controls_retained": true,
+      "performance_veto_applicable": false
+    },
+    "performance_controls": {
+      "cell_count": 14,
+      "failed_count": 0,
+      "material_net_regression_count": 1,
+      "net_gain_min_percent": -2.9820003701328868,
+      "all_controls_retained_and_within_limit": false
+    },
+    "decisive_control": {
+      "job_id": "870140238f193257aa864d73",
+      "cell": {
+        "api": "binding",
+        "batch": 16,
+        "k": 2,
+        "r": 16,
+        "shard_bytes": 4096,
+        "requested_backend": "auto",
+        "threads": 4,
+        "region": "control_auto_thread4"
+      },
+      "route_gain_percent": -1.9298141888815512,
+      "route_gain_percent_student_t_interval": [
+        -6.610490748598008,
+        2.985457597132757
+      ],
+      "table_gain_percent": -1.0728909836857259,
+      "table_gain_percent_student_t_interval": [
+        -4.136445486712914,
+        2.0885669012958408
+      ],
+      "net_gain_percent": -2.9820003701328868,
+      "net_gain_percent_student_t_interval": [
+        -6.698102082660129,
+        0.8821091776699319
+      ],
+      "triggers_control_material_net_regression": true
+    }
+  },
+  "correctness_gates": {
+    "host": "ripper",
+    "source_commit": "09ef2c6191671e72874828384eb73a5e7fcdc5d7",
+    "compiler": "GCC/G++ 13.3.0",
+    "release": {
+      "passed": 6,
+      "total": 6,
+      "elapsed_seconds": 91.54,
+      "test_log_sha256": "4ba9bf0e184beaef32c6713b696b066c9241d6e401d682b60b62a6944c42ee91"
+    },
+    "asan_ubsan": {
+      "passed": 5,
+      "total": 5,
+      "elapsed_seconds": 211.31,
+      "test_log_sha256": "0c1c1c414021e0b845ff84c768569e32c93a11292df96a8d8d6ecaea9f4192a8",
+      "diagnostics": []
+    },
+    "source_unchanged": true,
+    "artifact_hashes_unchanged": true,
+    "evidence_root": "ripper.lan:/home/catid/leopard-evidence/correctness-09ef2c-ripper.LvcwzG",
+    "critical_manifest_sha256": "2e9fd975997edff50a30363c884568fdf54ed9ec7daaba08841c97a1fcd5b4b9",
+    "critical_manifest_verified_files": 58
+  },
+  "replay_validation": {
+    "normal_exit_status": 2,
+    "optimized_exit_status": 2,
+    "normal_analysis_sha256": "23b7fd64830125b08acbfd6dafe1665cfd83d5d8558212ae95a82d5b7f9c7294",
+    "optimized_analysis_sha256": "23b7fd64830125b08acbfd6dafe1665cfd83d5d8558212ae95a82d5b7f9c7294",
+    "retained_analysis_sha256": "23b7fd64830125b08acbfd6dafe1665cfd83d5d8558212ae95a82d5b7f9c7294",
+    "all_analysis_documents_byte_identical": true,
+    "result_inventory_file_count": 6490,
+    "result_inventory_sha256_before": "e9c8cf93288c23f0fb4b68a29c040810849e7e88d2f9d8027eb64d048db16b18",
+    "result_inventory_sha256_after": "e9c8cf93288c23f0fb4b68a29c040810849e7e88d2f9d8027eb64d048db16b18",
+    "result_tree_unchanged": true
+  },
+  "accepted_result": {
+    "live_root": "foureyes.lan:/tmp/leopard-v11-09ef2c6.I0N59X/result",
+    "manifest_sha256": "6fa2a837d03e180701242cc65d5b862d1aaefff79b955d7cc85b4220f3b4a51e",
+    "matrix_sha256": "85a22b51a6c461c53d75f367deceafb79682643a26767b64b6e5fdacbdba32c0",
+    "analysis_sha256": "23b7fd64830125b08acbfd6dafe1665cfd83d5d8558212ae95a82d5b7f9c7294",
+    "acquisition_decision_exit_status": 2,
+    "single_pass": true
+  },
+  "independent_review": {
+    "status": "CONVERGED",
+    "decision_audit": {
+      "status": "CONVERGED",
+      "scope": "Independently reconstructed every three-round paired-log contrast and Student-t interval from all 2112 raw benchmark records; verified the exact 56/18/14 role split and the single prespecified performance-control veto."
+    },
+    "evidence_integrity_audit": {
+      "status": "CONVERGED",
+      "scope": "Independently verified exact source and build provenance, all campaign inventories and witnesses, byte-identical normal and optimized replay, and the complete frozen archive and critical manifest."
+    },
+    "claude_invoked": false,
+    "claude_note": "No Claude invocation was made because the required Max/OAuth non-API billing path was not used."
+  },
+  "artifacts": {
+    "durable_root": "foureyes.lan:/home/catid/leopard-evidence/production-auto-r4plus-09ef2c-20260831.SPOW4C",
+    "archive_size_bytes": 5000725,
+    "archive_sha256": "8498573ef52bd80ebd7fa5a1cee024c8ef60ab7b00faf68b484691655b2fd195",
+    "critical_manifest_sha256": "0f34e7ec3732e78b7ef60550ddef9e68d9aff3a02f030c9400f4b0631480076e",
+    "coordinator_exit_marker_note": "The original wrapper marker contains literal bytes 2n because of coordinator quoting; it is outside the result tree and archived unchanged. Acquisition stdout, retained analysis, and both replay statuses agree on exit status 2."
+  }
+}

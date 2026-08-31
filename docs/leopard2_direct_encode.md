@@ -468,6 +468,8 @@ discovery is in
 `experiments/leopard2/direct_encode/results/sparse_high_avx2_checkpoint_20260831.json`,
 and the production-AUTO decision below is in
 `experiments/leopard2/direct_encode/results/production_auto_avx2_checkpoint_20260831.json`.
+The separately versioned R>=4 decision is in
+`experiments/leopard2/direct_encode/results/production_auto_r4plus_avx2_checkpoint_20260831.json`.
 
 ### Production-AUTO qualification outcome
 
@@ -542,6 +544,24 @@ other reuse count, backend, thread count, out-of-table neighbor, and hardware
 target remains unauthorized. The intervals are marginal Student-t intervals at
 two degrees of freedom, not a simultaneous campaign guarantee. Any redesigned
 predicate or implementation requires a fresh preregistered campaign.
+
+### R4+ production-AUTO qualification outcome
+
+The fresh v11 campaign also completed all 88 jobs without an acquisition,
+correctness, or isolation failure. All 56 R in `{4,8,16}` candidates cleared
+both five-percent lower-bound gates: the weakest route and net lower bounds
+were 12.67% and 10.90%. All 18 R=2 structural controls retained transform
+routing with zero prepared direct rows. The complete promotion gate still did
+not pass because one of 14 performance controls, caller-AUTO/thread-four
+binding batch 16 at `K=2,R=16,4096`, had a -2.982% net point estimate against
+the fixed -2% veto.
+
+Normal and `python -O` replay reproduced the retained analysis byte for byte.
+This control result is disqualifying under the frozen rule even though every
+candidate passed; it cannot be removed or waived after observing the data.
+Sparse-high AUTO therefore remains compiled-default `OFF`. Full provenance,
+correctness, replay, and evidence hashes are recorded in
+[optimization report 43](../experiments/leopard2/optimization_log/43-sparse-high-r4plus-production-auto-qualification.md).
 
 ## Legacy-high GF8/AVX2 full-output experiment
 
@@ -656,8 +676,9 @@ Padded side two (`R=2`) retains the mature transform and does not prepare the
 sparse-high generator rows. The production T=2 encoder computes both transform
 rows together; report 41 records why the generic Q=1 direct executor loses to
 that reference even though it beat the hook-only exact sparse schedule. The
-24-tuple boundary above is a fresh measurement candidate, not promotion
-authority, and AUTO remains compiled-default `OFF`.
+fresh v11 campaign measured all 24 tuples and every candidate passed, but the
+complete gate failed a performance control. The tuple result alone is not
+promotion authority, and AUTO remains compiled-default `OFF`.
 
 Explicit backend requests, pooled contexts, extra parity outputs, flags,
 ragged sizes, and every unlisted K/R/byte tuple retain the transform path. The
@@ -666,10 +687,11 @@ adds no arithmetic kernel and does not enter the full-output source-major
 experiment.
 
 This option extracts sparse behavior that the older full-output option had
-admitted incidentally through the generic Q=1 selector. It is measurement
-machinery, not promotion authority: no performance gain is claimed here, and
-the committed direct-encode checkpoint and LOW-profile production AUTO region
-remain unchanged. Raw direct-versus-transform measurements can be made with:
+admitted incidentally through the generic Q=1 selector. It remains measurement
+machinery rather than promotion authority: the R>=4 candidate gains are
+recorded separately from the disqualifying control, and the committed
+direct-encode checkpoint and LOW-profile production AUTO region remain
+unchanged. Raw direct-versus-transform measurements can be made with:
 
 ```sh
 bench_leopard2_direct_encode --profile high --k 2 --r 16 --q 1 \
@@ -680,8 +702,10 @@ bench_leopard2_direct_encode --profile high --k 2 --r 16 --q 1 \
 
 An AUTO-path experiment must use an attested build with both controls enabled;
 parent ON/AUTO OFF is the same-layout route control. Production defaults remain
-OFF because the 2026-08-31 production-AUTO qualification did not meet its
-evidence gate; see [Production-AUTO qualification outcome](#production-auto-qualification-outcome).
+OFF because neither 2026-08-31 production-AUTO qualification met its complete
+evidence gate; see
+[Production-AUTO qualification outcome](#production-auto-qualification-outcome)
+and [R4+ production-AUTO qualification outcome](#r4-production-auto-qualification-outcome).
 
 The standalone `bench_leopard2_high_sparse_auto` target supplies the no-hook
 telemetry input for that qualification. It links the ordinary production
