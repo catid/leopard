@@ -130,6 +130,7 @@ Scratch falls with all of it: encode 1073.8 MB -> 8.5 MB (126x) at legacy-high
 | 38 | Current-source R32 regression closure | **accepted** | zero main regressions in 97 cells × encode/decode; weakest lower CI 1.031x |
 | 39 | Legacy-high sparse-Q1 forced-path discovery | discovery passed; production AUTO remains default-off | 54/54 candidates; weakest lower gain 17.64% |
 | 40 | Legacy-high sparse-Q1 production-AUTO qualification | gate not met; no promotion, AUTO remains default-off | 56/74 candidates cleared both 5% lower bounds; 1/14 controls triggered guard |
+| 41 | Sparse-high production-reference attribution | mechanism identified; fresh R>=4 campaign required | all 18 candidate failures are R=2; table contrast near zero |
 
 ## Method notes worth keeping
 

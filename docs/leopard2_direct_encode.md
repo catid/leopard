@@ -373,6 +373,13 @@ This campaign is a forced-direct versus forced-transform discovery study over
 intervals are marginal per-cell intervals with two degrees of freedom, not a
 simultaneous guarantee. The frozen campaign itself does not measure production
 AUTO and its results do not authorize a dispatcher or production promotion.
+In this hook-enabled binary, `force_transform` uses exact-schedule semantics,
+compiling and executing the sparse forward schedule when padded side is at
+least two; the R=1 controls have no butterflies to schedule. An ordinary
+production archive does not enable that hook; when no separately qualified
+production sparse schedule applies, it executes the mature prefix transform
+instead. Consequently the forced transform arm is a diagnostic reference, not
+a proxy for production AUTO-off.
 Current v5 analysis therefore uses neutral decision-threshold field names for
 sparse, historical, and screen results; historical v4 artifacts retain their
 original field names for replay. Exit status 2 means that an authoritative

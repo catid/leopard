@@ -5,13 +5,14 @@ pointers to `leo2_encode`.  The legacy high encoder and the first production
 low encoder trimmed only the unused suffix: a request for parity 0 and parity
 R-1 still executed the same forward-transform prefix as a dense request.
 
-The internal transform experiment can compile an exact forward dependency
-schedule into caller-provided encode scratch. All public plumbing that reserves
-that scratch, compiles the schedule, or selects the exact path is currently
-guarded by `LEO2_ENABLE_TEST_HOOKS`; it is absent from the production archive.
-Production `AUTO` therefore continues to run the mature prefix transform for
-every requested-parity mask. The schedule has a two-bit requested-row
-mask per radix-2 butterfly in the ordinary parent-preserving LCH traversal.
+The internal transform machinery can compile an exact forward dependency
+schedule into caller-provided encode scratch. The broad diagnostic selector is
+guarded by `LEO2_ENABLE_TEST_HOOKS`. Ordinary production has one independently
+qualified exception: LOW-profile GF16 `K=128,R=896` on AVX2/GFNI at or above
+1 KiB for either of its two exact edge/scattered output masks. Other production
+cases, including legacy-high GF8, continue to run the mature prefix transform.
+The schedule has a two-bit requested-row mask per radix-2 butterfly in the
+ordinary parent-preserving LCH traversal.
 This distinguishes x-only, y-only, and two-row operations so a one-row
 dependency does not write its dead peer. Compilation walks
 that traversal backwards from the exact output mask.  For a forward butterfly
@@ -44,13 +45,14 @@ per parity block and one reusable packed P/T-bit dependency workspace. Mid-size
 low-profile geometries whose many parity-coset masks would exceed that bound
 fall back to the mature prefix transform pending a compact measured schedule.
 
-Production `AUTO` retains the mature fused-prefix kernel for dense and sparse
-requests and does not reserve schedule scratch. Exact-mask execution through
-`leo2_encode` is currently possible only in the separate hook-enabled test
-archive through the test-only FORCE_TRANSFORM diagnostic. The production-linked
-crossover benchmark invokes the same internal kernel substrate directly; it is
-not evidence that the public production call path can select that substrate.
-Promotion requires authoritative
+Production retains the mature fused-prefix kernel and does not reserve schedule
+scratch outside the qualified LOW-GF16 shape and masks above. Broader exact-mask
+execution through `leo2_encode` remains available only in the separate
+hook-enabled test archive through the test-only FORCE_TRANSFORM diagnostic. The
+production-linked crossover benchmark invokes the same internal kernel
+substrate directly; outside the qualified LOW-GF16 case, it is not evidence
+that the public production call path can select that substrate. Promotion
+requires authoritative
 pinned, same-source crossover measurements that include schedule setup for
 one-shot and reused calls, followed by deterministic size/mask dispatcher cells.
 The current evidence is structural and diagnostic, not a throughput claim.

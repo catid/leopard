@@ -202,12 +202,18 @@ the net point estimate, not its interval. Representative decisive cells are:
 | explicit-AVX2 binding batch 16 `K=2,R=16`, 4096 B | -0.38% (-22.40% to 27.88%) | -1.82% (-8.33% to 5.15%) | -2.19% (-24.74% to 27.10%) | control point guard triggered |
 
 The forced-path discovery in report 39 measured encode execution after forcing
-either arithmetic path. This campaign instead measured the ordinary production
-AUTO route through public APIs and separately accounted for table preparation.
-The negative route contrasts above show that the forced-path win does not carry
+either arithmetic path. Its force-transform arm used hook-only exact-schedule
+semantics, compiling the schedule when padded side was at least two; its R=1
+controls needed no butterfly schedule. It did not use the ordinary prefix
+transform selected by the measured production archive. This campaign instead
+measured the ordinary production AUTO route through public APIs and separately
+accounted for table preparation. The
+negative route contrasts above show that the forced-path win does not carry
 through this bounded production route in every preregistered cell. Passing
 neighbors do not authorize deleting the failing cells or narrowing the policy
-after seeing these data.
+after seeing these data. The source-level attribution and mechanism-derived
+R=2 boundary are recorded in
+[report 41](41-sparse-high-production-reference-attribution.md).
 
 ## Scope fences
 

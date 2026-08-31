@@ -10,13 +10,21 @@ paired-log 95-percent Student-t intervals. The weakest candidate point gain was
 endpoint was 17.64 percent.
 
 This result makes **no production change**. The campaign forced direct and
-transform execution through test hooks, did not invoke production AUTO, and
-did not measure production table-preparation cost. Its intervals are per-cell
+transform execution through test hooks; its `force_transform` reference
+used hook-only exact-schedule semantics rather than the ordinary production
+prefix transform, compiling a schedule when padded side was at least two (the
+R=1 controls require no butterfly schedule). It did not invoke production AUTO
+and did not measure production table-preparation cost. Its intervals are per-cell
 marginal intervals at `df=2`, not a simultaneous campaign guarantee. The
 current default-off predicate also spans more K/R/byte/API cases than this
 finite grid. The separate production-AUTO qualification subsequently completed
 in [report 40](40-sparse-high-production-auto-qualification.md): its evidence
 gate was not met, so production AUTO remains default-off.
+
+The reference-path distinction and the R=2 sign reversal are attributed in
+[report 41](41-sparse-high-production-reference-attribution.md). This report's
+forced comparison remains valid for discovery, but it is not an estimate of
+the production direct-versus-prefix contrast.
 
 Leopard main has no equivalent partial-output Q=1 API, so this campaign has no
 Leopard1 ratio. It compares the two Leopard2 execution paths on identical
