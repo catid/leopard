@@ -128,6 +128,7 @@ Scratch falls with all of it: encode 1073.8 MB -> 8.5 MB (126x) at legacy-high
 | 36 | GF8 T=16 Q3/Q4 fused B64 encoder | **landed** | 1.60-1.86x vs exact Leopard1 in target cells |
 | 37 | GF8 T=32 Q3 packed B64 boundary | **landed** | 1.08-1.14x vs exact Leopard1 across K65..96/R32 |
 | 38 | Current-source R32 regression closure | **accepted** | zero main regressions in 97 cells × encode/decode; weakest lower CI 1.031x |
+| 39 | Legacy-high sparse-Q1 forced-path discovery | discovery passed; production AUTO remains default-off | 54/54 candidates; weakest lower gain 17.64% |
 
 ## Method notes worth keeping
 
