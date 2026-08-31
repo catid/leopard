@@ -371,13 +371,14 @@ python3 tools/leopard2_direct_encode_crossover.py analyze \
 This campaign is a forced-direct versus forced-transform discovery study over
 `metrics.encode_execution.median_us_per_batch_call`. Its 95% Student-t
 intervals are marginal per-cell intervals with two degrees of freedom, not a
-simultaneous guarantee. Production AUTO is not measured and the results do not
-authorize a dispatcher or production promotion. Current v5 analysis therefore
-uses neutral decision-threshold field names for sparse, historical, and screen
-results; historical v4 artifacts retain their original field names for replay.
-Exit status 2 means that an authoritative decision threshold was not met. For
-`sparse-high-avx2`, that is a valid discovery outcome and is not a statement
-that a production promotion failed or was even evaluated.
+simultaneous guarantee. The frozen campaign itself does not measure production
+AUTO and its results do not authorize a dispatcher or production promotion.
+Current v5 analysis therefore uses neutral decision-threshold field names for
+sparse, historical, and screen results; historical v4 artifacts retain their
+original field names for replay. Exit status 2 means that an authoritative
+decision threshold was not met. For `sparse-high-avx2`, that is a valid
+discovery outcome and is not a statement that a production promotion failed or
+was even evaluated.
 
 Each result directory is configuration-specific and resumable. Reusing a
 directory with changed source, flags, executables, grid settings, or machine
@@ -527,6 +528,35 @@ bench_leopard2_direct_encode --profile high --k 2 --r 16 --q 1 \
 An AUTO-path experiment must use an attested build with both controls enabled;
 parent ON/AUTO OFF is the same-layout route control. Production defaults remain
 OFF pending the separately versioned production-AUTO qualification.
+
+The standalone `bench_leopard2_high_sparse_auto` target supplies the no-hook
+telemetry input for that qualification. It links the ordinary production
+archive and the independent direct systematic generator oracle, rejects cells
+outside the exact 36-tuple sparse-high table, and emits
+`leopard2-high-sparse-auto-benchmark-v1`. Its three context-local policies are
+`tables-off-auto-off`, `tables-on-auto-off`, and `tables-on-auto-on`; the first
+two are production-route controls and the third exercises ordinary AUTO. The
+one-shot, batch, and reusable-binding APIs report codec setup, binding setup
+where applicable, execution, modeled reuse, requested and effective backend,
+thread count, prepared rows, and an untimed route witness that is disabled
+before timing.
+
+```sh
+bench_leopard2_high_sparse_auto --api one-shot --batch 1 \
+    --backend auto --threads 1 --policy tables-off-auto-off
+bench_leopard2_high_sparse_auto --api batch --batch 4 \
+    --backend auto --threads 1 --policy tables-on-auto-off
+bench_leopard2_high_sparse_auto --api binding --batch 4 \
+    --backend auto --threads 1 --policy tables-on-auto-on
+```
+
+Every raw document says `"authoritative": false`: a pinned paired runner must
+still freeze and hash the executable and archive, establish CPU isolation, and
+apply the qualification decision rule. The strict smoke parser runs normally
+and with Python assertions disabled, independently re-derives schema keys,
+layout, memory, route counts, setup/amortization formulas, and the full oracle
+result. Neither the target nor its tests change the installed API or production
+defaults.
 
 ## Promoted GF8/AVX2 T=4 batch-table amortization
 

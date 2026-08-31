@@ -961,6 +961,62 @@ class CMakeProductionGraph(object):
         ("set_property", _sparse_sidecar_link_depends): 1,
         ("add_custom_command", _sparse_sidecar_post_build): 1,
     })
+    _required_high_sparse_auto_target_commands = Counter({
+        ("add_executable", (
+            "bench_leopard2_high_sparse_auto",
+            "bench/leopard2/high_sparse_auto_benchmark.cpp",
+            "tests/leopard2/direct_oracle.cpp")): 1,
+        ("target_include_directories", (
+            "bench_leopard2_high_sparse_auto", "PRIVATE",
+            "${CMAKE_CURRENT_SOURCE_DIR}", "tests/leopard2")): 1,
+        ("target_compile_definitions", (
+            "bench_leopard2_high_sparse_auto", "PRIVATE",
+            "LEO2_HIGH_SPARSE_AUTO_LIBRARY_TEST_HOOKS=0",
+            "LEO2_BENCHMARK_BUILD_VARIANT=${LEO2_BACKEND_VARIANT}")): 1,
+        ("target_link_libraries", (
+            "bench_leopard2_high_sparse_auto", "leopard")): 1,
+        ("target_compile_definitions", (
+            "bench_leopard2_high_sparse_auto", "PRIVATE",
+            "LEO2_BENCHMARK_BUILD_CONFIGURATION_SCHEMA=\""
+            "${LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA}\"")): 1,
+    })
+    _high_sparse_auto_target_block = r"""    if(LEOPARD_ENABLE_GF8)
+        add_executable(bench_leopard2_high_sparse_auto
+            bench/leopard2/high_sparse_auto_benchmark.cpp
+            tests/leopard2/direct_oracle.cpp)
+        target_include_directories(bench_leopard2_high_sparse_auto PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            tests/leopard2)
+        target_compile_definitions(bench_leopard2_high_sparse_auto PRIVATE
+            LEO2_HIGH_SPARSE_AUTO_LIBRARY_TEST_HOOKS=0
+            LEO2_BENCHMARK_BUILD_VARIANT="${LEO2_BACKEND_VARIANT}")
+        target_link_libraries(bench_leopard2_high_sparse_auto leopard)
+        leopard2_enable_benchmark_source_attestation(
+            bench_leopard2_high_sparse_auto)
+        target_compile_definitions(bench_leopard2_high_sparse_auto PRIVATE
+            "LEO2_BENCHMARK_BUILD_CONFIGURATION_SCHEMA=\"${LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA}\"")
+    endif()"""
+    _high_sparse_auto_registration = (
+        "NAME", "leopard2_high_sparse_auto_benchmark_registration",
+        "COMMAND", "${CMAKE_COMMAND}",
+        "-DLEO2_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}",
+        "-DLEO2_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/"
+        "high-sparse-auto-registration",
+        "-DLEO2_C_COMPILER=${CMAKE_C_COMPILER}",
+        "-DLEO2_CXX_COMPILER=${CMAKE_CXX_COMPILER}",
+        "-DLEO2_GENERATOR=${CMAKE_GENERATOR}",
+        "-DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}",
+        "-DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}",
+        "-DLEO2_ARCHIVE_SYMBOL_CHECKS=${LEO2_ARCHIVE_SYMBOL_CHECKS}",
+        "-DLEO2_NM_COMMAND=${CMAKE_NM}",
+        "-DLEO2_STATIC_LIBRARY_PREFIX=${CMAKE_STATIC_LIBRARY_PREFIX}",
+        "-DLEO2_STATIC_LIBRARY_SUFFIX=${CMAKE_STATIC_LIBRARY_SUFFIX}",
+        "-DLEO2_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}",
+        "-P", "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/"
+        "test_high_sparse_auto_benchmark_registration.cmake")
+    _required_high_sparse_auto_registrations = Counter({
+        _high_sparse_auto_registration: 1,
+    })
     _required_trusted_commands = Counter({
         ("cmake_minimum_required", ("VERSION", "3.7")): 1,
         ("project", ("leopard",)): 1,
@@ -1146,6 +1202,8 @@ class CMakeProductionGraph(object):
         "leopard2_benchmark_json_regression": 2,
         "leopard2_pruned_transform_benchmark_smoke": 1,
         "leopard2_sparse_encode_benchmark_smoke": 1,
+        "leopard2_high_sparse_auto_benchmark_smoke": 1,
+        "leopard2_high_sparse_auto_benchmark_smoke_optimized": 1,
         "leopard2_cost_model_self_test": 1,
         "leopard2_allk_gap_identity_self_test": 1,
         "leopard2_allk_gap_identity_optimized_self_test": 1,
@@ -1313,7 +1371,7 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "d7b30d5f9c0ea9120f6e1d66ade5ff9b2b5206928f908420d87f122392060bdd"
+        "58248cb2bd8e7f02d488ea53c43b6b4b1d82ee1020bf6c209a228019ac1c4616"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1335,6 +1393,11 @@ class CMakeProductionGraph(object):
         ("set_tests_properties", (
             "leopard2_sparse_encode_benchmark_smoke", "PROPERTIES",
             "ENVIRONMENT", "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")): 1,
+        ("set_tests_properties", (
+            "leopard2_high_sparse_auto_benchmark_smoke",
+            "leopard2_high_sparse_auto_benchmark_smoke_optimized",
+            "PROPERTIES", "ENVIRONMENT",
+            "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")): 1,
         ("set_tests_properties", (
             "leopard2_lab_self_test", "PROPERTIES", "ENVIRONMENT",
             "PYTHONDONTWRITEBYTECODE=1;"
@@ -1902,6 +1965,9 @@ class CMakeProductionGraph(object):
             "set_property", _sparse_sidecar_link_depends)),
         ("sparse-sidecar", (
             "add_custom_command", _sparse_sidecar_post_build)),
+        ("guarded", (
+            "leopard2_enable_benchmark_source_attestation",
+            ("bench_leopard2_high_sparse_auto",))),
         ("test-enablement", ()),
         ("test-hook-definition", (
             "leopard_test_hooks", "target_compile_definitions", (
@@ -2039,6 +2105,9 @@ class CMakeProductionGraph(object):
                     raise ContractError(
                         "benchmark attestation build module identity differs: " +
                         str(path))
+            if text.count(self._high_sparse_auto_target_block) != 1:
+                raise ContractError(
+                    "sparse-high AUTO benchmark target block identity drift")
         self.raw_commands = cmake_commands(text)
         self.commands = [(name, cmake_tokens(body))
                          for name, body in self.raw_commands]
@@ -2080,6 +2149,8 @@ class CMakeProductionGraph(object):
         self.test_enablement_count = 0
         self.locator_provenance_counts = Counter()
         self.sparse_sidecar_counts = Counter()
+        self.high_sparse_auto_target_counts = Counter()
+        self.high_sparse_auto_registration_counts = Counter()
         self.protected_assignments = []
         self.contract_events = []
         self.require_mutation_contract = require_mutation_contract
@@ -2198,6 +2269,26 @@ class CMakeProductionGraph(object):
             visited.append(name)
             name = self.target_aliases[name]
         return name
+
+    def _record_high_sparse_auto_target_command(
+            self, command, tokens, guard, reasons):
+        if not tokens:
+            return
+        target = self._target_name(tokens[0], guard)
+        if target != "bench_leopard2_high_sparse_auto":
+            return
+        key = (command, tuple(tokens))
+        if key not in self._required_high_sparse_auto_target_commands:
+            raise ContractError(
+                "sparse-high AUTO benchmark target contract drift")
+        if self.require_mutation_contract and not reasons:
+            expected_guard = bool_and(
+                bool_atom("option:LEO2_BUILD_BENCHMARKS"),
+                bool_atom("option:LEOPARD_ENABLE_GF8"))
+            if not self._formula_equivalent(guard, expected_guard):
+                raise ContractError(
+                    "sparse-high AUTO benchmark target guard drift")
+        self.high_sparse_auto_target_counts[key] += 1
 
     def _record_target_build_mutation(self, command, tokens, guard, reasons):
         if not tokens:
@@ -2476,6 +2567,18 @@ class CMakeProductionGraph(object):
                     bool_atom("predicate:EXISTS:/usr/bin/c++")),
                 host_reasons +
                 ("unsupported CMake conditional predicate: EXISTS",)),)
+        if name in {
+                "leopard2_high_sparse_auto_benchmark_smoke",
+                "leopard2_high_sparse_auto_benchmark_smoke_optimized"}:
+            target = bool_atom(
+                "predicate:TARGET:bench_leopard2_high_sparse_auto")
+            return ((bool_and(
+                benchmark, target,
+                bool_atom(
+                    "option:LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE"),
+                bool_not(bool_atom(
+                    "option:LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE"))), (
+                    "unsupported CMake conditional predicate: TARGET",)),)
         if name in self._benchmark_python_test_registrations:
             return ((benchmark, ()),)
         if name == "leopard2_benchmark_json_regression":
@@ -2557,6 +2660,7 @@ class CMakeProductionGraph(object):
             "$<TARGET_FILE:bench_leopard2_locator>",
             "$<TARGET_FILE:bench_leopard2_pruned_transform>",
             "$<TARGET_FILE:bench_leopard2_sparse_encode>",
+            "$<TARGET_FILE:bench_leopard2_high_sparse_auto>",
             "$<TARGET_FILE:leopard2_decode_scratch_probe>",
             "$<TARGET_FILE:leopard_test_hooks>",
         }
@@ -2580,6 +2684,29 @@ class CMakeProductionGraph(object):
         self.python_test_guard_counts[(name, matches[0])] += 1
         self.python_test_registration_counts[name] += 1
         self.python_test_commands.append(tuple(tokens))
+
+    def _record_high_sparse_auto_registration(
+            self, tokens, guard, reasons):
+        name = "leopard2_high_sparse_auto_benchmark_registration"
+        script = (
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/"
+            "test_high_sparse_auto_benchmark_registration.cmake")
+        if name not in tokens and script not in tokens:
+            return
+        key = tuple(tokens)
+        if key != self._high_sparse_auto_registration:
+            raise ContractError(
+                "sparse-high AUTO benchmark registration contract drift")
+        if self.require_mutation_contract:
+            expected_guard = bool_and(
+                bool_atom("option:LEO2_BUILD_TESTS"),
+                bool_atom("option:LEO2_BUILD_BENCHMARKS"),
+                bool_atom("option:LEOPARD_ENABLE_GF8"),
+                bool_atom("option:LEOPARD_ENABLE_GF16"))
+            if reasons or not self._formula_equivalent(guard, expected_guard):
+                raise ContractError(
+                    "sparse-high AUTO benchmark registration guard drift")
+        self.high_sparse_auto_registration_counts[key] += 1
 
     def _record_python_test_property(
             self, command, tokens, guard, reasons):
@@ -3432,10 +3559,18 @@ class CMakeProductionGraph(object):
                 self._record_test_enablement(tokens, guard, reasons)
                 continue
             if (command in {"set_tests_properties", "set_property"} and
+                    "leopard2_high_sparse_auto_benchmark_registration"
+                    in tokens):
+                raise ContractError(
+                    "sparse-high AUTO benchmark registration properties "
+                    "are forbidden")
+            if (command in {"set_tests_properties", "set_property"} and
                     self._record_python_test_property(
                         command, tokens, guard, reasons)):
                 continue
             if command == "add_test":
+                self._record_high_sparse_auto_registration(
+                    tokens, guard, reasons)
                 self._record_python_test_registration(
                     tokens, guard, reasons,
                     inside_python_registration_gate)
@@ -3488,6 +3623,21 @@ class CMakeProductionGraph(object):
                         raise ContractError(
                             "unresolved source property is reachable in the "
                             "CPU-only graph: " + str(error))
+                protected_benchmark_sources = {
+                    "bench/leopard2/high_sparse_auto_benchmark.cpp".casefold(),
+                    "tests/leopard2/direct_oracle.cpp".casefold(),
+                }
+                normalized_source_property_paths = set()
+                for token in source_property_tokens:
+                    path = PurePosixPath(token.replace("\\", "/"))
+                    if not path.is_absolute() and ".." not in path.parts:
+                        normalized_source_property_paths.add(
+                            str(path).casefold())
+                if (normalized_source_property_paths &
+                        protected_benchmark_sources):
+                    raise ContractError(
+                        "sparse-high AUTO benchmark source properties are "
+                        "forbidden")
                 upper_source_properties = {
                     token.upper() for token in source_property_tokens}
                 if (any("$<" in token for token in source_property_tokens) and
@@ -3686,6 +3836,10 @@ class CMakeProductionGraph(object):
                         bool_atom("option:LEO2_BUILD_TESTS"),
                         bool_atom("option:LEOPARD_ENABLE_GF8"),
                         bool_atom("option:LEOPARD_ENABLE_GF16"))
+                elif tokens == ["bench_leopard2_high_sparse_auto"]:
+                    expected_guard = bool_and(
+                        benchmark_guard,
+                        bool_atom("option:LEOPARD_ENABLE_GF8"))
                 else:
                     raise ContractError(
                         "unapproved benchmark attestation target")
@@ -4039,6 +4193,10 @@ class CMakeProductionGraph(object):
                 if command == "add_library" and tokens:
                     self.declared_targets.add(tokens[0])
                 continue
+            if (command in {"add_executable", "target_sources"} or
+                    command in self._target_build_mutation_commands):
+                self._record_high_sparse_auto_target_command(
+                    command, tokens, guard, reasons)
             if command in self._target_build_mutation_commands:
                 self._record_target_build_mutation(
                     command, tokens, guard, reasons)
@@ -4290,6 +4448,32 @@ class CMakeProductionGraph(object):
                 raise ContractError(
                     "missing or duplicate sparse evidence sidecar command: "
                     "missing=" +
+                    repr(sorted(missing.elements(), key=repr)) + " extra=" +
+                    repr(sorted(extra.elements(), key=repr)))
+            if (self.high_sparse_auto_target_counts !=
+                    self._required_high_sparse_auto_target_commands):
+                missing = (
+                    self._required_high_sparse_auto_target_commands -
+                    self.high_sparse_auto_target_counts)
+                extra = (
+                    self.high_sparse_auto_target_counts -
+                    self._required_high_sparse_auto_target_commands)
+                raise ContractError(
+                    "missing or duplicate sparse-high AUTO benchmark target "
+                    "command: missing=" +
+                    repr(sorted(missing.elements(), key=repr)) + " extra=" +
+                    repr(sorted(extra.elements(), key=repr)))
+            if (self.high_sparse_auto_registration_counts !=
+                    self._required_high_sparse_auto_registrations):
+                missing = (
+                    self._required_high_sparse_auto_registrations -
+                    self.high_sparse_auto_registration_counts)
+                extra = (
+                    self.high_sparse_auto_registration_counts -
+                    self._required_high_sparse_auto_registrations)
+                raise ContractError(
+                    "missing or duplicate sparse-high AUTO benchmark "
+                    "registration: missing=" +
                     repr(sorted(missing.elements(), key=repr)) + " extra=" +
                     repr(sorted(extra.elements(), key=repr)))
             self._validate_required_protected_assignments()
@@ -7441,6 +7625,118 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
         with self.assertRaisesRegex(
                 ContractError, "security-sensitive CMake command order drift"):
             self.resolve_text(reordered, require_mutation_contract=True)
+
+    def test_high_sparse_auto_benchmark_target_and_registration_are_exact(
+            self):
+        target_definition = """add_executable(bench_leopard2_high_sparse_auto
+            bench/leopard2/high_sparse_auto_benchmark.cpp
+            tests/leopard2/direct_oracle.cpp)"""
+        link_definition = (
+            "target_link_libraries(bench_leopard2_high_sparse_auto leopard)")
+        no_hook_marker = "LEO2_HIGH_SPARSE_AUTO_LIBRARY_TEST_HOOKS=0"
+        registration_name = "leopard2_high_sparse_auto_benchmark_registration"
+        registration_script = (
+            "tests/cmake/test_high_sparse_auto_benchmark_registration.cmake")
+        mutations = (
+            (target_definition, target_definition.replace(
+                "\n            tests/leopard2/direct_oracle.cpp", "", 1)),
+            (link_definition, link_definition.replace(
+                " leopard)", " leopard_test_hooks)", 1)),
+            (no_hook_marker, "LEO2_HIGH_SPARSE_AUTO_LIBRARY_TEST_HOOKS=1"),
+            (registration_name,
+             "leopard2_high_sparse_auto_registration_injected"),
+            (registration_script,
+             "tests/cmake/test_sparse_encode_benchmark_registration.cmake"),
+        )
+        for original, replacement in mutations:
+            with self.subTest(mutation=replacement.splitlines()[-1]):
+                self.assertEqual(1, self.cmake.count(original))
+                mutated = self.cmake.replace(original, replacement, 1)
+                self.assertNotEqual(mutated, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "sparse-high AUTO benchmark (?:target|registration) "
+                        "(?:block identity |contract )?drift|"
+                        "missing or duplicate sparse-high AUTO"):
+                    self.resolve_text(
+                        mutated, require_mutation_contract=True)
+
+        extra_target_mutations = (
+            "target_sources(bench_leopard2_high_sparse_auto PRIVATE "
+            "bench/leopard2/high_sparse_auto_benchmark.cpp)",
+            "set(LEO2_INJECTED_BENCHMARK_TARGET "
+            "bench_leopard2_high_sparse_auto)\n"
+            "target_compile_definitions(${LEO2_INJECTED_BENCHMARK_TARGET} "
+            "PRIVATE INJECTED=1)",
+        )
+        for mutation in extra_target_mutations:
+            with self.subTest(extra_target_mutation=mutation.splitlines()[-1]):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "sparse-high AUTO benchmark target contract drift"):
+                    self.resolve(mutation)
+
+        source_property_mutations = (
+            "set_source_files_properties("
+            "bench/leopard2/high_sparse_auto_benchmark.cpp PROPERTIES "
+            "COMPILE_DEFINITIONS INJECTED=1)",
+            "set_source_files_properties("
+            "tests/leopard2/direct_oracle.cpp PROPERTIES LANGUAGE C)",
+            "set_source_files_properties("
+            "./bench/leopard2/high_sparse_auto_benchmark.cpp PROPERTIES "
+            "COMPILE_OPTIONS -O0)",
+            "set_source_files_properties("
+            "bench/leopard2/./high_sparse_auto_benchmark.cpp PROPERTIES "
+            "COMPILE_OPTIONS -O0)",
+            "set_source_files_properties("
+            '"bench\\\\leopard2\\\\high_sparse_auto_benchmark.cpp" '
+            "PROPERTIES COMPILE_OPTIONS -O0)",
+            "set_source_files_properties("
+            '"tests\\\\leopard2\\\\direct_oracle.cpp" '
+            "PROPERTIES LANGUAGE C)",
+            "set_source_files_properties("
+            "BENCH/leopard2/high_sparse_auto_benchmark.cpp PROPERTIES "
+            "COMPILE_OPTIONS -O0)",
+            "set_source_files_properties("
+            "bench/LEOPARD2/high_sparse_auto_benchmark.cpp PROPERTIES "
+            "COMPILE_OPTIONS -O0)",
+            "set_source_files_properties("
+            "TESTS/leopard2/direct_oracle.cpp PROPERTIES LANGUAGE C)",
+        )
+        for mutation in source_property_mutations:
+            with self.subTest(source_property_mutation=mutation):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "sparse-high AUTO benchmark source properties are "
+                        "forbidden"):
+                    self.resolve(mutation)
+
+        with self.assertRaisesRegex(
+                ContractError,
+                "sparse-high AUTO benchmark registration properties are "
+                "forbidden"):
+            self.resolve(
+                "set_tests_properties("
+                "leopard2_high_sparse_auto_benchmark_registration "
+                "PROPERTIES DISABLED TRUE)")
+
+        registration_guard = (
+            "if(LEO2_BUILD_BENCHMARKS)\n"
+            "        add_test(\n"
+            "            NAME leopard2_benchmark_attestation_refresh")
+        self.assertEqual(1, self.cmake.count(registration_guard))
+        inverted_registration_guard = self.cmake.replace(
+            registration_guard,
+            registration_guard.replace(
+                "if(LEO2_BUILD_BENCHMARKS)",
+                "if(NOT LEO2_BUILD_BENCHMARKS)", 1),
+            1)
+        with self.assertRaisesRegex(
+                ContractError,
+                "sparse-high AUTO benchmark registration guard drift"):
+            self.resolve_text(
+                inverted_registration_guard,
+                require_mutation_contract=True)
 
     def test_language_and_project_toolchain_mutations_are_rejected(self):
         mutations = (

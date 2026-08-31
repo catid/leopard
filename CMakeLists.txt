@@ -1123,6 +1123,27 @@ if(LEO2_BUILD_BENCHMARKS)
             VERBATIM)
     endif()
 
+    # Focused sparse-high production-AUTO telemetry.  This deliberately links
+    # the ordinary archive and uses the independent generator oracle; the
+    # context-local policy/witness controls are internal C++ diagnostics rather
+    # than the force-mode hook ABI used by bench_leopard2_direct_encode.
+    if(LEOPARD_ENABLE_GF8)
+        add_executable(bench_leopard2_high_sparse_auto
+            bench/leopard2/high_sparse_auto_benchmark.cpp
+            tests/leopard2/direct_oracle.cpp)
+        target_include_directories(bench_leopard2_high_sparse_auto PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            tests/leopard2)
+        target_compile_definitions(bench_leopard2_high_sparse_auto PRIVATE
+            LEO2_HIGH_SPARSE_AUTO_LIBRARY_TEST_HOOKS=0
+            LEO2_BENCHMARK_BUILD_VARIANT="${LEO2_BACKEND_VARIANT}")
+        target_link_libraries(bench_leopard2_high_sparse_auto leopard)
+        leopard2_enable_benchmark_source_attestation(
+            bench_leopard2_high_sparse_auto)
+        target_compile_definitions(bench_leopard2_high_sparse_auto PRIVATE
+            "LEO2_BENCHMARK_BUILD_CONFIGURATION_SCHEMA=\"${LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA}\"")
+    endif()
+
     if(LEOPARD_ENABLE_GF16)
         add_executable(bench_leopard2_gf16_high_attribution
             experiments/leopard2/gf16_high_encode/attribution.cpp)
@@ -3042,6 +3063,22 @@ if(LEO2_BUILD_TESTS)
                 -DLEO2_STATIC_LIBRARY_SUFFIX=${CMAKE_STATIC_LIBRARY_SUFFIX}
                 -DLEO2_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_sparse_encode_benchmark_registration.cmake)
+        add_test(
+            NAME leopard2_high_sparse_auto_benchmark_registration
+            COMMAND ${CMAKE_COMMAND}
+                -DLEO2_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DLEO2_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/high-sparse-auto-registration
+                -DLEO2_C_COMPILER=${CMAKE_C_COMPILER}
+                -DLEO2_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+                -DLEO2_GENERATOR=${CMAKE_GENERATOR}
+                -DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
+                -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
+                -DLEO2_ARCHIVE_SYMBOL_CHECKS=${LEO2_ARCHIVE_SYMBOL_CHECKS}
+                -DLEO2_NM_COMMAND=${CMAKE_NM}
+                -DLEO2_STATIC_LIBRARY_PREFIX=${CMAKE_STATIC_LIBRARY_PREFIX}
+                -DLEO2_STATIC_LIBRARY_SUFFIX=${CMAKE_STATIC_LIBRARY_SUFFIX}
+                -DLEO2_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_high_sparse_auto_benchmark_registration.cmake)
     endif()
 
     # The registered Python tools use postponed annotations, PEP 585
@@ -3126,6 +3163,25 @@ if(LEO2_BUILD_TESTS)
             set_tests_properties(
                 leopard2_sparse_encode_benchmark_smoke PROPERTIES
                 ENVIRONMENT "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
+            if(TARGET bench_leopard2_high_sparse_auto AND
+               LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE AND
+               NOT LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+                add_test(
+                    NAME leopard2_high_sparse_auto_benchmark_smoke
+                    COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_high_sparse_auto_benchmark_json_test.py
+                        $<TARGET_FILE:bench_leopard2_high_sparse_auto>)
+                add_test(
+                    NAME leopard2_high_sparse_auto_benchmark_smoke_optimized
+                    COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                        ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_high_sparse_auto_benchmark_json_test.py
+                        $<TARGET_FILE:bench_leopard2_high_sparse_auto>)
+                set_tests_properties(
+                    leopard2_high_sparse_auto_benchmark_smoke
+                    leopard2_high_sparse_auto_benchmark_smoke_optimized
+                    PROPERTIES
+                    ENVIRONMENT "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
+            endif()
         endif()
         add_test(
             NAME leopard2_cost_model_self_test
