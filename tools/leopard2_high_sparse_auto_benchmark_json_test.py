@@ -14,7 +14,7 @@ import sys
 from typing import Any
 
 
-SCHEMA = "leopard2-high-sparse-auto-benchmark-v1"
+SCHEMA = "leopard2-high-sparse-auto-benchmark-v2"
 CONFIG_SCHEMA = "leopard2-benchmark-build-configuration/v16"
 AUTHORITY_NOTE = (
     "raw telemetry is non-authoritative; authority requires the pinned paired "
@@ -100,6 +100,15 @@ def is_sparse_high_campaign_tuple(k: object, r: object, shard_bytes: object) -> 
         return True
     boundary_shape = (k, r) in {(2, 16), (16, 2)}
     return boundary_shape and shard_bytes in {1024, 1088, 2048, 4032, 4160, 65536}
+
+
+def is_sparse_high_direct_candidate_tuple(
+    k: object, r: object, shard_bytes: object,
+) -> bool:
+    return (
+        is_sparse_high_campaign_tuple(k, r, shard_bytes)
+        and r in {4, 8, 16}
+    )
 
 
 def next_power_of_two(value: int) -> int:
@@ -321,6 +330,25 @@ def validate(
             parameters["K"], parameters["R"], parameters["shard_bytes"]),
         "cell is outside the 36-cell sparse-high campaign envelope",
     )
+    direct_candidate = is_sparse_high_direct_candidate_tuple(
+        parameters["K"], parameters["R"], parameters["shard_bytes"]
+    )
+    expected_rows = (
+        parameters["R"]
+        if parameters["policy"] != "tables_off_auto_off" and direct_candidate
+        else 0
+    )
+    expected_direct = (
+        parameters["policy"] == "tables_on_auto_on"
+        and direct_candidate
+        and parameters["requested_backend"] == "auto"
+        and parameters["requested_thread_count"] == 1
+    )
+    require(
+        expected.get("rows") == expected_rows
+        and expected.get("direct") is expected_direct,
+        "test expectation differs from the v2 R>=4 selector contract",
+    )
 
     resolved = exact_keys(
         document["resolved"],
@@ -357,15 +385,17 @@ def validate(
     )
     require(
         is_int(resolved["direct_generator_rows"])
-        and resolved["direct_generator_rows"] == expected["rows"],
+        and resolved["direct_generator_rows"] == expected_rows,
         "prepared row count differs",
     )
     require(
-        resolved["auto_direct_selected"] is expected["direct"],
+        resolved["auto_direct_selected"] is expected_direct,
         "AUTO selector result differs",
     )
     require(
-        resolved["selected_route"] == ("direct" if expected["direct"] else "transform"),
+        resolved["selected_route"] == (
+            "direct" if expected_direct else "transform"
+        ),
         "selected route differs",
     )
 
@@ -394,9 +424,9 @@ def validate(
         "witness call accounting differs",
     )
     require(
-        qualification["direct_calls"] == (expected_calls if expected["direct"] else 0)
+        qualification["direct_calls"] == (expected_calls if expected_direct else 0)
         and qualification["transform_calls"]
-        == (0 if expected["direct"] else expected_calls),
+        == (0 if expected_direct else expected_calls),
         "actual route witness differs",
     )
     for name in (
@@ -952,6 +982,39 @@ def main() -> int:
             True,
         ),
         (
+            ["--k", "16", "--r", "2", "--bytes", "4096",
+             "--parity-index", "0", "--api", "one-shot", "--batch", "1",
+             "--backend", "auto", "--threads", "1", "--policy",
+             "tables-on-auto-on"],
+            {"K": 16, "R": 2, "parity_index": 0, "shard_bytes": 4096,
+             "requested_backend": "auto", "policy": "tables_on_auto_on",
+             "api": "one_shot", "batch": 1, "requested_thread_count": 1},
+            0,
+            False,
+        ),
+        (
+            ["--k", "16", "--r", "2", "--bytes", "4096",
+             "--parity-index", "0", "--api", "batch", "--batch", "4",
+             "--backend", "auto", "--threads", "1", "--policy",
+             "tables-on-auto-off"],
+            {"K": 16, "R": 2, "parity_index": 0, "shard_bytes": 4096,
+             "requested_backend": "auto", "policy": "tables_on_auto_off",
+             "api": "batch", "batch": 4, "requested_thread_count": 1},
+            0,
+            False,
+        ),
+        (
+            ["--k", "16", "--r", "2", "--bytes", "4096",
+             "--parity-index", "0", "--api", "binding", "--batch", "4",
+             "--backend", "auto", "--threads", "1", "--policy",
+             "tables-on-auto-on"],
+            {"K": 16, "R": 2, "parity_index": 0, "shard_bytes": 4096,
+             "requested_backend": "auto", "policy": "tables_on_auto_on",
+             "api": "binding", "batch": 4, "requested_thread_count": 1},
+            0,
+            False,
+        ),
+        (
             ["--api", "batch", "--batch", "1", "--backend", "avx2",
              "--threads", "1", "--policy", "tables-on-auto-on"],
             {"requested_backend": "avx2", "policy": "tables_on_auto_on",
@@ -970,6 +1033,8 @@ def main() -> int:
     ]
     first_document: dict[str, Any] | None = None
     first_expected: dict[str, Any] | None = None
+    padded_side2_document: dict[str, Any] | None = None
+    padded_side2_expected: dict[str, Any] | None = None
     for arguments, identity, rows, direct in cases:
         expected = {
             "parameters": {**common_parameters, **identity},
@@ -980,10 +1045,32 @@ def main() -> int:
         if first_document is None:
             first_document = document
             first_expected = expected
+        if identity.get("R") == 2 and identity.get("api") == "binding":
+            padded_side2_document = document
+            padded_side2_expected = expected
 
     require(first_document is not None and first_expected is not None,
             "no positive document was retained")
     exercise_mutation_rejections(first_document, first_expected, executable)
+    require(
+        padded_side2_document is not None and padded_side2_expected is not None,
+        "no padded-side2 structural-control document was retained",
+    )
+    changed = copy.deepcopy(padded_side2_document)
+    changed["resolved"]["direct_generator_rows"] = 2
+    expect_validation_failure(
+        changed, padded_side2_expected, executable,
+        "padded-side2 prepared rows",
+    )
+    changed = copy.deepcopy(padded_side2_document)
+    changed["resolved"]["auto_direct_selected"] = True
+    changed["resolved"]["selected_route"] = "direct"
+    changed["qualification"]["direct_calls"] = 8
+    changed["qualification"]["transform_calls"] = 0
+    expect_validation_failure(
+        changed, padded_side2_expected, executable,
+        "padded-side2 direct route",
+    )
 
     print("sparse-high production-AUTO benchmark schema: PASS")
     return 0

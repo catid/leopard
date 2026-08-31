@@ -402,20 +402,33 @@ python3 tools/leopard2_direct_encode_crossover.py \
     --source . --cpu "$ISO_CPU" --sibling "$ISO_SIBLING"
 python3 tools/leopard2_direct_encode_crossover.py analyze \
     --result-dir \
-    results/leopard2/direct-encode-crossover/production-auto-avx2
+    results/leopard2/direct-encode-crossover/production-auto-r4plus-v2
 ```
 
-The v10 campaign is fixed at 88 logical cells. Its 74 candidates cover all 36
-qualified tuples through one-shot row zero, eight middle/last-row samples, and
-batch plus binding APIs at batches 1, 4, and 16 over five anchor shapes. Its 14
-route-negative controls cross all seven API/batch lanes at `(2,16,4096,row0)`
-for caller-explicit AVX2/thread one and caller-AUTO/thread four. Every omitted
-row, API/tuple cross, reuse count, backend, thread count, hardware target, and
-out-of-table neighbor is explicitly outside the authorization scope. The
-ordered grid has SHA-256
-`ff6ab52d98a915afd1a86003cd6820dae1a63c66faa3276a8d97b056155db6d2`;
-changed timing, grid, build, threshold, timeout, or worker options are rejected
-before topology, locking, source capture, or building.
+The current v11 campaign is fixed at 88 freshly acquired logical cells. Its 56
+R>=4 candidates cover all 24 mechanism-bounded tuples through one-shot row
+zero, eight middle/last-row samples, and batch plus binding APIs at batches 1,
+4, and 16 over four anchor shapes. Eighteen former R=2 candidate lanes remain
+in their original grid positions as structural controls: 12 one-shot tuple
+cells and six `K=16,R=2,4096` batch/binding cells. They must prove correct
+transform routing with zero prepared direct rows under every policy; their
+timings are retained and disclosed but do not create either candidate evidence
+or a performance veto. The existing 14 route-negative performance controls
+still cross all seven API/batch lanes at `(2,16,4096,row0)` for caller-explicit
+AVX2/thread one and caller-AUTO/thread four, and retain the minus-two-percent
+point guard. The ordered v11 grid has SHA-256
+`5cb8acb9cdb2fc00de22753c9789f59bed4b515d0f62a663d45c2934c3e8b627`.
+
+Outer/job/analysis/cell/raw evidence identities are v11/v11/v7/v4/v2. The
+previous v10/v10/v6/v3/v1 campaign remains a frozen replay dialect: its 74
+candidates, 14 controls, exact region labels, and grid SHA-256
+`ff6ab52d98a915afd1a86003cd6820dae1a63c66faa3276a8d97b056155db6d2`
+are not relabeled. New acquisition uses a separate result directory and never
+pools the earlier measurements. Every omitted row, API/tuple cross, reuse
+count, backend, thread count, hardware target, and out-of-table neighbor is
+outside the authorization scope. Changed timing, grid, build, threshold,
+timeout, or worker options are rejected before topology, locking, source
+capture, or building.
 
 Each cell executes three rounds containing two ABBA blocks. The first compares
 tables-on/AUTO-on with tables-on/AUTO-off to measure the actual production
@@ -425,8 +438,10 @@ table preparation and setup cost. The primary observation is
 binding setup remain in every raw record. Route, preparation, and their
 round-wise summed net contrast use marginal two-sided 95% Student-t intervals
 at two degrees of freedom. A candidate qualifies only if both route and net
-lower bounds reach five percent. All controls remain visible, and an unexplained
-net regression worse than two percent prevents a passing decision. Reanalysis
+lower bounds reach five percent. All controls remain visible. An unexplained
+net regression worse than two percent in the 14 performance controls prevents
+a passing decision, while an invalid or missing R=2 structural record also
+fails closed without treating its timing as a performance veto. Reanalysis
 cannot lower the preregistered five-percent gate, and every policy invocation
 must retain the same non-vacuous input and parity checksums. This mode does not
 flip a compiled default or authorize a production promotion; exit status 2
@@ -673,7 +688,8 @@ telemetry input for that qualification. It links the ordinary production
 archive and the independent direct systematic generator oracle, rejects cells
 outside the 36-cell measurement envelope (24 R in `{4,8,16}` candidates plus
 12 padded-side-two structural controls), and emits
-`leopard2-high-sparse-auto-benchmark-v1`. Its three context-local policies are
+`leopard2-high-sparse-auto-benchmark-v2`. Retained v10 evidence continues to
+validate its frozen v1 raw dialect. Its three context-local policies are
 `tables-off-auto-off`, `tables-on-auto-off`, and `tables-on-auto-on`; the first
 two are production-route controls and the third exercises ordinary AUTO. The
 one-shot, batch, and reusable-binding APIs report codec setup, binding setup

@@ -123,7 +123,7 @@ function(assert_benchmark_json benchmark_json expected_policy expected_api
         set(expected_binding_text "\"binding_setup\": null")
     endif()
     foreach(required_text
-        "\"schema\": \"leopard2-high-sparse-auto-benchmark-v1\""
+        "\"schema\": \"leopard2-high-sparse-auto-benchmark-v2\""
         "\"authoritative\": false"
         "\"backend_variant\": \"auto\""
         "\"build_type\": \"Release\""
@@ -240,3 +240,29 @@ assert_benchmark_json(
     tables_on_auto_on binding 4
     16 true direct
     2 8 8 0 true)
+
+# R=2 remains in the fresh campaign as a structural control.  The ordinary
+# archive must prepare no direct rows and must retain transform routing even
+# when the public AUTO policy is enabled.
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env
+        OMP_DYNAMIC=FALSE OMP_NUM_THREADS=1 OMP_THREAD_LIMIT=1
+        "${benchmark}"
+        --k 16 --r 2 --bytes 4096 --parity-index 0
+        --backend auto --threads 1
+        --iterations 1 --setup-iterations 1 --calls-per-sample 1
+        --warmups 0 --reuse 1 --memory-mib 16
+        --api binding --batch 4 --policy tables-on-auto-on
+    RESULT_VARIABLE fourth_result
+    OUTPUT_VARIABLE fourth_json
+    ERROR_VARIABLE fourth_stderr)
+if(NOT fourth_result EQUAL 0)
+    message(FATAL_ERROR
+        "padded-side2 AUTO-on binding failed (${fourth_result}): "
+        "${fourth_stderr}")
+endif()
+assert_benchmark_json(
+    "${fourth_json}"
+    tables_on_auto_on binding 4
+    0 false transform
+    2 8 0 8 true)

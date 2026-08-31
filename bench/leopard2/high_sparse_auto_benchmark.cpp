@@ -1075,7 +1075,7 @@ int Run(const Options& options)
     json.imbue(std::locale::classic());
     json << std::fixed << std::setprecision(6);
     json << "{\n"
-         << "  \"schema\": \"leopard2-high-sparse-auto-benchmark-v1\",\n"
+         << "  \"schema\": \"leopard2-high-sparse-auto-benchmark-v2\",\n"
          << "  \"authoritative\": false,\n"
          << "  \"authority_note\": \"raw telemetry is non-authoritative; authority requires the pinned paired runner\",\n"
          << "  \"build\": {\n"

@@ -128,4 +128,5 @@ remains the authoritative negative result for the original 36-tuple production
 policy. No measurements are pooled, relabeled, or deleted. The follow-up work
 is tracked under Bead `leopard-79h.42.10`: first change the mechanism boundary,
 then version and run a fresh no-hook campaign with R=2 structural negative
-controls before making any promotion decision.
+controls before making any promotion decision. Report 42 records the resulting
+v11/v7/v4/v2 campaign and its exact v10 replay boundary.

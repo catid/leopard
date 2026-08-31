@@ -14,6 +14,10 @@ only the default-off sparse-high selector, and runs a frozen 91-cell discovery
 grid with per-cell batches 1, 4, and 16.  It compares forced direct and forced
 transform encode-execution timing only: it does not exercise production AUTO,
 provide simultaneous campaign-wide inference, or authorize promotion.
+``sparse-high-production-auto-avx2`` creates a no-hook production archive and
+runs the fresh 88-cell v11 campaign: 56 R>=4 candidates, 18 padded-side-two
+structural controls, and 14 backend/thread performance controls.  Retained v10
+result trees remain replayable under their frozen schema and grid identities.
 
 Typical use::
 
@@ -22,6 +26,8 @@ Typical use::
         --cpu 16 --sibling 80
     tools/leopard2_direct_encode_crossover.py sparse-high-avx2 \
         --cpu 16 --sibling 80
+    tools/leopard2_direct_encode_crossover.py \
+        sparse-high-production-auto-avx2 --cpu 16 --sibling 80
     tools/leopard2_direct_encode_crossover.py analyze \
         --result-dir results/leopard2/direct-encode-crossover/historical-avx2
 
@@ -67,22 +73,37 @@ from pathlib import Path
 SCHEMA_V7 = "leopard2-direct-encode-crossover/v7"
 SCHEMA_V8 = "leopard2-direct-encode-crossover/v8"
 SCHEMA = "leopard2-direct-encode-crossover/v9"
-PRODUCTION_AUTO_SCHEMA = "leopard2-direct-encode-crossover/v10"
+PRODUCTION_AUTO_SCHEMA_V10 = "leopard2-direct-encode-crossover/v10"
+PRODUCTION_AUTO_SCHEMA = "leopard2-direct-encode-crossover/v11"
+PRODUCTION_AUTO_SCHEMAS = (
+    PRODUCTION_AUTO_SCHEMA_V10, PRODUCTION_AUTO_SCHEMA,
+)
 JOB_SCHEMA_V7 = "leopard2-direct-encode-crossover-job/v7"
 JOB_SCHEMA_V8 = "leopard2-direct-encode-crossover-job/v8"
 JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v9"
-PRODUCTION_AUTO_JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v10"
+PRODUCTION_AUTO_JOB_SCHEMA_V10 = "leopard2-direct-encode-crossover-job/v10"
+PRODUCTION_AUTO_JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v11"
 ANALYSIS_SCHEMA_V4 = "leopard2-direct-encode-crossover-analysis/v4"
 ANALYSIS_SCHEMA = "leopard2-direct-encode-crossover-analysis/v5"
-PRODUCTION_AUTO_ANALYSIS_SCHEMA = (
+PRODUCTION_AUTO_ANALYSIS_SCHEMA_V6 = (
     "leopard2-direct-encode-crossover-analysis/v6"
+)
+PRODUCTION_AUTO_ANALYSIS_SCHEMA = (
+    "leopard2-direct-encode-crossover-analysis/v7"
+)
+PRODUCTION_AUTO_ANALYSIS_SCHEMAS = (
+    PRODUCTION_AUTO_ANALYSIS_SCHEMA_V6, PRODUCTION_AUTO_ANALYSIS_SCHEMA,
 )
 CELL_SCHEMA_V1 = "leopard2-direct-encode-crossover-cell/v1"
 CELL_SCHEMA_V2 = "leopard2-direct-encode-crossover-cell/v2"
 CELL_SCHEMA_V3 = "leopard2-direct-encode-crossover-cell/v3"
+CELL_SCHEMA_V4 = "leopard2-direct-encode-crossover-cell/v4"
 BENCHMARK_SCHEMA = "leopard2-direct-encode-benchmark-v2"
-PRODUCTION_AUTO_BENCHMARK_SCHEMA = (
+PRODUCTION_AUTO_BENCHMARK_SCHEMA_V1 = (
     "leopard2-high-sparse-auto-benchmark-v1"
+)
+PRODUCTION_AUTO_BENCHMARK_SCHEMA = (
+    "leopard2-high-sparse-auto-benchmark-v2"
 )
 KNOWN_BACKENDS = ("scalar", "ssse3", "avx2", "avx512")
 FROZEN_EXECUTABLE_SCHEMA = "leopard2-frozen-executable/v3"
@@ -94,8 +115,11 @@ PRODUCTION_AUTO_MODE = "sparse-high-production-auto-avx2"
 SPARSE_HIGH_CAMPAIGN_NAME = (
     "legacy-high-sparse-q1-explicit-avx2-forced-path-discovery-v1"
 )
-PRODUCTION_AUTO_CAMPAIGN_NAME = (
+PRODUCTION_AUTO_CAMPAIGN_NAME_V1 = (
     "legacy-high-sparse-q1-production-auto-qualification-v1"
+)
+PRODUCTION_AUTO_CAMPAIGN_NAME = (
+    "legacy-high-sparse-q1-production-auto-padded-side-ge4-qualification-v2"
 )
 SPARSE_HIGH_CELL_COUNT = 91
 SPARSE_HIGH_CELLS_SHA256 = (
@@ -105,8 +129,11 @@ PRODUCTION_AUTO_CELL_COUNT = 88
 PRODUCTION_AUTO_QUALIFICATION_PERCENT = 5.0
 # Filled from the deterministic preregistered grid below.  Changing the grid
 # requires a fresh campaign/schema rather than editing this value in place.
-PRODUCTION_AUTO_CELLS_SHA256 = (
+PRODUCTION_AUTO_CELLS_SHA256_V1 = (
     "ff6ab52d98a915afd1a86003cd6820dae1a63c66faa3276a8d97b056155db6d2"
+)
+PRODUCTION_AUTO_CELLS_SHA256 = (
+    "5cb8acb9cdb2fc00de22753c9789f59bed4b515d0f62a663d45c2934c3e8b627"
 )
 AUTHORITATIVE_COMMANDS_V7 = ("historical-avx2",)
 RUN_COMMANDS_V7 = ("screen",) + AUTHORITATIVE_COMMANDS_V7
@@ -474,6 +501,30 @@ RETAINED_MAX_SIBLING_NONIDLE_JIFFIES_V1 = 0
 
 class CrossoverError(Exception):
     """An actionable configuration, execution, or result error."""
+
+
+def is_production_auto_schema(manifest_schema):
+    return manifest_schema in PRODUCTION_AUTO_SCHEMAS
+
+
+def is_production_auto_analysis_schema(analysis_schema):
+    return analysis_schema in PRODUCTION_AUTO_ANALYSIS_SCHEMAS
+
+
+def production_auto_cell_schema(manifest_schema):
+    if manifest_schema == PRODUCTION_AUTO_SCHEMA_V10:
+        return CELL_SCHEMA_V3
+    if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+        return CELL_SCHEMA_V4
+    raise CrossoverError("outer schema has no production-AUTO cell dialect")
+
+
+def production_auto_benchmark_schema(manifest_schema):
+    if manifest_schema == PRODUCTION_AUTO_SCHEMA_V10:
+        return PRODUCTION_AUTO_BENCHMARK_SCHEMA_V1
+    if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+        return PRODUCTION_AUTO_BENCHMARK_SCHEMA
+    raise CrossoverError("outer schema has no production-AUTO benchmark dialect")
 
 
 class AuthoritativeGuardError(CrossoverError):
@@ -1291,7 +1342,7 @@ def current_runtime_launcher_identity():
 
 
 def retained_runtime_launcher_contract(manifest_schema):
-    if manifest_schema == SCHEMA_V7:
+    if manifest_schema in (SCHEMA_V7, PRODUCTION_AUTO_SCHEMA_V10):
         return (
             RUNTIME_LAUNCHER_NAMES_V7,
             RUNTIME_LAUNCHER_SOURCE_PATHS_V7,
@@ -1537,6 +1588,16 @@ def load_sealed_python_module(snapshot, module_name, description):
 
 
 def outer_schema_contract(manifest_schema):
+    if manifest_schema == PRODUCTION_AUTO_SCHEMA_V10:
+        return {
+            "analysis_schema": PRODUCTION_AUTO_ANALYSIS_SCHEMA_V6,
+            "build_configuration_attestation_schema":
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14,
+            "build_configuration_file_schema":
+                BUILD_CONFIGURATION_FILE_SCHEMA_V16,
+            "controlled_build_schema": PRODUCTION_AUTO_CONTROLLED_BUILD_SCHEMA,
+            "job_schema": PRODUCTION_AUTO_JOB_SCHEMA_V10,
+        }
     if manifest_schema == PRODUCTION_AUTO_SCHEMA:
         return {
             "analysis_schema": PRODUCTION_AUTO_ANALYSIS_SCHEMA,
@@ -1605,13 +1666,16 @@ def schema_for_run_mode(mode):
 
 def retained_environment_contract(manifest_schema):
     outer_schema_contract(manifest_schema)
-    if manifest_schema == SCHEMA_V7:
+    if manifest_schema in (SCHEMA_V7, PRODUCTION_AUTO_SCHEMA_V10):
         return BENCHMARK_ENVIRONMENT_V7, GIT_ENVIRONMENT_V7
     return BENCHMARK_ENVIRONMENT, GIT_ENVIRONMENT
 
 
-def production_auto_child_environment_contract():
-    fixed = dict(BENCHMARK_ENVIRONMENT)
+def production_auto_child_environment_contract(
+        manifest_schema=PRODUCTION_AUTO_SCHEMA):
+    fixed, unused_git = retained_environment_contract(manifest_schema)
+    del unused_git
+    fixed = dict(fixed)
     fixed.pop("OMP_NUM_THREADS", None)
     return {
         "fixed": fixed,
@@ -1632,9 +1696,10 @@ def benchmark_environment_for_job(job, manifest_schema=SCHEMA):
     except (KeyError, TypeError):
         raise CrossoverError("benchmark job omits its environment identity")
     environment = dict(retained)
-    if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+    if is_production_auto_schema(manifest_schema):
         validate_cell_value(
-            cell_value, "benchmark environment cell", CELL_SCHEMA_V3
+            cell_value, "benchmark environment cell",
+            production_auto_cell_schema(manifest_schema),
         )
         threads = str(cell_value["threads"])
         environment["OMP_NUM_THREADS"] = threads
@@ -1654,7 +1719,7 @@ def configuration_selector_overrides_for_mode(mode, manifest_schema=SCHEMA):
     if (manifest_schema in (SCHEMA_V8, SCHEMA) and
             mode == SPARSE_HIGH_MODE):
         return {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"}
-    if (manifest_schema == PRODUCTION_AUTO_SCHEMA and
+    if (is_production_auto_schema(manifest_schema) and
             mode == PRODUCTION_AUTO_MODE):
         return {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"}
     return {}
@@ -1665,10 +1730,10 @@ def evidence_contract(
         selector_overrides=None, mode=None):
     schemas = outer_schema_contract(manifest_schema)
     selector_overrides = {} if selector_overrides is None else selector_overrides
-    production_auto = manifest_schema == PRODUCTION_AUTO_SCHEMA
+    production_auto = is_production_auto_schema(manifest_schema)
     result = {
         "benchmark_schema": (
-            PRODUCTION_AUTO_BENCHMARK_SCHEMA
+            production_auto_benchmark_schema(manifest_schema)
             if production_auto else BENCHMARK_SCHEMA
         ),
         "build_configuration_attestation_schema":
@@ -1715,7 +1780,7 @@ def evidence_contract(
             ]
         ),
     }
-    if manifest_schema in (SCHEMA_V8, SCHEMA, PRODUCTION_AUTO_SCHEMA):
+    if manifest_schema in (SCHEMA_V8, SCHEMA) + PRODUCTION_AUTO_SCHEMAS:
         if mode not in run_commands_for_schema(manifest_schema):
             raise CrossoverError("current evidence runner mode is invalid")
         if (not isinstance(selector_overrides, dict) or
@@ -3648,6 +3713,12 @@ def build_configuration_contract(attestation_schema):
             BUILD_CONFIGURATION_VARIABLES,
             BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V16,
         )
+    if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14:
+        return (
+            BUILD_CONFIGURATION_FILE_SCHEMA_V16,
+            BUILD_CONFIGURATION_VARIABLES_V16,
+            BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V16,
+        )
     if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13:
         return (
             BUILD_CONFIGURATION_FILE_SCHEMA_V15,
@@ -3741,6 +3812,7 @@ def build_configuration_digest(
         )
     if tuple(variables) not in (
             BUILD_CONFIGURATION_VARIABLES,
+            BUILD_CONFIGURATION_VARIABLES_V16,
             BUILD_CONFIGURATION_VARIABLES_V15,
             BUILD_CONFIGURATION_VARIABLES_V14,
             BUILD_CONFIGURATION_VARIABLES_V13,
@@ -3827,6 +3899,9 @@ def read_build_configuration_attestation(path):
     if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA:
         attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA
         variables = BUILD_CONFIGURATION_VARIABLES
+    elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V16:
+        attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14
+        variables = BUILD_CONFIGURATION_VARIABLES_V16
     elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V15:
         attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13
         variables = BUILD_CONFIGURATION_VARIABLES_V15
@@ -3937,6 +4012,9 @@ def validate_build_configuration_attestation(
                 BUILD_CONFIGURATION_ATTESTATION_SCHEMA):
             canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS
         elif (value.get("schema") ==
+              BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14):
+            canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V16
+        elif (value.get("schema") ==
               BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13):
             canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V15
         elif (value.get("schema") ==
@@ -3977,6 +4055,7 @@ def validate_build_configuration_attestation(
                     for name, expected in selector_overrides.items()) or
                 (selector_overrides and value.get("schema") not in {
                     BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13,
+                    BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14,
                     BUILD_CONFIGURATION_ATTESTATION_SCHEMA}) or
                 not set(selector_overrides).issubset({
                     "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
@@ -5509,9 +5588,11 @@ def production_auto_cell(
     }
 
 
-def cell_schema_for_mode(mode):
+def cell_schema_for_mode(mode, manifest_schema=None):
     if mode == PRODUCTION_AUTO_MODE:
-        return CELL_SCHEMA_V3
+        if manifest_schema is None:
+            manifest_schema = PRODUCTION_AUTO_SCHEMA
+        return production_auto_cell_schema(manifest_schema)
     return CELL_SCHEMA_V2 if mode == SPARSE_HIGH_MODE else CELL_SCHEMA_V1
 
 
@@ -5766,7 +5847,7 @@ def sparse_high_campaign_contract(cells):
     }
 
 
-def qualified_sparse_high_tuples():
+def qualified_sparse_high_tuples_v1():
     values = {
         (k, r, 4096)
         for k in (2, 3, 4, 8, 12, 16)
@@ -5785,6 +5866,19 @@ def qualified_sparse_high_tuples():
     return result
 
 
+def qualified_sparse_high_tuples():
+    """Exact sparse-high tuples selected by the current R>=4 policy."""
+    result = [
+        value for value in qualified_sparse_high_tuples_v1()
+        if value[1] >= 4
+    ]
+    if len(result) != 24:
+        raise CrossoverError(
+            "production-AUTO qualified tuple contract is not 24 cells"
+        )
+    return result
+
+
 def production_auto_api_batch_lanes():
     return (
         ("one_shot", 1),
@@ -5797,13 +5891,13 @@ def production_auto_api_batch_lanes():
     )
 
 
-def _production_auto_grid_values():
+def _production_auto_grid_values_v10():
     """Return the preregistered 74 candidates plus 14 route controls."""
     values = []
 
     # Every qualified K/R/byte tuple is timed through the one-shot public API
     # at parity row zero.  This is the full production selector tuple set.
-    for k, r, shard_bytes in qualified_sparse_high_tuples():
+    for k, r, shard_bytes in qualified_sparse_high_tuples_v1():
         values.append(production_auto_cell(
             "candidate_qualified_tuple", k, r, shard_bytes, 0,
             "one_shot", 1,
@@ -5841,27 +5935,67 @@ def _production_auto_grid_values():
     return values
 
 
-def production_auto_grid():
-    values = _production_auto_grid_values()
+def _production_auto_grid_values():
+    """Return 56 R>=4 candidates, 18 R2 structural controls, and 14 controls."""
+    values = []
+    for legacy in _production_auto_grid_values_v10():
+        value = dict(legacy)
+        if value["r"] == 2:
+            if value["region"] == "candidate_qualified_tuple":
+                value["region"] = "control_padded_side2_tuple"
+            elif value["region"] == "candidate_public_api":
+                value["region"] = "control_padded_side2_public_api"
+        values.append(value)
+    return values
+
+
+def production_auto_grid(manifest_schema=PRODUCTION_AUTO_SCHEMA):
+    if manifest_schema == PRODUCTION_AUTO_SCHEMA_V10:
+        values = _production_auto_grid_values_v10()
+        expected_digest = PRODUCTION_AUTO_CELLS_SHA256_V1
+        generation = "v1"
+    elif manifest_schema == PRODUCTION_AUTO_SCHEMA:
+        values = _production_auto_grid_values()
+        expected_digest = PRODUCTION_AUTO_CELLS_SHA256
+        generation = "v2"
+    else:
+        raise CrossoverError("outer schema has no production-AUTO grid")
     identities = [digest_value(value) for value in values]
     if len(set(identities)) != len(values):
         raise CrossoverError("production-AUTO campaign contains duplicate cells")
     if (len(values) != PRODUCTION_AUTO_CELL_COUNT or
-            digest_value(values) != PRODUCTION_AUTO_CELLS_SHA256):
+            digest_value(values) != expected_digest):
         raise CrossoverError(
-            "production-AUTO campaign differs from its frozen v1 grid"
+            "production-AUTO campaign differs from its frozen {} grid".format(
+                generation
+            )
         )
     return values
 
 
-def production_auto_campaign_contract(cells):
+def production_auto_campaign_contract(
+        cells, manifest_schema=PRODUCTION_AUTO_SCHEMA):
+    if manifest_schema == PRODUCTION_AUTO_SCHEMA_V10:
+        cells_sha256 = PRODUCTION_AUTO_CELLS_SHA256_V1
+        cell_schema = CELL_SCHEMA_V3
+        candidate_cell_count = 74
+        control_cell_count = 14
+        campaign_name = PRODUCTION_AUTO_CAMPAIGN_NAME_V1
+    elif manifest_schema == PRODUCTION_AUTO_SCHEMA:
+        cells_sha256 = PRODUCTION_AUTO_CELLS_SHA256
+        cell_schema = CELL_SCHEMA_V4
+        candidate_cell_count = 56
+        control_cell_count = 14
+        campaign_name = PRODUCTION_AUTO_CAMPAIGN_NAME
+    else:
+        raise CrossoverError("outer schema has no production-AUTO campaign")
     if (not isinstance(cells, list) or
             len(cells) != PRODUCTION_AUTO_CELL_COUNT or
-            digest_value(cells) != PRODUCTION_AUTO_CELLS_SHA256):
+            digest_value(cells) != cells_sha256):
         raise CrossoverError(
             "production-AUTO campaign cells are not the frozen grid"
         )
-    return {
+    result = {
         "abba_contrasts": {
             "production_route": [
                 "tables_on_auto_on", "tables_on_auto_off",
@@ -5872,11 +6006,11 @@ def production_auto_campaign_contract(cells):
                 "tables_off_auto_off", "tables_on_auto_off",
             ],
         },
-        "candidate_cell_count": 74,
+        "candidate_cell_count": candidate_cell_count,
         "cell_count": PRODUCTION_AUTO_CELL_COUNT,
-        "cell_schema": CELL_SCHEMA_V3,
-        "cells_sha256": PRODUCTION_AUTO_CELLS_SHA256,
-        "control_cell_count": 14,
+        "cell_schema": cell_schema,
+        "cells_sha256": cells_sha256,
+        "control_cell_count": control_cell_count,
         "decision_gate": {
             "candidate_net_lower_gain_percent":
                 PRODUCTION_AUTO_QUALIFICATION_PERCENT,
@@ -5897,7 +6031,7 @@ def production_auto_campaign_contract(cells):
             "out-of-table neighboring tuples",
             "other hardware and OpenMP runtimes",
         ],
-        "name": PRODUCTION_AUTO_CAMPAIGN_NAME,
+        "name": campaign_name,
         "primary_metric": (
             "metrics.amortized.derived_median_us_per_api_call"
         ),
@@ -5910,6 +6044,10 @@ def production_auto_campaign_contract(cells):
             "metrics.binding_setup.median_us",
         ],
     }
+    if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+        result["decision_gate"]["structural_controls_retained"] = True
+        result["structural_control_cell_count"] = 18
+    return result
 
 
 def full_grid(backends, r):
@@ -6004,7 +6142,7 @@ def stable_seed(cell_value):
 
 def invocation_order(mode, job_id, abba_rounds, manifest_schema=SCHEMA):
     if (mode == PRODUCTION_AUTO_MODE and
-            manifest_schema == PRODUCTION_AUTO_SCHEMA):
+            is_production_auto_schema(manifest_schema)):
         route_abba = (
             "tables_on_auto_on", "tables_on_auto_off",
             "tables_on_auto_off", "tables_on_auto_on",
@@ -6082,7 +6220,7 @@ def benchmark_argv(
         if job.get("executable_artifact") is not None
         else job["executable"]
     )
-    if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+    if is_production_auto_schema(manifest_schema):
         if (settings.get("mode") != PRODUCTION_AUTO_MODE or
                 timed_mode not in {
                     "tables_off_auto_off", "tables_on_auto_off",
@@ -9190,13 +9328,14 @@ def validate_production_auto_summary(
 
 def validate_production_auto_raw(
         raw, job, policy, settings,
-        expected_configuration_schema, selector_overrides):
+        expected_configuration_schema, selector_overrides,
+        manifest_schema):
     raw = require_exact_keys(raw, {
         "authoritative", "authority_note", "build", "correctness",
         "memory", "methodology", "metrics", "parameters",
         "qualification", "resolved", "runtime", "schema",
     }, "document")
-    if raw.get("schema") != PRODUCTION_AUTO_BENCHMARK_SCHEMA:
+    if raw.get("schema") != production_auto_benchmark_schema(manifest_schema):
         raise CrossoverError(
             "production-AUTO benchmark emitted an unknown schema"
         )
@@ -9207,7 +9346,10 @@ def validate_production_auto_raw(
             "production-AUTO raw telemetry misstates its authority"
         )
     item = job["cell"]
-    validate_cell_value(item, "production-AUTO raw cell", CELL_SCHEMA_V3)
+    validate_cell_value(
+        item, "production-AUTO raw cell",
+        production_auto_cell_schema(manifest_schema),
+    )
     if policy not in {
             "tables_off_auto_off", "tables_on_auto_off",
             "tables_on_auto_on"}:
@@ -9238,9 +9380,13 @@ def validate_production_auto_raw(
         expected_configuration_schema,
         selector_overrides,
     )
+    configuration_file_schema, unused_variables, unused_selectors = (
+        build_configuration_contract(expected_configuration_schema)
+    )
+    del unused_variables, unused_selectors
     expected_build = {
         "backend_variant": "avx2",
-        "build_configuration_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
+        "build_configuration_schema": configuration_file_schema,
         "build_configuration_sha256": configuration_sha256,
         "build_type": "Release",
         "high_sparse_auto_compiled_default": False,
@@ -9332,11 +9478,22 @@ def validate_production_auto_raw(
                 "production-AUTO parameter {} is not an integer".format(key)
             )
 
+    table_shape = (
+        (item["k"], item["r"], item["shard_bytes"]) in set(
+            qualified_sparse_high_tuples_v1()
+            if manifest_schema == PRODUCTION_AUTO_SCHEMA_V10 else
+            qualified_sparse_high_tuples()
+        )
+    )
     direct_expected = (
         policy == "tables_on_auto_on" and
+        table_shape and
         item["requested_backend"] == "auto" and item["threads"] == 1
     )
-    rows_expected = 0 if policy == "tables_off_auto_off" else item["r"]
+    rows_expected = (
+        item["r"]
+        if policy != "tables_off_auto_off" and table_shape else 0
+    )
     padded_side = 1 << (item["r"] - 1).bit_length()
     parent_count = 1 << (item["k"] + padded_side - 1).bit_length()
     resolved = require_exact_keys(raw.get("resolved"), {
@@ -9546,10 +9703,11 @@ def validate_raw(
         raw, job, timed_mode, settings,
         expected_configuration_schema=BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
         selector_overrides=None, manifest_schema=SCHEMA):
-    if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+    if is_production_auto_schema(manifest_schema):
         return validate_production_auto_raw(
             raw, job, timed_mode, settings,
             expected_configuration_schema, selector_overrides,
+            manifest_schema,
         )
     raw = require_exact_keys(raw, {
         "build", "correctness", "memory", "methodology", "metrics",
@@ -10005,7 +10163,7 @@ def validate_job_artifacts(
         "benchmark_json", "benchmark_json_sha256", "mad_us", "median_us",
         "parity_identity", "sequence_index", "timed_mode",
     }
-    if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+    if is_production_auto_schema(manifest_schema):
         measurement_keys.update({
             "binding_setup_median_us", "codec_setup_median_us",
             "execution_median_us",
@@ -10102,7 +10260,7 @@ def validate_job_artifacts(
         )
         if recorded_median != median_us or recorded_mad != mad_us:
             raise CrossoverError("raw metrics differ from the passed job summary")
-        if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+        if is_production_auto_schema(manifest_schema):
             raw_metrics = required_mapping(
                 raw.get("metrics"), "production-AUTO metrics"
             )
@@ -10374,13 +10532,14 @@ def production_auto_contrast_summary(rounds, candidate_policy,
     }
 
 
-def summarize_production_auto_measurements(measurements):
+def summarize_production_auto_measurements(
+        measurements, manifest_schema=PRODUCTION_AUTO_SCHEMA):
     if not isinstance(measurements, list) or len(measurements) != 24:
         raise CrossoverError(
             "production-AUTO job requires exactly 24 measurements"
         )
     expected_round = list(invocation_order(
-        PRODUCTION_AUTO_MODE, "00000000", 1, PRODUCTION_AUTO_SCHEMA
+        PRODUCTION_AUTO_MODE, "00000000", 1, manifest_schema
     ))
     route_rounds = []
     setup_rounds = []
@@ -10469,8 +10628,10 @@ def summarize_production_auto_measurements(measurements):
 
 
 def summarize_measurements(measurements, manifest_schema=SCHEMA):
-    if manifest_schema == PRODUCTION_AUTO_SCHEMA:
-        return summarize_production_auto_measurements(measurements)
+    if is_production_auto_schema(manifest_schema):
+        return summarize_production_auto_measurements(
+            measurements, manifest_schema
+        )
     by_mode = {"direct": [], "transform": []}
     if not isinstance(measurements, list):
         raise CrossoverError("job measurements must be a JSON array")
@@ -10869,7 +11030,7 @@ def run_job(job, context):
                 "sequence_index": index,
                 "timed_mode": timed_mode,
             }
-            if context.get("manifest_schema") == PRODUCTION_AUTO_SCHEMA:
+            if is_production_auto_schema(context.get("manifest_schema")):
                 raw_metrics = raw["metrics"]
                 measurement.update({
                     "binding_setup_median_us": (
@@ -11141,19 +11302,36 @@ def analysis_decision_contract(mode):
     raise CrossoverError("analysis mode has no decision contract")
 
 
-def production_auto_qualification_threshold(settings):
+def production_auto_qualification_threshold(
+        settings, manifest_schema=PRODUCTION_AUTO_SCHEMA):
     settings = required_mapping(
         settings, "production-AUTO qualification settings"
     )
     campaign = required_mapping(
         settings.get("campaign"), "production-AUTO qualification campaign"
     )
-    gate = require_exact_keys(campaign.get("decision_gate"), {
+    gate_keys = {
         "candidate_net_lower_gain_percent",
         "candidate_route_lower_gain_percent",
         "control_material_regression_percent",
         "control_regressions_retained",
-    }, "production-AUTO qualification decision gate")
+    }
+    if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+        gate_keys.add("structural_controls_retained")
+    elif manifest_schema != PRODUCTION_AUTO_SCHEMA_V10:
+        raise CrossoverError(
+            "outer schema has no production-AUTO qualification gate"
+        )
+    gate = require_exact_keys(
+        campaign.get("decision_gate"), gate_keys,
+        "production-AUTO qualification decision gate",
+    )
+    if (gate.get("control_regressions_retained") is not True or
+            (manifest_schema == PRODUCTION_AUTO_SCHEMA and
+             gate.get("structural_controls_retained") is not True)):
+        raise CrossoverError(
+            "production-AUTO retained-control policy differs"
+        )
     route = required_finite_number(
         gate.get("candidate_route_lower_gain_percent"),
         "production-AUTO route qualification threshold",
@@ -11180,7 +11358,7 @@ def decision_threshold_summary(summary):
 
 
 def analysis_threshold_percent(analysis):
-    if analysis.get("schema") == PRODUCTION_AUTO_ANALYSIS_SCHEMA:
+    if is_production_auto_analysis_schema(analysis.get("schema")):
         key = "qualification_threshold_percent"
     elif analysis.get("schema") == ANALYSIS_SCHEMA:
         key = "decision_threshold_percent"
@@ -11197,8 +11375,10 @@ def analysis_threshold_percent(analysis):
 
 def analysis_candidate_gate_passed(analysis):
     candidate = required_mapping(analysis.get("candidate"), "analysis.candidate")
-    if analysis.get("schema") == PRODUCTION_AUTO_ANALYSIS_SCHEMA:
+    if analysis.get("schema") == PRODUCTION_AUTO_ANALYSIS_SCHEMA_V6:
         key = "all_candidates_qualified_and_controls_within_limit"
+    elif analysis.get("schema") == PRODUCTION_AUTO_ANALYSIS_SCHEMA:
+        key = "all_candidates_qualified_and_controls_valid"
     elif analysis.get("schema") == ANALYSIS_SCHEMA:
         key = "all_cells_confidently_meet_decision_threshold"
     elif analysis.get("schema") == ANALYSIS_SCHEMA_V4:
@@ -11260,8 +11440,9 @@ def production_auto_summary_inference(result, contrast, index):
     return {"gain_percent": gain, "lower": lower, "upper": upper}
 
 
-def summarize_production_auto_region(results, qualification_percent,
-                                     control_regression_percent):
+def summarize_production_auto_region(
+        results, qualification_percent, control_regression_percent,
+        gate_role=None):
     passed = [item for item in results if item.get("status") == "passed"]
     route = []
     net = []
@@ -11270,9 +11451,12 @@ def summarize_production_auto_region(results, qualification_percent,
             item, "production_route", index
         ))
         net.append(production_auto_summary_inference(item, "net", index))
-    candidate = bool(results) and all(
-        item.get("cell", {}).get("region", "").startswith("candidate")
-        for item in results
+    candidate = (
+        gate_role == "candidate" or
+        (gate_role is None and bool(results) and all(
+            item.get("cell", {}).get("region", "").startswith("candidate")
+            for item in results
+        ))
     )
     qualified = sum(
         route_value["lower"] >= qualification_percent and
@@ -11281,8 +11465,8 @@ def summarize_production_auto_region(results, qualification_percent,
     ) if candidate else 0
     material_regressions = sum(
         value["gain_percent"] < -control_regression_percent for value in net
-    ) if not candidate else 0
-    return {
+    ) if (not candidate and gate_role != "structural_control") else 0
+    result = {
         "cell_count": len(results),
         "failed_count": len(results) - len(passed),
         "material_net_regression_count": material_regressions,
@@ -11300,11 +11484,15 @@ def summarize_production_auto_region(results, qualification_percent,
             (value["lower"] for value in route), default=None
         ),
     }
+    if gate_role is not None:
+        result["gate_role"] = gate_role
+    return result
 
 
 def analyze_production_auto_results(
         ordered, qualification_percent, manifest_configuration_id,
-        run_status, source_changed_during_run, execution_input_error):
+        run_status, source_changed_during_run, execution_input_error,
+        analysis_schema):
     regions = {}
     for item in ordered:
         region = item.get("cell", {}).get("region", "unknown")
@@ -11313,33 +11501,106 @@ def analyze_production_auto_results(
         item for item in ordered
         if item.get("cell", {}).get("region", "").startswith("candidate")
     ]
-    controls = [item for item in ordered if item not in candidates]
+    structural_controls = [
+        item for item in ordered
+        if item.get("cell", {}).get("region", "").startswith(
+            "control_padded_side2_"
+        )
+    ]
+    controls = [
+        item for item in ordered
+        if item not in candidates and item not in structural_controls
+    ]
     control_limit = 2.0
-    candidate_summary = summarize_production_auto_region(
-        candidates, qualification_percent, control_limit
-    )
-    control_summary = summarize_production_auto_region(
-        controls, qualification_percent, control_limit
-    )
-    all_candidates_qualified = (
-        len(candidates) == 74 and
-        candidate_summary["failed_count"] == 0 and
-        candidate_summary["qualified_candidate_count"] == len(candidates)
-    )
-    controls_within_limit = (
-        len(controls) == 14 and control_summary["failed_count"] == 0 and
-        control_summary["material_net_regression_count"] == 0
-    )
-    candidate_summary.update({
-        "all_candidates_qualified": all_candidates_qualified,
-        "all_candidates_qualified_and_controls_within_limit": (
-            all_candidates_qualified and controls_within_limit
-        ),
-    })
-    control_summary["all_controls_retained_and_within_limit"] = (
-        controls_within_limit
-    )
-    return {
+    if analysis_schema == PRODUCTION_AUTO_ANALYSIS_SCHEMA_V6:
+        # v10 predates structural-control classification.  Preserve its
+        # exact 74-candidate/14-control analysis dialect for retained replay.
+        controls = [item for item in ordered if item not in candidates]
+        structural_controls = []
+        candidate_summary = summarize_production_auto_region(
+            candidates, qualification_percent, control_limit
+        )
+        control_summary = summarize_production_auto_region(
+            controls, qualification_percent, control_limit
+        )
+        all_candidates_qualified = (
+            len(candidates) == 74 and
+            candidate_summary["failed_count"] == 0 and
+            candidate_summary["qualified_candidate_count"] == len(candidates)
+        )
+        controls_within_limit = (
+            len(controls) == 14 and control_summary["failed_count"] == 0 and
+            control_summary["material_net_regression_count"] == 0
+        )
+        candidate_summary.update({
+            "all_candidates_qualified": all_candidates_qualified,
+            "all_candidates_qualified_and_controls_within_limit": (
+                all_candidates_qualified and controls_within_limit
+            ),
+        })
+        control_summary["all_controls_retained_and_within_limit"] = (
+            controls_within_limit
+        )
+        region_summaries = {
+            region: summarize_production_auto_region(
+                values, qualification_percent, control_limit
+            ) for region, values in sorted(regions.items())
+        }
+    elif analysis_schema == PRODUCTION_AUTO_ANALYSIS_SCHEMA:
+        candidate_summary = summarize_production_auto_region(
+            candidates, qualification_percent, control_limit, "candidate"
+        )
+        control_summary = summarize_production_auto_region(
+            controls, qualification_percent, control_limit,
+            "performance_control",
+        )
+        structural_summary = summarize_production_auto_region(
+            structural_controls, qualification_percent, control_limit,
+            "structural_control",
+        )
+        all_candidates_qualified = (
+            len(candidates) == 56 and
+            candidate_summary["failed_count"] == 0 and
+            candidate_summary["qualified_candidate_count"] == len(candidates)
+        )
+        controls_within_limit = (
+            len(controls) == 14 and control_summary["failed_count"] == 0 and
+            control_summary["material_net_regression_count"] == 0
+        )
+        structural_controls_retained = (
+            len(structural_controls) == 18 and
+            structural_summary["failed_count"] == 0
+        )
+        candidate_summary.update({
+            "all_candidates_qualified": all_candidates_qualified,
+            "all_candidates_qualified_and_controls_valid": (
+                all_candidates_qualified and controls_within_limit and
+                structural_controls_retained
+            ),
+        })
+        control_summary["all_controls_retained_and_within_limit"] = (
+            controls_within_limit
+        )
+        structural_summary["all_structural_controls_retained"] = (
+            structural_controls_retained
+        )
+
+        def region_gate_role(region):
+            if region.startswith("candidate"):
+                return "candidate"
+            if region.startswith("control_padded_side2_"):
+                return "structural_control"
+            return "performance_control"
+
+        region_summaries = {
+            region: summarize_production_auto_region(
+                values, qualification_percent, control_limit,
+                region_gate_role(region),
+            ) for region, values in sorted(regions.items())
+        }
+    else:
+        raise CrossoverError("production-AUTO analysis schema is unsupported")
+    result = {
         "candidate": candidate_summary,
         "control_material_regression_percent": control_limit,
         "controls": control_summary,
@@ -11356,15 +11617,14 @@ def analyze_production_auto_results(
         "jobs_total": len(ordered),
         "manifest_configuration_id": manifest_configuration_id,
         "qualification_threshold_percent": qualification_percent,
-        "regions": {
-            region: summarize_production_auto_region(
-                values, qualification_percent, control_limit
-            ) for region, values in sorted(regions.items())
-        },
+        "regions": region_summaries,
         "run_status": run_status,
-        "schema": PRODUCTION_AUTO_ANALYSIS_SCHEMA,
+        "schema": analysis_schema,
         "source_changed_during_run": source_changed_during_run,
     }
+    if analysis_schema == PRODUCTION_AUTO_ANALYSIS_SCHEMA:
+        result["structural_controls"] = structural_summary
+    return result
 
 
 def analyze_results(
@@ -11373,7 +11633,7 @@ def analyze_results(
         execution_input_error=None, analysis_schema=ANALYSIS_SCHEMA,
         mode="screen"):
     ordered = sorted(results, key=lambda item: item.get("job_id", ""))
-    if analysis_schema == PRODUCTION_AUTO_ANALYSIS_SCHEMA:
+    if is_production_auto_analysis_schema(analysis_schema):
         if mode != PRODUCTION_AUTO_MODE:
             raise CrossoverError(
                 "production-AUTO analysis schema has the wrong runner mode"
@@ -11390,6 +11650,7 @@ def analyze_results(
         return analyze_production_auto_results(
             ordered, qualification, manifest_configuration_id,
             run_status, source_changed_during_run, execution_input_error,
+            analysis_schema,
         )
     regions = {}
     for item in ordered:
@@ -11472,7 +11733,7 @@ def manifest_identity(manifest):
 
 
 def validate_cell_value(value, description, cell_schema=CELL_SCHEMA_V1):
-    if cell_schema == CELL_SCHEMA_V3:
+    if cell_schema in (CELL_SCHEMA_V3, CELL_SCHEMA_V4):
         expected_keys = {
             "api", "backend", "batch", "field", "k", "parity_index",
             "profile", "q", "r", "region", "requested_backend",
@@ -11501,7 +11762,7 @@ def validate_cell_value(value, description, cell_schema=CELL_SCHEMA_V1):
                 value["requested_backend"] not in ("auto", "avx2") or
                 value["threads"] not in (1, 4) or
                 (value["api"], value["batch"]) not in lanes or
-                tuple_identity not in set(qualified_sparse_high_tuples()) or
+                tuple_identity not in set(qualified_sparse_high_tuples_v1()) or
                 value["parity_index"] < 0 or
                 value["parity_index"] >= value["r"]):
             raise CrossoverError(
@@ -11516,7 +11777,14 @@ def validate_cell_value(value, description, cell_schema=CELL_SCHEMA_V1):
         if region == "candidate_qualified_tuple":
             valid_region = (
                 candidate_identity and value["api"] == "one_shot" and
-                value["batch"] == 1 and value["parity_index"] == 0
+                value["batch"] == 1 and value["parity_index"] == 0 and
+                (cell_schema == CELL_SCHEMA_V3 or value["r"] >= 4)
+            )
+        elif region == "control_padded_side2_tuple":
+            valid_region = (
+                cell_schema == CELL_SCHEMA_V4 and candidate_identity and
+                value["api"] == "one_shot" and value["batch"] == 1 and
+                value["parity_index"] == 0 and value["r"] == 2
             )
         elif region == "candidate_parity_row":
             valid_region = (
@@ -11534,8 +11802,24 @@ def validate_cell_value(value, description, cell_schema=CELL_SCHEMA_V1):
                 value["shard_bytes"] == 4096 and
                 value["parity_index"] == 0 and
                 (value["k"], value["r"]) in {
-                    (2, 16), (4, 4), (8, 8), (16, 2), (16, 16),
+                    (2, 16), (4, 4), (8, 8), (16, 16),
                 }
+            )
+            if cell_schema == CELL_SCHEMA_V3:
+                valid_region = valid_region or (
+                    candidate_identity and
+                    value["api"] in ("batch", "binding") and
+                    value["shard_bytes"] == 4096 and
+                    value["parity_index"] == 0 and
+                    (value["k"], value["r"]) == (16, 2)
+                )
+        elif region == "control_padded_side2_public_api":
+            valid_region = (
+                cell_schema == CELL_SCHEMA_V4 and candidate_identity and
+                value["api"] in ("batch", "binding") and
+                value["shard_bytes"] == 4096 and
+                value["parity_index"] == 0 and
+                (value["k"], value["r"]) == (16, 2)
             )
         elif region == "control_requested_avx2":
             valid_region = (
@@ -11678,8 +11962,8 @@ def validate_manifest_settings(settings, jobs, path, manifest_schema=SCHEMA):
                 "{} has invalid authoritative CPU-pair settings".format(path)
             )
         expected_child_environment = (
-            production_auto_child_environment_contract()
-            if manifest_schema == PRODUCTION_AUTO_SCHEMA else
+            production_auto_child_environment_contract(manifest_schema)
+            if is_production_auto_schema(manifest_schema) else
             retained_benchmark_environment
         )
         if (isolation.get("child_environment") !=
@@ -11751,10 +12035,12 @@ def validate_manifest_settings(settings, jobs, path, manifest_schema=SCHEMA):
             )
     elif mode == PRODUCTION_AUTO_MODE:
         cells = [job.get("cell") for job in jobs]
-        expected_cells = production_auto_grid()
+        expected_cells = production_auto_grid(manifest_schema)
         if (canonical_bytes(cells) != canonical_bytes(expected_cells) or
                 canonical_bytes(settings.get("campaign")) != canonical_bytes(
-                    production_auto_campaign_contract(expected_cells)
+                    production_auto_campaign_contract(
+                        expected_cells, manifest_schema
+                    )
                 ) or benchmark != {
                     "calls_per_sample": 4,
                     "iterations": 15,
@@ -11788,7 +12074,7 @@ def validate_controlled_build_held(
     if settings.get("mode") not in (
             "historical-avx2", SPARSE_HIGH_MODE, PRODUCTION_AUTO_MODE):
         return
-    production_auto = manifest_schema == PRODUCTION_AUTO_SCHEMA
+    production_auto = is_production_auto_schema(manifest_schema)
     schemas = outer_schema_contract(manifest_schema)
     unused_benchmark_environment, retained_git_environment = \
         retained_environment_contract(manifest_schema)
@@ -12002,7 +12288,7 @@ def validate_manifest(manifest, path, result_root=None):
     }
     if (not isinstance(manifest, dict) or set(manifest) != expected_keys or
             manifest.get("schema") not in (
-                SCHEMA_V7, SCHEMA_V8, SCHEMA, PRODUCTION_AUTO_SCHEMA)):
+                SCHEMA_V7, SCHEMA_V8, SCHEMA) + PRODUCTION_AUTO_SCHEMAS):
         raise CrossoverError(
             "{} has an unknown, legacy, or incomplete schema".format(path)
         )
@@ -12049,7 +12335,7 @@ def validate_manifest(manifest, path, result_root=None):
             raise CrossoverError("{} contains an invalid v6 job".format(path))
         validate_cell_value(
             job.get("cell"), "manifest job",
-            cell_schema_for_mode(settings.get("mode")),
+            cell_schema_for_mode(settings.get("mode"), manifest_schema),
         )
         identity = job_identity(
             job["cell"], job["executable"], job["executable_artifact"],
@@ -12073,7 +12359,7 @@ def validate_manifest(manifest, path, result_root=None):
         if frozen_required != (job.get("executable_artifact") is not None):
             raise CrossoverError("{} has inconsistent frozen job policy".format(path))
         if frozen_required:
-            if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+            if is_production_auto_schema(manifest_schema):
                 validate_frozen_production_bundle(
                     job["executable_artifact"], job["build_metadata"],
                     source_state, result_root,
@@ -12274,9 +12560,9 @@ def load_job_results(result_dir, manifest, result_root=None):
 def write_merged(
         result_dir, manifest, results, source_end, promotion_percent,
         execution_input_error="", result_root=None):
-    if manifest.get("schema") == PRODUCTION_AUTO_SCHEMA:
+    if is_production_auto_schema(manifest.get("schema")):
         expected_threshold = production_auto_qualification_threshold(
-            manifest.get("settings")
+            manifest.get("settings"), manifest.get("schema")
         )
         observed_threshold = required_finite_number(
             promotion_percent,
@@ -12350,6 +12636,7 @@ def invalidate_authoritative_result_dir_held(result_root, reason):
         if (not isinstance(value, dict) or
                 value.get("schema") not in (
                     JOB_SCHEMA_V7, JOB_SCHEMA_V8, JOB_SCHEMA,
+                    PRODUCTION_AUTO_JOB_SCHEMA_V10,
                     PRODUCTION_AUTO_JOB_SCHEMA)):
             continue
         if value.get("status") == "passed":
@@ -12432,7 +12719,7 @@ def invalidate_authoritative_result_dir(result_dir, reason):
 
 
 def print_analysis(analysis):
-    if analysis.get("schema") == PRODUCTION_AUTO_ANALYSIS_SCHEMA:
+    if is_production_auto_analysis_schema(analysis.get("schema")):
         candidate = required_mapping(
             analysis.get("candidate"), "analysis.candidate"
         )
@@ -12456,7 +12743,7 @@ def print_analysis(analysis):
             )
         )
         print(
-            "production-AUTO controls: {}/{} passed; material net "
+            "production-AUTO performance controls: {}/{} passed; material net "
             "regressions below -{:.1f}%: {}; gate={}".format(
                 controls["cell_count"] - controls["failed_count"],
                 controls["cell_count"],
@@ -12466,6 +12753,18 @@ def print_analysis(analysis):
                 else "not passed",
             )
         )
+        if analysis.get("schema") == PRODUCTION_AUTO_ANALYSIS_SCHEMA:
+            structural = required_mapping(
+                analysis.get("structural_controls"),
+                "analysis.structural_controls",
+            )
+            print(
+                "production-AUTO padded-side2 structural controls: "
+                "{}/{} passed; performance veto=not applicable".format(
+                    structural["cell_count"] - structural["failed_count"],
+                    structural["cell_count"],
+                )
+            )
         decision = analysis["decision_contract"]
         print(
             "decision scope: {}; metric={}; AUTO evaluated=yes; default flip "
@@ -12614,7 +12913,7 @@ def validate_production_auto_arguments(arguments):
     for index, value in enumerate(cells):
         validate_cell_value(
             value, "production-AUTO preregistered cell {}".format(index),
-            CELL_SCHEMA_V3,
+            CELL_SCHEMA_V4,
         )
     production_auto_campaign_contract(cells)
 
@@ -12793,7 +13092,7 @@ def run_matrix_body_held(arguments, isolation, result_root):
         for backend, executable in executables.items()
     }
     for backend in backends:
-        if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+        if is_production_auto_schema(manifest_schema):
             validate_production_auto_build_source_binding(
                 build_metadata[backend], source, source_state,
                 require_fresh=authoritative,
@@ -12844,8 +13143,8 @@ def run_matrix_body_held(arguments, isolation, result_root):
             "benchmark_cpu": isolation["cpu"],
             "canonical_lock": isolation["canonical_lock"],
             "child_environment": (
-                production_auto_child_environment_contract()
-                if manifest_schema == PRODUCTION_AUTO_SCHEMA else
+                production_auto_child_environment_contract(manifest_schema)
+                if is_production_auto_schema(manifest_schema) else
                 dict(BENCHMARK_ENVIRONMENT)
             ),
             "housekeeping_cpu_set": isolation["housekeeping"],
@@ -12882,7 +13181,7 @@ def run_matrix_body_held(arguments, isolation, result_root):
                     result_dir, executables[backend],
                     build_metadata[backend], source_state, result_root,
                     expected_configuration_schema, selector_overrides,
-                ) if manifest_schema == PRODUCTION_AUTO_SCHEMA else
+                ) if is_production_auto_schema(manifest_schema) else
                 freeze_executable(
                     result_dir, backend, executables[backend],
                     build_metadata[backend], source_state, result_root,
@@ -13037,9 +13336,9 @@ def analyze_command_held(arguments, result_root):
     result_dir = result_root["path"]
     manifest = load_manifest(result_dir, result_root)
     requested_threshold = arguments.promotion_percent
-    if manifest["schema"] == PRODUCTION_AUTO_SCHEMA:
+    if is_production_auto_schema(manifest["schema"]):
         expected_threshold = production_auto_qualification_threshold(
-            manifest["settings"]
+            manifest["settings"], manifest["schema"]
         )
         requested_threshold = required_finite_number(
             requested_threshold,
@@ -13126,7 +13425,7 @@ def analyze_command_held(arguments, result_root):
         raise CrossoverError("matrix status was not derived from retained evidence")
     retained_analysis = required_mapping(matrix.get("analysis"), "matrix.analysis")
     retained_promotion = analysis_threshold_percent(retained_analysis)
-    if (manifest["schema"] == PRODUCTION_AUTO_SCHEMA and
+    if (is_production_auto_schema(manifest["schema"]) and
             retained_promotion != requested_threshold):
         raise CrossoverError(
             "retained production-AUTO analysis changed its preregistered "
@@ -13275,6 +13574,36 @@ def self_test():
         "v7 outer schema retains its exact historical dialect"
     )
     check(
+        outer_schema_contract(PRODUCTION_AUTO_SCHEMA_V10) == {
+            "analysis_schema": PRODUCTION_AUTO_ANALYSIS_SCHEMA_V6,
+            "build_configuration_attestation_schema":
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14,
+            "build_configuration_file_schema":
+                BUILD_CONFIGURATION_FILE_SCHEMA_V16,
+            "controlled_build_schema":
+                PRODUCTION_AUTO_CONTROLLED_BUILD_SCHEMA,
+            "job_schema": PRODUCTION_AUTO_JOB_SCHEMA_V10,
+        } and
+        authoritative_commands_for_schema(PRODUCTION_AUTO_SCHEMA_V10) ==
+            (PRODUCTION_AUTO_MODE,) and
+        run_commands_for_schema(PRODUCTION_AUTO_SCHEMA_V10) ==
+            (PRODUCTION_AUTO_MODE,) and
+        retained_runtime_launcher_contract(PRODUCTION_AUTO_SCHEMA_V10) == (
+            RUNTIME_LAUNCHER_NAMES_V7,
+            RUNTIME_LAUNCHER_SOURCE_PATHS_V7,
+        ) and
+        retained_environment_contract(PRODUCTION_AUTO_SCHEMA_V10) == (
+            BENCHMARK_ENVIRONMENT_V7, GIT_ENVIRONMENT_V7,
+        ) and
+        production_auto_child_environment_contract(
+            PRODUCTION_AUTO_SCHEMA_V10)["fixed"] == {
+                name: value
+                for name, value in BENCHMARK_ENVIRONMENT_V7.items()
+                if name != "OMP_NUM_THREADS"
+            },
+        "v10 production schema retains its exact historical dialect",
+    )
+    check(
         outer_schema_contract(PRODUCTION_AUTO_SCHEMA) == {
             "analysis_schema": PRODUCTION_AUTO_ANALYSIS_SCHEMA,
             "build_configuration_attestation_schema":
@@ -13292,8 +13621,15 @@ def self_test():
             PRODUCTION_AUTO_SCHEMA and
         PRODUCTION_AUTO_MODE not in run_commands_for_schema(SCHEMA) and
         SPARSE_HIGH_MODE not in run_commands_for_schema(
-            PRODUCTION_AUTO_SCHEMA),
-        "v10 outer schema is isolated from v7-v9 replay",
+            PRODUCTION_AUTO_SCHEMA) and
+        retained_runtime_launcher_contract(PRODUCTION_AUTO_SCHEMA) == (
+            RUNTIME_LAUNCHER_NAMES,
+            RUNTIME_LAUNCHER_SOURCE_PATHS,
+        ) and
+        retained_environment_contract(PRODUCTION_AUTO_SCHEMA) == (
+            BENCHMARK_ENVIRONMENT, GIT_ENVIRONMENT,
+        ),
+        "v11 outer schema is isolated from v7-v10 replay",
     )
     production_evidence = evidence_contract(
         True, PRODUCTION_AUTO_SCHEMA,
@@ -13321,7 +13657,17 @@ def self_test():
             "contrasts",
             "input immutability and unrequested-output canaries",
         ],
-        "v10 evidence names ordinary production telemetry without promotion",
+        "v11 evidence names ordinary production telemetry without promotion",
+    )
+    retained_production_evidence = evidence_contract(
+        True, PRODUCTION_AUTO_SCHEMA_V10,
+        {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"},
+        PRODUCTION_AUTO_MODE,
+    )
+    check(
+        retained_production_evidence["benchmark_schema"] ==
+            PRODUCTION_AUTO_BENCHMARK_SCHEMA_V1,
+        "v10 evidence retains raw benchmark schema v1",
     )
     v7_evidence = evidence_contract(
         True, SCHEMA_V7, {}, "historical-avx2")
@@ -13773,6 +14119,9 @@ def self_test():
             )
 
     production_cells = production_auto_grid()
+    retained_production_cells = production_auto_grid(
+        PRODUCTION_AUTO_SCHEMA_V10
+    )
     production_regions = {
         region: sum(item["region"] == region for item in production_cells)
         for region in {item["region"] for item in production_cells}
@@ -13782,18 +14131,64 @@ def self_test():
         digest_value(production_cells) == PRODUCTION_AUTO_CELLS_SHA256 and
         production_regions == {
             "candidate_parity_row": 8,
+            "candidate_public_api": 24,
+            "candidate_qualified_tuple": 24,
+            "control_auto_thread4": 7,
+            "control_padded_side2_public_api": 6,
+            "control_padded_side2_tuple": 12,
+            "control_requested_avx2": 7,
+        } and
+        len(qualified_sparse_high_tuples()) == 24,
+        "v11 production-AUTO grid count, digest, tuples, and controls are exact",
+    )
+    for item in production_cells:
+        validate_cell_value(
+            item, "self-test production-AUTO cell", CELL_SCHEMA_V4
+        )
+    retained_production_regions = {
+        region: sum(
+            item["region"] == region for item in retained_production_cells
+        ) for region in {
+            item["region"] for item in retained_production_cells
+        }
+    }
+    check(
+        len(retained_production_cells) == 88 and
+        digest_value(retained_production_cells) ==
+            PRODUCTION_AUTO_CELLS_SHA256_V1 and
+        retained_production_regions == {
+            "candidate_parity_row": 8,
             "candidate_public_api": 30,
             "candidate_qualified_tuple": 36,
             "control_auto_thread4": 7,
             "control_requested_avx2": 7,
-        } and
-        len(qualified_sparse_high_tuples()) == 36,
-        "production-AUTO grid count, digest, tuples, and controls are exact",
+        } and len(qualified_sparse_high_tuples_v1()) == 36,
+        "v10 production-AUTO grid replays byte-for-byte",
     )
-    for item in production_cells:
+    for item in retained_production_cells:
         validate_cell_value(
-            item, "self-test production-AUTO cell", CELL_SCHEMA_V3
+            item, "self-test retained production-AUTO cell", CELL_SCHEMA_V3
         )
+    production_candidate_cell = next(
+        item for item in production_cells
+        if item["region"] == "candidate_qualified_tuple" and
+        (item["k"], item["r"], item["shard_bytes"]) == (2, 4, 4096)
+    )
+    production_structural_cell = next(
+        item for item in production_cells
+        if item["region"] == "control_padded_side2_tuple" and
+        (item["k"], item["r"], item["shard_bytes"]) == (2, 2, 4096)
+    )
+    production_explicit_control = next(
+        item for item in production_cells
+        if item["region"] == "control_requested_avx2" and
+        item["api"] == "one_shot"
+    )
+    production_thread_control = next(
+        item for item in production_cells
+        if item["region"] == "control_auto_thread4" and
+        item["api"] == "one_shot"
+    )
     check(
         production_auto_campaign_contract(production_cells)[
             "production_default_flip_authorized"] is False and
@@ -13801,7 +14196,12 @@ def self_test():
             "production_promotion_authorized"] is False and
         production_auto_campaign_contract(production_cells)[
             "primary_metric"] ==
-            "metrics.amortized.derived_median_us_per_api_call",
+            "metrics.amortized.derived_median_us_per_api_call" and
+        production_auto_campaign_contract(production_cells)[
+            "structural_control_cell_count"] == 18 and
+        production_auto_campaign_contract(
+            retained_production_cells, PRODUCTION_AUTO_SCHEMA_V10
+        )["cell_schema"] == CELL_SCHEMA_V3,
         "production-AUTO campaign is exact, amortized, and non-promotional",
     )
     for invalid_cells in (
@@ -13815,12 +14215,26 @@ def self_test():
             raise CrossoverError(
                 "self-test failed: production-AUTO accepted a changed grid"
             )
+    for invalid_cells in (
+            list(reversed(retained_production_cells)),
+            retained_production_cells[:-1],
+            retained_production_cells + [dict(retained_production_cells[-1])]):
+        try:
+            production_auto_campaign_contract(
+                invalid_cells, PRODUCTION_AUTO_SCHEMA_V10
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: v10 production-AUTO accepted a changed grid"
+            )
     invalid_production_cell = dict(production_cells[0])
     invalid_production_cell["threads"] = True
     try:
         validate_cell_value(
             invalid_production_cell, "self-test Boolean thread",
-            CELL_SCHEMA_V3,
+            CELL_SCHEMA_V4,
         )
     except CrossoverError:
         pass
@@ -13828,6 +14242,21 @@ def self_test():
         raise CrossoverError(
             "self-test failed: production-AUTO accepted Boolean thread"
         )
+    for value, cell_schema in (
+            (production_cells[0], CELL_SCHEMA_V3),
+            (retained_production_cells[0], CELL_SCHEMA_V4)):
+        try:
+            validate_cell_value(
+                value, "self-test cross-generation production cell",
+                cell_schema,
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: production-AUTO accepted a relabeled "
+                "cross-generation cell"
+            )
     production_order = invocation_order(
         PRODUCTION_AUTO_MODE, "00000000", 3, PRODUCTION_AUTO_SCHEMA
     )
@@ -13855,7 +14284,7 @@ def self_test():
         "pin_cpu": 3,
     }
     production_job_fixture = {
-        "cell": production_cells[0],
+        "cell": production_candidate_cell,
         "executable": "/self-test/bench_leopard2_high_sparse_auto",
         "executable_artifact": None,
         "seed": 7,
@@ -13888,7 +14317,8 @@ def self_test():
             {**production_job_fixture, "cell": production_cells[-1]},
             PRODUCTION_AUTO_SCHEMA,
         )["OMP_THREAD_LIMIT"] == "4" and
-        production_auto_child_environment_contract()["per_cell"] == {
+        production_auto_child_environment_contract(
+            PRODUCTION_AUTO_SCHEMA)["per_cell"] == {
             "LEO2_EXPECT_BACKEND": "cell.backend",
             "OMP_NUM_THREADS": "decimal(cell.threads)",
             "OMP_THREAD_LIMIT": "decimal(cell.threads)",
@@ -14103,14 +14533,32 @@ def self_test():
         "timeout_seconds_per_invocation": 120,
     })
     retained_production_settings["isolation"]["child_environment"] = (
-        production_auto_child_environment_contract()
+        production_auto_child_environment_contract(PRODUCTION_AUTO_SCHEMA)
     )
     production_manifest_jobs = [
         {"cell": item} for item in production_cells
     ]
     validate_manifest_settings(
         retained_production_settings, production_manifest_jobs,
-        Path("/self-test/v10/manifest.json"), PRODUCTION_AUTO_SCHEMA,
+        Path("/self-test/v11/manifest.json"), PRODUCTION_AUTO_SCHEMA,
+    )
+    retained_v10_production_settings = json.loads(json.dumps(
+        retained_production_settings
+    ))
+    retained_v10_production_settings["campaign"] = (
+        production_auto_campaign_contract(
+            retained_production_cells, PRODUCTION_AUTO_SCHEMA_V10
+        )
+    )
+    retained_v10_production_settings["isolation"]["child_environment"] = (
+        production_auto_child_environment_contract(PRODUCTION_AUTO_SCHEMA_V10)
+    )
+    retained_v10_production_jobs = [
+        {"cell": item} for item in retained_production_cells
+    ]
+    validate_manifest_settings(
+        retained_v10_production_settings, retained_v10_production_jobs,
+        Path("/self-test/v10/manifest.json"), PRODUCTION_AUTO_SCHEMA_V10,
     )
     for setting_name, changed_setting in (
             ("placement_policy", "edited placement"),
@@ -14122,7 +14570,7 @@ def self_test():
         try:
             validate_manifest_settings(
                 changed_settings, production_manifest_jobs,
-                Path("/self-test/v10/manifest.json"),
+                Path("/self-test/v11/manifest.json"),
                 PRODUCTION_AUTO_SCHEMA,
             )
         except CrossoverError:
@@ -14667,6 +15115,59 @@ def self_test():
                     "self-test failed: {} accepted a mutated canonical "
                     "selector".format(attestation_schema)
                 )
+        retained_current_configuration_dialect = (
+            BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+            BUILD_CONFIGURATION_FILE_SCHEMA,
+            BUILD_CONFIGURATION_VARIABLES,
+        )
+        try:
+            globals()["BUILD_CONFIGURATION_ATTESTATION_SCHEMA"] = (
+                "leopard2-build-configuration-attestation/self-test-future"
+            )
+            globals()["BUILD_CONFIGURATION_FILE_SCHEMA"] = (
+                "leopard2-effective-cmake-configuration/self-test-future"
+            )
+            globals()["BUILD_CONFIGURATION_VARIABLES"] = (
+                *BUILD_CONFIGURATION_VARIABLES_V16,
+                "LEO2_SELF_TEST_FUTURE_CONFIGURATION_VARIABLE",
+            )
+            replay_attestation = read_build_configuration_attestation(
+                configuration_path)
+            replay_sparse_attestation = {
+                **replay_attestation,
+                "entries": dict(replay_attestation["entries"]),
+            }
+            replay_sparse_attestation["entries"][
+                "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE"] = "ON"
+            replay_sparse_attestation["sha256"] = (
+                build_configuration_digest(
+                    replay_sparse_attestation["entries"],
+                    BUILD_CONFIGURATION_VARIABLES_V16,
+                )
+            )
+            check(
+                build_configuration_contract(
+                    BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14) == (
+                        BUILD_CONFIGURATION_FILE_SCHEMA_V16,
+                        BUILD_CONFIGURATION_VARIABLES_V16,
+                        BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V16,
+                    ) and
+                replay_attestation == ladder_attestation and
+                validate_build_configuration_attestation(
+                    replay_sparse_attestation, configuration_path,
+                    BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14,
+                    {
+                        "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON",
+                    },
+                ) == replay_sparse_attestation["sha256"],
+                "v14/v16 replay survives advancement of current aliases",
+            )
+        finally:
+            (globals()["BUILD_CONFIGURATION_ATTESTATION_SCHEMA"],
+             globals()["BUILD_CONFIGURATION_FILE_SCHEMA"],
+             globals()["BUILD_CONFIGURATION_VARIABLES"]) = (
+                retained_current_configuration_dialect
+            )
         compatibility_v10_entries = {
             variable: self_test_effective_entries[variable]
             for variable in BUILD_CONFIGURATION_VARIABLES_V10
@@ -15645,7 +16146,7 @@ def self_test():
                 "sha256": production_raw_digest,
             },
         },
-        "cell": production_cells[0],
+        "cell": production_candidate_cell,
         "seed": 12345,
         "source_identity": {
             "git": {
@@ -15711,7 +16212,7 @@ def self_test():
             "policy": "tables_on_auto_on",
             "api": "one_shot",
             "K": 2,
-            "R": 2,
+            "R": 4,
             "Q": 1,
             "parity_index": 0,
             "profile": "legacy_high_v1",
@@ -15732,9 +16233,9 @@ def self_test():
         "resolved": {
             "effective_backend": "avx2",
             "thread_count": 1,
-            "parent_count": 4,
-            "padded_side": 2,
-            "direct_generator_rows": 2,
+            "parent_count": 8,
+            "padded_side": 4,
+            "direct_generator_rows": 4,
             "auto_direct_selected": True,
             "selected_route": "direct",
         },
@@ -15763,7 +16264,7 @@ def self_test():
             "scratch_bytes_batch": 128,
             "logical_input_bytes_per_call": production_logical_bytes,
             "requested_output_bytes_per_call": production_output_bytes,
-            "estimated_benchmark_storage_bytes": 5 * 4096 + 128,
+            "estimated_benchmark_storage_bytes": 7 * 4096 + 128,
         },
         "metrics": {
             "codec_setup": production_metric_summary(2.0, 15),
@@ -15871,16 +16372,30 @@ def self_test():
             "with the same parity checksum"
         )
 
-    def production_route_fixture(cell_value, policy):
+    def production_route_fixture(
+            cell_value, policy, manifest_schema=PRODUCTION_AUTO_SCHEMA):
         value = json.loads(json.dumps(production_raw_fixture))
         job_value = json.loads(json.dumps(production_raw_job))
         job_value["cell"] = cell_value
+        value["schema"] = production_auto_benchmark_schema(manifest_schema)
+        table_shape = (
+            (cell_value["k"], cell_value["r"], cell_value["shard_bytes"])
+            in set(
+                qualified_sparse_high_tuples_v1()
+                if manifest_schema == PRODUCTION_AUTO_SCHEMA_V10 else
+                qualified_sparse_high_tuples()
+            )
+        )
         direct = (
             policy == "tables_on_auto_on" and
+            table_shape and
             cell_value["requested_backend"] == "auto" and
             cell_value["threads"] == 1
         )
-        rows = 0 if policy == "tables_off_auto_off" else cell_value["r"]
+        rows = (
+            cell_value["r"]
+            if policy != "tables_off_auto_off" and table_shape else 0
+        )
         value["parameters"].update({
             "requested_backend": cell_value["requested_backend"],
             "policy": policy,
@@ -15938,13 +16453,21 @@ def self_test():
         return value, job_value
 
     for label, cell_value, policy, expected_route, expected_rows in (
-            ("AUTO off", production_cells[0], "tables_on_auto_off",
-             "transform", 2),
-            ("tables off", production_cells[0], "tables_off_auto_off",
+            ("AUTO off", production_candidate_cell, "tables_on_auto_off",
+             "transform", 4),
+            ("tables off", production_candidate_cell, "tables_off_auto_off",
              "transform", 0),
-            ("explicit AVX2", production_cells[74], "tables_on_auto_on",
+            ("padded-side2", production_structural_cell,
+             "tables_on_auto_on", "transform", 0),
+            ("padded-side2 AUTO off", production_structural_cell,
+             "tables_on_auto_off", "transform", 0),
+            ("padded-side2 tables off", production_structural_cell,
+             "tables_off_auto_off", "transform", 0),
+            ("explicit AVX2", production_explicit_control,
+             "tables_on_auto_on",
              "transform", 16),
-            ("thread four", production_cells[81], "tables_on_auto_on",
+            ("thread four", production_thread_control,
+             "tables_on_auto_on",
              "transform", 16)):
         route_raw, route_job = production_route_fixture(cell_value, policy)
         validate_raw(
@@ -15958,6 +16481,22 @@ def self_test():
             route_raw["resolved"]["direct_generator_rows"] == expected_rows,
             "production-AUTO {} truth table".format(label),
         )
+
+    retained_route_raw, retained_route_job = production_route_fixture(
+        retained_production_cells[0], "tables_on_auto_on",
+        PRODUCTION_AUTO_SCHEMA_V10,
+    )
+    validate_raw(
+        retained_route_raw, retained_route_job, "tables_on_auto_on",
+        production_raw_settings, BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"},
+        PRODUCTION_AUTO_SCHEMA_V10,
+    )
+    check(
+        retained_route_raw["resolved"]["selected_route"] == "direct" and
+        retained_route_raw["resolved"]["direct_generator_rows"] == 2,
+        "v10 R2 raw telemetry retains its historical direct semantics",
+    )
 
     def reject_production_raw(name, mutator):
         changed = json.loads(json.dumps(production_raw_fixture))
@@ -16431,15 +16970,42 @@ def self_test():
         PRODUCTION_AUTO_ANALYSIS_SCHEMA, PRODUCTION_AUTO_MODE,
     )
     check(
-        production_analysis["candidate"]["qualified_candidate_count"] == 74 and
+        production_analysis["candidate"]["qualified_candidate_count"] == 56 and
         production_analysis["controls"]["cell_count"] == 14 and
+        production_analysis["structural_controls"]["cell_count"] == 18 and
+        production_analysis["structural_controls"][
+            "all_structural_controls_retained"] is True and
         production_analysis["candidate"][
-            "all_candidates_qualified_and_controls_within_limit"] is True and
+            "all_candidates_qualified_and_controls_valid"] is True and
         production_analysis["decision_contract"][
             "production_default_flip_authorized"] is False and
         production_analysis["decision_contract"][
             "production_promotion_authorized"] is False,
-        "production-AUTO analysis retains candidates, controls, and no authority",
+        "v11 production-AUTO analysis separates candidates and control roles",
+    )
+    retained_production_results = [
+        {
+            "cell": cell_value,
+            "job_id": "{:024x}".format(index),
+            "status": "passed",
+            "summary": production_summary,
+        }
+        for index, cell_value in enumerate(retained_production_cells)
+    ]
+    retained_production_analysis = analyze_results(
+        retained_production_results, 5.0, "self-test", "passed", False,
+        None, PRODUCTION_AUTO_ANALYSIS_SCHEMA_V6, PRODUCTION_AUTO_MODE,
+    )
+    check(
+        retained_production_analysis["schema"] ==
+            PRODUCTION_AUTO_ANALYSIS_SCHEMA_V6 and
+        retained_production_analysis["candidate"][
+            "qualified_candidate_count"] == 74 and
+        retained_production_analysis["controls"]["cell_count"] == 14 and
+        "structural_controls" not in retained_production_analysis and
+        retained_production_analysis["candidate"][
+            "all_candidates_qualified_and_controls_within_limit"] is True,
+        "v10 production-AUTO analysis retains its exact 74/14 dialect",
     )
     check(
         production_auto_qualification_threshold(
@@ -16449,7 +17015,7 @@ def self_test():
             [], 0.0, "self-test", "passed", False, None,
             ANALYSIS_SCHEMA, "screen",
         )["decision_threshold_percent"] == 0.0,
-        "v10 freezes qualification while legacy reanalysis stays configurable",
+        "v11 freezes qualification while legacy reanalysis stays configurable",
     )
     try:
         analyze_results(
@@ -16469,7 +17035,7 @@ def self_test():
     }
     try:
         write_merged(
-            Path("/self-test/v10"), production_threshold_manifest,
+            Path("/self-test/v11"), production_threshold_manifest,
             [], None, 0.0,
         )
     except CrossoverError as error:
@@ -16493,7 +17059,7 @@ def self_test():
         try:
             analyze_command_held(
                 argparse.Namespace(promotion_percent=0.0),
-                {"path": Path("/self-test/v10")},
+                {"path": Path("/self-test/v11")},
             )
         except CrossoverError as error:
             check(
@@ -16523,7 +17089,11 @@ def self_test():
         regression_measurements, PRODUCTION_AUTO_SCHEMA
     )
     regressed_results = json.loads(json.dumps(production_results))
-    regressed_results[74]["summary"] = regression_summary
+    performance_control_index = next(
+        index for index, item in enumerate(regressed_results)
+        if item["cell"]["region"] == "control_requested_avx2"
+    )
+    regressed_results[performance_control_index]["summary"] = regression_summary
     regressed_analysis = analyze_results(
         regressed_results, 5.0, "self-test", "passed", False, None,
         PRODUCTION_AUTO_ANALYSIS_SCHEMA, PRODUCTION_AUTO_MODE,
@@ -16532,8 +17102,41 @@ def self_test():
         regressed_analysis["controls"][
             "material_net_regression_count"] == 1 and
         regressed_analysis["candidate"][
-            "all_candidates_qualified_and_controls_within_limit"] is False,
+            "all_candidates_qualified_and_controls_valid"] is False,
         "production-AUTO retains and gates a material negative control",
+    )
+    structural_regression_results = json.loads(json.dumps(production_results))
+    structural_control_index = next(
+        index for index, item in enumerate(structural_regression_results)
+        if item["cell"]["region"] == "control_padded_side2_tuple"
+    )
+    structural_regression_results[structural_control_index]["summary"] = (
+        regression_summary
+    )
+    structural_regression_analysis = analyze_results(
+        structural_regression_results, 5.0, "self-test", "passed", False,
+        None, PRODUCTION_AUTO_ANALYSIS_SCHEMA, PRODUCTION_AUTO_MODE,
+    )
+    check(
+        structural_regression_analysis["structural_controls"][
+            "material_net_regression_count"] == 0 and
+        structural_regression_analysis["candidate"][
+            "all_candidates_qualified_and_controls_valid"] is True,
+        "padded-side2 timings are disclosed without a performance veto",
+    )
+    failed_structural_results = json.loads(json.dumps(production_results))
+    failed_structural_results[structural_control_index]["status"] = "failed"
+    failed_structural_results[structural_control_index].pop("summary")
+    failed_structural_analysis = analyze_results(
+        failed_structural_results, 5.0, "self-test", "failed", False,
+        None, PRODUCTION_AUTO_ANALYSIS_SCHEMA, PRODUCTION_AUTO_MODE,
+    )
+    check(
+        failed_structural_analysis["structural_controls"][
+            "all_structural_controls_retained"] is False and
+        failed_structural_analysis["candidate"][
+            "all_candidates_qualified_and_controls_valid"] is False,
+        "missing padded-side2 structural evidence fails the v11 gate",
     )
     with tempfile.TemporaryDirectory(
             prefix="leo2-production-bundle-self-test-") as bundle_directory:
@@ -20253,7 +20856,7 @@ def parser():
     )
     add_run_arguments(
         production_auto,
-        "results/leopard2/direct-encode-crossover/production-auto-avx2",
+        "results/leopard2/direct-encode-crossover/production-auto-r4plus-v2",
     )
     production_auto.set_defaults(
         backends="avx2", batch=1, iterations=15, warmups=4, reuse=64,
