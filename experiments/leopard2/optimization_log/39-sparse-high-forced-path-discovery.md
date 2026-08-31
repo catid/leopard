@@ -14,8 +14,9 @@ transform execution through test hooks, did not invoke production AUTO, and
 did not measure production table-preparation cost. Its intervals are per-cell
 marginal intervals at `df=2`, not a simultaneous campaign guarantee. The
 current default-off predicate also spans more K/R/byte/API cases than this
-finite grid. Production-AUTO qualification remains separately tracked in
-Bead `leopard-79h.42.9`.
+finite grid. The separate production-AUTO qualification subsequently completed
+in [report 40](40-sparse-high-production-auto-qualification.md): its evidence
+gate was not met, so production AUTO remains default-off.
 
 Leopard main has no equivalent partial-output Q=1 API, so this campaign has no
 Leopard1 ratio. It compares the two Leopard2 execution paths on identical
@@ -104,7 +105,9 @@ The 160 MiB raw bundle remains generated evidence on `ripper.lan`. The
 committed projection, including every cell and discarded isolation record, is
 `experiments/leopard2/direct_encode/results/sparse_high_avx2_checkpoint_20260831.json`.
 
-The next gate must freeze a finite production predicate, resolve whether AVX2
-means caller-requested or effective backend, add a tables-on/AUTO-off control,
-and measure actual production AUTO plus setup/amortization across one-shot,
-batch, and binding APIs. It remains default-off until that independent gate.
+The subsequent gate froze a finite production predicate, resolved requested
+versus effective AVX2 identity, added a tables-on/AUTO-off control, and measured
+actual production AUTO plus setup/amortization across one-shot, batch, and
+binding APIs. As recorded in
+[report 40](40-sparse-high-production-auto-qualification.md), that gate was not
+met and no production change was made.

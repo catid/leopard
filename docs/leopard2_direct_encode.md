@@ -436,11 +436,90 @@ taskset snapshot and held lock. Replay also keeps the Release/tests/canonical-
 Git and required object/archive/link-graph closure checks, while deliberately
 omitting only the original source-versus-executable mtime comparison. The
 authoritative reader rejects multi-config metadata before consulting that
-artifact inventory. The
-compact, committed checkpoint at
-`experiments/leopard2/direct_encode/results/checkpoint.json` preserves the
-promotion evidence needed to resume on another machine, while the much larger
-raw result trees remain generated artifacts.
+artifact inventory.
+
+Campaign-specific compact checkpoints preserve authenticated projections, but
+do not replace the retained raw trees required for full replay. The LOW AUTO
+evidence remains in
+`experiments/leopard2/direct_encode/results/checkpoint.json`, the forced sparse
+discovery is in
+`experiments/leopard2/direct_encode/results/sparse_high_avx2_checkpoint_20260831.json`,
+and the production-AUTO decision below is in
+`experiments/leopard2/direct_encode/results/production_auto_avx2_checkpoint_20260831.json`.
+
+### Production-AUTO qualification outcome
+
+The 2026-08-31 v10 campaign completed with all 88 jobs structurally valid, but
+the preregistered performance gate was not met. Only 56 of 74 candidates had
+both production-route and summed-net marginal 95-percent lower bounds at or
+above five percent. All 14 route-negative controls were retained, and one had
+a net point estimate below the minus-two-percent guard. The final strict resume
+and both deterministic replays returned exit status 2; the initial pass returned
+1 solely for 11 archived isolation rejections. This is a valid performance
+no-promotion result, not a correctness or acquisition failure: sparse-high AUTO
+remains compiled-default `OFF`, and no production route or installed API changed.
+
+The decisive cells include:
+
+| Cell | Route gain (95% interval) | Net gain (95% interval) | Decision |
+| --- | ---: | ---: | --- |
+| one-shot `K=3,R=2`, 4096 B | -27.06% (-31.88% to -21.90%) | -25.13% (-36.02% to -12.39%) | weakest candidate route lower bound; fail |
+| binding batch 1 `K=16,R=2`, 4096 B | -23.29% (-27.83% to -18.48%) | -24.54% (-37.25% to -9.25%) | weakest candidate net lower bound; fail |
+| one-shot `K=16,R=4`, 4096 B | 21.74% (14.73% to 29.19%) | 21.40% (12.34% to 31.18%) | weakest passing candidate lower bound |
+| explicit-AVX2 binding batch 16 `K=2,R=16`, 4096 B | -0.38% (-22.40% to 27.88%) | -2.19% (-24.74% to 27.10%) | control point guard triggered |
+
+The 36 one-shot tuple candidates split 24 passing and 12 failing. The 30
+batch/binding candidates split 24 passing and six failing; those six are all
+the `K=16,R=2,4096` anchor across batch and binding at batches 1, 4, and 16.
+All eight sampled parity-row candidates passed. Passing cells are not averaged
+with these failures and do not authorize a post-hoc narrower selector.
+
+The accepted source was commit
+`b455108e61017c711e238ccf159d45da50e77ca2`, tree
+`4c2caeb67fa22379f9ac9de74e7a4039207fae19`, source fingerprint
+`ca8f40ff251c035ac14b222225ac15e12828b827189b092cad77ad607b2a3d01`,
+and initialized `sse2neon` gitlink
+`cad518a93b326f0f644b7972d488d04eaa2b0475`. Timing used CPU109 on
+`foureyes.lan` with exact SMT sibling CPU45 reserved. The first full pass
+accepted 77 jobs and rejected 11 solely for sibling work; a quiet strict resume
+reran all 24 invocations for those 11 jobs, and every accepted sibling delta
+was zero. The 77 already-valid jobs were revalidated and retained byte for byte;
+only the 11 rejected job attempts were replaced, and those failed measurements
+were neither pooled nor used.
+
+Fresh exact-source GCC 13 gates passed 5/5 focused Release tests and 4/4 focused
+ASan+UBSan tests. Every campaign job passed independent-oracle parity,
+route/table witnesses, stable non-vacuous input and parity identities,
+input/output canaries, process containment, raw/log hashes, frozen-artifact
+checks, source stability, and isolation. Normal and `python -O` reanalysis both
+returned 2 and reproduced `analysis.json` byte for byte at SHA-256
+`a6da9452f530e3ac3af183a268822094c0715da84b06b19a01ad26f8eff6a853`.
+
+The accepted manifest, matrix, analysis, and controlled-build SHA-256 values
+are respectively
+`db5d472d73ea0646e782665e6960dc9c7c0c736b9987ef4280a80e3a21789d82`,
+`346326eff8f0bdc4b402bf641f0a49463cd7d998b272c004e1736317d7306433`,
+`a6da9452f530e3ac3af183a268822094c0715da84b06b19a01ad26f8eff6a853`,
+and
+`7eab103780f3dd29262f8e4d8a75d992b17a1561312c92cbb59fd5c8a7926916`.
+The 174,689,363-byte raw working tree remains on `foureyes.lan`; its canonical
+6,490-file inventory digest is
+`003cbb457cfa057957b98794ea185595d9c1d4a0fbdad7b41363a50fc024b4cd`.
+Its 4,401,675-byte accepted archive, acquisition logs, discarded-attempt
+archive, and replay records are retained in owner-only durable storage under
+`foureyes.lan:/home/catid/leopard-evidence/production-auto-b455108-20260831`;
+that 20-file payload is bound by manifest SHA-256
+`5e8adb4eba3fe99c71091af4c11afd3793c8ee001badc7450f57c902faadc2e8`.
+The compact checkpoint retains every cell and discarded-attempt record, while
+[optimization report 40](../experiments/leopard2/optimization_log/40-sparse-high-production-auto-qualification.md)
+records the full disposition.
+
+This evidence is bounded to the frozen rows, K/R/byte/API/batch crosses, reuse,
+backend, thread counts, host, and OpenMP runtime. Every omitted row or cross,
+other reuse count, backend, thread count, out-of-table neighbor, and hardware
+target remains unauthorized. The intervals are marginal Student-t intervals at
+two degrees of freedom, not a simultaneous campaign guarantee. Any redesigned
+predicate or implementation requires a fresh preregistered campaign.
 
 ## Legacy-high GF8/AVX2 full-output experiment
 
@@ -572,7 +651,8 @@ bench_leopard2_direct_encode --profile high --k 2 --r 16 --q 1 \
 
 An AUTO-path experiment must use an attested build with both controls enabled;
 parent ON/AUTO OFF is the same-layout route control. Production defaults remain
-OFF pending the separately versioned production-AUTO qualification.
+OFF because the 2026-08-31 production-AUTO qualification did not meet its
+evidence gate; see [Production-AUTO qualification outcome](#production-auto-qualification-outcome).
 
 The standalone `bench_leopard2_high_sparse_auto` target supplies the no-hook
 telemetry input for that qualification. It links the ordinary production
