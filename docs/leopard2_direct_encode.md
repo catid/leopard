@@ -341,7 +341,9 @@ are contiguous. Controlled-build schema v9 records `/usr/bin/cmake` as its
 lexical `argv[0]` so CMake can locate its installed modules, while a separate
 `/proc/self/fd` executable field proves that the immutable sealed CMake bytes
 were executed. Historical v7 replay retains its original procfd-as-`argv[0]`
-contract.
+contract. Across replayable schemas, the audited build umask produces the
+controlled executable with exact owner-only mode `0700`; the runner validates
+that mode before freezing a read-only execution copy.
 
 ```sh
 ISO_CPU=15

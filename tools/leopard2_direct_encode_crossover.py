@@ -106,6 +106,7 @@ CANONICAL_NINJA = Path("/usr/bin/ninja")
 CANONICAL_GIT = Path("/usr/bin/git")
 CONTROLLED_BUILD_SCHEMA_V7 = "leopard2-direct-controlled-build/v7"
 CONTROLLED_BUILD_SCHEMA = "leopard2-direct-controlled-build/v9"
+CONTROLLED_EXECUTABLE_MODE = 0o700
 BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2 = (
     "leopard2-benchmark-build-configuration-attestation/v2"
 )
@@ -1524,6 +1525,11 @@ def retained_environment_contract(manifest_schema):
     if manifest_schema == SCHEMA_V7:
         return BENCHMARK_ENVIRONMENT_V7, GIT_ENVIRONMENT_V7
     return BENCHMARK_ENVIRONMENT, GIT_ENVIRONMENT
+
+
+def controlled_executable_mode(manifest_schema):
+    outer_schema_contract(manifest_schema)
+    return CONTROLLED_EXECUTABLE_MODE
 
 
 def configuration_selector_overrides_for_mode(mode, manifest_schema=SCHEMA):
@@ -6475,7 +6481,8 @@ def read_owned_regular(
     """Read a bounded exact file from a held, revalidated directory."""
     if (not isinstance(name, str) or name in ("", ".", "..") or
             "/" in name or type(maximum_bytes) is not int or
-            maximum_bytes <= 0 or required_mode not in (0o600, 0o755)):
+            maximum_bytes <= 0 or
+            required_mode not in (0o600, 0o700)):
         raise CrossoverError("{} read contract is invalid".format(description))
     validate_owned_directory(directory, description + " directory")
     flags = (
@@ -7628,7 +7635,7 @@ def controlled_avx2_build(
             executable_bytes = read_result_regular(
                 result_root, executable_relative,
                 MAX_RAW_JSON_BYTES, "controlled-build executable",
-                required_mode=0o755,
+                required_mode=CONTROLLED_EXECUTABLE_MODE,
             )
             metadata = cmake_build_metadata(
                 executable, BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
@@ -7858,7 +7865,7 @@ def controlled_avx2_build(
     executable_bytes = read_result_regular(
         result_root, executable.relative_to(result_dir),
         MAX_RAW_JSON_BYTES, "controlled-build executable",
-        required_mode=0o755,
+        required_mode=CONTROLLED_EXECUTABLE_MODE,
     )
     record = {
         "backend": "avx2",
@@ -9586,7 +9593,7 @@ def validate_controlled_build_held(
         executable.relative_to(result_dir),
         MAX_RAW_JSON_BYTES,
         "controlled build executable",
-        required_mode=0o755,
+        required_mode=controlled_executable_mode(manifest_schema),
     )
     if (digest_bytes(executable_bytes) != record.get("executable_sha256") or
             not os.access(str(executable), os.X_OK)):
@@ -10782,8 +10789,10 @@ def self_test():
     validate_source_state(repository_state, "self-test repository", False)
     check(
         outer_schema_contract(SCHEMA)["controlled_build_schema"] ==
-            "leopard2-direct-controlled-build/v9",
-        "current outer schema requires lexical-argv0 controlled builds",
+            "leopard2-direct-controlled-build/v9" and
+        controlled_executable_mode(SCHEMA) == 0o700 and
+        controlled_executable_mode(SCHEMA_V7) == 0o700,
+        "current and v7 controlled-build mode contracts are exact",
     )
     check(
         outer_schema_contract(SCHEMA_V7) == {
@@ -14027,6 +14036,55 @@ def self_test():
                 ) == b"stable",
                 "retained file stable snapshot",
             )
+            controlled_mode_name = "controlled-mode-0700.bin"
+            controlled_mode_value = b"owner-only-controlled"
+            controlled_mode_fixture = write_retained_fixture(
+                controlled_mode_name, controlled_mode_value)
+            controlled_mode_fixture.chmod(CONTROLLED_EXECUTABLE_MODE)
+            for schema in (SCHEMA, SCHEMA_V7):
+                check(
+                    read_result_regular(
+                        retained_root, controlled_mode_name, 64,
+                        "self-test controlled executable mode",
+                        required_mode=controlled_executable_mode(schema),
+                    ) == controlled_mode_value,
+                    "controlled executable exact owner-only mode is accepted",
+                )
+            permissive_mode_name = "controlled-mode-0755.bin"
+            permissive_mode_fixture = write_retained_fixture(
+                permissive_mode_name, b"overly-permissive-controlled")
+            permissive_mode_fixture.chmod(0o755)
+            for schema in (SCHEMA, SCHEMA_V7):
+                try:
+                    read_result_regular(
+                        retained_root, permissive_mode_name, 64,
+                        "self-test permissive controlled executable mode",
+                        required_mode=controlled_executable_mode(schema),
+                    )
+                except CrossoverError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: permissive controlled executable "
+                        "mode was accepted"
+                    )
+            for unsupported_mode in (0o701, 0o755):
+                try:
+                    read_result_regular(
+                        retained_root, controlled_mode_name, 64,
+                        "self-test unsupported executable mode",
+                        required_mode=unsupported_mode,
+                    )
+                except CrossoverError as error:
+                    check(
+                        "read contract is invalid" in str(error),
+                        "unsupported executable mode is rejected by contract",
+                    )
+                else:
+                    raise CrossoverError(
+                        "self-test failed: unsupported executable mode was "
+                        "accepted"
+                    )
             write_retained_fixture("victim.bin", b"victim")
             (retained_path / "linked.bin").symlink_to("victim.bin")
             os.mkfifo(retained_path / "fifo.bin", 0o600)
