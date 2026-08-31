@@ -62,6 +62,7 @@ from leopard2_build_provenance import (
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V13,
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V14,
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V15,
+    BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V16,
     CANONICAL_REPLAY_RECIPE_SCHEMA,
     CORE_LIBRARY_SOURCES,
     LEGACY_REPLAY_RECIPE_SCHEMA,
@@ -132,7 +133,8 @@ RUN_CONTRACT_SCHEMA_V15 = "leopard2-all-k-gap-contract/v15"
 RUN_CONTRACT_SCHEMA_V16 = "leopard2-all-k-gap-contract/v16"
 RUN_CONTRACT_SCHEMA_V17 = "leopard2-all-k-gap-contract/v17"
 RUN_CONTRACT_SCHEMA_V18 = "leopard2-all-k-gap-contract/v18"
-RUN_CONTRACT_SCHEMA = RUN_CONTRACT_SCHEMA_V18
+RUN_CONTRACT_SCHEMA_V19 = "leopard2-all-k-gap-contract/v19"
+RUN_CONTRACT_SCHEMA = RUN_CONTRACT_SCHEMA_V19
 MANIFEST_SCHEMA_V4 = "leopard2-all-k-gap-manifest/v4"
 MANIFEST_SCHEMA_V5 = "leopard2-all-k-gap-manifest/v5"
 MANIFEST_SCHEMA_V6 = "leopard2-all-k-gap-manifest/v6"
@@ -148,7 +150,8 @@ MANIFEST_SCHEMA_V15 = "leopard2-all-k-gap-manifest/v15"
 MANIFEST_SCHEMA_V16 = "leopard2-all-k-gap-manifest/v16"
 MANIFEST_SCHEMA_V17 = "leopard2-all-k-gap-manifest/v17"
 MANIFEST_SCHEMA_V18 = "leopard2-all-k-gap-manifest/v18"
-MANIFEST_SCHEMA = MANIFEST_SCHEMA_V18
+MANIFEST_SCHEMA_V19 = "leopard2-all-k-gap-manifest/v19"
+MANIFEST_SCHEMA = MANIFEST_SCHEMA_V19
 # Acquisition deliberately asks build provenance for its moving head while
 # this outer table pins a suffixed configuration generation.  The next
 # provenance bump must therefore fail this join loudly instead of letting an
@@ -252,9 +255,16 @@ ALL_K_EVIDENCE_CONTRACTS = {
         "replay_plan": CANONICAL_REPLAY_RECIPE_SCHEMA,
         "replay_invocation": REPLAY_INVOCATION_SCHEMA,
     },
-    RUN_CONTRACT_SCHEMA: {
+    RUN_CONTRACT_SCHEMA_V18: {
         "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA,
         "configuration": BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V15,
+        "proof": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+        "replay_plan": CANONICAL_REPLAY_RECIPE_SCHEMA,
+        "replay_invocation": REPLAY_INVOCATION_SCHEMA,
+    },
+    RUN_CONTRACT_SCHEMA: {
+        "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA,
+        "configuration": BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V16,
         "proof": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
         "replay_plan": CANONICAL_REPLAY_RECIPE_SCHEMA,
         "replay_invocation": REPLAY_INVOCATION_SCHEMA,
@@ -275,6 +285,7 @@ MANIFEST_TO_CONTRACT_SCHEMA = {
     MANIFEST_SCHEMA_V15: RUN_CONTRACT_SCHEMA_V15,
     MANIFEST_SCHEMA_V16: RUN_CONTRACT_SCHEMA_V16,
     MANIFEST_SCHEMA_V17: RUN_CONTRACT_SCHEMA_V17,
+    MANIFEST_SCHEMA_V18: RUN_CONTRACT_SCHEMA_V18,
     MANIFEST_SCHEMA: RUN_CONTRACT_SCHEMA,
 }
 RUN_CONTRACT_KEYS_V7 = frozenset((
@@ -303,6 +314,7 @@ ALL_K_CHILD_ENVIRONMENTS = {
     RUN_CONTRACT_SCHEMA_V15: CHILD_ENV,
     RUN_CONTRACT_SCHEMA_V16: CHILD_ENV,
     RUN_CONTRACT_SCHEMA_V17: CHILD_ENV,
+    RUN_CONTRACT_SCHEMA_V18: CHILD_ENV,
     RUN_CONTRACT_SCHEMA: CHILD_ENV,
 }
 ALL_K_BUILD_CACHE_KEYS_V2 = frozenset((
@@ -375,7 +387,11 @@ ALL_K_BUILD_CACHE_KEYS_V12 = frozenset((
     *ALL_K_BUILD_CACHE_KEYS_V11,
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO",
 ))
-ALL_K_BUILD_CACHE_KEYS = ALL_K_BUILD_CACHE_KEYS_V12
+ALL_K_BUILD_CACHE_KEYS_V13 = frozenset((
+    *ALL_K_BUILD_CACHE_KEYS_V12,
+    "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO",
+))
+ALL_K_BUILD_CACHE_KEYS = ALL_K_BUILD_CACHE_KEYS_V13
 
 
 def require(condition: bool, message: str) -> None:
@@ -1694,6 +1710,7 @@ def validate_run_contract_evidence(
             RUN_CONTRACT_SCHEMA_V15,
             RUN_CONTRACT_SCHEMA_V16,
             RUN_CONTRACT_SCHEMA_V17,
+            RUN_CONTRACT_SCHEMA_V18,
             RUN_CONTRACT_SCHEMA)
         else RUN_CONTRACT_KEYS_V7)
     require(set(contract) == expected_contract_keys,
@@ -1707,6 +1724,7 @@ def validate_run_contract_evidence(
             RUN_CONTRACT_SCHEMA_V15,
             RUN_CONTRACT_SCHEMA_V16,
             RUN_CONTRACT_SCHEMA_V17,
+            RUN_CONTRACT_SCHEMA_V18,
             RUN_CONTRACT_SCHEMA):
         require(canonical_equal(
             contract.get("child_environment"),
@@ -1747,6 +1765,7 @@ def validate_run_contract_evidence(
         RUN_CONTRACT_SCHEMA_V15: ALL_K_BUILD_CACHE_KEYS_V10,
         RUN_CONTRACT_SCHEMA_V16: ALL_K_BUILD_CACHE_KEYS_V10,
         RUN_CONTRACT_SCHEMA_V17: ALL_K_BUILD_CACHE_KEYS_V11,
+        RUN_CONTRACT_SCHEMA_V18: ALL_K_BUILD_CACHE_KEYS_V12,
         RUN_CONTRACT_SCHEMA: ALL_K_BUILD_CACHE_KEYS,
     }[contract_schema]
     require(
@@ -1770,7 +1789,9 @@ def validate_run_contract_evidence(
         cache.get("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE") == "OFF" and
         cache.get("LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE") in {"0", "1", "2"},
         "all-K run contract selector tuple differs")
-    if contract_schema in (RUN_CONTRACT_SCHEMA_V17, RUN_CONTRACT_SCHEMA):
+    if contract_schema in (
+            RUN_CONTRACT_SCHEMA_V17, RUN_CONTRACT_SCHEMA_V18,
+            RUN_CONTRACT_SCHEMA):
         require(
             cache.get("LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE") == "OFF",
             "all-K run contract sparse-direct-encode selector tuple differs")
@@ -1779,7 +1800,7 @@ def validate_run_contract_evidence(
             "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE" not in cache,
             "historical all-K run contract contains an unversioned "
             "sparse-direct-encode selector tuple")
-    if contract_schema == RUN_CONTRACT_SCHEMA:
+    if contract_schema in (RUN_CONTRACT_SCHEMA_V18, RUN_CONTRACT_SCHEMA):
         require(
             cache.get("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO") == "ON",
             "all-K run contract direct-encode AUTO selector tuple differs")
@@ -1787,6 +1808,17 @@ def validate_run_contract_evidence(
         require(
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO" not in cache,
             "historical all-K run contract contains an unversioned "
+            "direct-encode AUTO selector tuple")
+    if contract_schema == RUN_CONTRACT_SCHEMA:
+        require(
+            cache.get("LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO") ==
+                "OFF",
+            "all-K run contract sparse direct-encode AUTO selector tuple "
+            "differs")
+    else:
+        require(
+            "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO" not in cache,
+            "historical all-K run contract contains an unversioned sparse "
             "direct-encode AUTO selector tuple")
     if contract_schema in (
             RUN_CONTRACT_SCHEMA_V8, RUN_CONTRACT_SCHEMA_V9,
@@ -1797,6 +1829,7 @@ def validate_run_contract_evidence(
             RUN_CONTRACT_SCHEMA_V15,
             RUN_CONTRACT_SCHEMA_V16,
             RUN_CONTRACT_SCHEMA_V17,
+            RUN_CONTRACT_SCHEMA_V18,
             RUN_CONTRACT_SCHEMA):
         require(
             cache.get("LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR") == "OFF" and
@@ -1810,12 +1843,14 @@ def validate_run_contract_evidence(
                     RUN_CONTRACT_SCHEMA_V13, RUN_CONTRACT_SCHEMA_V14,
                     RUN_CONTRACT_SCHEMA_V15,
                     RUN_CONTRACT_SCHEMA_V16, RUN_CONTRACT_SCHEMA_V17,
+                    RUN_CONTRACT_SCHEMA_V18,
                     RUN_CONTRACT_SCHEMA} and
               cache.get("LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED") == "ON") or
              (contract_schema not in {
                     RUN_CONTRACT_SCHEMA_V13, RUN_CONTRACT_SCHEMA_V14,
                     RUN_CONTRACT_SCHEMA_V15,
                     RUN_CONTRACT_SCHEMA_V16, RUN_CONTRACT_SCHEMA_V17,
+                    RUN_CONTRACT_SCHEMA_V18,
                     RUN_CONTRACT_SCHEMA} and
               "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED" not in cache)) and
             cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED") ==
@@ -1825,6 +1860,7 @@ def validate_run_contract_evidence(
                     RUN_CONTRACT_SCHEMA_V15,
                     RUN_CONTRACT_SCHEMA_V16,
                     RUN_CONTRACT_SCHEMA_V17,
+                    RUN_CONTRACT_SCHEMA_V18,
                     RUN_CONTRACT_SCHEMA} else
                  "OFF") and
             cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK") == "ON" and
@@ -1845,6 +1881,7 @@ def validate_run_contract_evidence(
                 RUN_CONTRACT_SCHEMA_V15,
                 RUN_CONTRACT_SCHEMA_V16,
                 RUN_CONTRACT_SCHEMA_V17,
+                RUN_CONTRACT_SCHEMA_V18,
                 RUN_CONTRACT_SCHEMA):
             require(
                 cache.get("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT") == "ON",
@@ -1862,11 +1899,13 @@ def validate_run_contract_evidence(
                 RUN_CONTRACT_SCHEMA_V15,
                 RUN_CONTRACT_SCHEMA_V16,
                 RUN_CONTRACT_SCHEMA_V17,
+                RUN_CONTRACT_SCHEMA_V18,
                 RUN_CONTRACT_SCHEMA):
             expected_regular_fallback = (
                 "ON" if contract_schema in {
                     RUN_CONTRACT_SCHEMA_V14, RUN_CONTRACT_SCHEMA_V15,
                     RUN_CONTRACT_SCHEMA_V16, RUN_CONTRACT_SCHEMA_V17,
+                    RUN_CONTRACT_SCHEMA_V18,
                     RUN_CONTRACT_SCHEMA} else "OFF")
             require(
                 cache.get("LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS") ==

@@ -53,6 +53,9 @@
 #if !defined(LEO2_EXPECT_HIGH_SPARSE_DIRECT)
 #error "production high sparse-direct expectation must be explicit"
 #endif
+#if !defined(LEO2_EXPECT_HIGH_SPARSE_DIRECT_AUTO)
+#error "production high sparse-direct AUTO expectation must be explicit"
+#endif
 #if !defined(LEO2_EXPECT_HIGH_T8_VECTOR)
 #error "production high-T8 expectation must be explicit"
 #endif
@@ -142,15 +145,20 @@
 
 namespace {
 
-const bool kExpectHighDirectRows =
-    LEO2_EXPECT_HIGH_DIRECT_PRODUCTION != 0 ||
-    LEO2_EXPECT_HIGH_SPARSE_DIRECT != 0;
-const bool kExpectSparseCellDirect =
-    LEO2_EXPECT_HIGH_DIRECT_AUTO != 0 ||
-    LEO2_EXPECT_HIGH_SPARSE_DIRECT != 0;
+const bool kExpectSparseCellDirect = false;
 
 typedef std::vector<uint8_t> Bytes;
 typedef std::vector<Bytes> Shards;
+
+bool ExpectHighDirectRows(unsigned k, unsigned r)
+{
+    const bool sparse_shape =
+        (k == 2 || k == 3 || k == 4 || k == 8 ||
+         k == 12 || k == 16) &&
+        (r == 2 || r == 4 || r == 8 || r == 16);
+    return LEO2_EXPECT_HIGH_DIRECT_PRODUCTION != 0 ||
+        (LEO2_EXPECT_HIGH_SPARSE_DIRECT != 0 && sparse_shape);
+}
 
 void Require(bool condition, const char* message)
 {
@@ -1477,7 +1485,7 @@ void ExerciseTinyFullOutputRegion(
                         expected_two_block_binding,
                     "tiny two-block T8 selector differs from expectation");
                 Require(path.direct_generator_rows ==
-                        (kExpectHighDirectRows ? r : 0),
+                        (ExpectHighDirectRows(k, r) ? r : 0),
                     "tiny production direct-row preparation differs from policy");
                 if (path.auto_direct_selected)
                     ++direct_checks;
@@ -1557,6 +1565,10 @@ int main()
             leopard2_internal::HighSparseDirectEncodeEnabled() ==
                 (LEO2_EXPECT_HIGH_SPARSE_DIRECT != 0),
             "high sparse-direct provenance marker differs from build policy");
+        Require(
+            leopard2_internal::HighSparseDirectEncodeAutoEnabled() ==
+                (LEO2_EXPECT_HIGH_SPARSE_DIRECT_AUTO != 0),
+            "high sparse-direct AUTO marker differs from build policy");
         const uint64_t t4_diagnostic_checks =
             ExerciseT4DiagnosticControl();
 
@@ -1570,7 +1582,7 @@ int main()
             codec, bytes, 1, &path),
             "production encode-path introspection rejected the campaign cell");
         Require(path.direct_generator_rows ==
-                (kExpectHighDirectRows ? r : 0),
+                (ExpectHighDirectRows(k, r) ? r : 0),
             "production direct-row preparation differs from build policy");
         Require(path.auto_direct_selected == kExpectSparseCellDirect,
             "production sparse-Q1 selection differs from build policy");

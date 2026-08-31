@@ -231,6 +231,37 @@ bool SetContextHighT4BatchBindingEnabledForDiagnostics(
     bool enabled);
 
 /*
+    Setup-only policy control for the legacy-high sparse-Q1 direct experiment.
+    Call it after context creation and before constructing a codec.  AUTO
+    selection requires prepared tables; the invalid (false, true) state is
+    rejected.  This is internal benchmark/test plumbing, not public ABI.
+*/
+bool SetContextHighSparseDirectEncodePolicyForDiagnostics(
+    leo2_context* context,
+    bool prepare_tables,
+    bool auto_select);
+
+struct HighSparseEncodeRouteWitness
+{
+    uint64_t direct_calls;
+    uint64_t transform_calls;
+};
+
+/*
+    Arm a context-local route witness for untimed sparse-high qualification
+    calls, then read and disarm it before measurement.  It records the general
+    direct-versus-transform selector used by the sparse-Q1 candidate domain;
+    specialized encode terminals outside that domain are deliberately outside
+    this diagnostic contract.  The witness is unavailable unless the
+    sparse-high experiment is compiled into the ordinary archive.
+*/
+bool ArmContextHighSparseEncodeRouteWitnessForDiagnostics(
+    leo2_context* context);
+bool ReadAndDisarmContextHighSparseEncodeRouteWitnessForDiagnostics(
+    leo2_context* context,
+    HighSparseEncodeRouteWitness* witness_out);
+
+/*
     Context-local setup-only attribution control for the pure-AVX2 dense GF8
     Walsh locator.  Call immediately after context creation and before codec
     or plan construction.  It changes neither public ABI nor wire identity.
@@ -602,6 +633,9 @@ bool HighT8RaggedBindingEnabled();
 
 /* Marker for the default-off legacy-high sparse-Q1 direct candidate. */
 bool HighSparseDirectEncodeEnabled();
+
+/* Marker for its separately controlled production AUTO selector. */
+bool HighSparseDirectEncodeAutoEnabled();
 
 /* Text-layout-neutral marker for equal-rounded GF8/AVX2 multi-loss repair. */
 bool EqualRoundedMultiLossEnabled();

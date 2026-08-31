@@ -54,9 +54,14 @@
 #error "The direct-encode test requires LEO2_ENABLE_TEST_HOOKS"
 #endif
 
-#if (defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
-     LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO) || \
-    defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+#define LEO2_TEST_HAVE_HIGH_SPARSE_Q1 1
+#else
+#define LEO2_TEST_HAVE_HIGH_SPARSE_Q1 0
+#endif
+
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE) && \
+    LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO
 #define LEO2_TEST_EXPECT_HIGH_SPARSE_Q1 1
 #else
 #define LEO2_TEST_EXPECT_HIGH_SPARSE_Q1 0
@@ -2725,13 +2730,8 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
     require_result(leo2_test_codec_encode_path(high->codec, 1024, 1, &direct),
         "AUTO high-profile path query");
-#if LEO2_TEST_EXPECT_HIGH_SPARSE_Q1
-    const bool measured_high_backend = backend == LEO2_BACKEND_AVX2;
-#else
-    const bool measured_high_backend = false;
-#endif
-    require(direct == (measured_high_backend ? 1 : 0),
-        "AUTO high-profile selection escaped its measured AVX2 region");
+    require(direct == 0,
+        "AUTO high-profile selection admitted an unlisted sparse tuple");
     ++counts->dispatch_checks;
     delete high;
 
@@ -2740,6 +2740,9 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
     require_result(leo2_test_codec_encode_path(
         historical->codec, 4096, 1, &direct),
         "historical high-profile path query");
+    const bool measured_high_backend =
+        LEO2_TEST_EXPECT_HIGH_SPARSE_Q1 &&
+        backend == LEO2_BACKEND_AVX2;
     require(direct == (measured_high_backend ? 1 : 0),
         "historical high-profile path escaped its default-off AVX2 gate");
     ++counts->dispatch_checks;
@@ -2768,10 +2771,10 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
     }
     delete historical;
 
-#if LEO2_TEST_EXPECT_HIGH_SPARSE_Q1
+#if LEO2_TEST_HAVE_HIGH_SPARSE_Q1
     leo2_context_options avx2_options = {};
     avx2_options.struct_size = sizeof(avx2_options);
-    avx2_options.backend = LEO2_BACKEND_AVX2;
+    avx2_options.backend = LEO2_BACKEND_AUTO;
     avx2_options.thread_count = 1;
     leo2_context* avx2_context = NULL;
     const leo2_result avx2_created =
@@ -2779,7 +2782,11 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
     if (avx2_created != LEO2_UNSUPPORTED)
     {
         require_result(avx2_created,
-            "high-selector bounded AVX2 context create");
+            "high-selector bounded AUTO context create");
+        require(leopard2_internal::
+                SetContextHighSparseDirectEncodePolicyForDiagnostics(
+                    avx2_context, true, true),
+            "high-selector bounded AUTO policy enable");
         for (unsigned k = 2; k <= 16; ++k)
             for (unsigned r = 2; r <= 16; ++r)
             {
@@ -2788,8 +2795,14 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
                 require_result(leo2_test_codec_encode_path(
                     bounded->codec, 4096, 1, &direct),
                     "high-selector bounded path query");
-                require(direct == 1,
-                    "high-selector rejected a bounded diagnostic AVX2 shape");
+                const bool measured_shape =
+                    leo2_context_backend(avx2_context) ==
+                        LEO2_BACKEND_AVX2 &&
+                    (k == 2 || k == 3 || k == 4 || k == 8 ||
+                     k == 12 || k == 16) &&
+                    (r == 2 || r == 4 || r == 8 || r == 16);
+                require(direct == (measured_shape ? 1 : 0),
+                    "high-selector differed from its measured shape grid");
                 ++counts->dispatch_checks;
                 require_result(leo2_test_codec_encode_path(
                     bounded->codec, 4095, 1, &direct),
@@ -2894,14 +2907,9 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
         require_result(leo2_test_codec_encode_path(
             control->codec, 1024, 1, &direct),
             "high-selector backend control path query");
-#if LEO2_TEST_EXPECT_HIGH_SPARSE_Q1
-        const bool expected_high =
-            high_control_backends[i] == LEO2_BACKEND_AVX2;
-#else
         const bool expected_high = false;
-#endif
         require(direct == (expected_high ? 1 : 0),
-            "experimental high selector admitted an unmeasured backend");
+            "experimental high selector admitted an explicit backend");
         ++counts->dispatch_checks;
         delete control;
         leo2_context_destroy(fixed_context);

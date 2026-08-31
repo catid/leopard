@@ -356,9 +356,10 @@ python3 tools/leopard2_direct_encode_crossover.py analyze \
 
 The separate sparse-high discovery campaign is intentionally frozen: its 91
 cells include exact K/R/byte/mask boundaries and batches 1, 4, and 16. The
-runner enables only `LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=ON`; changing its
-backend, grid, batch, iterations, warmups, reuse, threshold, or worker count is
-rejected before topology or artifact handling.
+runner enables only `LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=ON` and leaves
+`LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO=OFF`; changing its backend,
+grid, batch, iterations, warmups, reuse, threshold, or worker count is rejected
+before topology or artifact handling.
 
 ```sh
 python3 tools/leopard2_direct_encode_crossover.py sparse-high-avx2 \
@@ -481,22 +482,34 @@ tail, forced source-loop unrolling, and a generated coefficient-major
 `K=5,R=5` circuit. Each either failed the five-percent whole-call gate or
 regressed through extra source loads, register pressure, or code size.
 
-## Legacy-high GF8/AVX2 sparse-Q1 measurement candidate
+## Legacy-high GF8/AVX2 sparse-Q1 AUTO experiment
 
-Sparse legacy-high direct encoding has an independent, default-off selector:
+Sparse legacy-high direct encoding has two independent, default-off controls:
 
 ```sh
 -DLEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=ON
+-DLEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO=ON
 ```
 
-The candidate requires GF8, an explicit AVX2 context, `2 <= K <= 16`,
-`2 <= R <= 16`, exactly one non-null requested recovery output, at least 1,024
-bytes, and a byte count divisible by 64. It prepares the existing bounded
-generator table at codec creation and executes the existing allocation-free
-row-major direct encoder. It adds no arithmetic kernel and does not enter the
-full-output source-major experiment. Every other profile, backend, requested
-output count, ragged byte count, and the legacy-high `R=1` control remains on
-its prior path.
+The first control prepares the existing bounded generator table at codec
+creation; by itself it leaves production AUTO routing unchanged and supports
+forced-path measurement. The second control authorizes the experimental AUTO
+dispatcher, and is rejected unless table preparation is also enabled.
+
+AUTO dispatch is deliberately narrower than table preparation. It requires a
+caller-requested AUTO context that resolves to AVX2, one context thread, GF8
+legacy-high native layout, flags zero, and exactly one non-null parity output.
+The attested tuple set is exactly:
+
+- 4,096-byte shards, `K` in `{2,3,4,8,12,16}`, and `R` in `{2,4,8,16}`;
+- `(K,R)` equal to `(2,16)` or `(16,2)`, with shard bytes in
+  `{1024,1088,2048,4032,4160,65536}`.
+
+Explicit backend requests, pooled contexts, extra parity outputs, flags,
+ragged sizes, and every unlisted K/R/byte tuple retain the transform path. The
+candidate executes the existing allocation-free row-major direct encoder; it
+adds no arithmetic kernel and does not enter the full-output source-major
+experiment.
 
 This option extracts sparse behavior that the older full-output option had
 admitted incidentally through the generic Q=1 selector. It is measurement
@@ -511,11 +524,9 @@ bench_leopard2_direct_encode --profile high --k 2 --r 16 --q 1 \
     --bytes 4096 --force-transform
 ```
 
-An AUTO-path experiment must use an attested build with the option enabled;
-the default-OFF build is its selector control. Any production promotion still
-requires a separately preregistered bounded crossover with a credible gain of
-at least five percent and no unexplained neighboring regression above two
-percent.
+An AUTO-path experiment must use an attested build with both controls enabled;
+parent ON/AUTO OFF is the same-layout route control. Production defaults remain
+OFF pending the separately versioned production-AUTO qualification.
 
 ## Promoted GF8/AVX2 T=4 batch-table amortization
 

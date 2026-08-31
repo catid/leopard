@@ -67,6 +67,9 @@ option(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
 option(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE
     "Enable the default-off candidate legacy-high GF8/AVX2 sparse Q=1 direct encoder"
     OFF)
+option(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO
+    "Allow the legacy-high sparse Q=1 direct-encode experiment to change AUTO dispatch"
+    OFF)
 option(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR
     "Disable the promoted AVX2 T=8 encoder for same-source diagnostics"
     OFF)
@@ -367,7 +370,8 @@ if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
 endif()
 if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
     target_compile_definitions(leopard PRIVATE
-        LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1)
+        LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1
+        LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO}>)
 endif()
 target_compile_definitions(leopard PRIVATE
     LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
@@ -1161,7 +1165,8 @@ if(LEO2_BUILD_TESTS)
     endif()
     if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
         target_compile_definitions(leopard_test_hooks PRIVATE
-            LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1)
+            LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1
+            LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO}>)
     endif()
     target_compile_definitions(leopard_test_hooks PRIVATE
         LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
@@ -1809,6 +1814,16 @@ if(LEO2_BUILD_TESTS)
                 leopard2_high_direct_production_test PRIVATE
                 LEO2_EXPECT_HIGH_SPARSE_DIRECT=0)
         endif()
+        if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE AND
+           LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO)
+            target_compile_definitions(
+                leopard2_high_direct_production_test PRIVATE
+                LEO2_EXPECT_HIGH_SPARSE_DIRECT_AUTO=1)
+        else()
+            target_compile_definitions(
+                leopard2_high_direct_production_test PRIVATE
+                LEO2_EXPECT_HIGH_SPARSE_DIRECT_AUTO=0)
+        endif()
         if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
             target_compile_definitions(
                 leopard2_high_direct_production_test PRIVATE
@@ -1845,6 +1860,37 @@ if(LEO2_BUILD_TESTS)
         add_test(NAME leopard2_high_direct_production
             COMMAND leopard2_high_direct_production_test)
         set_tests_properties(leopard2_high_direct_production PROPERTIES
+            ENVIRONMENT
+                "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
+        # Focused no-hook coverage for the sparse-high production policy.  One
+        # ordinary archive exercises tables-off/AUTO-off, tables-on/AUTO-off,
+        # and tables-on/AUTO-on through context-local setup controls.
+        add_executable(leopard2_high_sparse_auto_production_test
+            tests/leopard2/direct_oracle.cpp
+            tests/leopard2/test_high_sparse_auto_production.cpp)
+        target_include_directories(
+            leopard2_high_sparse_auto_production_test PRIVATE tests/leopard2)
+        target_compile_definitions(
+            leopard2_high_sparse_auto_production_test PRIVATE
+            LEO2_EXPECT_HIGH_DIRECT_PRODUCTION=$<BOOL:${LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE}>
+            LEO2_EXPECT_HIGH_SPARSE_DIRECT=$<BOOL:${LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE}>)
+        if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE AND
+           LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO)
+            target_compile_definitions(
+                leopard2_high_sparse_auto_production_test PRIVATE
+                LEO2_EXPECT_HIGH_SPARSE_DIRECT_AUTO=1)
+        else()
+            target_compile_definitions(
+                leopard2_high_sparse_auto_production_test PRIVATE
+                LEO2_EXPECT_HIGH_SPARSE_DIRECT_AUTO=0)
+        endif()
+        target_link_libraries(
+            leopard2_high_sparse_auto_production_test leopard)
+        add_test(NAME leopard2_high_sparse_auto_production
+            COMMAND leopard2_high_sparse_auto_production_test)
+        set_tests_properties(
+            leopard2_high_sparse_auto_production PROPERTIES
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
@@ -2283,7 +2329,8 @@ if(LEO2_BUILD_TESTS)
         endif()
         if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
             target_compile_definitions(bench_leopard2_direct_encode PRIVATE
-                LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1)
+                LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1
+                LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO}>)
         endif()
         target_link_libraries(bench_leopard2_direct_encode leopard_test_hooks)
         leopard2_enable_benchmark_source_attestation(
@@ -2519,7 +2566,8 @@ if(LEO2_BUILD_TESTS)
     endif()
     if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
         target_compile_definitions(leopard2_direct_encode_test PRIVATE
-            LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1)
+            LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE=1
+            LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO}>)
     endif()
     if(LEO2_BACKEND_VARIANT STREQUAL "auto" AND
        LEO2_HAVE_AVX512_BACKEND)

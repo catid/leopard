@@ -65,9 +65,11 @@ from pathlib import Path
 
 
 SCHEMA_V7 = "leopard2-direct-encode-crossover/v7"
-SCHEMA = "leopard2-direct-encode-crossover/v8"
+SCHEMA_V8 = "leopard2-direct-encode-crossover/v8"
+SCHEMA = "leopard2-direct-encode-crossover/v9"
 JOB_SCHEMA_V7 = "leopard2-direct-encode-crossover-job/v7"
-JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v8"
+JOB_SCHEMA_V8 = "leopard2-direct-encode-crossover-job/v8"
+JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v9"
 ANALYSIS_SCHEMA_V4 = "leopard2-direct-encode-crossover-analysis/v4"
 ANALYSIS_SCHEMA = "leopard2-direct-encode-crossover-analysis/v5"
 CELL_SCHEMA_V1 = "leopard2-direct-encode-crossover-cell/v1"
@@ -143,8 +145,11 @@ BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V12 = (
 BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13 = (
     "leopard2-benchmark-build-configuration-attestation/v13"
 )
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14 = (
+    "leopard2-benchmark-build-configuration-attestation/v14"
+)
 BUILD_CONFIGURATION_ATTESTATION_SCHEMA = \
-    BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13
+    BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14
 BUILD_CONFIGURATION_FILE_SCHEMA_V2 = (
     "leopard2-benchmark-build-configuration/v2"
 )
@@ -181,7 +186,10 @@ BUILD_CONFIGURATION_FILE_SCHEMA_V14 = (
 BUILD_CONFIGURATION_FILE_SCHEMA_V15 = (
     "leopard2-benchmark-build-configuration/v15"
 )
-BUILD_CONFIGURATION_FILE_SCHEMA = BUILD_CONFIGURATION_FILE_SCHEMA_V15
+BUILD_CONFIGURATION_FILE_SCHEMA_V16 = (
+    "leopard2-benchmark-build-configuration/v16"
+)
+BUILD_CONFIGURATION_FILE_SCHEMA = BUILD_CONFIGURATION_FILE_SCHEMA_V16
 BUILD_CONFIGURATION_RELATIVE_PATH = (
     "generated/leopard2-benchmark-attestation/"
     "leopard2_benchmark_build_configuration.txt"
@@ -258,7 +266,12 @@ BUILD_CONFIGURATION_VARIABLES_V15 = (
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO",
     *BUILD_CONFIGURATION_VARIABLES_V14[23:],
 )
-BUILD_CONFIGURATION_VARIABLES = BUILD_CONFIGURATION_VARIABLES_V15
+BUILD_CONFIGURATION_VARIABLES_V16 = (
+    *BUILD_CONFIGURATION_VARIABLES_V15[:25],
+    "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO",
+    *BUILD_CONFIGURATION_VARIABLES_V15[25:],
+)
+BUILD_CONFIGURATION_VARIABLES = BUILD_CONFIGURATION_VARIABLES_V16
 BUILD_CONFIGURATION_EXPERIMENT_SELECTORS = (
     *BUILD_CONFIGURATION_VARIABLES[16:],
 )
@@ -282,6 +295,8 @@ BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V14 = \
     tuple(BUILD_CONFIGURATION_VARIABLES_V14[16:])
 BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V15 = \
     tuple(BUILD_CONFIGURATION_VARIABLES_V15[16:])
+BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V16 = \
+    tuple(BUILD_CONFIGURATION_VARIABLES_V16[16:])
 BUILD_CONFIGURATION_CANONICAL_SELECTORS_V2 = {
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
@@ -338,8 +353,12 @@ BUILD_CONFIGURATION_CANONICAL_SELECTORS_V15 = {
     **BUILD_CONFIGURATION_CANONICAL_SELECTORS_V14,
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO": "ON",
 }
+BUILD_CONFIGURATION_CANONICAL_SELECTORS_V16 = {
+    **BUILD_CONFIGURATION_CANONICAL_SELECTORS_V15,
+    "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO": "OFF",
+}
 BUILD_CONFIGURATION_CANONICAL_SELECTORS = \
-    BUILD_CONFIGURATION_CANONICAL_SELECTORS_V15
+    BUILD_CONFIGURATION_CANONICAL_SELECTORS_V16
 CMAKE_CACHE_ENTRY_TYPES = frozenset((
     "BOOL", "FILEPATH", "INTERNAL", "PATH", "STATIC", "STRING",
     "UNINITIALIZED",
@@ -355,6 +374,8 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO":
+        frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": frozenset(("BOOL",)),
@@ -1247,7 +1268,7 @@ def retained_runtime_launcher_contract(manifest_schema):
             RUNTIME_LAUNCHER_NAMES_V7,
             RUNTIME_LAUNCHER_SOURCE_PATHS_V7,
         )
-    if manifest_schema == SCHEMA:
+    if manifest_schema in (SCHEMA_V8, SCHEMA):
         return RUNTIME_LAUNCHER_NAMES, RUNTIME_LAUNCHER_SOURCE_PATHS
     raise CrossoverError("retained launcher schema is unsupported")
 
@@ -1497,6 +1518,16 @@ def outer_schema_contract(manifest_schema):
             "controlled_build_schema": CONTROLLED_BUILD_SCHEMA,
             "job_schema": JOB_SCHEMA,
         }
+    if manifest_schema == SCHEMA_V8:
+        return {
+            "analysis_schema": ANALYSIS_SCHEMA,
+            "build_configuration_attestation_schema":
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13,
+            "build_configuration_file_schema":
+                BUILD_CONFIGURATION_FILE_SCHEMA_V15,
+            "controlled_build_schema": CONTROLLED_BUILD_SCHEMA,
+            "job_schema": JOB_SCHEMA_V8,
+        }
     if manifest_schema == SCHEMA_V7:
         return {
             "analysis_schema": ANALYSIS_SCHEMA_V4,
@@ -1511,13 +1542,13 @@ def outer_schema_contract(manifest_schema):
 
 def authoritative_commands_for_schema(manifest_schema):
     outer_schema_contract(manifest_schema)
-    return (AUTHORITATIVE_COMMANDS if manifest_schema == SCHEMA
-            else AUTHORITATIVE_COMMANDS_V7)
+    return (AUTHORITATIVE_COMMANDS_V7 if manifest_schema == SCHEMA_V7
+            else AUTHORITATIVE_COMMANDS)
 
 
 def run_commands_for_schema(manifest_schema):
     outer_schema_contract(manifest_schema)
-    return RUN_COMMANDS if manifest_schema == SCHEMA else RUN_COMMANDS_V7
+    return RUN_COMMANDS_V7 if manifest_schema == SCHEMA_V7 else RUN_COMMANDS
 
 
 def retained_environment_contract(manifest_schema):
@@ -1535,7 +1566,7 @@ def controlled_executable_mode(manifest_schema):
 def configuration_selector_overrides_for_mode(mode, manifest_schema=SCHEMA):
     if mode not in run_commands_for_schema(manifest_schema):
         raise CrossoverError("runner mode has no build-selector contract")
-    if manifest_schema == SCHEMA and mode == SPARSE_HIGH_MODE:
+    if manifest_schema in (SCHEMA_V8, SCHEMA) and mode == SPARSE_HIGH_MODE:
         return {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"}
     return {}
 
@@ -1570,7 +1601,7 @@ def evidence_contract(
             "unrequested_outputs_untouched",
         ],
     }
-    if manifest_schema == SCHEMA:
+    if manifest_schema in (SCHEMA_V8, SCHEMA):
         if mode not in RUN_COMMANDS:
             raise CrossoverError("current evidence runner mode is invalid")
         if (not isinstance(selector_overrides, dict) or
@@ -3495,6 +3526,12 @@ def build_configuration_contract(attestation_schema):
         return (
             BUILD_CONFIGURATION_FILE_SCHEMA,
             BUILD_CONFIGURATION_VARIABLES,
+            BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V16,
+        )
+    if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13:
+        return (
+            BUILD_CONFIGURATION_FILE_SCHEMA_V15,
+            BUILD_CONFIGURATION_VARIABLES_V15,
             BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V15,
         )
     if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V12:
@@ -3584,6 +3621,7 @@ def build_configuration_digest(
         )
     if tuple(variables) not in (
             BUILD_CONFIGURATION_VARIABLES,
+            BUILD_CONFIGURATION_VARIABLES_V15,
             BUILD_CONFIGURATION_VARIABLES_V14,
             BUILD_CONFIGURATION_VARIABLES_V13,
             BUILD_CONFIGURATION_VARIABLES_V12,
@@ -3617,6 +3655,7 @@ def build_configuration_digest(
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO",
             "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
+            "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO",
             "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
             "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
@@ -3668,6 +3707,9 @@ def read_build_configuration_attestation(path):
     if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA:
         attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA
         variables = BUILD_CONFIGURATION_VARIABLES
+    elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V15:
+        attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13
+        variables = BUILD_CONFIGURATION_VARIABLES_V15
     elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V14:
         attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V12
         variables = BUILD_CONFIGURATION_VARIABLES_V14
@@ -3775,6 +3817,9 @@ def validate_build_configuration_attestation(
                 BUILD_CONFIGURATION_ATTESTATION_SCHEMA):
             canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS
         elif (value.get("schema") ==
+              BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13):
+            canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V15
+        elif (value.get("schema") ==
               BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V12):
             canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V14
         elif (value.get("schema") ==
@@ -3810,8 +3855,9 @@ def validate_build_configuration_attestation(
         if (not isinstance(selector_overrides, dict) or
                 any(not isinstance(name, str) or not isinstance(expected, str)
                     for name, expected in selector_overrides.items()) or
-                (selector_overrides and value.get("schema") !=
-                 BUILD_CONFIGURATION_ATTESTATION_SCHEMA) or
+                (selector_overrides and value.get("schema") not in {
+                    BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13,
+                    BUILD_CONFIGURATION_ATTESTATION_SCHEMA}) or
                 not set(selector_overrides).issubset({
                     "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
                 }) or
@@ -9748,7 +9794,7 @@ def validate_manifest(manifest, path, result_root=None):
         "machine", "schema", "settings", "source_fingerprint",
     }
     if (not isinstance(manifest, dict) or set(manifest) != expected_keys or
-            manifest.get("schema") not in (SCHEMA_V7, SCHEMA)):
+            manifest.get("schema") not in (SCHEMA_V7, SCHEMA_V8, SCHEMA)):
         raise CrossoverError(
             "{} has an unknown, legacy, or incomplete schema".format(path)
         )
@@ -10064,7 +10110,8 @@ def invalidate_authoritative_result_dir_held(result_root, reason):
             str(path),
         )
         if (not isinstance(value, dict) or
-                value.get("schema") not in (JOB_SCHEMA_V7, JOB_SCHEMA)):
+                value.get("schema") not in (
+                    JOB_SCHEMA_V7, JOB_SCHEMA_V8, JOB_SCHEMA)):
             continue
         if value.get("status") == "passed":
             value.pop("parity_identity", None)
@@ -10791,8 +10838,38 @@ def self_test():
         outer_schema_contract(SCHEMA)["controlled_build_schema"] ==
             "leopard2-direct-controlled-build/v9" and
         controlled_executable_mode(SCHEMA) == 0o700 and
+        controlled_executable_mode(SCHEMA_V8) == 0o700 and
         controlled_executable_mode(SCHEMA_V7) == 0o700,
-        "current and v7 controlled-build mode contracts are exact",
+        "current, v8, and v7 controlled-build mode contracts are exact",
+    )
+    check(
+        outer_schema_contract(SCHEMA) == {
+            "analysis_schema": ANALYSIS_SCHEMA,
+            "build_configuration_attestation_schema":
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14,
+            "build_configuration_file_schema":
+                BUILD_CONFIGURATION_FILE_SCHEMA_V16,
+            "controlled_build_schema": CONTROLLED_BUILD_SCHEMA,
+            "job_schema": JOB_SCHEMA,
+        } and
+        authoritative_commands_for_schema(SCHEMA) == AUTHORITATIVE_COMMANDS and
+        run_commands_for_schema(SCHEMA) == RUN_COMMANDS,
+        "current v9 outer schema binds its exact configuration dialect"
+    )
+    check(
+        outer_schema_contract(SCHEMA_V8) == {
+            "analysis_schema": ANALYSIS_SCHEMA,
+            "build_configuration_attestation_schema":
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13,
+            "build_configuration_file_schema":
+                BUILD_CONFIGURATION_FILE_SCHEMA_V15,
+            "controlled_build_schema": CONTROLLED_BUILD_SCHEMA,
+            "job_schema": JOB_SCHEMA_V8,
+        } and
+        authoritative_commands_for_schema(SCHEMA_V8) ==
+            AUTHORITATIVE_COMMANDS and
+        run_commands_for_schema(SCHEMA_V8) == RUN_COMMANDS,
+        "v8 outer schema retains its exact historical dialect"
     )
     check(
         outer_schema_contract(SCHEMA_V7) == {
@@ -11067,11 +11144,14 @@ def self_test():
         [argument for argument in sparse_configure
          if argument != sparse_selector_argument] == mode_zero_configure and
         not any("HIGH_DIRECT_ENCODE_AUTO=" in argument
+                for argument in sparse_configure) and
+        not any("HIGH_SPARSE_DIRECT_ENCODE_AUTO=" in argument
                 for argument in sparse_configure),
         "sparse controlled configure adds exactly the default-off selector"
     )
     for invalid_overrides in (
             {"LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO": "OFF"},
+            {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO": "OFF"},
             {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "OFF"},
             {
                 "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON",
@@ -11514,6 +11594,21 @@ def self_test():
             "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"},
         "sparse-high mode owns exactly one build selector override"
     )
+    check(
+        configuration_selector_overrides_for_mode(
+            SPARSE_HIGH_MODE, SCHEMA_V8) == sparse_overrides,
+        "v8 sparse-high mode retains its one-selector override"
+    )
+    v8_sparse_evidence = evidence_contract(
+        True, SCHEMA_V8, sparse_overrides, SPARSE_HIGH_MODE)
+    check(
+        v8_sparse_evidence[
+            "build_configuration_attestation_schema"] ==
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13 and
+        v8_sparse_evidence["build_configuration_file_schema"] ==
+            BUILD_CONFIGURATION_FILE_SCHEMA_V15,
+        "v8 sparse-high evidence retains its v13/v15 configuration pair"
+    )
     sparse_evidence = evidence_contract(
         True, SCHEMA, sparse_overrides, SPARSE_HIGH_MODE)
     sparse_decision = analysis_decision_contract(SPARSE_HIGH_MODE)
@@ -11654,6 +11749,30 @@ def self_test():
             ) == sparse_attestation["sha256"],
             "sparse attestation requires the exact mode-owned override"
         )
+        historical_sparse_entries = {
+            variable: self_test_effective_entries[variable]
+            for variable in BUILD_CONFIGURATION_VARIABLES_V15
+        }
+        historical_sparse_entries.update(
+            BUILD_CONFIGURATION_CANONICAL_SELECTORS_V15)
+        historical_sparse_entries[
+            "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE"] = "ON"
+        historical_sparse_attestation = {
+            "entries": historical_sparse_entries,
+            "path": configuration_attestation["path"],
+            "schema": BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13,
+            "sha256": build_configuration_digest(
+                historical_sparse_entries,
+                BUILD_CONFIGURATION_VARIABLES_V15),
+        }
+        check(
+            validate_build_configuration_attestation(
+                historical_sparse_attestation, configuration_path,
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13,
+                {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"},
+            ) == historical_sparse_attestation["sha256"],
+            "v13/v15 sparse attestation preserves the checkpoint override"
+        )
         for label, attestation, overrides in (
                 ("sparse ON without override", sparse_attestation, None),
                 (
@@ -11668,6 +11787,14 @@ def self_test():
                 (
                     "unowned AUTO override", configuration_attestation,
                     {"LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO": "OFF"},
+                ),
+                (
+                    "unowned sparse AUTO override",
+                    configuration_attestation,
+                    {
+                        "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO":
+                            "OFF"
+                    },
                 )):
             try:
                 validate_build_configuration_attestation(
@@ -11752,6 +11879,12 @@ def self_test():
                 BUILD_CONFIGURATION_FILE_SCHEMA_V15,
                 BUILD_CONFIGURATION_VARIABLES_V15,
                 BUILD_CONFIGURATION_CANONICAL_SELECTORS_V15,
+            ),
+            (
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14,
+                BUILD_CONFIGURATION_FILE_SCHEMA_V16,
+                BUILD_CONFIGURATION_VARIABLES_V16,
+                BUILD_CONFIGURATION_CANONICAL_SELECTORS_V16,
             ),
         )
         for (
@@ -12118,6 +12251,7 @@ def self_test():
                 "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
                 "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO",
                 "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
+                "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO",
                 "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
                 "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
             reject_configuration_file(
@@ -12208,6 +12342,9 @@ def self_test():
                 )
         for selector in (
                 "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+                "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO",
+                "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
+                "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO",
                 "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
                 "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
             for invalid_value in (
@@ -14041,7 +14178,7 @@ def self_test():
             controlled_mode_fixture = write_retained_fixture(
                 controlled_mode_name, controlled_mode_value)
             controlled_mode_fixture.chmod(CONTROLLED_EXECUTABLE_MODE)
-            for schema in (SCHEMA, SCHEMA_V7):
+            for schema in (SCHEMA, SCHEMA_V8, SCHEMA_V7):
                 check(
                     read_result_regular(
                         retained_root, controlled_mode_name, 64,
@@ -14054,7 +14191,7 @@ def self_test():
             permissive_mode_fixture = write_retained_fixture(
                 permissive_mode_name, b"overly-permissive-controlled")
             permissive_mode_fixture.chmod(0o755)
-            for schema in (SCHEMA, SCHEMA_V7):
+            for schema in (SCHEMA, SCHEMA_V8, SCHEMA_V7):
                 try:
                     read_result_regular(
                         retained_root, permissive_mode_name, 64,

@@ -132,12 +132,14 @@ executable to the exact clean source commit/tree.  Timed calls then use the
 distinct schema-v3 decode-path report, so summaries record the implementation
 actually selected instead of inferring a potentially stale route from K/R.
 
-The current all-K run-contract and manifest generation is v18. It requires the
+The current all-K run-contract and manifest generation is v19. It requires the
 production-default exact T32/B256 terminal and T16/Q2 fused selectors to be
 `ON`, the legacy-high sparse direct encoder to be `OFF`, and legacy-high direct
-AUTO routing to be `ON`. Historical v16 remains pinned to benchmark
-configuration v13, while v17 binds configuration v14 and the default-off sparse
-selector; relabeling any body as another generation is rejected.
+AUTO routing to be `ON`; sparse direct AUTO remains `OFF`. Historical v18 stays
+pinned to benchmark configuration v15 and has no sparse-AUTO field. Historical
+v16 remains pinned to configuration v13, while v17 binds configuration v14 and
+the default-off sparse selector; relabeling any body as another generation is
+rejected.
 The 2,522-cell matrix uses 4 KiB and 64 KiB shards, so the exact 256-byte
 T32 terminal and at-most-64-byte T16/Q2 kernel cannot affect a timed cell, but
 their values still belong to the authenticated production selector identity.

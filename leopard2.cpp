@@ -143,6 +143,14 @@
 #error "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO must be 0 or 1"
 #endif
 
+#ifndef LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO
+#define LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO 0
+#endif
+#if LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO < 0 || \
+    LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO > 1
+#error "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO must be 0 or 1"
+#endif
+
 /*
     Text-layout-neutral default for the dense T=4 batch callback.  Each context
     snapshots this initialized data word and each codec then snapshots its
@@ -564,6 +572,13 @@ struct leo2_context
         auto_k16r16_b64_avx512_gfni_kernel;
     bool calibrated_k1_avx2_copy_host;
     bool high_t4_batch_binding_enabled;
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+    bool high_sparse_direct_encode_tables_enabled;
+    bool high_sparse_direct_encode_auto_enabled;
+    std::atomic<bool> high_sparse_encode_route_witness_enabled;
+    std::atomic<uint32_t> high_sparse_encode_route_witness_direct_calls;
+    std::atomic<uint32_t> high_sparse_encode_route_witness_transform_calls;
+#endif
     bool gf8_avx2_walsh_locator_enabled;
     /*
         Setup-only policy for reusable GF8 small-dual plans.  Keeping this in
@@ -2915,6 +2930,45 @@ static bool IsDirectEncodeShape(const leo2_codec* codec)
         coefficient_count != 0;
 }
 
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) || \
+    defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+static bool IsEffectiveAVX2Context(const leo2_context* context)
+{
+    return context && context->backend == LEO2_BACKEND_AVX2 &&
+        context->ops && context->ops == context->baseline_ops &&
+        context->ops->kind == LEO2_BACKEND_AVX2;
+}
+#endif
+
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+static bool IsHighSparseDirectEncodeShape(const leo2_codec* codec)
+{
+    return codec &&
+        (codec->original_count == 2 || codec->original_count == 3 ||
+         codec->original_count == 4 || codec->original_count == 8 ||
+         codec->original_count == 12 || codec->original_count == 16) &&
+        (codec->recovery_count == 2 || codec->recovery_count == 4 ||
+         codec->recovery_count == 8 || codec->recovery_count == 16);
+}
+
+static bool IsHighSparseDirectEncodeTuple(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    if (!IsHighSparseDirectEncodeShape(codec))
+        return false;
+    if (shard_bytes == 4096)
+        return true;
+    const bool boundary_shape =
+        (codec->original_count == 2 && codec->recovery_count == 16) ||
+        (codec->original_count == 16 && codec->recovery_count == 2);
+    return boundary_shape &&
+        (shard_bytes == 1024 || shard_bytes == 1088 ||
+         shard_bytes == 2048 || shard_bytes == 4032 ||
+         shard_bytes == 4160 || shard_bytes == 65536);
+}
+#endif
+
 static bool CanAutoDirectEncodeCodec(const leo2_codec* codec)
 {
     if (!IsDirectEncodeShape(codec) || !codec->context ||
@@ -2926,17 +2980,27 @@ static bool CanAutoDirectEncodeCodec(const leo2_codec* codec)
     defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
     /*
         This default-off diagnostic eligibility boundary is deliberately
-        confined to legacy-high GF8 on an explicit AVX2 context with more than
-        one recovery shard.  The full-output and sparse-Q=1 candidates share
-        this preparation boundary, but their selectors remain independent.
+        confined to legacy-high GF8 on an effective AVX2 context with more
+        than one recovery shard.  The full-output and sparse-Q=1 candidates
+        share this preparation boundary, but their selectors remain
+        independent.
         The R>1 guard holds out the measured-negative legacy-high single-side
         control.  Defining either experiment must not silently admit GF16,
         SSSE3, AVX-512, GFNI, scalar, or the existing R=1 encoder.
     */
-    const bool measured_high =
+    bool high_tables_enabled = false;
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+    high_tables_enabled = true;
+#endif
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+    high_tables_enabled = high_tables_enabled ||
+        (codec->context->high_sparse_direct_encode_tables_enabled &&
+         IsHighSparseDirectEncodeShape(codec));
+#endif
+    const bool measured_high = high_tables_enabled &&
         codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->field == LEO2_FIELD_GF8 &&
-        backend == LEO2_BACKEND_AVX2 &&
+        IsEffectiveAVX2Context(codec->context) &&
         codec->recovery_count > 1;
     if (codec->profile != LEO2_PROFILE_LOW_V1 && !measured_high)
         return false;
@@ -3776,22 +3840,23 @@ static bool AutoDirectEncodePreferred(
 #if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
     /*
         Default-off measurement candidate for legacy-high sparse output.  It
-        deliberately reuses the mature row-major executor and admits only the
-        previously screened regular-tile Q=1 region.  The retained ceiling is
-        not broad enough to authorize production promotion, so this predicate
-        remains separately named and disabled by default.
+        deliberately reuses the mature row-major executor and admits only 36
+        previously screened (K,R,B) tuples at Q=1.  The finite decision table
+        is not broad enough to authorize production promotion, so both table
+        preparation and AUTO dispatch remain independently controllable.
     */
-    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+    if (codec->context->high_sparse_direct_encode_auto_enabled &&
+        codec->context->auto_requested &&
+        codec->context->thread_count == 1 &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->field == LEO2_FIELD_GF8 &&
-        codec->context->backend == LEO2_BACKEND_AVX2 &&
-        codec->recovery_count > 1 && requested_recovery_count == 1 &&
-        shard_bytes >= kDirectMinimumMeasuredBytes &&
-        shard_bytes % kDirectSimdTileBytes == 0)
+        IsEffectiveAVX2Context(codec->context) &&
+        codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        codec->flags == 0 && requested_recovery_count == 1 &&
+        IsHighSparseDirectEncodeTuple(codec, shard_bytes))
         return true;
 #endif
 
-#if !defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) || \
-    !LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
     /*
         The generic tail below is qualified LOW-profile evidence.  A distinct
         experiment may open table preparation for legacy-high codecs, but it
@@ -3799,7 +3864,6 @@ static bool AutoDirectEncodePreferred(
     */
     if (codec->profile != LEO2_PROFILE_LOW_V1)
         return false;
-#endif
 
     if (requested_recovery_count != 1 ||
         shard_bytes < kDirectMinimumMeasuredBytes ||
@@ -14865,6 +14929,17 @@ LEO2_EXPORT leo2_result leo2_context_create(
             : NULL;
     context->calibrated_k1_avx2_copy_host =
         leopard::backend::IsCalibratedK1AVX2CopyHost();
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+    context->high_sparse_direct_encode_tables_enabled = true;
+    context->high_sparse_direct_encode_auto_enabled =
+        LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO != 0;
+    context->high_sparse_encode_route_witness_enabled.store(
+        false, std::memory_order_relaxed);
+    context->high_sparse_encode_route_witness_direct_calls.store(
+        0, std::memory_order_relaxed);
+    context->high_sparse_encode_route_witness_transform_calls.store(
+        0, std::memory_order_relaxed);
+#endif
 #ifdef LEO_HAS_FF8
     context->high_t4_batch_binding_enabled =
         g_high_t4_batch_binding_mode == 1U;
@@ -15914,6 +15989,69 @@ bool SetContextHighT4BatchBindingEnabledForDiagnostics(
     return true;
 }
 
+bool SetContextHighSparseDirectEncodePolicyForDiagnostics(
+    leo2_context* context,
+    bool prepare_tables,
+    bool auto_select)
+{
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+    if (!context || (auto_select && !prepare_tables))
+        return false;
+    context->high_sparse_direct_encode_tables_enabled = prepare_tables;
+    context->high_sparse_direct_encode_auto_enabled = auto_select;
+    return true;
+#else
+    (void)context;
+    (void)prepare_tables;
+    (void)auto_select;
+    return false;
+#endif
+}
+
+bool ArmContextHighSparseEncodeRouteWitnessForDiagnostics(leo2_context* context)
+{
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+    if (!context || context->high_sparse_encode_route_witness_enabled.load(
+            std::memory_order_acquire))
+        return false;
+    context->high_sparse_encode_route_witness_direct_calls.store(
+        0, std::memory_order_relaxed);
+    context->high_sparse_encode_route_witness_transform_calls.store(
+        0, std::memory_order_relaxed);
+    bool expected = false;
+    return context->high_sparse_encode_route_witness_enabled.
+        compare_exchange_strong(
+            expected, true, std::memory_order_release,
+            std::memory_order_relaxed);
+#else
+    (void)context;
+    return false;
+#endif
+}
+
+bool ReadAndDisarmContextHighSparseEncodeRouteWitnessForDiagnostics(
+    leo2_context* context,
+    HighSparseEncodeRouteWitness* witness_out)
+{
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+    if (!context || !witness_out ||
+        !context->high_sparse_encode_route_witness_enabled.exchange(
+            false, std::memory_order_acq_rel))
+        return false;
+    witness_out->direct_calls =
+        context->high_sparse_encode_route_witness_direct_calls.load(
+            std::memory_order_relaxed);
+    witness_out->transform_calls =
+        context->high_sparse_encode_route_witness_transform_calls.load(
+            std::memory_order_relaxed);
+    return true;
+#else
+    (void)context;
+    (void)witness_out;
+    return false;
+#endif
+}
+
 bool SetContextGF8AVX2WalshLocatorEnabledForDiagnostics(
     leo2_context* context,
     bool enabled)
@@ -16898,6 +17036,16 @@ bool HighT8RaggedBindingEnabled()
 bool HighSparseDirectEncodeEnabled()
 {
 #if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool HighSparseDirectEncodeAutoEnabled()
+{
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE) && \
+    LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO
     return true;
 #else
     return false;
@@ -21544,8 +21692,19 @@ static leo2_result EncodeInternal(
     }
     if (requested_recovery_count == 0)
         return LEO2_SUCCESS;
-    if (ShouldUseDirectEncode(
-            codec, shard_bytes, requested_recovery_count))
+    const bool use_direct_encode = ShouldUseDirectEncode(
+        codec, shard_bytes, requested_recovery_count);
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+    if (codec->context->high_sparse_encode_route_witness_enabled.load(
+            std::memory_order_acquire))
+    {
+        std::atomic<uint32_t>& counter = use_direct_encode
+            ? codec->context->high_sparse_encode_route_witness_direct_calls
+            : codec->context->high_sparse_encode_route_witness_transform_calls;
+        counter.fetch_add(1, std::memory_order_relaxed);
+    }
+#endif
+    if (use_direct_encode)
     {
         return ExecuteDirectEncode(codec, static_cast<size_t>(shard_bytes),
             original, recovery);
