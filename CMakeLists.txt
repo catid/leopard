@@ -3379,6 +3379,14 @@ if(LEO2_BUILD_TESTS)
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_k65_gen3_preregistration.py)
             add_test(
+                NAME leopard2_k65_gen3_execution_contract_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_k65_gen3_execution_contract.py)
+            add_test(
+                NAME leopard2_k65_gen3_execution_contract_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_k65_gen3_execution_contract.py)
+            add_test(
                 NAME leopard2_k65_gen3_plan_runner_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_k65r65_b64_packed_terminal_gen3_abba.py)
@@ -3386,6 +3394,14 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_k65_gen3_plan_runner_optimized_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_k65r65_b64_packed_terminal_gen3_abba.py)
+            add_test(
+                NAME leopard2_k65_gen3_acquire_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_k65r65_b64_packed_terminal_gen3_acquire.py)
+            add_test(
+                NAME leopard2_k65_gen3_acquire_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_k65r65_b64_packed_terminal_gen3_acquire.py)
             set_tests_properties(
                 leopard2_pair_qualification_acquire_self_test
                 leopard2_pair_qualification_acquire_optimized_self_test
@@ -3397,9 +3413,19 @@ if(LEO2_BUILD_TESTS)
                 leopard2_k65_gen3_freeze_boundaries_optimized_self_test
                 leopard2_k65_gen3_preregistration_self_test
                 leopard2_k65_gen3_preregistration_optimized_self_test
+                leopard2_k65_gen3_execution_contract_self_test
+                leopard2_k65_gen3_execution_contract_optimized_self_test
                 leopard2_k65_gen3_plan_runner_self_test
                 leopard2_k65_gen3_plan_runner_optimized_self_test
                 PROPERTIES TIMEOUT 300)
+            # The acquisition suite materializes and validates the complete
+            # pre-ratified 1,650-child topology, so its deterministic
+            # correctness run needs a wider CI timeout than the lightweight
+            # contract suites above.
+            set_tests_properties(
+                leopard2_k65_gen3_acquire_self_test
+                leopard2_k65_gen3_acquire_optimized_self_test
+                PROPERTIES TIMEOUT 3600)
             add_test(
                 NAME leopard2_allk_gap_identity_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}

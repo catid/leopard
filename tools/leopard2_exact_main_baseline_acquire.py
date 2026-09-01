@@ -1785,11 +1785,13 @@ class StableLeaseAnchor:
                  _traceback: object) -> None:
         if self.descriptor >= 0:
             descriptor = self.descriptor
-            self.descriptor = -1
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
             finally:
-                os.close(descriptor)
+                try:
+                    os.close(descriptor)
+                finally:
+                    self.descriptor = -1
         self.identity = None
 
 
@@ -1864,11 +1866,13 @@ class CanonicalFileLock:
                  _traceback: object) -> None:
         if self.descriptor >= 0:
             descriptor = self.descriptor
-            self.descriptor = -1
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
             finally:
-                os.close(descriptor)
+                try:
+                    os.close(descriptor)
+                finally:
+                    self.descriptor = -1
         self.identity = None
 
 

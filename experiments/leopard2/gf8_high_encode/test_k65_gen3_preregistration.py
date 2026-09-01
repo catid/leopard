@@ -6,9 +6,13 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
+import shutil
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 HERE = Path(__file__).resolve().parent
@@ -48,9 +52,46 @@ def retained_generation2_files_available() -> bool:
 RETAINED_GENERATION2_FILES_AVAILABLE = retained_generation2_files_available()
 
 
+def dummy_output_lane_binding() -> dict:
+    handle = {
+        "schema": prereg.OUTPUT_LANE_FILE_HANDLE_SCHEMA,
+        "handle_type": 1,
+        "handle_hex": "00",
+    }
+    return {
+        "schema": prereg.OUTPUT_LANE_SCHEMA,
+        "path": "/unit/k65-generation-3-output-lane",
+        "device": 1,
+        "inode": 1,
+        "uid": os.geteuid(),
+        "mode": 0o500,
+        "link_count": 6,
+        "initial_mtime_ns": 1,
+        "initial_ctime_ns": 1,
+        "file_handle": copy.deepcopy(handle),
+        "lane_manifest": {
+            "schema": prereg.OUTPUT_LANE_MANIFEST_BINDING_SCHEMA,
+            "name": prereg.OUTPUT_LANE_MANIFEST_FILE,
+            "device": 1,
+            "inode": 2,
+            "uid": os.geteuid(),
+            "mode": 0o400,
+            "link_count": 1,
+            "initial_mtime_ns": 1,
+            "initial_ctime_ns": 1,
+            "sha256": "0" * 64,
+            "size": 1,
+            "file_handle": copy.deepcopy(handle),
+        },
+    }
+
+
 def final_preregistration(
     *, track_b_permitted: bool = True, scan_window_count: int = 2,
+    output_lane_binding: dict | None = None,
 ) -> dict:
+    if output_lane_binding is None:
+        output_lane_binding = dummy_output_lane_binding()
     return prereg.preregistration_record(
         authority="unit-test-fixture-not-an-authorization",
         authorized_utc="2026-08-30T00:00:00Z",
@@ -72,10 +113,21 @@ def final_preregistration(
         bridge_nominal_window_ns=1_000_000_000,
         maximum_handoff_elapsed_ns=120_000_000_000,
         freeze_point="armed",
-        candidate_executable_mode="deferred-until-arming",
-        candidate_executable_sha256=None,
+        candidate_executable_mode="frozen-sha256",
+        candidate_executable_sha256="a" * 64,
+        candidate_executable_size=1_234_567,
+        candidate_build_provenance_sha256="4a" * 32,
+        candidate_reproducible_build_core_sha256="5b" * 32,
+        candidate_authority_record_sha256="6c" * 32,
+        candidate_authority_ledger_sha256="7d" * 32,
         candidate_source_commit="1" * 40,
         candidate_source_tree="2" * 40,
+        host_machine_id_sha256="b" * 64,
+        host_name="qualification-host.example",
+        host_architecture="x86_64",
+        host_cpu_model="Unit Test CPU",
+        output_lane_binding=output_lane_binding,
+        child_launch_context=prereg.recommended_launch_context_record(),
         controller_bindings=[
             {"path": path, "sha256": f"{index + 1:064x}"}
             for index, path in enumerate(prereg.REQUIRED_CONTROLLER_PATHS)
@@ -123,6 +175,14 @@ class K65Generation3PreregistrationTests(unittest.TestCase):
         self.assertEqual(
             prereg.contract.canonical_json_bytes(observed),
             TEMPLATE_PATH.read_bytes())
+
+    def test_launch_context_rejects_boolean_integer_aliases(self) -> None:
+        for field in ("nice", "scheduler_policy", "scheduler_priority"):
+            malformed = prereg.recommended_launch_context_record()
+            malformed[field] = False
+            self.assertRejected(lambda malformed=malformed:
+                prereg.validate_launch_context_contract(malformed),
+                "normative policy")
 
     @unittest.skipUnless(
         RETAINED_GENERATION2_FILES_AVAILABLE,
@@ -178,6 +238,7 @@ class K65Generation3PreregistrationTests(unittest.TestCase):
         record = final_preregistration(track_b_permitted=True)
         self.assertEqual(
             prereg.validate_preregistration(record, verify_files=False), record)
+        self.assertFalse(record["safe_to_execute"])
         qualification = record["qualification"]
         self.assertEqual(
             qualification["policy_evaluation_order"],
@@ -318,43 +379,159 @@ class K65Generation3PreregistrationTests(unittest.TestCase):
         self.assertRejected(lambda: prereg.reject_denylisted_evidence_hash(
             "f" * 64, forged))
 
+        stable_handle = {
+            "schema": prereg.OUTPUT_LANE_FILE_HANDLE_SCHEMA,
+            "handle_type": 1,
+            "handle_hex": "00",
+        }
+        handle_patcher = mock.patch.object(
+            prereg, "_capture_output_lane_file_handle",
+            return_value=(stable_handle, 1))
+        handle_patcher.start()
+        self.addCleanup(handle_patcher.stop)
+
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             fake_repo = root / "repo"
             fake_repo.mkdir()
             empty = root / "empty"
             empty.mkdir()
+            empty.chmod(0o700)
+            lane_record = final_preregistration(
+                track_b_permitted=False,
+                output_lane_binding=prereg.output_lane_binding_record(
+                    empty, setup_invalid_budget=5,
+                    environment_rejected_budget=8,
+                    evidence_attempt_budget=3))
             self.assertEqual(
                 prereg.validate_output_lane_for_preregistration(
-                    empty, record, fake_repo),
+                    empty, lane_record, fake_repo),
                 empty.resolve())
+            empty.chmod(0o700)
             (empty / "occupied").write_text("x", encoding="ascii")
+            empty.chmod(0o500)
             self.assertRejected(lambda: (
                 prereg.validate_output_lane_for_preregistration(
-                    empty, record, fake_repo)),
-                "not empty")
+                    empty, lane_record, fake_repo)),
+                "ratified inode")
             target = root / "target"
             target.mkdir()
             link = root / "link"
             link.symlink_to(target, target_is_directory=True)
             self.assertRejected(lambda: (
                 prereg.validate_output_lane_for_preregistration(
-                    link, record, fake_repo)),
+                    link, lane_record, fake_repo)),
                 "canonical directory")
             prior = fake_repo / \
                 record["closed_generation_2"]["attempts"][0]["lane"]
             prior.mkdir(parents=True)
+            prior.chmod(0o700)
+            prior_record = final_preregistration(
+                track_b_permitted=False,
+                output_lane_binding=prereg.output_lane_binding_record(
+                    prior, setup_invalid_budget=5,
+                    environment_rejected_budget=8,
+                    evidence_attempt_budget=3))
             self.assertRejected(lambda: (
                 prereg.validate_output_lane_for_preregistration(
-                    prior, record, fake_repo)), "overlaps")
+                    prior, prior_record, fake_repo)), "overlaps")
             absent = root / "absent"
             self.assertRejected(lambda: (
                 prereg.validate_output_lane_for_preregistration(
-                    absent, record, fake_repo)), "cannot be resolved")
+                    absent, lane_record, fake_repo)), "cannot be resolved")
             missing_repo = root / "missing-repo"
             self.assertRejected(lambda: (
                 prereg.validate_output_lane_for_preregistration(
-                    target, record, missing_repo)), "cannot be resolved")
+                    target, lane_record, missing_repo)), "cannot be resolved")
+
+    def test_output_lane_descriptor_rejects_deterministic_handle_mismatch(
+            self) -> None:
+        ratified_handle = {
+            "schema": prereg.OUTPUT_LANE_FILE_HANDLE_SCHEMA,
+            "handle_type": 1,
+            "handle_hex": "00",
+        }
+        current_handle = {
+            "schema": prereg.OUTPUT_LANE_FILE_HANDLE_SCHEMA,
+            "handle_type": 1,
+            "handle_hex": "11",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_repo = root / "repo"
+            fake_repo.mkdir()
+            lane = (root / "ratified-lane").resolve()
+            lane.mkdir(mode=0o700)
+            lane.chmod(0o700)
+            with mock.patch.object(
+                    prereg, "_capture_output_lane_file_handle",
+                    return_value=(ratified_handle, 1)):
+                binding = prereg.output_lane_binding_record(
+                    lane, setup_invalid_budget=5,
+                    environment_rejected_budget=8,
+                    evidence_attempt_budget=3)
+            record = final_preregistration(
+                track_b_permitted=False, output_lane_binding=binding)
+            descriptor = os.open(
+                lane, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC |
+                os.O_NOFOLLOW)
+            try:
+                with mock.patch.object(
+                        prereg, "_capture_output_lane_file_handle",
+                        return_value=(current_handle, 1)):
+                    self.assertRejected(
+                        lambda: prereg.
+                        validate_output_lane_descriptor_identity_for_preregistration(
+                            lane, descriptor, record, fake_repo),
+                        "ratified lifetime handle")
+            finally:
+                os.close(descriptor)
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux file handles are required for the live lane ABA test")
+    def test_output_lane_file_handle_rejects_same_inode_aba(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lane = (Path(directory) / "ratified-lane").resolve()
+            lane.mkdir(mode=0o700)
+            lane.chmod(0o700)
+            try:
+                binding = prereg.output_lane_binding_record(
+                    lane, setup_invalid_budget=5,
+                    environment_rejected_budget=8,
+                    evidence_attempt_budget=3)
+            except prereg.PreregistrationError as error:
+                if "cannot export a bounded durable handle" in str(error):
+                    self.skipTest(str(error))
+                raise
+            record = final_preregistration(
+                track_b_permitted=False, output_lane_binding=binding)
+
+            replacement_inode = None
+            for unused_attempt in range(1024):
+                if lane.exists():
+                    for current, unused_directories, unused_files in os.walk(
+                            lane):
+                        os.chmod(current, 0o700)
+                    shutil.rmtree(lane)
+                lane.mkdir(mode=0o700)
+                lane.chmod(0o700)
+                replacement_inode = lane.stat(follow_symlinks=False).st_ino
+                if replacement_inode == binding["inode"]:
+                    break
+            if replacement_inode != binding["inode"]:
+                self.skipTest(
+                    "temporary filesystem did not recycle the lane inode")
+            replacement = prereg.output_lane_binding_record(
+                lane, setup_invalid_budget=5,
+                environment_rejected_budget=8,
+                evidence_attempt_budget=3)
+            self.assertNotEqual(
+                replacement["file_handle"], binding["file_handle"])
+            self.assertRejected(
+                lambda: prereg.validate_output_lane_identity_for_preregistration(
+                    lane, record),
+                "ratified")
 
     def test_strict_json_and_extra_keys_reject(self) -> None:
         record = final_preregistration(track_b_permitted=False)

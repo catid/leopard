@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -18,7 +19,7 @@ V2_PATH = HERE / "run_k65r65_b64_packed_terminal_abba.py"
 TEMPLATE_PATH = HERE / \
     "k65r65_b64_packed_terminal_gen3_preregistration.template.json"
 PLAN_SHA256 = \
-    "ed1dc2b8fd032c2f579edfbd1fd637283f9d44bb7c4adc28cdac578815a7eaca"
+    "415415cf72be1756b8cb8c3ec69d41fae605e0bd7fab66eaa41bf23a5c49c399"
 
 
 def load_module(name: str, path: Path):
@@ -52,10 +53,56 @@ def final_preregistration() -> dict:
         bridge_nominal_window_ns=1_000_000_000,
         maximum_handoff_elapsed_ns=120_000_000_000,
         freeze_point="armed",
-        candidate_executable_mode="deferred-until-arming",
-        candidate_executable_sha256=None,
+        candidate_executable_mode="frozen-sha256",
+        candidate_executable_sha256="a" * 64,
+        candidate_executable_size=1_234_567,
+        candidate_build_provenance_sha256="4a" * 32,
+        candidate_reproducible_build_core_sha256="5b" * 32,
+        candidate_authority_record_sha256="6c" * 32,
+        candidate_authority_ledger_sha256="7d" * 32,
         candidate_source_commit="1" * 40,
         candidate_source_tree="2" * 40,
+        host_machine_id_sha256="b" * 64,
+        host_name="qualification-host.example",
+        host_architecture="x86_64",
+        host_cpu_model="Unit Test CPU",
+        output_lane_binding={
+            "schema": runner.prereg.OUTPUT_LANE_SCHEMA,
+            "path": "/unit/k65-generation-3-output-lane",
+            "device": 1,
+            "inode": 1,
+            "uid": os.geteuid(),
+            "mode": 0o500,
+            "link_count": 6,
+            "initial_mtime_ns": 1,
+            "initial_ctime_ns": 1,
+            "file_handle": {
+                "schema": runner.prereg.OUTPUT_LANE_FILE_HANDLE_SCHEMA,
+                "handle_type": 1,
+                "handle_hex": "00",
+            },
+            "lane_manifest": {
+                "schema":
+                    runner.prereg.OUTPUT_LANE_MANIFEST_BINDING_SCHEMA,
+                "name": runner.prereg.OUTPUT_LANE_MANIFEST_FILE,
+                "device": 1,
+                "inode": 2,
+                "uid": os.geteuid(),
+                "mode": 0o400,
+                "link_count": 1,
+                "initial_mtime_ns": 1,
+                "initial_ctime_ns": 1,
+                "sha256": "0" * 64,
+                "size": 1,
+                "file_handle": {
+                    "schema": runner.prereg.OUTPUT_LANE_FILE_HANDLE_SCHEMA,
+                    "handle_type": 1,
+                    "handle_hex": "00",
+                },
+            },
+        },
+        child_launch_context=
+            runner.prereg.recommended_launch_context_record(),
         controller_bindings=[
             {"path": path, "sha256": f"{index + 1:064x}"}
             for index, path in enumerate(runner.prereg.REQUIRED_CONTROLLER_PATHS)
@@ -70,13 +117,6 @@ def template() -> dict:
 
 
 PAIR = {"benchmark_cpu": 8, "reserved_sibling": 72}
-ARTIFACTS = {
-    "candidate": "/planned/candidate-control",
-    "control": "/planned/candidate-control",
-    "main": "/planned/main",
-}
-
-
 class K65Generation3PlanRunnerTests(unittest.TestCase):
     def assertRejected(self, function, pattern: str | None = None) -> None:
         with self.assertRaises((
@@ -90,11 +130,12 @@ class K65Generation3PlanRunnerTests(unittest.TestCase):
 
     def test_plan_contains_all_1650_exact_children_without_execution(self) -> None:
         plan = runner.campaign_plan_record(
-            preregistration=template(), artifact_paths=ARTIFACTS,
-            selected_pair=PAIR)
+            preregistration=template())
         self.assertFalse(plan["safe_to_execute"])
         self.assertFalse(plan["candidate_timing_performed"])
         self.assertFalse(plan["preregistration_ratified"])
+        self.assertNotIn("selected_pair", plan)
+        self.assertNotIn("artifacts", plan)
         self.assertEqual(plan["child_process_count"], 1650)
         self.assertEqual(len(plan["child_plans"]), 1650)
         self.assertEqual(
@@ -109,8 +150,7 @@ class K65Generation3PlanRunnerTests(unittest.TestCase):
     def test_every_child_command_and_round_order_match_frozen_v2(self) -> None:
         v2 = load_module("k65_v2_for_gen3_plan_comparison", V2_PATH)
         self.assertEqual(runner.cells(), v2.cells())
-        plans = runner.child_plans(
-            artifact_paths=ARTIFACTS, selected_pair=PAIR)
+        plans = runner.child_plans()
         index = 0
         for cell, expected_cell in zip(runner.cells(), v2.cells()):
             self.assertEqual(cell, expected_cell)
@@ -125,10 +165,10 @@ class K65Generation3PlanRunnerTests(unittest.TestCase):
                          item["implementation"]),
                         (cell["id"], round_index, slot, implementation))
                     self.assertEqual(
-                        item["command"],
+                        item["argv_tail"],
                         v2.benchmark_command(
-                            implementation, Path(ARTIFACTS[implementation]),
-                            cell, 8, 31, 64))
+                            implementation, Path("/logical/executable"),
+                            cell, 8, 31, 64)[6:])
                     self.assertEqual(
                         item["timeout_budget"],
                         v2.child_timeout_budget(implementation, cell, 31, 64))
@@ -159,8 +199,7 @@ class K65Generation3PlanRunnerTests(unittest.TestCase):
                 ):
                     self.assertRejected(lambda changed=changed: (
                         runner.campaign_plan_record(
-                            preregistration=changed, artifact_paths=ARTIFACTS,
-                            selected_pair=PAIR)), "frozen plan constants")
+                            preregistration=changed)), "frozen plan constants")
 
     def test_state_machine_accepts_only_one_way_paths(self) -> None:
         success = runner.attempt_state_history_record(
@@ -258,11 +297,13 @@ class K65Generation3PlanRunnerTests(unittest.TestCase):
         self.assertTrue(abandoned_armed["events"][-1][
             "evidence_attempt_committed"])
 
-    def test_candidate_and_control_must_share_one_planned_executable(self) -> None:
-        split = dict(ARTIFACTS)
-        split["control"] = "/planned/other-control"
-        self.assertRejected(lambda: runner.child_plans(
-            artifact_paths=split, selected_pair=PAIR), "share one planned")
+    def test_plan_has_no_artifact_or_pair_injection_surface(self) -> None:
+        plan = runner.campaign_plan_record(preregistration=template())
+        self.assertNotIn("selected_pair", plan)
+        self.assertNotIn("artifacts", plan)
+        self.assertTrue(all("command" not in child for child in plan["child_plans"]))
+        self.assertTrue(all(child["argv_tail"][0] == "--k"
+                            for child in plan["child_plans"]))
 
     def test_frozen_pair_is_write_once_and_budget_limits_fail_closed(self) -> None:
         registration = final_preregistration()
@@ -300,10 +341,6 @@ class K65Generation3PlanRunnerTests(unittest.TestCase):
         command = [
             sys.executable, "-I", "-S", "-B", str(RUNNER_PATH),
             "--plan-only", "--preregistration", str(TEMPLATE_PATH),
-            "--candidate", ARTIFACTS["candidate"],
-            "--control", ARTIFACTS["control"],
-            "--main", ARTIFACTS["main"],
-            "--cpu", "8", "--sibling", "72",
         ]
         completed = subprocess.run(
             command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

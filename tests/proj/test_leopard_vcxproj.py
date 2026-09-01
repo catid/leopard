@@ -1244,8 +1244,12 @@ class CMakeProductionGraph(object):
         "leopard2_k65_gen3_freeze_boundaries_optimized_self_test": 1,
         "leopard2_k65_gen3_preregistration_self_test": 1,
         "leopard2_k65_gen3_preregistration_optimized_self_test": 1,
+        "leopard2_k65_gen3_execution_contract_self_test": 1,
+        "leopard2_k65_gen3_execution_contract_optimized_self_test": 1,
         "leopard2_k65_gen3_plan_runner_self_test": 1,
         "leopard2_k65_gen3_plan_runner_optimized_self_test": 1,
+        "leopard2_k65_gen3_acquire_self_test": 1,
+        "leopard2_k65_gen3_acquire_optimized_self_test": 1,
         "leopard2_exact_main_baseline_contract_self_test": 1,
         "leopard2_exact_main_baseline_contract_optimized_self_test": 1,
         "leopard2_exact_main_baseline_record_self_test": 1,
@@ -1331,8 +1335,12 @@ class CMakeProductionGraph(object):
         "leopard2_k65_gen3_freeze_boundaries_optimized_self_test",
         "leopard2_k65_gen3_preregistration_self_test",
         "leopard2_k65_gen3_preregistration_optimized_self_test",
+        "leopard2_k65_gen3_execution_contract_self_test",
+        "leopard2_k65_gen3_execution_contract_optimized_self_test",
         "leopard2_k65_gen3_plan_runner_self_test",
         "leopard2_k65_gen3_plan_runner_optimized_self_test",
+        "leopard2_k65_gen3_acquire_self_test",
+        "leopard2_k65_gen3_acquire_optimized_self_test",
         "leopard2_exact_main_baseline_verifier_self_test",
         "leopard2_exact_main_baseline_verifier_optimized_self_test",
         "leopard2_exact_main_baseline_acquire_self_test",
@@ -1371,7 +1379,7 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "58248cb2bd8e7f02d488ea53c43b6b4b1d82ee1020bf6c209a228019ac1c4616"
+        "1a2e1e7b84950ea361b5f7ed285af4303355701a07c83a4f8259c8de21c2db07"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1484,9 +1492,15 @@ class CMakeProductionGraph(object):
             "leopard2_k65_gen3_freeze_boundaries_optimized_self_test",
             "leopard2_k65_gen3_preregistration_self_test",
             "leopard2_k65_gen3_preregistration_optimized_self_test",
+            "leopard2_k65_gen3_execution_contract_self_test",
+            "leopard2_k65_gen3_execution_contract_optimized_self_test",
             "leopard2_k65_gen3_plan_runner_self_test",
             "leopard2_k65_gen3_plan_runner_optimized_self_test",
             "PROPERTIES", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_k65_gen3_acquire_self_test",
+            "leopard2_k65_gen3_acquire_optimized_self_test",
+            "PROPERTIES", "TIMEOUT", "3600")): 1,
         ("set_tests_properties", (
             "leopard2_exact_main_baseline_contract_self_test", "PROPERTIES",
             "TIMEOUT", "300")): 1,

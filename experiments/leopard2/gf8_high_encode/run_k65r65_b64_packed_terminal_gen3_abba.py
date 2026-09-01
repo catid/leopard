@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Generation-3 K65 plan/state contract; this version cannot run benchmarks.
+"""Generation-3 K65 logical plan/state contract; this file cannot run benchmarks.
 
 The only CLI mode is ``--plan-only``.  It emits every one of the 1,650 frozen
-child argv vectors and the nominal one-way state path without launching a child,
-reading host topology, acquiring a lease, or touching an evidence lane.  A later
-versioned acquisition runner may consume these pure records after an explicitly
-authorized preregistration exists.
+logical child argument tails without accepting executable paths or a CPU pair,
+launching a child, reading host topology, acquiring a lease, or touching an
+evidence lane.  The separately hashed acquisition runner may materialize these
+logical roles only from an atomically durable ARMED record and sealed handles.
 """
 
 from __future__ import annotations
@@ -52,13 +52,13 @@ contract = prereg.contract
 
 GENERATION = 3
 PLAN_SCHEMA = \
-    "leopard2-gf8-k65r65-b64-packed-terminal-gen3-campaign-plan/v1"
+    "leopard2-gf8-k65r65-b64-packed-terminal-gen3-campaign-plan/v2"
 STATE_HISTORY_SCHEMA = \
-    "leopard2-gf8-k65r65-b64-packed-terminal-gen3-state-history/v1"
+    "leopard2-gf8-k65r65-b64-packed-terminal-gen3-state-history/v2"
 STATE_EVENT_SCHEMA = \
-    "leopard2-gf8-k65r65-b64-packed-terminal-gen3-state-event/v1"
+    "leopard2-gf8-k65r65-b64-packed-terminal-gen3-state-event/v2"
 BUDGET_LEDGER_SCHEMA = \
-    "leopard2-gf8-k65r65-b64-packed-terminal-gen3-budget-ledger/v1"
+    "leopard2-gf8-k65r65-b64-packed-terminal-gen3-budget-ledger/v2"
 
 ROUNDS = 25
 ITERATIONS = 31
@@ -126,19 +126,18 @@ BUDGET_LEDGER_KEYS = frozenset((
 ))
 CHILD_PLAN_KEYS = frozenset((
     "index", "cell_index", "cell_id", "round", "slot", "implementation",
-    "command", "timeout_budget",
+    "argv_tail", "timeout_budget",
 ))
 TIMEOUT_KEYS = frozenset((
     "timeout_seconds", "setup_seconds", "logical_bytes_per_second_floor",
     "measured_metric_count", "calls_per_metric", "logical_bytes_per_call",
     "logical_byte_visits",
 ))
-ARTIFACT_PATH_KEYS = frozenset(("candidate", "control", "main"))
 PLAN_KEYS = frozenset((
     "schema", "generation", "mode", "safe_to_execute",
     "candidate_timing_performed", "preregistration_schema",
-    "preregistration_sha256", "preregistration_ratified", "selected_pair",
-    "artifacts", "campaign", "state_graph", "nominal_state_history",
+    "preregistration_sha256", "preregistration_ratified",
+    "campaign", "state_graph",
     "cells", "child_plans", "child_process_count",
 ))
 
@@ -434,16 +433,13 @@ def child_timeout_budget(
     }
 
 
-def benchmark_command(
-    implementation: str, executable: str, cell: Mapping[str, Any], cpu: int,
+def benchmark_argv_tail(
+    implementation: str, cell: Mapping[str, Any],
 ) -> list[str]:
+    """Return only arguments after the executable; paths/CPUs are post-ARMED."""
     _require(implementation in {"candidate", "control", "main"},
              "benchmark implementation differs")
-    executable_path = _absolute_path(executable, f"{implementation} artifact")
-    benchmark_cpu = _bounded_int(cpu, 0, contract.MAX_CPU_ID, "benchmark CPU")
-    command = [
-        "/usr/bin/prlimit", "--as=201326592", "/usr/bin/taskset", "-c",
-        str(benchmark_cpu), executable_path,
+    arguments = [
         "--k", str(cell["K"]), "--r", str(cell["R"]),
         "--bytes", str(cell["bytes"]), "--loss", str(cell["loss"]),
         "--batch", str(cell["batch"]), "--reuse", str(cell["reuse"]),
@@ -451,29 +447,18 @@ def benchmark_command(
         "--threads", "1", "--seed", str(cell["seed"]),
     ]
     if implementation != "main":
-        command.extend((
+        arguments.extend((
             "--profile", "high", "--field", "gf8", "--backend", "avx2",
             "--skip-legacy", "--retain-samples", "--attest-source",
             "--measure-one-shot-encode", SELECTOR_ARGUMENT,
             "1" if implementation == "candidate" else "0",
         ))
-    command.extend(("--json", "-"))
-    return command
+    arguments.extend(("--json", "-"))
+    return arguments
 
 
-def child_plans(
-    *, artifact_paths: Mapping[str, Any], selected_pair: Mapping[str, Any],
-) -> list[dict[str, Any]]:
-    artifacts = _exact_object(
-        artifact_paths, ARTIFACT_PATH_KEYS, "planned artifact paths")
-    normalized_artifacts = {
-        implementation: _absolute_path(path, f"{implementation} artifact")
-        for implementation, path in artifacts.items()
-    }
-    _require(normalized_artifacts["candidate"] ==
-             normalized_artifacts["control"],
-             "candidate and control do not share one planned executable")
-    pair = _pair(selected_pair, "planned CPU pair")
+def child_plans() -> list[dict[str, Any]]:
+    """Return the immutable logical schedule without launch authority."""
     result: list[dict[str, Any]] = []
     for cell_index, cell in enumerate(cells()):
         orders = TARGET_ORDERS if cell["compare_main"] else NEIGHBOR_ORDERS
@@ -487,9 +472,7 @@ def child_plans(
                     "round": round_index,
                     "slot": slot,
                     "implementation": implementation,
-                    "command": benchmark_command(
-                        implementation, normalized_artifacts[implementation],
-                        cell, pair["benchmark_cpu"]),
+                    "argv_tail": benchmark_argv_tail(implementation, cell),
                     "timeout_budget": child_timeout_budget(implementation, cell),
                 })
     _require(len(result) == EXPECTED_CHILD_PROCESS_COUNT,
@@ -509,8 +492,7 @@ def _validate_preregistration_for_plan(value: Any) -> tuple[dict[str, Any], bool
 
 
 def campaign_plan_record(
-    *, preregistration: Mapping[str, Any], artifact_paths: Mapping[str, Any],
-    selected_pair: Mapping[str, Any],
+    *, preregistration: Mapping[str, Any],
 ) -> dict[str, Any]:
     registration, ratified = _validate_preregistration_for_plan(preregistration)
     campaign = registration["campaign"]
@@ -528,24 +510,10 @@ def campaign_plan_record(
         all(campaign[key] == expected
             for key, expected in frozen_campaign_fields.items()),
         "preregistration campaign differs from the frozen plan constants")
-    pair = _pair(selected_pair, "planned CPU pair")
-    artifacts = {
-        name: _absolute_path(path, f"{name} artifact")
-        for name, path in _exact_object(
-            artifact_paths, ARTIFACT_PATH_KEYS, "planned artifact paths").items()
-    }
-    plans = child_plans(artifact_paths=artifacts, selected_pair=pair)
+    plans = child_plans()
     _require(
         campaign["expected_child_process_count"] == len(plans),
         "preregistration child-process count differs from the generated plan")
-    nominal_history = attempt_state_history_record(
-        lane_class="evidence", lane_index=1,
-        states=(
-            "INIT", "PREREGISTERED", "QUALIFYING", "QUALIFIED",
-            "BRIDGING", "BRIDGED", "ARMING", "PRESAMPLING", "ARMED", "TIMING",
-            "FINALIZING", "ACCEPTED",
-        ),
-        selected_pair=pair)
     return {
         "schema": PLAN_SCHEMA,
         "generation": GENERATION,
@@ -555,11 +523,8 @@ def campaign_plan_record(
         "preregistration_schema": registration["schema"],
         "preregistration_sha256": contract.canonical_sha256(registration),
         "preregistration_ratified": ratified,
-        "selected_pair": pair,
-        "artifacts": artifacts,
         "campaign": copy.deepcopy(campaign),
         "state_graph": state_graph_record(),
-        "nominal_state_history": nominal_history,
         "cells": cells(),
         "child_plans": plans,
         "child_process_count": len(plans),
@@ -576,10 +541,7 @@ def validate_campaign_plan(value: Any, preregistration: Mapping[str, Any]) -> di
         _exact_object(item["timeout_budget"], TIMEOUT_KEYS,
                       f"child plan {index} timeout")
         _require(item["index"] == index, f"child plan {index} index differs")
-    rebuilt = campaign_plan_record(
-        preregistration=preregistration,
-        artifact_paths=record["artifacts"],
-        selected_pair=record["selected_pair"])
+    rebuilt = campaign_plan_record(preregistration=preregistration)
     _require(contract.exact_json_equal(record, rebuilt),
              "campaign plan differs from its fixed point")
     return copy.deepcopy(rebuilt)
@@ -595,11 +557,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan-only", action="store_true", required=True)
     parser.add_argument("--preregistration", type=Path, required=True)
-    parser.add_argument("--candidate", required=True)
-    parser.add_argument("--control", required=True)
-    parser.add_argument("--main", required=True)
-    parser.add_argument("--cpu", type=int, required=True)
-    parser.add_argument("--sibling", type=int, required=True)
     options = parser.parse_args()
     try:
         data = options.preregistration.read_bytes()
@@ -613,17 +570,7 @@ def main() -> int:
                 data, verify_files=True)
         else:
             _fail("plan preregistration schema differs")
-        plan = campaign_plan_record(
-            preregistration=registration,
-            artifact_paths={
-                "candidate": options.candidate,
-                "control": options.control,
-                "main": options.main,
-            },
-            selected_pair={
-                "benchmark_cpu": options.cpu,
-                "reserved_sibling": options.sibling,
-            })
+        plan = campaign_plan_record(preregistration=registration)
         sys.stdout.buffer.write(contract.canonical_json_bytes(plan))
     except (OSError, PlanError, prereg.PreregistrationError,
             contract.QualificationError) as error:
@@ -635,7 +582,7 @@ def main() -> int:
 __all__ = (
     "ALLOWED_TRANSITIONS", "BUDGET_LEDGER_SCHEMA", "EXPECTED_CHILD_PROCESS_COUNT",
     "GENERATION", "PLAN_SCHEMA", "PlanError", "STATE_HISTORY_SCHEMA",
-    "attempt_state_history_record", "benchmark_command", "budget_ledger_record",
+    "attempt_state_history_record", "benchmark_argv_tail", "budget_ledger_record",
     "campaign_plan_record", "cells", "child_plans", "child_timeout_budget",
     "contract", "load_campaign_plan", "state_graph_record",
     "validate_attempt_state_history", "validate_budget_ledger",

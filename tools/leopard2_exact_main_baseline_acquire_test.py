@@ -1133,6 +1133,50 @@ class ExactMainBaselineAcquireTest(unittest.TestCase):
                 os.replace(replacement, canonical)
                 self.assertAcquireError(lock.validate_current)
 
+    def test_lock_descriptors_remain_advertised_until_kernel_close(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leopard-exact-main-lock-close-order.") as parent:
+            anchor_path = Path(parent) / "anchor"
+            anchor_path.mkdir(mode=0o700)
+            canonical_path = Path(parent) / "canonical.lock"
+            for lock in (
+                    acquire.StableLeaseAnchor(str(anchor_path)),
+                    acquire.CanonicalFileLock(str(canonical_path))):
+                with self.subTest(lock=type(lock).__name__):
+                    lock.__enter__()
+                    descriptor = lock.descriptor
+                    real_flock = acquire.fcntl.flock
+                    real_close = acquire.os.close
+                    observed: list[str] = []
+
+                    def checked_flock(fd, operation):
+                        if fd == descriptor and operation == acquire.fcntl.LOCK_UN:
+                            self.assertEqual(lock.descriptor, descriptor)
+                            observed.append("unlock")
+                        return real_flock(fd, operation)
+
+                    def checked_close(fd):
+                        if fd == descriptor:
+                            self.assertEqual(lock.descriptor, descriptor)
+                            observed.append("close")
+                        return real_close(fd)
+
+                    try:
+                        with mock.patch.object(
+                                acquire.fcntl, "flock",
+                                side_effect=checked_flock), \
+                                mock.patch.object(
+                                    acquire.os, "close",
+                                    side_effect=checked_close):
+                            lock.__exit__(None, None, None)
+                    finally:
+                        if lock.descriptor >= 0:
+                            real_close(lock.descriptor)
+                            lock.descriptor = -1
+                    self.assertEqual(observed, ["unlock", "close"])
+                    self.assertEqual(lock.descriptor, -1)
+                    self.assertIsNone(lock.identity)
+
     def test_lock_metadata_and_path_errors_are_normalized(self) -> None:
         for kind in ("anchor_mode", "missing_anchor", "lock_mode",
                      "lock_hardlink", "lock_directory", "lock_symlink"):
