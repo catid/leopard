@@ -1242,6 +1242,8 @@ class CMakeProductionGraph(object):
         "leopard2_pair_qualification_verify_optimized_self_test": 1,
         "leopard2_k65_gen3_freeze_boundaries_self_test": 1,
         "leopard2_k65_gen3_freeze_boundaries_optimized_self_test": 1,
+        "leopard2_k65_gen3_candidate_authority_self_test": 1,
+        "leopard2_k65_gen3_candidate_authority_optimized_self_test": 1,
         "leopard2_k65_gen3_preregistration_self_test": 1,
         "leopard2_k65_gen3_preregistration_optimized_self_test": 1,
         "leopard2_k65_gen3_execution_contract_self_test": 1,
@@ -1333,6 +1335,8 @@ class CMakeProductionGraph(object):
         "leopard2_pair_qualification_verify_optimized_self_test",
         "leopard2_k65_gen3_freeze_boundaries_self_test",
         "leopard2_k65_gen3_freeze_boundaries_optimized_self_test",
+        "leopard2_k65_gen3_candidate_authority_self_test",
+        "leopard2_k65_gen3_candidate_authority_optimized_self_test",
         "leopard2_k65_gen3_preregistration_self_test",
         "leopard2_k65_gen3_preregistration_optimized_self_test",
         "leopard2_k65_gen3_execution_contract_self_test",
@@ -1379,7 +1383,7 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "1a2e1e7b84950ea361b5f7ed285af4303355701a07c83a4f8259c8de21c2db07"
+        "31155fb24db5bdc153a7a11301bfd757819c8cb45262c0ab57afbdcebaedad06"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1490,6 +1494,8 @@ class CMakeProductionGraph(object):
             "leopard2_pair_qualification_verify_optimized_self_test",
             "leopard2_k65_gen3_freeze_boundaries_self_test",
             "leopard2_k65_gen3_freeze_boundaries_optimized_self_test",
+            "leopard2_k65_gen3_candidate_authority_self_test",
+            "leopard2_k65_gen3_candidate_authority_optimized_self_test",
             "leopard2_k65_gen3_preregistration_self_test",
             "leopard2_k65_gen3_preregistration_optimized_self_test",
             "leopard2_k65_gen3_execution_contract_self_test",
