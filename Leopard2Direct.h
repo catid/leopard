@@ -245,15 +245,19 @@ struct HighSparseEncodeRouteWitness
 {
     uint64_t direct_calls;
     uint64_t transform_calls;
+    uint64_t fused_pair_calls;
+    uint64_t fused_tail_calls;
 };
 
 /*
     Arm a context-local route witness for untimed sparse-high qualification
     calls, then read and disarm it before measurement.  It records the general
-    direct-versus-transform selector used by the sparse-Q1 candidate domain;
-    specialized encode terminals outside that domain are deliberately outside
-    this diagnostic contract.  The witness is unavailable unless the
-    sparse-high experiment is compiled into the ordinary archive.
+    direct-versus-transform selector used by the sparse-Q1 candidate domain.
+    For direct calls it also records successful two-source fused operations
+    and the single-source tails retained for odd K.  Specialized encode
+    terminals outside that domain are deliberately outside this diagnostic
+    contract.  The witness is unavailable unless the sparse-high experiment
+    is compiled into the ordinary archive.
 */
 bool ArmContextHighSparseEncodeRouteWitnessForDiagnostics(
     leo2_context* context);

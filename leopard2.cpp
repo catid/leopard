@@ -578,6 +578,8 @@ struct leo2_context
     std::atomic<bool> high_sparse_encode_route_witness_enabled;
     std::atomic<uint32_t> high_sparse_encode_route_witness_direct_calls;
     std::atomic<uint32_t> high_sparse_encode_route_witness_transform_calls;
+    std::atomic<uint64_t> high_sparse_encode_route_witness_fused_pair_calls;
+    std::atomic<uint64_t> high_sparse_encode_route_witness_fused_tail_calls;
 #endif
     bool gf8_avx2_walsh_locator_enabled;
     /*
@@ -11639,6 +11641,116 @@ static leo2_result ExecuteDirectEncodeRows(
     return LEO2_SUCCESS;
 }
 
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE) && \
+    defined(LEO_HAS_FF8)
+#if defined(_MSC_VER)
+#define LEO2_HIGH_SPARSE_PAIR_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_HIGH_SPARSE_PAIR_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_HIGH_SPARSE_PAIR_NOINLINE
+#endif
+
+/*
+    The sparse-high selector requests exactly one generator row.  Consume two
+    source coefficients per AVX2 pass so each initialized output tile is read
+    and written ceil(K/2), rather than K, times.  This executor is deliberately
+    narrower than the selector: it changes no eligible tuple, table, or AUTO
+    decision, and a missing callback retains the mature row loop.
+*/
+static LEO2_HIGH_SPARSE_PAIR_NOINLINE leo2_result
+ExecuteGF8HighSparseDirectEncodePairs(
+    const leo2_codec* codec,
+    size_t shard_bytes,
+    const void* const* original,
+    void* const* recovery)
+{
+    if (!codec || !codec->context || !codec->context->ops ||
+        !original || !recovery)
+        return LEO2_INTERNAL_ERROR;
+
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    if (codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 ||
+        codec->flags != 0 ||
+        codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
+        !codec->context->high_sparse_direct_encode_tables_enabled ||
+        !IsEffectiveAVX2Context(codec->context) ||
+        !IsHighSparseDirectEncodeTuple(codec, shard_bytes) ||
+        !ops.ff8_linear_combination2)
+        return LEO2_UNSUPPORTED;
+
+    void* output = NULL;
+    uint32_t selected_recovery = codec->recovery_count;
+    for (uint32_t recovery_index = 0;
+         recovery_index < codec->recovery_count;
+         ++recovery_index)
+    {
+        if (!recovery[recovery_index])
+            continue;
+        if (output)
+            return LEO2_UNSUPPORTED;
+        output = recovery[recovery_index];
+        selected_recovery = recovery_index;
+    }
+    if (!output || selected_recovery >= codec->recovery_count)
+        return LEO2_UNSUPPORTED;
+
+    const size_t row_offset =
+        static_cast<size_t>(selected_recovery) * codec->original_count;
+    if (row_offset > codec->direct_generator_logs8.size() ||
+        codec->direct_generator_logs8.size() - row_offset <
+            codec->original_count)
+        return LEO2_INTERNAL_ERROR;
+
+    uint64_t fused_pair_calls = 0;
+    uint64_t fused_tail_calls = 0;
+    uint32_t original_index = 0;
+    for (; original_index + 1 < codec->original_count;
+         original_index += 2)
+    {
+        if (!original[original_index] || !original[original_index + 1])
+            return LEO2_INTERNAL_ERROR;
+        ops.ff8_linear_combination2(
+            output,
+            original[original_index],
+            original[original_index + 1],
+            codec->direct_generator_logs8[row_offset + original_index],
+            codec->direct_generator_logs8[row_offset + original_index + 1],
+            original_index != 0,
+            shard_bytes);
+        ++fused_pair_calls;
+    }
+
+    if (original_index < codec->original_count)
+    {
+        const void* source = original[original_index];
+        if (!source)
+            return LEO2_INTERNAL_ERROR;
+        const uint8_t multiplier_log =
+            codec->direct_generator_logs8[row_offset + original_index];
+        if (multiplier_log == 0)
+            XorArbitraryBytes(ops, output, source, shard_bytes);
+        else
+            DirectField8::MultiplyAddBytes(
+                ops, output, source, multiplier_log, shard_bytes);
+        ++fused_tail_calls;
+    }
+
+    if (codec->context->high_sparse_encode_route_witness_enabled.load(
+            std::memory_order_acquire))
+    {
+        codec->context->high_sparse_encode_route_witness_fused_pair_calls.
+            fetch_add(fused_pair_calls, std::memory_order_relaxed);
+        codec->context->high_sparse_encode_route_witness_fused_tail_calls.
+            fetch_add(fused_tail_calls, std::memory_order_relaxed);
+    }
+    return LEO2_SUCCESS;
+}
+
+#undef LEO2_HIGH_SPARSE_PAIR_NOINLINE
+#endif
+
 #if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && defined(LEO_HAS_FF8)
 /*
     Default-off source-major legacy-high experiment for the tiny full-parity
@@ -11768,6 +11880,12 @@ static leo2_result ExecuteDirectEncode(
                 codec, shard_bytes, original, recovery);
         if (source_major != LEO2_UNSUPPORTED)
             return source_major;
+#endif
+#if defined(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE)
+        const leo2_result paired = ExecuteGF8HighSparseDirectEncodePairs(
+            codec, shard_bytes, original, recovery);
+        if (paired != LEO2_UNSUPPORTED)
+            return paired;
 #endif
         return ExecuteDirectEncodeRows<DirectField8>(
             codec, shard_bytes, original, recovery,
@@ -14946,6 +15064,10 @@ LEO2_EXPORT leo2_result leo2_context_create(
         0, std::memory_order_relaxed);
     context->high_sparse_encode_route_witness_transform_calls.store(
         0, std::memory_order_relaxed);
+    context->high_sparse_encode_route_witness_fused_pair_calls.store(
+        0, std::memory_order_relaxed);
+    context->high_sparse_encode_route_witness_fused_tail_calls.store(
+        0, std::memory_order_relaxed);
 #endif
 #ifdef LEO_HAS_FF8
     context->high_t4_batch_binding_enabled =
@@ -16025,6 +16147,10 @@ bool ArmContextHighSparseEncodeRouteWitnessForDiagnostics(leo2_context* context)
         0, std::memory_order_relaxed);
     context->high_sparse_encode_route_witness_transform_calls.store(
         0, std::memory_order_relaxed);
+    context->high_sparse_encode_route_witness_fused_pair_calls.store(
+        0, std::memory_order_relaxed);
+    context->high_sparse_encode_route_witness_fused_tail_calls.store(
+        0, std::memory_order_relaxed);
     bool expected = false;
     return context->high_sparse_encode_route_witness_enabled.
         compare_exchange_strong(
@@ -16050,6 +16176,12 @@ bool ReadAndDisarmContextHighSparseEncodeRouteWitnessForDiagnostics(
             std::memory_order_relaxed);
     witness_out->transform_calls =
         context->high_sparse_encode_route_witness_transform_calls.load(
+            std::memory_order_relaxed);
+    witness_out->fused_pair_calls =
+        context->high_sparse_encode_route_witness_fused_pair_calls.load(
+            std::memory_order_relaxed);
+    witness_out->fused_tail_calls =
+        context->high_sparse_encode_route_witness_fused_tail_calls.load(
             std::memory_order_relaxed);
     return true;
 #else

@@ -53,6 +53,9 @@
 #if !defined(LEO2_EXPECT_HIGH_DIRECT_PRODUCTION)
 #error "production high direct-table expectation must be explicit"
 #endif
+#if !defined(LEO2_EXPECT_HIGH_SPARSE_PAIR_FUSION)
+#error "production high sparse pair-fusion expectation must be explicit"
+#endif
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 #error "the sparse-high production policy test must use the ordinary archive"
 #endif
@@ -279,7 +282,8 @@ void EncodeTwoAndCheck(
 void CheckWitness(
     leo2_context* context,
     uint64_t expected_direct,
-    uint64_t expected_transform)
+    uint64_t expected_transform,
+    uint64_t source_count)
 {
     leopard2_internal::HighSparseEncodeRouteWitness witness = {};
     Require(
@@ -289,6 +293,17 @@ void CheckWitness(
     Require(witness.direct_calls == expected_direct &&
             witness.transform_calls == expected_transform,
         "sparse-high route witness observed the wrong executor");
+    const uint64_t expected_pair_calls =
+        LEO2_EXPECT_HIGH_SPARSE_PAIR_FUSION
+            ? expected_direct * (source_count / 2U)
+            : 0;
+    const uint64_t expected_tail_calls =
+        LEO2_EXPECT_HIGH_SPARSE_PAIR_FUSION
+            ? expected_direct * (source_count % 2U)
+            : 0;
+    Require(witness.fused_pair_calls == expected_pair_calls &&
+            witness.fused_tail_calls == expected_tail_calls,
+        "sparse-high route witness observed the wrong fused operation count");
 }
 
 void ExercisePolicyState(
@@ -318,7 +333,7 @@ void ExercisePolicyState(
         "sparse-high route witness could not be armed");
     EncodeOneAndCheck(codec, original, field, generator, 16, 7);
     CheckWitness(context, expected_direct ? 1 : 0,
-        expected_direct ? 0 : 1);
+        expected_direct ? 0 : 1, 2);
 
     leo2_codec_destroy(codec);
     leo2_context_destroy(context);
@@ -343,7 +358,7 @@ void ExerciseTransformWitness(
         leopard2_internal::ArmContextHighSparseEncodeRouteWitnessForDiagnostics(context),
         "sparse-high exclusion witness could not be armed");
     EncodeOneAndCheck(codec, original, field, generator, r, r - 1);
-    CheckWitness(context, 0, 1);
+    CheckWitness(context, 0, 1, k);
 }
 
 std::vector<Cell> CandidateCells()
@@ -422,7 +437,7 @@ uint64_t ExerciseCandidateCells(
                 codec, original, field, generator, cell.r, parity);
             ++parity_checks;
         }
-        CheckWitness(context, cell.r, 0);
+        CheckWitness(context, cell.r, 0, cell.k);
         leo2_codec_destroy(codec);
         route_checks_out += cell.r;
         route_checks_out += ExerciseBatchEntry(
@@ -514,7 +529,8 @@ uint64_t ExerciseBatchEntry(
         ? 2U * item_count : item_count;
     CheckWitness(context,
         expected_direct ? expected_calls : 0,
-        expected_direct ? 0 : expected_calls);
+        expected_direct ? 0 : expected_calls,
+        k);
 
     const leopard2_test::BinaryField field =
         leopard2_test::make_legacy_gf8();
@@ -591,7 +607,7 @@ void ExerciseExclusions(leo2_context* context)
         leopard2_internal::ArmContextHighSparseEncodeRouteWitnessForDiagnostics(context),
         "sparse-high Q2 exclusion witness could not be armed");
     EncodeTwoAndCheck(codec, original, field, generator, 16);
-    CheckWitness(context, 0, 1);
+    CheckWitness(context, 0, 1, 2);
     ExerciseTransformWitness(context, codec, 2, 16, 1152,
         UINT64_C(0x4558434c55444541));
     leo2_codec_destroy(codec);
@@ -756,12 +772,14 @@ int main()
             "Leopard2 sparse-high production policy passed: "
             "states=3 candidate_tuples=24 candidate_parity_rows=%llu "
             "side2_control_tuples=12 side2_control_routes=%llu routes=%llu "
+            "pair_fusion=%s "
             "apis=one-shot,batch1,batch4,batch8,batch16,"
             "binding1,binding4,binding8,binding16 "
             "binding_reuse=2\n",
             static_cast<unsigned long long>(parity_checks),
             static_cast<unsigned long long>(side2_route_checks),
-            static_cast<unsigned long long>(route_checks));
+            static_cast<unsigned long long>(route_checks),
+            LEO2_EXPECT_HIGH_SPARSE_PAIR_FUSION ? "on" : "off");
         return 0;
     }
     catch (const std::exception& error)

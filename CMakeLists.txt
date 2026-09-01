@@ -1906,6 +1906,16 @@ if(LEO2_BUILD_TESTS)
                 leopard2_high_sparse_auto_production_test PRIVATE
                 LEO2_EXPECT_HIGH_SPARSE_DIRECT_AUTO=0)
         endif()
+        if(LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE AND
+           LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT)
+            target_compile_definitions(
+                leopard2_high_sparse_auto_production_test PRIVATE
+                LEO2_EXPECT_HIGH_SPARSE_PAIR_FUSION=1)
+        else()
+            target_compile_definitions(
+                leopard2_high_sparse_auto_production_test PRIVATE
+                LEO2_EXPECT_HIGH_SPARSE_PAIR_FUSION=0)
+        endif()
         target_link_libraries(
             leopard2_high_sparse_auto_production_test leopard)
         add_test(NAME leopard2_high_sparse_auto_production
