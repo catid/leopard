@@ -1415,6 +1415,8 @@ class HostEnvironment:
         env: Mapping[str, str],
         timeout: float,
         maximum_bytes: int,
+        inherited_descriptors: Sequence[int] = (),
+        executable_descriptor: int | None = None,
     ) -> CommandResult:
         """Run one new-session child with bounded stdout+stderr capture."""
         arguments = _command_arguments(argv)
@@ -1427,6 +1429,17 @@ class HostEnvironment:
         _require(type(maximum_bytes) is int and
                  0 <= maximum_bytes <= MAX_COMMAND_OUTPUT_BYTES,
                  "command output bound is invalid")
+        _require(type(inherited_descriptors) in (list, tuple) and
+                 len(inherited_descriptors) <= 64 and
+                 all(type(descriptor) is int and descriptor >= 0
+                     for descriptor in inherited_descriptors) and
+                 len(set(inherited_descriptors)) ==
+                    len(inherited_descriptors) and
+                 (executable_descriptor is None or
+                  (type(executable_descriptor) is int and
+                   executable_descriptor in inherited_descriptors)),
+                 "command inherited descriptors are invalid")
+        inherited = tuple(inherited_descriptors)
         process: subprocess.Popen[bytes] | None = None
         selector = selectors.DefaultSelector()
         outputs: dict[int, bytearray] = {}
@@ -1434,16 +1447,21 @@ class HostEnvironment:
         try:
             with _LinuxChildContainment() as containment:
                 try:
-                    process = subprocess.Popen(
-                        arguments,
-                        cwd=working_directory,
-                        env=environment,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        start_new_session=True,
-                        close_fds=True,
-                    )
+                    options: dict[str, Any] = {
+                        "cwd": working_directory,
+                        "env": environment,
+                        "stdin": subprocess.DEVNULL,
+                        "stdout": subprocess.PIPE,
+                        "stderr": subprocess.PIPE,
+                        "start_new_session": True,
+                        "close_fds": True,
+                    }
+                    if inherited:
+                        options["pass_fds"] = inherited
+                    if executable_descriptor is not None:
+                        options["executable"] = \
+                            f"/proc/self/fd/{executable_descriptor}"
+                    process = subprocess.Popen(arguments, **options)
                 except OSError as error:
                     raise AcquisitionError(
                         f"command could not be started: {error}") from error
@@ -2615,7 +2633,8 @@ def canonical_git_archive(
         "canonical archive commit is invalid")
     _require(prefix in (
         "leopard-main-source/", "leopard2-adapter-source/",
-        "sse2neon-source/"), "canonical archive prefix is invalid")
+        "sse2neon-source/", "candidate-source/"),
+        "canonical archive prefix is invalid")
     name = _safe_relative_path(
         destination_name, "canonical archive destination name")
     _require("/" not in name and name.endswith(".tar"),
@@ -4336,6 +4355,123 @@ class LaneWriter:
         os.fchmod(self._root_descriptor, LANE_DIRECTORY_MODE)
         os.fsync(self._root_descriptor)
 
+    def seal_payload(
+        self,
+        *,
+        terminal: str,
+        terminal_content: bytes,
+        retained_files: Mapping[str, bytes],
+        retained_paths: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Exclusively publish one closed payload and seal its exact tree.
+
+        This is the schema-neutral publication primitive.  Callers must
+        validate their terminal record and its inventory before entering this
+        boundary; this method independently enforces the byte/path topology,
+        never-reused root, canonical checksum ledger, and owner-only seal.
+        ``seal_record`` below remains the exact-main schema-specific wrapper.
+        """
+        self._require_open()
+        terminal_path = _safe_relative_path(terminal, "lane terminal path")
+        _require(
+            terminal_path not in {_TREE_METADATA_PATH, _SHA256SUMS_PATH} and
+            type(terminal_content) is bytes and
+            0 < len(terminal_content) <= MAX_SEALED_FILE_BYTES,
+            "lane terminal bytes are invalid")
+        _require(type(retained_files) is dict,
+                 "retained lane files are not a path-to-bytes mapping")
+        path_files = {} if retained_paths is None else retained_paths
+        _require(type(path_files) is dict and
+                 set(retained_files).isdisjoint(path_files) and
+                 terminal_path not in retained_files and
+                 terminal_path not in path_files,
+                 "retained path-backed lane files are invalid")
+        normalized_files: dict[str, bytes] = {}
+        for path, content in retained_files.items():
+            relative = _safe_relative_path(path, "retained lane path")
+            _require(
+                relative not in {
+                    terminal_path, _TREE_METADATA_PATH, _SHA256SUMS_PATH} and
+                relative not in normalized_files and
+                type(content) is bytes and
+                len(content) <= MAX_SEALED_FILE_BYTES,
+                     f"retained lane file {relative!r} is not bytes")
+            normalized_files[relative] = content
+        normalized_paths: dict[str, str] = {}
+        path_identities: dict[str, dict[str, Any]] = {}
+        for path, source in path_files.items():
+            relative = _safe_relative_path(path, "retained lane path")
+            _require(
+                relative not in {
+                    terminal_path, _TREE_METADATA_PATH, _SHA256SUMS_PATH} and
+                relative not in normalized_paths and
+                relative not in normalized_files and type(source) is str,
+                     "retained path-backed lane file is invalid")
+            path_identities[relative] = _owned_file_identity(
+                source, f"retained path-backed lane file {relative!r}")
+            normalized_paths[relative] = source
+        _require(normalized_files or normalized_paths,
+                 "sealed lane payload is empty")
+        for path in sorted(normalized_files):
+            self.publish_bytes(path, normalized_files[path])
+        for path in sorted(normalized_paths):
+            published = self.publish_path(path, normalized_paths[path])
+            expected = path_identities[path]
+            _require(published["size"] == expected["size"] and
+                     published["sha256"] == expected["sha256"],
+                     f"retained lane file {path!r} changed before publication")
+        self.publish_bytes(terminal_path, terminal_content)
+        self.publish_bytes(_TREE_METADATA_PATH, b"")
+        self.publish_bytes(_SHA256SUMS_PATH, b"")
+        metadata_descriptor = self._open_placeholder(_TREE_METADATA_PATH)
+        ledger_descriptor = -1
+        try:
+            ledger_descriptor = self._open_placeholder(_SHA256SUMS_PATH)
+        except BaseException:
+            os.close(metadata_descriptor)
+            raise
+        expected_files = set(normalized_files) | set(normalized_paths) | {
+            terminal_path,
+            _TREE_METADATA_PATH, _SHA256SUMS_PATH}
+        expected_directories = _derived_directories(sorted(expected_files))
+        try:
+            _require(self._directories == expected_directories,
+                     "lane contains an unexpected derived directory")
+            self._apply_final_modes(expected_files, expected_directories)
+            nodes, _digests = self._scan_tree(
+                expected_files, expected_directories, hash_files=False)
+            metadata_content = canonical_json_bytes(
+                expected_tree_metadata(nodes))
+            self._replace_placeholder(
+                _TREE_METADATA_PATH, metadata_descriptor, metadata_content)
+            _nodes, digests = self._scan_tree(
+                expected_files, expected_directories)
+            ledger_content = expected_sha256sums({
+                path: digest for path, digest in digests.items()
+                if path != _SHA256SUMS_PATH
+            })
+            self._replace_placeholder(
+                _SHA256SUMS_PATH, ledger_descriptor, ledger_content)
+            _nodes, digests = self._scan_tree(
+                expected_files, expected_directories)
+            _require(all(
+                digests[path] == identity["sha256"]
+                for path, identity in self._published.items()),
+                "lane files changed after publication")
+        finally:
+            os.close(metadata_descriptor)
+            os.close(ledger_descriptor)
+        self._sealed = True
+        return {
+            "root": self.root_path,
+            "terminal": terminal_path,
+            "terminal_sha256": _sha256(terminal_content),
+            "file_count": len(expected_files),
+            "directory_count": len(expected_directories),
+            "tree_metadata_sha256": digests[_TREE_METADATA_PATH],
+            "sha256sums_sha256": digests[_SHA256SUMS_PATH],
+        }
+
     def seal_record(
         self,
         record: Mapping[str, Any],
@@ -4395,65 +4531,18 @@ class LaneWriter:
             _require(claim["size"] == identity["size"] and
                      claim["sha256"] == identity["sha256"],
                      f"retained lane file {relative!r} differs from its claim")
-        terminal_content = canonical_json_bytes(validated)
-        for path in sorted(retained_files):
-            self.publish_bytes(path, retained_files[path])
-        for path in sorted(path_files):
-            published = self.publish_path(path, path_files[path])
-            claim = expected[path]
-            _require(published["size"] == claim["size"] and
-                     published["sha256"] == claim["sha256"],
-                     f"retained lane file {path!r} changed before publication")
-        self.publish_bytes(terminal, terminal_content)
-        self.publish_bytes(_TREE_METADATA_PATH, b"")
-        self.publish_bytes(_SHA256SUMS_PATH, b"")
-        metadata_descriptor = self._open_placeholder(_TREE_METADATA_PATH)
-        ledger_descriptor = -1
-        try:
-            ledger_descriptor = self._open_placeholder(_SHA256SUMS_PATH)
-        except BaseException:
-            os.close(metadata_descriptor)
-            raise
-        expected_files = set(expected) | {
-            _TREE_METADATA_PATH, _SHA256SUMS_PATH}
-        expected_directories = _derived_directories(sorted(expected_files))
-        try:
-            _require(self._directories == expected_directories,
-                     "lane contains an unexpected derived directory")
-            self._apply_final_modes(expected_files, expected_directories)
-            nodes, _digests = self._scan_tree(
-                expected_files, expected_directories, hash_files=False)
-            metadata_content = canonical_json_bytes(
-                expected_tree_metadata(nodes))
-            self._replace_placeholder(
-                _TREE_METADATA_PATH, metadata_descriptor, metadata_content)
-            _nodes, digests = self._scan_tree(
-                expected_files, expected_directories)
-            ledger_content = expected_sha256sums({
-                path: digest for path, digest in digests.items()
-                if path != _SHA256SUMS_PATH
-            })
-            self._replace_placeholder(
-                _SHA256SUMS_PATH, ledger_descriptor, ledger_content)
-            _nodes, digests = self._scan_tree(
-                expected_files, expected_directories)
-            _require(all(
-                digests[path] == identity["sha256"]
-                for path, identity in self._published.items()),
-                "lane files changed after publication")
-        finally:
-            os.close(metadata_descriptor)
-            os.close(ledger_descriptor)
-        self._sealed = True
-        return {
-            "root": self.root_path,
-            "terminal": terminal,
-            "terminal_record_sha256": validated["record_sha256"],
-            "file_count": len(expected_files),
-            "directory_count": len(expected_directories),
-            "tree_metadata_sha256": digests[_TREE_METADATA_PATH],
-            "sha256sums_sha256": digests[_SHA256SUMS_PATH],
-        }
+        result = self.seal_payload(
+            terminal=terminal,
+            terminal_content=canonical_json_bytes(validated),
+            retained_files=retained_files,
+            retained_paths=path_files)
+        # Preserve the schema-specific receipt consumed by the independent
+        # exact-main verifier.  ``seal_payload`` exposes the terminal bytes'
+        # digest to generic callers; exact-main binds the terminal through the
+        # record's self-hash instead.
+        del result["terminal_sha256"]
+        result["terminal_record_sha256"] = validated["record_sha256"]
+        return result
 
 
 def _verification_file_identity(

@@ -3366,6 +3366,20 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_k65_gen3_freeze_boundaries_optimized_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_k65_gen3_freeze_boundaries.py)
+            # Candidate authority acquisition is build-only.  These tests use
+            # synthetic sealed payloads, bounded loader discovery, and
+            # scripted verifier children;
+            # they launch no compiler, benchmark, timing, or qualification.
+            add_test(
+                NAME leopard2_k65_gen3_candidate_authority_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -X
+                    pycache_prefix=/dev/null
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_k65_gen3_candidate_authority.py)
+            add_test(
+                NAME leopard2_k65_gen3_candidate_authority_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O -X
+                    pycache_prefix=/dev/null
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_k65_gen3_candidate_authority.py)
             # Generation 3 remains offline and non-executable here.  These tests
             # bind the closed v2 lineage, the explicitly unratified template,
             # the three-budget state machine, and all 1,650 planned child argv
@@ -3411,6 +3425,8 @@ if(LEO2_BUILD_TESTS)
                 leopard2_pair_qualification_verify_optimized_self_test
                 leopard2_k65_gen3_freeze_boundaries_self_test
                 leopard2_k65_gen3_freeze_boundaries_optimized_self_test
+                leopard2_k65_gen3_candidate_authority_self_test
+                leopard2_k65_gen3_candidate_authority_optimized_self_test
                 leopard2_k65_gen3_preregistration_self_test
                 leopard2_k65_gen3_preregistration_optimized_self_test
                 leopard2_k65_gen3_execution_contract_self_test

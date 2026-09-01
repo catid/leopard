@@ -1225,6 +1225,11 @@ class ExactMainBaselineAcquireTest(unittest.TestCase):
                 retained, record = fixture_for_root(root, kind)
                 with acquire.LaneWriter(str(root)) as writer:
                     seal = writer.seal_record(record, retained)
+                self.assertEqual(set(seal), {
+                    "root", "terminal", "terminal_record_sha256",
+                    "file_count", "directory_count",
+                    "tree_metadata_sha256", "sha256sums_sha256",
+                })
                 self.assertEqual(seal["terminal"],
                                  "baseline-authority.json" if kind ==
                                  "authority" else "FAILED.json")
@@ -1244,6 +1249,43 @@ class ExactMainBaselineAcquireTest(unittest.TestCase):
                 self.assertEqual(
                     completed.returncode, expected_status,
                     completed.stderr.decode("utf-8", "replace"))
+
+    def test_schema_neutral_payload_seals_and_replays(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leopard-generic-sealed-payload.") as temporary:
+            root = (Path(temporary) / "lane").resolve()
+            terminal = b'{"schema":"unit-terminal/v1"}\n'
+            retained = {
+                "artifacts/payload.bin": b"payload bytes\n",
+                "records/detail.json": b'{"value":1}\n',
+            }
+            with acquire.LaneWriter(str(root)) as writer:
+                seal = writer.seal_payload(
+                    terminal="unit-terminal.json",
+                    terminal_content=terminal,
+                    retained_files=retained)
+            self.assertEqual(set(seal), {
+                "root", "terminal", "terminal_sha256", "file_count",
+                "directory_count", "tree_metadata_sha256",
+                "sha256sums_sha256",
+            })
+            self.assertEqual(seal["terminal_sha256"], sha256(terminal))
+            with verifier.read_sealed_tree(root) as tree:
+                metadata = verifier.verify_tree_metadata(tree)
+                ledger = verifier.verify_sha256sums(tree)
+                self.assertEqual(set(tree.files), set(retained) | {
+                    "unit-terminal.json", "TREE-METADATA.json",
+                    "SHA256SUMS",
+                })
+                self.assertEqual(tree.read_file(
+                    "unit-terminal.json", maximum_bytes=1024), terminal)
+                tree.reverify()
+            self.assertEqual(
+                seal["tree_metadata_sha256"],
+                sha256((root / "TREE-METADATA.json").read_bytes()))
+            self.assertEqual(
+                seal["sha256sums_sha256"], ledger["sha256"])
+            self.assertGreaterEqual(len(metadata["entries"]), len(tree.files))
 
     def test_lane_root_is_never_reused_and_publish_is_no_replace(self) -> None:
         with tempfile.TemporaryDirectory(
