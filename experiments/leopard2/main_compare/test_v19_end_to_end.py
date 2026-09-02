@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -59,6 +60,39 @@ def expected_attempt_two() -> dict:
         prior_attempt_acquisition_sha256="1" * 64,
         prior_attempt_selection_status="no-candidate-pair-qualified",
     )
+
+
+def live_authority(raw: dict) -> dict:
+    qualification = raw["pair_qualification"]
+    return runner.prepare_v19_live_run_authority(
+        campaign=raw["campaign"], host_identity_value=raw["host_initial"],
+        expected_attempt=qualification["attempt"],
+        acquisition_value=qualification["acquisition"],
+        bridge_value=qualification["bridge"],
+        expected_v18_failure_lineage_sha256=
+            qualification["v18_failure_lineage_sha256"],
+        expected_claim_ceiling_sha256=
+            runner.pair_v19.contract.canonical_sha256(
+                qualification["shared_host_claim_ceiling"]),
+        resource_envelope_value=copy.deepcopy(
+            runner.V19_LIVE_RESOURCE_ENVELOPE),
+        controller_affinity_value=passive_fixtures.v19_controller(raw),
+        environment_census_pre_value=
+            passive_fixtures.v19_snapshot(raw, "pre"))
+
+
+def handed_off_authority(raw: dict) -> dict:
+    return runner.bind_v19_live_first_window(
+        live_authority(raw), campaign=raw["campaign"],
+        host_identity_value=raw["host_initial"],
+        first_window_before_value=raw["invocations"][0]
+            ["cpu_window"]["before"])
+
+
+def complete_live_authority(raw: dict) -> dict:
+    return runner.complete_v19_live_run_authority(
+        handed_off_authority(raw), campaign=raw["campaign"],
+        host_identity_value=raw["host_initial"])
 
 
 def attempt_cli_arguments(attempt: int) -> tuple[str, ...]:
@@ -483,6 +517,222 @@ class V19EndToEndTests(unittest.TestCase):
             mutation(candidate)
             self.assert_all_reject(
                 candidate, attempt, label, witnesses)
+
+    def test_dormant_live_producer_uses_one_dynamic_pair_end_to_end(
+            self) -> None:
+        raw = replay_fixtures.fixtures.synthetic_raw(
+            raw_schema=runner.RAW_SCHEMA_V19, v19_primary=7)
+        qualification = raw["pair_qualification"]
+        self.assertEqual(qualification["selected_pair"], {
+            "benchmark_cpu": 7, "reserved_sibling": 71,
+        })
+
+        forbidden = (
+            "run_process_bounded", "validate_topology", "host_identity",
+            "run_child",
+        )
+        patches = [
+            mock.patch.object(
+                runner, name,
+                side_effect=AssertionError(
+                    f"dormant v19 producer called {name}"))
+            for name in forbidden
+        ]
+        with patches[0], patches[1], patches[2], patches[3]:
+            authority = live_authority(raw)
+            self.assertEqual(
+                authority["acquisition_generation"], "passive-v3")
+            self.assertEqual(
+                authority["qualification"]["stage"], "bridged")
+            handoff = runner.bind_v19_live_first_window(
+                authority, campaign=raw["campaign"],
+                host_identity_value=raw["host_initial"],
+                first_window_before_value=raw["invocations"][0]
+                    ["cpu_window"]["before"])
+            launch = runner.require_v19_live_launch_authority(
+                handoff, campaign=raw["campaign"],
+                host_identity_value=raw["host_initial"])
+            completed = runner.complete_v19_live_run_authority(
+                launch, campaign=raw["campaign"],
+                host_identity_value=raw["host_initial"])
+            rebuilt_raw = runner.v19_live_raw_record(
+                completed, created_utc=raw["created_utc"],
+                campaign=raw["campaign"], host_initial=raw["host_initial"],
+                isolation=raw["isolation"],
+                reservation=raw["reservation"],
+                input_specification=raw["input_specification"],
+                identities_initial=raw["identities_initial"],
+                executable_snapshots=raw["executable_snapshots"],
+                invocations=raw["invocations"],
+                identities_final=raw["identities_final"],
+                host_final=raw["host_final"])
+        self.assertEqual(rebuilt_raw, raw)
+        self.assertEqual(rebuilt_raw["schema"], runner.RAW_SCHEMA_V19)
+        self.assertNotEqual(
+            rebuilt_raw["schema"], runner.RAW_SCHEMA)
+        self.assertEqual(
+            rebuilt_raw["isolation"]["before"]["monotonic_ns"],
+            qualification["bridge"]["campaign_presample_before"]
+                ["read_finished_monotonic_ns"])
+        self.assertEqual(
+            rebuilt_raw["invocations"][0]["cpu_window"]["before"],
+            qualification["first_window_handoff"]["first_window_before"])
+
+        with tempfile.TemporaryDirectory(
+                prefix="leopard-v19-live-producer-") as temporary:
+            manifest_path = \
+                replay_fixtures.materialize_windowed_auditor_bundle(
+                    Path(temporary), rebuilt_raw)
+            stored_manifest = runner.strict_json_loads(
+                manifest_path.read_bytes(), "stored v19 live manifest")
+            stored_raw = runner.strict_json_loads(
+                (manifest_path.parent / "raw.json").read_bytes(),
+                "stored v19 live raw")
+            self.assertIsInstance(stored_manifest, dict)
+            self.assertIsInstance(stored_raw, dict)
+            rebuilt_manifest = runner.v19_live_manifest_record(
+                completed, stored_raw,
+                created_utc=stored_manifest["created_utc"])
+            self.assertEqual(rebuilt_manifest, stored_manifest)
+            self.assertEqual(
+                rebuilt_manifest["schema"], runner.MANIFEST_SCHEMA_V19)
+            self.assertNotEqual(
+                rebuilt_manifest["schema"], runner.MANIFEST_SCHEMA)
+
+        failed_authority = runner.fail_v19_live_campaign_authority(
+            handoff, campaign=raw["campaign"],
+            host_identity_value=raw["host_initial"])
+        before = raw["isolation"]["before"]
+        after = raw["isolation"]["after"]
+        failed_isolation = runner.isolation_record_v2(
+            7, 71, raw["isolation"]["pair_lease"],
+            before["monotonic_ns"], after["monotonic_ns"],
+            before["benchmark_cpu"], after["benchmark_cpu"],
+            before["reserved_sibling"], after["reserved_sibling"], [])
+        failure = runner.v19_live_failure_record(
+            failed_authority, created_utc=raw["created_utc"],
+            error_type="EvidenceError", error="fixture failure",
+            diagnostic_traceback="fixture traceback",
+            campaign=raw["campaign"], host_initial=raw["host_initial"],
+            reservation=raw["reservation"],
+            pair_lease=raw["isolation"]["pair_lease"],
+            isolation=failed_isolation,
+            input_specification=raw["input_specification"],
+            identities_initial=raw["identities_initial"],
+            executable_snapshots=raw["executable_snapshots"],
+            invocations=[], retained_files=[])
+        self.assertEqual(
+            failure,
+            replay_fixtures.fixtures.synthetic_failure(
+                runner.RAW_SCHEMA_V19, v19_primary=7))
+        self.assertEqual(failure["schema"], runner.FAILURE_SCHEMA_V19)
+        self.assertNotEqual(failure["schema"], runner.FAILURE_SCHEMA)
+        self.assertEqual(
+            failure["pair_qualification"]["selected_pair"], {
+                "benchmark_cpu": 7, "reserved_sibling": 71,
+            })
+        self.assertEqual(
+            (failure["pair_qualification"]["stage"],
+             failure["pair_qualification"]["terminal"]),
+            ("campaign", "campaign-rejected"))
+
+    def test_dormant_live_prelaunch_and_handoff_fail_closed(self) -> None:
+        raw = canonical_raw()
+        qualification = raw["pair_qualification"]
+
+        for label, mutate in (
+            ("campaign pair", lambda values:
+             values["campaign"].__setitem__("benchmark_cpu", 2)),
+            ("launch affinity", lambda values:
+             values["campaign"]["allowed_cpu_set_at_launch"].pop()),
+            ("bridge", lambda values:
+             values["bridge"].__setitem__("bridge_tail_sha256", "0" * 64)),
+            ("attempt", lambda values:
+             values["attempt"].__setitem__("attempt_budget", 3)),
+            ("v18 lineage", lambda values:
+             values.__setitem__("lineage", "0" * 64)),
+            ("claim ceiling", lambda values:
+             values.__setitem__("claim", "0" * 64)),
+            ("resource envelope", lambda values:
+             values["resource"].__setitem__("release_max_jobs", 2)),
+            ("controller generation", lambda values:
+             values["controller"].__setitem__(
+                 "acquisition_generation", "passive-v2")),
+            ("pre census", lambda values:
+             values["census"]["reserved_cpus"].append(66)),
+        ):
+            values = {
+                "campaign": copy.deepcopy(raw["campaign"]),
+                "host": copy.deepcopy(raw["host_initial"]),
+                "attempt": copy.deepcopy(qualification["attempt"]),
+                "acquisition": copy.deepcopy(qualification["acquisition"]),
+                "bridge": copy.deepcopy(qualification["bridge"]),
+                "lineage": qualification["v18_failure_lineage_sha256"],
+                "claim": runner.pair_v19.contract.canonical_sha256(
+                    qualification["shared_host_claim_ceiling"]),
+                "resource": copy.deepcopy(
+                    runner.V19_LIVE_RESOURCE_ENVELOPE),
+                "controller": passive_fixtures.v19_controller(raw),
+                "census": passive_fixtures.v19_snapshot(raw, "pre"),
+            }
+            mutate(values)
+            with self.subTest(splice=label), self.assertRaises(
+                    runner.EvidenceError):
+                runner.prepare_v19_live_run_authority(
+                    campaign=values["campaign"],
+                    host_identity_value=values["host"],
+                    expected_attempt=values["attempt"],
+                    acquisition_value=values["acquisition"],
+                    bridge_value=values["bridge"],
+                    expected_v18_failure_lineage_sha256=values["lineage"],
+                    expected_claim_ceiling_sha256=values["claim"],
+                    resource_envelope_value=values["resource"],
+                    controller_affinity_value=values["controller"],
+                    environment_census_pre_value=values["census"])
+
+        authority = live_authority(raw)
+        tail = qualification["bridge"]["campaign_presample_before"]
+        late_before = copy.deepcopy(
+            raw["invocations"][0]["cpu_window"]["before"])
+        late_started = (
+            tail["read_finished_monotonic_ns"] +
+            runner.pair_v19.MAXIMUM_HANDOFF_ELAPSED_NS + 1)
+        late_before.update({
+            "read_started_monotonic_ns": late_started,
+            "read_finished_monotonic_ns": late_started + 1_000_000,
+            "monotonic_ns": late_started + 1_000_000,
+        })
+        rejected = runner.bind_v19_live_first_window(
+            authority, campaign=raw["campaign"],
+            host_identity_value=raw["host_initial"],
+            first_window_before_value=late_before)
+        self.assertEqual(
+            rejected["qualification"]["terminal"],
+            "first-window-handoff-late")
+        launched = False
+        with self.assertRaises(runner.EvidenceError):
+            runner.require_v19_live_launch_authority(
+                rejected, campaign=raw["campaign"],
+                host_identity_value=raw["host_initial"])
+            launched = True
+        self.assertFalse(launched)
+
+        mixed = copy.deepcopy(authority)
+        mixed.pop("digest")
+        mixed["acquisition_generation"] = "passive-v2"
+        mixed = runner.signed(mixed)
+        with self.assertRaises(runner.EvidenceError):
+            runner.bind_v19_live_first_window(
+                mixed, campaign=raw["campaign"],
+                host_identity_value=raw["host_initial"],
+                first_window_before_value=raw["invocations"][0]
+                    ["cpu_window"]["before"])
+
+        self.assertEqual(
+            (runner.RAW_SCHEMA, runner.MANIFEST_SCHEMA,
+             runner.FAILURE_SCHEMA),
+            (runner.RAW_SCHEMA_V18, runner.MANIFEST_SCHEMA_V18,
+             runner.FAILURE_SCHEMA_V18))
 
     def test_isolated_consumer_self_test_stdout_is_exact(self) -> None:
         cases = (

@@ -428,8 +428,10 @@ def v17_execution_fixtures(
 
 
 def v19_qualification_components(
-    *, selected: bool = True,
+    *, selected: bool = True, selected_primary: int = 1,
 ) -> tuple[dict, dict | None, dict, object]:
+    if not 1 <= selected_primary <= 63:
+        raise ValueError("v19 fixture primary must be in 1..63")
     fixture_module = load_pair_v19_fixtures()
     acquire = fixture_module.live.acquire
     allowed = list(range(128))
@@ -446,10 +448,12 @@ def v19_qualification_components(
             f"{primary},{sibling_cpu}\n".encode("ascii")
         topology_values[root + "/cache/index3/shared_cpu_list"] = b"0-127\n"
 
-    def proc_snapshot(idle_offset: int, *, reject_pairs: bool = False) -> bytes:
+    def proc_snapshot(
+        idle_offset: int, *, rejected_primaries: range = range(0),
+    ) -> bytes:
         rows = [b"cpu  0 0 0 0 0 0 0 0 0 0"]
         for logical_cpu in allowed:
-            user = 1 if reject_pairs and 1 <= logical_cpu <= 63 else 0
+            user = 1 if logical_cpu in rejected_primaries else 0
             idle = 100_000 + logical_cpu + idle_offset - user
             rows.append(
                 f"cpu{logical_cpu} {user} 0 0 {idle} 0 0 0 0 0 0"
@@ -457,15 +461,18 @@ def v19_qualification_components(
         rows.extend((b"intr 0", b"ctxt 0", b"btime 0", b"processes 0"))
         return b"\n".join(rows) + b"\n"
 
+    rejected = (
+        range(1, selected_primary) if selected else range(1, 64))
     proc_records = [
-        proc_snapshot(
-            index * 700 + index // 6,
-            reject_pairs=not selected and index == 12,
-        )
-        for index in range(13)
+        proc_snapshot(index * 700 + index // 6)
+        for index in range(12)
     ]
+    proc_records.append(proc_snapshot(8_402, rejected_primaries=rejected))
     if selected:
-        proc_records.extend((proc_snapshot(8_502), proc_snapshot(8_602)))
+        proc_records.extend((
+            proc_snapshot(8_502, rejected_primaries=rejected),
+            proc_snapshot(8_602, rejected_primaries=rejected),
+        ))
     reader = fixture_module.fixtures.FakeHostReader(
         proc_records=proc_records,
         topology_variants=[topology_values],
@@ -499,8 +506,10 @@ def v19_qualification_components(
 def v19_execution_fixtures(
     campaign: Mapping[str, object],
 ) -> tuple[dict, dict, dict, dict]:
-    cpu = 1
-    sibling = 65
+    cpu = campaign["benchmark_cpu"]
+    sibling = campaign["reserved_sibling"]
+    if type(cpu) is not int or type(sibling) is not int:
+        raise RuntimeError("v19 fixture campaign lacks a selected pair")
     allowed = list(range(128))
 
     def policy(logical_cpu: int) -> dict:
@@ -555,7 +564,7 @@ def v19_execution_fixtures(
     }
 
     acquisition, bridge_record, qualification_policy, fixture_module = \
-        v19_qualification_components()
+        v19_qualification_components(selected_primary=cpu)
     if bridge_record is None:
         raise RuntimeError("selected v19 fixture lacks its bridge")
     first_before = fixture_module.first_window_before(bridge_record)
@@ -1848,8 +1857,12 @@ def sealed_executable_fixtures(identity: Mapping[str, object]) -> dict:
 def synthetic_raw(
     candidate_scale: float = 0.8, raw_schema: str = runner.RAW_SCHEMA_V16,
     candidate_mode: str = "auto",
-    *, multi_config: bool = False,
+    *, multi_config: bool = False, v19_primary: int = 1,
 ) -> dict:
+    if raw_schema != runner.RAW_SCHEMA_V19 and v19_primary != 1:
+        raise ValueError("v19_primary is only valid for schema v19 fixtures")
+    if not 1 <= v19_primary <= 63:
+        raise ValueError("v19 fixture primary must be in 1..63")
     identity, specification = cmake_fixture_identity(
         raw_schema, multi_config=multi_config)
     executable_snapshots = (
@@ -1864,9 +1877,10 @@ def synthetic_raw(
             "iterations": 9,
             "warmup": 2,
             "benchmark_cpu": (
-                1 if raw_schema == runner.RAW_SCHEMA_V19 else 52),
+                v19_primary if raw_schema == runner.RAW_SCHEMA_V19 else 52),
             "reserved_sibling": (
-                65 if raw_schema == runner.RAW_SCHEMA_V19 else 116),
+                v19_primary + 64
+                if raw_schema == runner.RAW_SCHEMA_V19 else 116),
             "allowed_cpu_set_at_launch": (
                 list(range(128))
                 if raw_schema == runner.RAW_SCHEMA_V19
@@ -2208,8 +2222,11 @@ def replace_current_executable_recipe_text(value: dict, text: str) -> None:
     synchronize_identity(value)
 
 
-def synthetic_failure(raw_schema: str) -> dict:
-    raw = synthetic_raw(raw_schema=raw_schema)
+def synthetic_failure(
+    raw_schema: str, *, v19_primary: int = 1,
+) -> dict:
+    raw = synthetic_raw(
+        raw_schema=raw_schema, v19_primary=v19_primary)
     failure_schema = {
         runner.RAW_SCHEMA_V2: runner.FAILURE_SCHEMA_V2,
         runner.RAW_SCHEMA_V3: runner.FAILURE_SCHEMA_V3,

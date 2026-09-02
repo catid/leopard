@@ -53,6 +53,12 @@ _PAIR_V19_PATH = (
 if Path(pair_v19.__file__).resolve(strict=True) != _PAIR_V19_PATH:
     raise RuntimeError(
         "pair-qualified v19 contract resolved outside this source tree")
+import passive_environment_census as passive_census
+_PASSIVE_CENSUS_PATH = (
+    _MAIN_COMPARE_DIR / "passive_environment_census.py").resolve(strict=True)
+if Path(passive_census.__file__).resolve(strict=True) != _PASSIVE_CENSUS_PATH:
+    raise RuntimeError(
+        "passive census contract resolved outside this source tree")
 
 _DECODER_DISPATCH_DIR = Path(__file__).resolve().parents[1] / "decoder_dispatch"
 if str(_DECODER_DISPATCH_DIR) not in sys.path:
@@ -145,6 +151,18 @@ FAILURE_EVIDENCE_CONTRACT_V18 = \
 FAILURE_EVIDENCE_CONTRACT_V19 = \
     "leopard2-main-compare-failure-evidence-contract/v19"
 FAILURE_EVIDENCE_CONTRACT = FAILURE_EVIDENCE_CONTRACT_V18
+V19_LIVE_RUN_AUTHORITY_SCHEMA = \
+    "leopard2-main-compare-v19-live-run-authority/v1"
+V19_ACQUISITION_GENERATION = "passive-v3"
+V19_LIVE_RESOURCE_ENVELOPE = {
+    "memory_max_bytes": 536_870_912,
+    "memory_swap_max_bytes": 0,
+    "release_authorized_max_jobs": 2,
+    "release_max_jobs": 1,
+    "release_max_jobs_basis": "retained-preflight-proven-cap",
+    "sanitizer_max_jobs": 1,
+    "maximum_substantial_processes": 1,
+}
 _V16_AUTO_GF16_GFNI_SELECTOR = re.compile(
     rb"(?m)^static std::atomic<uint32_t> "
     rb"g_auto_gf16_gfni_encode_mode\(([0-9]+)U\);$")
@@ -360,6 +378,14 @@ MANIFEST_V8_KEYS = frozenset((
     "identities", "executable_snapshots", "analysis", "digest",
 ))
 MANIFEST_V19_KEYS = frozenset((*MANIFEST_V8_KEYS, "pair_qualification"))
+V19_LIVE_RUN_AUTHORITY_KEYS = frozenset((
+    "schema", "acquisition_generation", "expected_attempt",
+    "v18_failure_lineage_sha256", "claim_ceiling_sha256",
+    "resource_envelope", "resource_envelope_sha256",
+    "controller_affinity", "controller_affinity_sha256",
+    "environment_census_pre", "environment_census_pre_sha256",
+    "qualification", "digest",
+))
 INVOCATION_V8_KEYS = frozenset((
     "cell_id", "round", "slot", "implementation", "command",
     "execution_protocol", "executable_snapshot", "environment", "pinned_cpu",
@@ -10692,6 +10718,559 @@ def publish_failure_record(
         parsed, output, check_files=True,
         evidence_directory=evidence_directory)
     return parsed
+
+
+def _validate_v19_live_campaign_authority(
+    campaign_value: object,
+    host_identity_value: object,
+    qualification: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind one dormant live-run authority to exact v19 campaign inputs."""
+    require(isinstance(campaign_value, dict) and
+            set(campaign_value) == CAMPAIGN_V8_KEYS,
+            "v19 live campaign has unexpected or missing fields")
+    campaign = campaign_value
+    require(type(campaign.get("rounds")) is int and
+            campaign["rounds"] == ROUNDS and
+            exact_json_equal(campaign.get("order"), list(ORDER)) and
+            type(campaign.get("batch")) is int and campaign["batch"] == 1 and
+            type(campaign.get("threads")) is int and
+            campaign["threads"] == 1,
+            "v19 live campaign is not the exact three-round ABBA geometry")
+    require(type(campaign.get("iterations")) is int and
+            3 <= campaign["iterations"] <= MAX_CAMPAIGN_COUNT and
+            type(campaign.get("reuse")) is int and
+            1 <= campaign["reuse"] <= MAX_CAMPAIGN_COUNT and
+            type(campaign.get("warmup")) is int and
+            1 <= campaign["warmup"] <= MAX_CAMPAIGN_COUNT,
+            "v19 live campaign scalar counts are invalid")
+    timeout = campaign.get("timeout_seconds")
+    require(isinstance(timeout, (int, float)) and
+            not isinstance(timeout, bool) and math.isfinite(timeout) and
+            0 < timeout <= MAX_COMMAND_TIMEOUT_SECONDS,
+            "v19 live campaign timeout is invalid")
+    require(exact_json_equal(
+                campaign.get("child_environment"),
+                child_environment_for_raw_schema(RAW_SCHEMA_V19)) and
+            exact_json_equal(
+                campaign.get("statistics"),
+                statistics_policy(RAW_SCHEMA_V19)),
+            "v19 live campaign policy differs from schema v19")
+    validate_candidate_mode_schema(campaign, RAW_SCHEMA_V19)
+
+    cells_value = campaign.get("cells")
+    require(type(cells_value) is list and
+            1 <= len(cells_value) <= MAX_CAMPAIGN_CELLS and
+            all(isinstance(item, dict) and set(item) == {
+                "identifier", "k", "r", "shard_bytes", "losses", "seed"}
+                for item in cells_value),
+            "v19 live campaign cell list is invalid")
+    cells = [Cell(**item) for item in cells_value]
+    require(len({cell.identifier for cell in cells}) == len(cells),
+            "v19 live campaign cell identifiers are not unique")
+    for cell in cells:
+        validate_cell(cell, RAW_SCHEMA_V19)
+
+    selected = qualification.get("selected_pair")
+    acquisition = qualification.get("acquisition")
+    require(isinstance(selected, dict) and isinstance(acquisition, dict),
+            "v19 live authority lacks a selected acquisition")
+    cpu = selected.get("benchmark_cpu")
+    sibling = selected.get("reserved_sibling")
+    require(type(cpu) is int and type(sibling) is int and
+            campaign.get("benchmark_cpu") == cpu and
+            campaign.get("reserved_sibling") == sibling,
+            "v19 live campaign differs from its dynamically selected pair")
+    allowed = acquisition.get("allowed_cpu_set_at_launch")
+    require(type(allowed) is list and
+            exact_json_equal(
+                campaign.get("allowed_cpu_set_at_launch"), allowed),
+            "v19 live campaign launch affinity differs from acquisition")
+    validate_host_record(
+        host_identity_value, cpu, sibling, allowed, RAW_SCHEMA_V19)
+    validate_gfni_campaign_contract(
+        RAW_SCHEMA_V19, cells, campaign, cpu, sibling)
+    return copy.deepcopy(campaign)
+
+
+def _validate_v19_live_run_authority(
+    value: object,
+    campaign: object,
+    host_identity_value: object,
+    *,
+    required_stage: str | None = None,
+    required_record_status: str | None = None,
+) -> dict[str, Any]:
+    """Recompute every signed field in a dormant v19 producer authority."""
+    authority = verify_signature(value, "v19 live-run authority")
+    require(set(authority) == V19_LIVE_RUN_AUTHORITY_KEYS and
+            authority.get("schema") == V19_LIVE_RUN_AUTHORITY_SCHEMA and
+            authority.get("acquisition_generation") ==
+                V19_ACQUISITION_GENERATION,
+            "v19 live-run authority identity differs")
+    try:
+        expected_attempt = pair_v19.validate_pair_qualified_attempt(
+            authority.get("expected_attempt"))
+    except Exception as error:
+        raise EvidenceError(
+            f"v19 live-run attempt authority is invalid: {error}") from error
+    expected_policy = v19_qualification_policy_record()
+    expected_policy_sha256 = pair_v19.contract.canonical_sha256(
+        expected_policy)
+    expected_host_sha256 = pair_v19.contract.canonical_sha256(
+        host_identity_value)
+    try:
+        qualification = pair_v19.validate_pair_qualified_v19_record(
+            authority.get("qualification"),
+            expected_policy=expected_policy,
+            expected_policy_sha256=expected_policy_sha256,
+            expected_host_identity_sha256=expected_host_sha256,
+            expected_attempt=expected_attempt)
+    except Exception as error:
+        raise EvidenceError(
+            f"v19 live-run pair authority is invalid: {error}") from error
+    lineage_sha256 = authority.get("v18_failure_lineage_sha256")
+    claim_sha256 = authority.get("claim_ceiling_sha256")
+    require(isinstance(lineage_sha256, str) and
+            HEX256.fullmatch(lineage_sha256) is not None and
+            lineage_sha256 ==
+                qualification.get("v18_failure_lineage_sha256"),
+            "v19 live-run v18 failure lineage authority differs")
+    require(isinstance(claim_sha256, str) and
+            HEX256.fullmatch(claim_sha256) is not None and
+            claim_sha256 == pair_v19.contract.canonical_sha256(
+                qualification.get("shared_host_claim_ceiling")),
+            "v19 live-run claim-ceiling authority differs")
+    resource = authority.get("resource_envelope")
+    resource_sha256 = authority.get("resource_envelope_sha256")
+    require(exact_json_equal(resource, V19_LIVE_RESOURCE_ENVELOPE) and
+            isinstance(resource_sha256, str) and
+            HEX256.fullmatch(resource_sha256) is not None and
+            resource_sha256 == sha256_bytes(canonical_bytes(resource)),
+            "v19 live-run resource-envelope authority differs")
+    if required_stage is not None:
+        require(qualification.get("stage") == required_stage,
+                "v19 live-run authority is at the wrong stage")
+    if required_record_status is not None:
+        require(qualification.get("record_status") ==
+                    required_record_status,
+                "v19 live-run authority has the wrong record status")
+    validated_campaign = _validate_v19_live_campaign_authority(
+        campaign, host_identity_value, qualification)
+    selected = qualification["selected_pair"]
+    cpu_pair = (
+        selected["benchmark_cpu"], selected["reserved_sibling"])
+    try:
+        controller = passive_census.validate_controller(
+            authority.get("controller_affinity"),
+            passive_census.RAW_SCHEMA_V19, cpu_pair=cpu_pair)
+        census_pre = passive_census.validate_snapshot(
+            authority.get("environment_census_pre"), "pre",
+            cpu_pair=cpu_pair)
+    except Exception as error:
+        raise EvidenceError(
+            f"v19 live-run census authority is invalid: {error}") from error
+    controller_hash = authority.get("controller_affinity_sha256")
+    census_hash = authority.get("environment_census_pre_sha256")
+    require(isinstance(controller_hash, str) and
+            HEX256.fullmatch(controller_hash) is not None and
+            controller_hash == sha256_bytes(canonical_bytes(controller)) and
+            isinstance(census_hash, str) and
+            HEX256.fullmatch(census_hash) is not None and
+            census_hash == sha256_bytes(canonical_bytes(census_pre)),
+            "v19 live-run census record hash differs")
+    acquisition = qualification["acquisition"]
+    bridge = qualification["bridge"]
+    require(exact_json_equal(
+                controller["before_allowed_cpus"],
+                acquisition["allowed_cpu_set_at_launch"]) and
+            exact_json_equal(
+                controller["runner_launch_allowed_cpus"],
+                validated_campaign["allowed_cpu_set_at_launch"]) and
+            controller["verified_acquisition_sha256"] ==
+                qualification["acquisition_sha256"] and
+            controller["verified_bridge_sha256"] ==
+                qualification["bridge_sha256"] and
+            bridge["bridge_finished_monotonic_ns"] <=
+                controller["pair_verification_completed_monotonic_ns"] <=
+                controller["affinity_narrowing_started_monotonic_ns"] <=
+                controller["affinity_narrowing_finished_monotonic_ns"] <=
+                census_pre["scan_started_monotonic_ns"],
+            "v19 live-run controller/census sequence differs")
+    return copy.deepcopy(authority)
+
+
+def _v19_live_authority_with_qualification(
+    authority: Mapping[str, Any], qualification: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = {
+        name: copy.deepcopy(authority[name])
+        for name in V19_LIVE_RUN_AUTHORITY_KEYS - {"digest"}
+    }
+    payload["qualification"] = copy.deepcopy(qualification)
+    return signed(payload)
+
+
+def _rebuild_v19_live_qualification(
+    authority: Mapping[str, Any],
+    *,
+    stage: str,
+    record_status: str,
+    terminal: object,
+    first_window_before_value: object,
+) -> dict[str, Any]:
+    qualification = authority["qualification"]
+    try:
+        return pair_v19.pair_qualified_v19_record(
+            stage=stage, record_status=record_status, terminal=terminal,
+            policy_value=qualification["policy"],
+            expected_policy_sha256=qualification["policy_sha256"],
+            host_identity_sha256=qualification["host_identity_sha256"],
+            attempt_value=authority["expected_attempt"],
+            acquisition_value=qualification["acquisition"],
+            bridge_value=qualification["bridge"],
+            first_window_before_value=first_window_before_value)
+    except Exception as error:
+        raise EvidenceError(
+            f"v19 live-run qualification transition is invalid: {error}") \
+            from error
+
+
+def prepare_v19_live_run_authority(
+    *,
+    campaign: object,
+    host_identity_value: object,
+    expected_attempt: object,
+    acquisition_value: object,
+    bridge_value: object,
+    expected_v18_failure_lineage_sha256: object,
+    expected_claim_ceiling_sha256: object,
+    resource_envelope_value: object,
+    controller_affinity_value: object,
+    environment_census_pre_value: object,
+) -> dict[str, Any]:
+    """Validate a dynamic pair and return a dormant prelaunch capability.
+
+    This is deliberately host-free and process-free.  The wrapper must obtain
+    and independently verify the acquisition, bridge, resource envelope, and
+    census authority before calling it.
+    """
+    try:
+        attempt = pair_v19.validate_pair_qualified_attempt(expected_attempt)
+        policy = v19_qualification_policy_record()
+        policy_sha256 = pair_v19.contract.canonical_sha256(policy)
+        qualification = pair_v19.pair_qualified_v19_record(
+            stage="bridged", record_status="in-progress", terminal=None,
+            policy_value=policy,
+            expected_policy_sha256=policy_sha256,
+            host_identity_sha256=pair_v19.contract.canonical_sha256(
+                host_identity_value),
+            attempt_value=attempt, acquisition_value=acquisition_value,
+            bridge_value=bridge_value)
+    except Exception as error:
+        raise EvidenceError(
+            f"v19 live-run prelaunch authority is invalid: {error}") \
+            from error
+    require(isinstance(expected_v18_failure_lineage_sha256, str) and
+            HEX256.fullmatch(expected_v18_failure_lineage_sha256) is not None,
+            "v19 live-run external v18 lineage hash is invalid")
+    require(isinstance(expected_claim_ceiling_sha256, str) and
+            HEX256.fullmatch(expected_claim_ceiling_sha256) is not None,
+            "v19 live-run external claim-ceiling hash is invalid")
+    authority = signed({
+        "schema": V19_LIVE_RUN_AUTHORITY_SCHEMA,
+        "acquisition_generation": V19_ACQUISITION_GENERATION,
+        "expected_attempt": attempt,
+        "v18_failure_lineage_sha256":
+            expected_v18_failure_lineage_sha256,
+        "claim_ceiling_sha256": expected_claim_ceiling_sha256,
+        "resource_envelope": copy.deepcopy(resource_envelope_value),
+        "resource_envelope_sha256": sha256_bytes(canonical_bytes(
+            resource_envelope_value)),
+        "controller_affinity": copy.deepcopy(controller_affinity_value),
+        "controller_affinity_sha256": sha256_bytes(canonical_bytes(
+            controller_affinity_value)),
+        "environment_census_pre": copy.deepcopy(
+            environment_census_pre_value),
+        "environment_census_pre_sha256": sha256_bytes(canonical_bytes(
+            environment_census_pre_value)),
+        "qualification": qualification,
+    })
+    return _validate_v19_live_run_authority(
+        authority, campaign, host_identity_value,
+        required_stage="bridged", required_record_status="in-progress")
+
+
+def bind_v19_live_first_window(
+    authority_value: object,
+    *,
+    campaign: object,
+    host_identity_value: object,
+    first_window_before_value: object,
+) -> dict[str, Any]:
+    """Bind the bridge tail to the first window without launching a child."""
+    authority = _validate_v19_live_run_authority(
+        authority_value, campaign, host_identity_value,
+        required_stage="bridged", required_record_status="in-progress")
+    qualification = authority["qualification"]
+    pre = authority["environment_census_pre"]
+    selected = qualification["selected_pair"]
+    bridge_tail = qualification["bridge"]["campaign_presample_before"]
+    try:
+        handoff = pair_v19.first_window_handoff_record(
+            qualification["bridge"], qualification["selected_pair"],
+            first_window_before_value)
+    except Exception as error:
+        raise EvidenceError(
+            f"v19 live-run first-window handoff is invalid: {error}") \
+            from error
+    require(pre["scan_finished_monotonic_ns"] <=
+                pre["activity_boundary_monotonic_ns"] <=
+                handoff["first_window_before_read_started_monotonic_ns"],
+            "v19 live-run pre-census escapes the first-window handoff")
+    for role in ("benchmark_cpu", "reserved_sibling"):
+        cpu = selected[role]
+        tail_fields = bridge_tail["cpus"][str(cpu)]["fields"]
+        census_fields = pre["proc_stat"][str(cpu)]["fields"]
+        first_fields = handoff["first_window_before"][role]["fields"]
+        require(all(
+                    tail_fields[name] <= census_fields[name] <=
+                        first_fields[name]
+                    for name in CPU_STAT_FIELDS),
+                f"v19 live-run pre-census CPU {cpu} counter chain differs")
+    if handoff["accepted"]:
+        status = "in-progress"
+        terminal = None
+    else:
+        status = "failed"
+        terminal = handoff["failure_terminal"]
+    advanced = _rebuild_v19_live_qualification(
+        authority, stage="handoff", record_status=status,
+        terminal=terminal,
+        first_window_before_value=first_window_before_value)
+    result = _v19_live_authority_with_qualification(authority, advanced)
+    return _validate_v19_live_run_authority(
+        result, campaign, host_identity_value,
+        required_stage="handoff", required_record_status=status)
+
+
+def require_v19_live_launch_authority(
+    authority_value: object,
+    *,
+    campaign: object,
+    host_identity_value: object,
+) -> dict[str, Any]:
+    """Fail closed unless the <=5-second first-window handoff is accepted."""
+    authority = _validate_v19_live_run_authority(
+        authority_value, campaign, host_identity_value,
+        required_stage="handoff", required_record_status="in-progress")
+    handoff = authority["qualification"].get("first_window_handoff")
+    require(isinstance(handoff, dict) and handoff.get("accepted") is True and
+            handoff.get("handoff_elapsed_ns") <=
+                pair_v19.MAXIMUM_HANDOFF_ELAPSED_NS,
+            "v19 live-run child launch lacks an accepted first-window handoff")
+    return authority
+
+
+def complete_v19_live_run_authority(
+    authority_value: object,
+    *,
+    campaign: object,
+    host_identity_value: object,
+) -> dict[str, Any]:
+    """Advance an accepted handoff to the exact NOT_PROMOTED terminal."""
+    authority = require_v19_live_launch_authority(
+        authority_value, campaign=campaign,
+        host_identity_value=host_identity_value)
+    first_before = authority["qualification"]["first_window_handoff"] \
+        ["first_window_before"]
+    qualification = _rebuild_v19_live_qualification(
+        authority, stage="complete", record_status="complete",
+        terminal=pair_v19.SUCCESS_TERMINAL,
+        first_window_before_value=first_before)
+    result = _v19_live_authority_with_qualification(
+        authority, qualification)
+    return _validate_v19_live_run_authority(
+        result, campaign, host_identity_value,
+        required_stage="complete", required_record_status="complete")
+
+
+def fail_v19_live_campaign_authority(
+    authority_value: object,
+    *,
+    campaign: object,
+    host_identity_value: object,
+) -> dict[str, Any]:
+    """Advance an accepted handoff to the canonical campaign failure state."""
+    authority = require_v19_live_launch_authority(
+        authority_value, campaign=campaign,
+        host_identity_value=host_identity_value)
+    first_before = authority["qualification"]["first_window_handoff"] \
+        ["first_window_before"]
+    qualification = _rebuild_v19_live_qualification(
+        authority, stage="campaign", record_status="failed",
+        terminal="campaign-rejected",
+        first_window_before_value=first_before)
+    result = _v19_live_authority_with_qualification(
+        authority, qualification)
+    return _validate_v19_live_run_authority(
+        result, campaign, host_identity_value,
+        required_stage="campaign", required_record_status="failed")
+
+
+def v19_live_raw_record(
+    authority_value: object,
+    *,
+    created_utc: object,
+    campaign: object,
+    host_initial: object,
+    isolation: object,
+    reservation: object,
+    input_specification: object,
+    identities_initial: object,
+    executable_snapshots: object,
+    invocations: object,
+    identities_final: object,
+    host_final: object,
+) -> dict[str, Any]:
+    """Build and fully replay-check one synthetic/offline v19 raw record."""
+    authority = _validate_v19_live_run_authority(
+        authority_value, campaign, host_initial,
+        required_stage="complete", required_record_status="complete")
+    require(isinstance(invocations, list),
+            "v19 live raw invocation sequence is not a list")
+    analysis = analyze(invocations, campaign, RAW_SCHEMA_V19)
+    raw = signed({
+        "schema": RAW_SCHEMA_V19,
+        "created_utc": copy.deepcopy(created_utc),
+        "validity_is_independent_of_speed": True,
+        "campaign": copy.deepcopy(campaign),
+        "host_initial": copy.deepcopy(host_initial),
+        "isolation": copy.deepcopy(isolation),
+        "reservation": copy.deepcopy(reservation),
+        "supervision": None,
+        "input_specification": copy.deepcopy(input_specification),
+        "identities_initial": copy.deepcopy(identities_initial),
+        "executable_snapshots": copy.deepcopy(executable_snapshots),
+        "invocations": copy.deepcopy(invocations),
+        "identities_final": copy.deepcopy(identities_final),
+        "host_final": copy.deepcopy(host_final),
+        "analysis": analysis,
+        "pair_qualification": copy.deepcopy(authority["qualification"]),
+    })
+    validate_raw(
+        raw, None, check_files=False, check_current_inputs=False,
+        expected_v19_attempt=authority["expected_attempt"])
+    return raw
+
+
+def v19_live_manifest_record(
+    authority_value: object,
+    raw_value: object,
+    *,
+    created_utc: object,
+) -> dict[str, Any]:
+    """Build the manifest for exact canonical ``raw.json`` wire bytes."""
+    require(isinstance(raw_value, dict),
+            "v19 live manifest raw value is not an object")
+    raw = raw_value
+    campaign = raw.get("campaign")
+    host = raw.get("host_initial")
+    authority = _validate_v19_live_run_authority(
+        authority_value, campaign, host,
+        required_stage="complete", required_record_status="complete")
+    validate_raw(
+        raw, None, check_files=False, check_current_inputs=False,
+        expected_v19_attempt=authority["expected_attempt"])
+    require(raw.get("schema") == RAW_SCHEMA_V19 and
+            exact_json_equal(raw.get("pair_qualification"),
+                             authority["qualification"]),
+            "v19 live manifest received mixed-generation raw evidence")
+    raw_bytes = canonical_bytes(raw) + b"\n"
+    manifest = signed({
+        "schema": MANIFEST_SCHEMA_V19,
+        "created_utc": copy.deepcopy(created_utc),
+        "valid": True,
+        "validity_is_independent_of_speed": True,
+        "raw": {
+            "path": "raw.json",
+            "size": len(raw_bytes),
+            "sha256": sha256_bytes(raw_bytes),
+            "payload_digest": raw["digest"],
+        },
+        "campaign": copy.deepcopy(raw["campaign"]),
+        "host": copy.deepcopy(raw["host_initial"]),
+        "isolation": copy.deepcopy(raw["isolation"]),
+        "reservation": copy.deepcopy(raw["reservation"]),
+        "supervision": None,
+        "identities": copy.deepcopy(raw["identities_initial"]),
+        "executable_snapshots": copy.deepcopy(
+            raw["executable_snapshots"]),
+        "analysis": copy.deepcopy(raw["analysis"]),
+        "pair_qualification": copy.deepcopy(
+            authority["qualification"]),
+    })
+    verify_signature(manifest, "v19 live manifest")
+    require(set(manifest) == MANIFEST_V19_KEYS,
+            "v19 live manifest has unexpected or missing fields")
+    validate_utc_timestamp(
+        manifest.get("created_utc"), "v19 live manifest creation time")
+    return manifest
+
+
+def v19_live_failure_record(
+    authority_value: object,
+    *,
+    created_utc: object,
+    error_type: object,
+    error: object,
+    diagnostic_traceback: object,
+    campaign: object,
+    host_initial: object,
+    reservation: object,
+    pair_lease: object,
+    isolation: object,
+    input_specification: object,
+    identities_initial: object,
+    executable_snapshots: object,
+    invocations: object,
+    retained_files: object,
+) -> dict[str, Any]:
+    """Build and replay-check a selected-pair v19 failure record.
+
+    Publication, recursive attempt sealing, and pre-acquisition failures stay
+    in the dedicated failure-orchestration task.  This producer only accepts a
+    canonical failed authority that already identifies a selected pair.
+    """
+    authority = _validate_v19_live_run_authority(
+        authority_value, campaign, host_initial,
+        required_record_status="failed")
+    failure = signed({
+        "schema": FAILURE_SCHEMA_V19,
+        "evidence_contract": FAILURE_EVIDENCE_CONTRACT_V19,
+        "created_utc": copy.deepcopy(created_utc),
+        "status": "failed",
+        "valid": False,
+        "error_type": copy.deepcopy(error_type),
+        "error": copy.deepcopy(error),
+        "campaign": copy.deepcopy(campaign),
+        "host_initial": copy.deepcopy(host_initial),
+        "reservation": copy.deepcopy(reservation),
+        "supervision": None,
+        "pair_lease": copy.deepcopy(pair_lease),
+        "isolation": copy.deepcopy(isolation),
+        "input_specification": copy.deepcopy(input_specification),
+        "identities_initial": copy.deepcopy(identities_initial),
+        "executable_snapshots": copy.deepcopy(executable_snapshots),
+        "invocations": copy.deepcopy(invocations),
+        "retained_files": copy.deepcopy(retained_files),
+        "traceback": copy.deepcopy(diagnostic_traceback),
+        "pair_qualification": copy.deepcopy(authority["qualification"]),
+    })
+    validate_failure(
+        failure, Path("/unused-v19-live-evidence"), check_files=False,
+        expected_v19_attempt=authority["expected_attempt"])
+    return failure
 
 
 def _run_campaign_owned(
