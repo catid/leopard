@@ -3362,6 +3362,16 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_pair_qualification_bridge_acquire_optimized_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_pair_qualification_bridge_acquire.py)
+            # The conditioned-passive v19 evidence contract is pure and uses
+            # only synthetic acquisition/bridge fixtures in this suite.
+            add_test(
+                NAME leopard2_pair_qualified_v19_contract_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_pair_qualified_v19_contract.py)
+            add_test(
+                NAME leopard2_pair_qualified_v19_contract_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_pair_qualified_v19_contract.py)
             add_test(
                 NAME leopard2_pair_qualification_bridge_contract_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
@@ -3441,6 +3451,8 @@ if(LEO2_BUILD_TESTS)
                 leopard2_pair_qualification_acquire_optimized_self_test
                 leopard2_pair_qualification_bridge_acquire_self_test
                 leopard2_pair_qualification_bridge_acquire_optimized_self_test
+                leopard2_pair_qualified_v19_contract_self_test
+                leopard2_pair_qualified_v19_contract_optimized_self_test
                 leopard2_pair_qualification_bridge_contract_self_test
                 leopard2_pair_qualification_bridge_contract_optimized_self_test
                 leopard2_pair_qualification_verify_self_test
