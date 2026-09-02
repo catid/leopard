@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[3]
 MAIN_COMPARE = ROOT / "experiments/leopard2/main_compare"
 SEALED_V17_FAILURE = (
     ROOT / ".research/leopard-79h/2cc900f-v17-passive-main-v1")
+SEALED_V18_FAILURE_A3 = (
+    ROOT / ".research/leopard-79h/c8f825d-v18-passive-main-a3")
 
 
 def load_module(name: str, path: Path):
@@ -713,6 +715,26 @@ class V18ReplayCompatibilityTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("envelope verified", completed.stdout)
+
+    @unittest.skipUnless(
+        (SEALED_V18_FAILURE_A3 / "FAILED.json").is_file(),
+        "retained passive-v18 attempt-three envelope is unavailable")
+    def test_current_wrapper_uses_sealed_v18_wrapper_for_lineage_replay(
+            self) -> None:
+        completed = subprocess.run(
+            ["/usr/bin/bash", str(
+                MAIN_COMPARE /
+                "run_authoritative_v17_gfni_main_compare.sh"),
+             "--verify", str(SEALED_V18_FAILURE_A3)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            check=False, text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        self.assertEqual(
+            completed.stdout,
+            f"authoritative v17/v18 envelope verified: "
+            f"{SEALED_V18_FAILURE_A3}\n")
 
 
 if __name__ == "__main__":

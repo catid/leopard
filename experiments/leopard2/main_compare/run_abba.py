@@ -9632,6 +9632,10 @@ def validate_raw(
     require(isinstance(raw_schema, str) and
             raw_schema in RAW_TO_CMAKE_IDENTITY,
             "wrong raw bundle schema")
+    require(
+        (expected_v19_attempt is not None) ==
+        (raw_schema == RAW_SCHEMA_V19),
+        "v19 attempt authority must be supplied exactly for a v19 raw bundle")
     if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
         expected_raw_keys = (
             RAW_V19_KEYS if raw_schema == RAW_SCHEMA_V19 else RAW_V8_KEYS)
@@ -10292,6 +10296,10 @@ def validate_failure(
             failure_schema in FAILURE_TO_RAW_SCHEMA and
             failure.get("status") == "failed" and failure.get("valid") is False,
             "failed campaign status is invalid")
+    require(
+        (expected_v19_attempt is not None) ==
+        (failure_schema == FAILURE_SCHEMA_V19),
+        "v19 attempt authority must be supplied exactly for a v19 failure")
     if failure_schema in (
             FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10, FAILURE_SCHEMA_V11,
             FAILURE_SCHEMA_V12, FAILURE_SCHEMA_V13, FAILURE_SCHEMA_V14,
@@ -10969,6 +10977,60 @@ def run_campaign(options: argparse.Namespace) -> int:
         evidence_directory.close()
 
 
+def add_v19_attempt_arguments(command: argparse.ArgumentParser) -> None:
+    """Add the external two-attempt authority accepted by v19 replay."""
+    command.add_argument("--v19-attempt", type=int, choices=(1, 2))
+    command.add_argument("--v19-prior-failure-sha256")
+    command.add_argument("--v19-prior-acquisition-sha256")
+    command.add_argument(
+        "--v19-prior-selection-status",
+        choices=("not-acquired", "no-candidate-pair-qualified",
+                 "selected-lowest-primary"))
+    command.add_argument(
+        "--v19-prior-selected-pair", metavar="BENCHMARK,SIBLING")
+
+
+def v19_attempt_from_options(options: argparse.Namespace) -> dict[str, Any] | None:
+    """Build exact external v19 replay authority from CLI options."""
+    attempt = getattr(options, "v19_attempt", None)
+    prior_failure = getattr(options, "v19_prior_failure_sha256", None)
+    prior_acquisition = getattr(
+        options, "v19_prior_acquisition_sha256", None)
+    prior_status = getattr(options, "v19_prior_selection_status", None)
+    prior_pair_text = getattr(options, "v19_prior_selected_pair", None)
+    prior_values = (
+        prior_failure, prior_acquisition, prior_status, prior_pair_text)
+    if attempt is None:
+        require(all(value is None for value in prior_values),
+                "v19 prior-attempt flags require --v19-attempt")
+        return None
+    prior_pair = None
+    if prior_pair_text is not None:
+        require(type(prior_pair_text) is str,
+                "--v19-prior-selected-pair must be BENCHMARK,SIBLING")
+        components = prior_pair_text.split(",")
+        require(len(components) == 2 and
+                all(component and component.isascii() and
+                    component.isdecimal() and len(component) <= 7 and
+                    (component == "0" or not component.startswith("0"))
+                    for component in components),
+                "--v19-prior-selected-pair must be BENCHMARK,SIBLING")
+        prior_pair = {
+            "benchmark_cpu": int(components[0], 10),
+            "reserved_sibling": int(components[1], 10),
+        }
+    try:
+        return pair_v19.pair_qualified_attempt_record(
+            attempt=attempt,
+            prior_attempt_failure_sha256=prior_failure,
+            prior_attempt_acquisition_sha256=prior_acquisition,
+            prior_attempt_selection_status=prior_status,
+            prior_attempt_selected_pair=prior_pair)
+    except pair_v19.PairQualifiedV19Error as error:
+        raise EvidenceError(
+            f"v19 attempt authority is invalid: {error}") from error
+
+
 def verified_campaign_bundle(
     manifest_path: Path, no_current_input_check: bool = False,
     expected_v19_attempt: object = None,
@@ -10994,6 +11056,11 @@ def verified_campaign_bundle(
                 manifest.get("valid") is True and
                 manifest.get("validity_is_independent_of_speed") is True,
                 "manifest is not valid main-comparison evidence")
+        require(
+            (expected_v19_attempt is not None) ==
+            (manifest_schema == MANIFEST_SCHEMA_V19),
+            "v19 attempt authority must be supplied exactly for a v19 "
+            "manifest")
         if manifest_schema in (
                 MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10,
                 MANIFEST_SCHEMA_V11, MANIFEST_SCHEMA_V12,
@@ -11129,8 +11196,10 @@ def verified_campaign_bundle(
 
 def verify_campaign(options: argparse.Namespace) -> int:
     manifest_path = EvidenceDirectory._absolute(options.manifest)
+    expected_v19_attempt = v19_attempt_from_options(options)
     manifest, _, _, manifest_snapshot = verified_campaign_bundle(
-        manifest_path, options.no_current_input_check)
+        manifest_path, options.no_current_input_check,
+        expected_v19_attempt=expected_v19_attempt)
     manifest_schema = manifest["schema"]
     affinity_binding = getattr(options, "affinity_binding", None)
     if affinity_binding is not None:
@@ -11160,6 +11229,7 @@ def verify_campaign(options: argparse.Namespace) -> int:
 
 def verify_failed_campaign(options: argparse.Namespace) -> int:
     failure_path = EvidenceDirectory._absolute(options.failure)
+    expected_v19_attempt = v19_attempt_from_options(options)
     directory = EvidenceDirectory.open_existing(failure_path.parent)
     try:
         _, failure_bytes = directory.snapshot(
@@ -11195,7 +11265,8 @@ def verify_failed_campaign(options: argparse.Namespace) -> int:
             failure_value = strict_failure
         validate_failure(
             failure_value, failure_path.parent, check_files=True,
-            evidence_directory=directory)
+            evidence_directory=directory,
+            expected_v19_attempt=expected_v19_attempt)
     finally:
         directory.close()
     print("failed exact-main campaign diagnostics and retained files verified; "
@@ -11249,10 +11320,12 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument(
         "--affinity-binding", type=Path,
         help="also require a verified accepted affinity-supervisor binding")
+    add_v19_attempt_arguments(verify)
     verify.set_defaults(function=verify_campaign)
     verify_failure = commands.add_parser(
         "verify-failure", help="verify a retained failed campaign bundle")
     verify_failure.add_argument("--failure", required=True, type=Path)
+    add_v19_attempt_arguments(verify_failure)
     verify_failure.set_defaults(function=verify_failed_campaign)
     return result
 

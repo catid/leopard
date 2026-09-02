@@ -98,6 +98,52 @@ class V19WrapperPreregistrationTests(unittest.TestCase):
         for value in preregistration["claim_ceiling"].values():
             self.assertIs(value, False)
 
+    def test_controller_closure_record_is_exact_and_canonical(self) -> None:
+        completed = subprocess.run(
+            [str(WRAPPER), "--print-conditioned-v19-controller-closure"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+        self.assertEqual(completed.stderr, b"")
+        self.assertTrue(completed.stdout.endswith(b"\n"))
+        self.assertEqual(completed.stdout.count(b"\n"), 1)
+        record = json.loads(completed.stdout)
+        self.assertEqual(
+            completed.stdout,
+            (json.dumps(record, ensure_ascii=False, sort_keys=True,
+                        separators=(",", ":")) + "\n").encode("utf-8"))
+        expected = (
+            ("pair_qualification_acquire.py",
+             "experiments/leopard2/main_compare/"
+             "pair_qualification_acquire.py"),
+            ("pair_qualification_bridge_acquire.py",
+             "experiments/leopard2/main_compare/"
+             "pair_qualification_bridge_acquire.py"),
+            ("pair_qualification_bridge_contract.py",
+             "experiments/leopard2/main_compare/"
+             "pair_qualification_bridge_contract.py"),
+            ("pair_qualification_contract.py",
+             "experiments/leopard2/main_compare/"
+             "pair_qualification_contract.py"),
+            ("pair_qualification_verify.py",
+             "experiments/leopard2/main_compare/"
+             "pair_qualification_verify.py"),
+            ("pair_qualified_v19_contract.py",
+             "experiments/leopard2/main_compare/"
+             "pair_qualified_v19_contract.py"),
+        )
+        self.assertEqual(
+            record["schema"], "leopard2-v19-controller-closure/v1")
+        self.assertEqual(
+            [(entry["lane_path"], entry["source_path"])
+             for entry in record["files"]], list(expected))
+        for entry in record["files"]:
+            source = ROOT / entry["source_path"]
+            self.assertTrue(source.is_file())
+            self.assertFalse(source.is_symlink())
+            self.assertEqual(
+                entry["sha256"], hashlib.sha256(source.read_bytes()).hexdigest())
+
     def test_unarmed_v19_and_exhausted_v18_refuse_before_lane(self) -> None:
         wrapper_text = WRAPPER.read_text(encoding="utf-8")
         verify_dispatch = wrapper_text.index(
@@ -212,6 +258,7 @@ class V19WrapperPreregistrationTests(unittest.TestCase):
             guarded_dispatches = (
                 hidden_verify,
                 ("--print-conditioned-v19-preregistration",),
+                ("--print-conditioned-v19-controller-closure",),
                 ("--self-test-conditioned-v19-contract",),
             )
             for mode in mode_arguments:

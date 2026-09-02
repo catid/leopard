@@ -97,6 +97,9 @@ done < <(/usr/bin/env -0)
 
 repo=/home/catid/leopard
 main_commit=6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198
+v18_frozen_source_commit=c8f825d0a033d31d220b0ebce9cc8871e8c2fc6d
+v18_frozen_source_tree=2c17a0a7bcea20274d2593cb204442c4c817e464
+v18_frozen_wrapper_sha256=74f1b844fc5b6bf0ecd52476e612936e12c16edae853361db3e63ff982494449
 relative_wrapper=experiments/leopard2/main_compare/run_authoritative_v17_gfni_main_compare.sh
 relative_runner=experiments/leopard2/main_compare/run_abba.py
 relative_git_capture=experiments/leopard2/main_compare/git_capture.py
@@ -105,7 +108,20 @@ relative_build_provenance=tools/leopard2_build_provenance.py
 relative_auditor=experiments/leopard2/main_compare/audit_v17_gfni_main_compare.py
 relative_census=experiments/leopard2/main_compare/passive_environment_census.py
 relative_supervisor=tools/leopard2_affinity_supervisor.py
+relative_pair_qualification_contract=experiments/leopard2/main_compare/pair_qualification_contract.py
+relative_pair_qualification_acquire=experiments/leopard2/main_compare/pair_qualification_acquire.py
+relative_pair_qualification_bridge_contract=experiments/leopard2/main_compare/pair_qualification_bridge_contract.py
+relative_pair_qualification_bridge_acquire=experiments/leopard2/main_compare/pair_qualification_bridge_acquire.py
+relative_pair_qualification_verify=experiments/leopard2/main_compare/pair_qualification_verify.py
 relative_pair_v19_contract=experiments/leopard2/main_compare/pair_qualified_v19_contract.py
+conditioned_v19_controller_bindings=(
+    "pair_qualification_acquire.py:$relative_pair_qualification_acquire"
+    "pair_qualification_bridge_acquire.py:$relative_pair_qualification_bridge_acquire"
+    "pair_qualification_bridge_contract.py:$relative_pair_qualification_bridge_contract"
+    "pair_qualification_contract.py:$relative_pair_qualification_contract"
+    "pair_qualification_verify.py:$relative_pair_qualification_verify"
+    "pair_qualified_v19_contract.py:$relative_pair_v19_contract"
+)
 lock=/tmp/leopard-gf8-authoritative.lock
 passive_housekeeping_jq='[.allowed_cpus[] | select(. != 52 and . != 116)]
     | map(tostring) | join(",") | select(length > 0)'
@@ -314,6 +330,95 @@ conditioned_v19_preregistration_digest()
 {
     conditioned_v19_preregistration_record | \
         /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1
+}
+
+conditioned_v19_controller_closure_record()
+(
+    local source_root=$1
+    local binding=
+    local lane_path=
+    local source_path=
+    local source_sha256=
+    for binding in "${conditioned_v19_controller_bindings[@]}"; do
+        lane_path=${binding%%:*}
+        source_path=${binding#*:}
+        test -f "$source_root/$source_path" || return 1
+        test ! -L "$source_root/$source_path" || return 1
+        source_sha256="$(/usr/bin/sha256sum "$source_root/$source_path" | \
+            /usr/bin/cut -d' ' -f1)" || return 1
+        /usr/bin/jq -cS -n \
+            --arg lane_path "$lane_path" \
+            --arg source_path "$source_path" \
+            --arg sha256 "$source_sha256" \
+            '{lane_path:$lane_path,source_path:$source_path,sha256:$sha256}' || \
+            return 1
+    done | /usr/bin/jq -cS -s \
+        '{schema:"leopard2-v19-controller-closure/v1",files:.}'
+)
+
+conditioned_v19_controller_closure_digest()
+{
+    conditioned_v19_controller_closure_record "$1" | \
+        /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1
+}
+
+compare_conditioned_v19_controller_closure_record()
+(
+    local source_root=$1
+    local recorded_path=$2
+    local regenerated_path=
+    regenerated_path="$(/usr/bin/mktemp \
+        /tmp/leopard-v19-controller-closure.XXXXXX)" || exit 1
+    trap '/usr/bin/rm -f -- "$regenerated_path"' EXIT
+    conditioned_v19_controller_closure_record "$source_root" \
+        > "$regenerated_path" || exit 1
+    /usr/bin/cmp "$recorded_path" "$regenerated_path"
+)
+
+validate_conditioned_v19_controller_copy()
+{
+    local source_root=$1
+    local destination=$2
+    local binding=
+    local lane_path=
+    local source_path=
+    test -d "$destination" || return 1
+    test ! -L "$destination" || return 1
+    for binding in "${conditioned_v19_controller_bindings[@]}"; do
+        lane_path=${binding%%:*}
+        source_path=${binding#*:}
+        test -f "$destination/$lane_path" || return 1
+        test ! -L "$destination/$lane_path" || return 1
+        test "$(/usr/bin/stat -c %h "$destination/$lane_path")" = 1 || \
+            return 1
+        test "$(/usr/bin/stat -c %a "$destination/$lane_path")" = 444 || \
+            return 1
+        /usr/bin/cmp "$source_root/$source_path" \
+            "$destination/$lane_path" || return 1
+    done
+}
+
+copy_conditioned_v19_controller_closure()
+{
+    local source_root=$1
+    local destination=$2
+    local binding=
+    local lane_path=
+    local source_path=
+    test -d "$destination" || return 1
+    test ! -L "$destination" || return 1
+    for binding in "${conditioned_v19_controller_bindings[@]}"; do
+        lane_path=${binding%%:*}
+        source_path=${binding#*:}
+        require_path_absent "$destination/$lane_path" || return 1
+        test -f "$source_root/$source_path" || return 1
+        test ! -L "$source_root/$source_path" || return 1
+        /usr/bin/cp --reflink=never "$source_root/$source_path" \
+            "$destination/$lane_path" || return 1
+        /usr/bin/chmod 0444 "$destination/$lane_path" || return 1
+    done
+    validate_conditioned_v19_controller_copy \
+        "$source_root" "$destination"
 }
 
 validate_conditioned_v19_attempt_contract()
@@ -1914,6 +2019,8 @@ validate_v18_attempt_lineage()
     local recorded_prior_sha=
     local observed_lineage_sha=
     local recorded_lineage_sha=
+    local sealed_wrapper="$current_core/run-authoritative.sh"
+    local sealed_wrapper_sha=
     test -f "$lineage" || return 1
     test ! -L "$lineage" || return 1
     observed_lineage_sha="$(/usr/bin/sha256sum "$lineage" | \
@@ -1930,6 +2037,19 @@ validate_v18_attempt_lineage()
         return 1
     current_tree="$(/usr/bin/jq -er '.source_tree | strings' "$lineage")" || \
         return 1
+    test "$current_commit" = "$v18_frozen_source_commit" || return 1
+    test "$current_tree" = "$v18_frozen_source_tree" || return 1
+    verify_source_tree_at_commit "$current_commit" "$current_tree" || return 1
+    if ((current_attempt > 1)); then
+        test -f "$sealed_wrapper" || return 1
+        test ! -L "$sealed_wrapper" || return 1
+        sealed_wrapper_sha="$(/usr/bin/sha256sum "$sealed_wrapper" | \
+            /usr/bin/cut -d' ' -f1)" || return 1
+        test "$sealed_wrapper_sha" = "$v18_frozen_wrapper_sha256" || return 1
+        verify_core_file_at_source_commit \
+            "$sealed_wrapper" "$current_commit" "$relative_wrapper" || \
+            return 1
+    fi
     for ((prior_index = 1; prior_index < current_attempt; ++prior_index)); do
         prior_path="$(/usr/bin/jq -er --argjson index "$prior_index" \
             '.prior_attempts[$index - 1].envelope | strings' "$lineage")" || \
@@ -1947,8 +2067,7 @@ validate_v18_attempt_lineage()
             /usr/bin/cut -d' ' -f1)" || return 1
         test "$prior_sha_before" = "$recorded_prior_sha" || return 1
         /usr/bin/cmp "$prior_path/core/run-authoritative.sh" \
-            "$current_core/run-authoritative.sh" || return 1
-        /usr/bin/cmp "$current_core/run-authoritative.sh" "$0" || return 1
+            "$sealed_wrapper" || return 1
         /usr/bin/jq -e \
             --argjson attempt "$prior_index" \
             --arg commit "$current_commit" --arg tree "$current_tree" '
@@ -1957,7 +2076,7 @@ validate_v18_attempt_lineage()
             .attempt == $attempt and .attempt_budget == 3 and
             .source_commit == $commit and .source_tree == $tree
         ' "$prior_path/FAILED.json" >/dev/null || return 1
-        /usr/bin/bash "$0" \
+        /usr/bin/bash "$sealed_wrapper" \
             --verify "$prior_path" >/dev/null || return 1
         if v18_envelope_has_observational_output "$prior_path"; then
             return 1
@@ -1982,24 +2101,55 @@ v18_attempt_lineage_self_test()
     /usr/bin/cp --reflink=never "$repo/$relative_wrapper" \
         "$self_test_core/run-authoritative.sh"
     /usr/bin/jq -cS -n \
-        '{schema:"leopard2-v18-gfni-main-attempt-lineage/v1",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,source_commit:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",prior_attempts:[]}' \
+        --arg commit "$v18_frozen_source_commit" \
+        --arg tree "$v18_frozen_source_tree" \
+        '{schema:"leopard2-v18-gfni-main-attempt-lineage/v1",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,source_commit:$commit,source_tree:$tree,prior_attempts:[]}' \
         > "$self_test_core/attempt-lineage.json"
     lineage_hash="$(/usr/bin/sha256sum \
         "$self_test_core/attempt-lineage.json" | /usr/bin/cut -d' ' -f1)"
     /usr/bin/jq -n --arg schema "$failure_schema" \
         --arg lineage_hash "$lineage_hash" \
-        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:$lineage_hash,promotion_passed:false,campaign_exit_status:7,stage:"fixture",source_commit:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",core_sha256sums_sha256:("c" * 64)}' \
+        --arg commit "$v18_frozen_source_commit" \
+        --arg tree "$v18_frozen_source_tree" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:$lineage_hash,promotion_passed:false,campaign_exit_status:7,stage:"fixture",source_commit:$commit,source_tree:$tree,core_sha256sums_sha256:("c" * 64)}' \
         > "$self_test_root/FAILED.json"
     validate_v18_attempt_lineage \
         "$self_test_root" "$self_test_core" "$self_test_root/FAILED.json"
     /usr/bin/jq -n --arg schema "$failure_schema" \
-        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("e" * 64),promotion_passed:false,campaign_exit_status:7,stage:"fixture",source_commit:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",core_sha256sums_sha256:("c" * 64)}' \
+        --arg commit "$v18_frozen_source_commit" \
+        --arg tree "$v18_frozen_source_tree" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,attempt_lineage_sha256:("e" * 64),promotion_passed:false,campaign_exit_status:7,stage:"fixture",source_commit:$commit,source_tree:$tree,core_sha256sums_sha256:("c" * 64)}' \
         > "$self_test_root/BAD-FAILED.json"
     if validate_v18_attempt_lineage \
             "$self_test_root" "$self_test_core" \
             "$self_test_root/BAD-FAILED.json"; then
         return 1
     fi
+    /usr/bin/printf '%s\n' \
+        '#!/usr/bin/bash' \
+        "/usr/bin/touch '$self_test_root/executed'" \
+        > "$self_test_core/run-authoritative.sh"
+    /usr/bin/jq -cS -n \
+        --arg commit "$v18_frozen_source_commit" \
+        --arg tree "$v18_frozen_source_tree" \
+        --arg envelope \
+            "$repo/.research/leopard-79h/c8f825d-v18-passive-main-a1" \
+        '{schema:"leopard2-v18-gfni-main-attempt-lineage/v1",acquisition_generation:"passive-v2",attempt:2,attempt_budget:3,source_commit:$commit,source_tree:$tree,prior_attempts:[{attempt:1,envelope:$envelope,terminal:"FAILED.json",terminal_schema:"leopard2-v18-gfni-main-failed-envelope/v1",envelope_sha256sums_sha256:("c" * 64)}]}' \
+        > "$self_test_core/attempt-lineage.json"
+    lineage_hash="$(/usr/bin/sha256sum \
+        "$self_test_core/attempt-lineage.json" | /usr/bin/cut -d' ' -f1)"
+    /usr/bin/jq -n --arg schema "$failure_schema" \
+        --arg lineage_hash "$lineage_hash" \
+        --arg commit "$v18_frozen_source_commit" \
+        --arg tree "$v18_frozen_source_tree" \
+        '{schema:$schema,status:"failed",acquisition_generation:"passive-v2",attempt:2,attempt_budget:3,attempt_lineage_sha256:$lineage_hash,promotion_passed:false,campaign_exit_status:7,stage:"fixture",source_commit:$commit,source_tree:$tree,core_sha256sums_sha256:("c" * 64)}' \
+        > "$self_test_root/BAD-SEALED-WRAPPER-FAILED.json"
+    if validate_v18_attempt_lineage \
+            "$self_test_root" "$self_test_core" \
+            "$self_test_root/BAD-SEALED-WRAPPER-FAILED.json"; then
+        return 1
+    fi
+    test ! -e "$self_test_root/executed" || return 1
     /usr/bin/jq -cS -n \
         '{schema:"leopard2-v18-gfni-main-attempt-lineage/v1",acquisition_generation:"passive-v2",attempt:1,attempt_budget:3,source_commit:(("a" * 40) + "\n"),source_tree:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",prior_attempts:[]}' \
         > "$self_test_core/attempt-lineage.json"
@@ -2054,6 +2204,10 @@ conditioned_v19_contract_self_test()
     local self_test_root=
     local preregistration_path=
     local validator_path=
+    local controller_root=
+    local controller_record_path=
+    local controller_validator_path=
+    local -a controller_files=()
     local bad_attempt=
     local bad_budget=
     test "$conditioned_v19_armed" = false || return 1
@@ -2077,6 +2231,17 @@ conditioned_v19_contract_self_test()
         trap '/usr/bin/find "$self_test_root" -depth -delete' EXIT
         preregistration_path="$self_test_root/preregistration.json"
         validator_path="$self_test_root/validate.py"
+        controller_root="$self_test_root/controller"
+        controller_record_path="$self_test_root/controller-closure.json"
+        controller_validator_path="$self_test_root/validate-controller.py"
+        /usr/bin/mkdir -m 0700 "$controller_root" || return 1
+        copy_conditioned_v19_controller_closure \
+            "$repo" "$controller_root" || return 1
+        conditioned_v19_controller_closure_record \
+            "$repo" > "$controller_record_path" || return 1
+        controller_files=("$controller_root"/*)
+        test "${#controller_files[@]}" = \
+            "${#conditioned_v19_controller_bindings[@]}" || return 1
         conditioned_v19_preregistration_record > "$preregistration_path" || \
             return 1
         /usr/bin/tee "$validator_path" >/dev/null <<'PY'
@@ -2370,6 +2535,79 @@ require(value["stop_rule"] == {
     "successor_requires_dedicated_or_os_exclusive_environment": True,
 }, "stop rule differs")
 PY
+        /usr/bin/tee "$controller_validator_path" >/dev/null <<'PY'
+#!/usr/bin/python3
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def load_module(name, path):
+    specification = importlib.util.spec_from_file_location(name, path)
+    require(specification is not None and specification.loader is not None,
+            f"cannot load {path}")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[name] = module
+    specification.loader.exec_module(module)
+    return module
+
+
+root = Path(sys.argv[1]).resolve()
+record_path = Path(sys.argv[2])
+record_data = record_path.read_bytes()
+record = json.loads(record_data)
+expected_paths = (
+    ("pair_qualification_acquire.py",
+     "experiments/leopard2/main_compare/pair_qualification_acquire.py"),
+    ("pair_qualification_bridge_acquire.py",
+     "experiments/leopard2/main_compare/"
+     "pair_qualification_bridge_acquire.py"),
+    ("pair_qualification_bridge_contract.py",
+     "experiments/leopard2/main_compare/"
+     "pair_qualification_bridge_contract.py"),
+    ("pair_qualification_contract.py",
+     "experiments/leopard2/main_compare/pair_qualification_contract.py"),
+    ("pair_qualification_verify.py",
+     "experiments/leopard2/main_compare/pair_qualification_verify.py"),
+    ("pair_qualified_v19_contract.py",
+     "experiments/leopard2/main_compare/pair_qualified_v19_contract.py"),
+)
+expected_files = []
+for lane_path, source_path in expected_paths:
+    data = (root / lane_path).read_bytes()
+    expected_files.append({
+        "lane_path": lane_path,
+        "source_path": source_path,
+        "sha256": hashlib.sha256(data).hexdigest(),
+    })
+expected_record = {
+    "schema": "leopard2-v19-controller-closure/v1",
+    "files": expected_files,
+}
+canonical = (json.dumps(
+    expected_record, ensure_ascii=False, sort_keys=True,
+    separators=(",", ":")) + "\n").encode("utf-8")
+require(record_data == canonical and record == expected_record,
+        "v19 controller closure record differs")
+v19 = load_module(
+    "wrapper_v19_copied_contract", root / "pair_qualified_v19_contract.py")
+bridge_acquire = load_module(
+    "wrapper_v19_copied_bridge_acquire",
+    root / "pair_qualification_bridge_acquire.py")
+for module in (
+        v19, v19.bridge, v19.verifier, v19.contract,
+        bridge_acquire, bridge_acquire.acquire, bridge_acquire.bridge,
+        bridge_acquire.verifier, bridge_acquire.contract):
+    require(Path(module.__file__).resolve().parent == root,
+            "v19 controller dependency resolved outside the copied closure")
+PY
         require_empty_output /usr/bin/python3 -I -S -B "$validator_path" \
             "$preregistration_path" \
             "$conditioned_v19_preregistration_sha256" "$repo" \
@@ -2378,6 +2616,18 @@ PY
             "$preregistration_path" \
             "$conditioned_v19_preregistration_sha256" "$repo" \
             "$relative_runner" "$relative_pair_v19_contract" || return 1
+        require_empty_output /usr/bin/python3 -I -S -B \
+            "$controller_validator_path" \
+            "$controller_root" "$controller_record_path" || return 1
+        require_empty_output /usr/bin/python3 -O -I -S -B \
+            "$controller_validator_path" \
+            "$controller_root" "$controller_record_path" || return 1
+        /usr/bin/chmod 0644 \
+            "$controller_root/pair_qualification_contract.py" || return 1
+        if validate_conditioned_v19_controller_copy \
+                "$repo" "$controller_root"; then
+            return 1
+        fi
     ) || return 1
     /usr/bin/printf \
         'v19 conditioned wrapper preregistration self-test passed\n'
@@ -6299,6 +6549,13 @@ if [[ $# -eq 1 && $1 == --print-conditioned-v19-preregistration ]]; then
     exit 0
 fi
 
+if [[ $# -eq 1 && $1 == --print-conditioned-v19-controller-closure ]]; then
+    test "$passive_mode" = false
+    test "$conditioned_v19_mode" = false
+    conditioned_v19_controller_closure_record "$repo"
+    exit 0
+fi
+
 if [[ $# -eq 1 && $1 == --self-test-conditioned-v19-contract ]]; then
     test "$passive_mode" = false
     test "$conditioned_v19_mode" = false
@@ -6346,6 +6603,8 @@ if [[ $# -ne 1 || $1 != /* ]]; then
         '       %s --self-test-conditioned-v19-contract\n' "$0" >&2
     /usr/bin/printf \
         '       %s --print-conditioned-v19-preregistration\n' "$0" >&2
+    /usr/bin/printf \
+        '       %s --print-conditioned-v19-controller-closure\n' "$0" >&2
     exit 2
 fi
 if [[ "$conditioned_v19_mode" == true ]]; then
@@ -6877,15 +7136,21 @@ next_stage freeze_committed_controllers
     "$lane/leopard2_build_provenance.py"
 /usr/bin/cp --reflink=never "$candidate_source/$relative_supervisor" \
     "$lane/leopard2_affinity_supervisor.py"
-if [[ "$passive_mode" == true ]]; then
+if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
     /usr/bin/cp --reflink=never "$candidate_source/$relative_census" \
         "$lane/passive_environment_census.py"
+fi
+if [[ "$conditioned_v19_mode" == true ]]; then
+    copy_conditioned_v19_controller_closure \
+        "$candidate_source" "$lane"
+    conditioned_v19_controller_closure_record "$candidate_source" \
+        > "$lane/conditioned-v19-controller-closure.json"
 fi
 /usr/bin/chmod 0555 \
     "$lane/audit_v17_gfni_main_compare.py" \
     "$lane/run_abba.py" \
     "$lane/leopard2_affinity_supervisor.py"
-if [[ "$passive_mode" == true ]]; then
+if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
     /usr/bin/chmod 0555 "$lane/passive_environment_census.py"
 fi
 /usr/bin/chmod 0444 \
@@ -6895,6 +7160,10 @@ fi
     "$lane/candidate-source.tar" \
     "$lane/leopard1-source.tar" \
     "$lane/sse2neon-source.tar"
+if [[ "$conditioned_v19_mode" == true ]]; then
+    /usr/bin/chmod 0444 \
+        "$lane/conditioned-v19-controller-closure.json"
+fi
 for frozen_controller in \
     "$lane/run-authoritative.sh" \
     "$lane/audit_v17_gfni_main_compare.py" \
@@ -6907,10 +7176,17 @@ for frozen_controller in \
     test ! -L "$frozen_controller"
     test "$(/usr/bin/stat -c %h "$frozen_controller")" = 1
 done
-if [[ "$passive_mode" == true ]]; then
+if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
     test ! -L "$lane/passive_environment_census.py"
     test "$(/usr/bin/stat -c %h \
         "$lane/passive_environment_census.py")" = 1
+fi
+if [[ "$conditioned_v19_mode" == true ]]; then
+    validate_conditioned_v19_controller_copy \
+        "$candidate_source" "$lane"
+    test ! -L "$lane/conditioned-v19-controller-closure.json"
+    test "$(/usr/bin/stat -c %h \
+        "$lane/conditioned-v19-controller-closure.json")" = 1
 fi
 
 candidate_configure=(
@@ -7187,10 +7463,12 @@ next_stage isolated_controller_self_tests
 /usr/bin/python3 -I -S -B \
     "$candidate_source/$relative_auditor" --self-test \
     > "$lane/auditor-self-test.log" 2>&1
-if [[ "$passive_mode" == true ]]; then
+if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
     /usr/bin/python3 -I -S -B \
         "$candidate_source/$relative_census" self-test \
         > "$lane/passive-census-self-test.log" 2>&1
+fi
+if [[ "$passive_mode" == true ]]; then
     test ! -e "$lane/supervisor-self-test.log"
 else
     /usr/bin/python3 -I -S -B \
@@ -7384,9 +7662,19 @@ next_stage committed_controller_closure
     > "$lane/build-closure/committed-auditor.py"
 /usr/bin/git -C "$repo" show "$commit:$relative_supervisor" \
     > "$lane/build-closure/committed-supervisor.py"
-if [[ "$passive_mode" == true ]]; then
+if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
     /usr/bin/git -C "$repo" show "$commit:$relative_census" \
         > "$lane/build-closure/committed-passive-census.py"
+fi
+if [[ "$conditioned_v19_mode" == true ]]; then
+    for conditioned_v19_controller_binding in \
+            "${conditioned_v19_controller_bindings[@]}"; do
+        conditioned_v19_lane_path=${conditioned_v19_controller_binding%%:*}
+        conditioned_v19_source_path=${conditioned_v19_controller_binding#*:}
+        /usr/bin/git -C "$repo" show \
+            "$commit:$conditioned_v19_source_path" \
+            > "$lane/build-closure/committed-$conditioned_v19_lane_path"
+    done
 fi
 /usr/bin/cmp "$lane/run-authoritative.sh" \
     "$lane/build-closure/committed-wrapper.sh"
@@ -7402,9 +7690,20 @@ fi
     "$lane/build-closure/committed-auditor.py"
 /usr/bin/cmp "$lane/leopard2_affinity_supervisor.py" \
     "$lane/build-closure/committed-supervisor.py"
-if [[ "$passive_mode" == true ]]; then
+if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
     /usr/bin/cmp "$lane/passive_environment_census.py" \
         "$lane/build-closure/committed-passive-census.py"
+fi
+if [[ "$conditioned_v19_mode" == true ]]; then
+    for conditioned_v19_controller_binding in \
+            "${conditioned_v19_controller_bindings[@]}"; do
+        conditioned_v19_lane_path=${conditioned_v19_controller_binding%%:*}
+        /usr/bin/cmp "$lane/$conditioned_v19_lane_path" \
+            "$lane/build-closure/committed-$conditioned_v19_lane_path"
+    done
+    compare_conditioned_v19_controller_closure_record \
+        "$candidate_source" \
+        "$lane/conditioned-v19-controller-closure.json"
 fi
 /usr/bin/cmp "$candidate_source/$relative_wrapper" \
     "$lane/run-authoritative.sh"
@@ -7435,7 +7734,7 @@ auditor_hash="$(/usr/bin/sha256sum \
 supervisor_hash="$(/usr/bin/sha256sum \
     "$lane/leopard2_affinity_supervisor.py" | /usr/bin/cut -d' ' -f1)"
 passive_census_hash=null
-if [[ "$passive_mode" == true ]]; then
+if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
     passive_census_hash="$(/usr/bin/sha256sum \
         "$lane/passive_environment_census.py" | /usr/bin/cut -d' ' -f1)"
 fi
@@ -8093,9 +8392,22 @@ require_empty_output /usr/bin/find "$candidate_build" "$baseline_build" \
     "$lane/audit_v17_gfni_main_compare.py"
 /usr/bin/cmp "$candidate_source/$relative_supervisor" \
     "$lane/leopard2_affinity_supervisor.py"
-if [[ "$passive_mode" == true ]]; then
+if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
     /usr/bin/cmp "$candidate_source/$relative_census" \
         "$lane/passive_environment_census.py"
+fi
+if [[ "$conditioned_v19_mode" == true ]]; then
+    validate_conditioned_v19_controller_copy \
+        "$candidate_source" "$lane"
+    compare_conditioned_v19_controller_closure_record \
+        "$candidate_source" \
+        "$lane/conditioned-v19-controller-closure.json"
+    for conditioned_v19_controller_binding in \
+            "${conditioned_v19_controller_bindings[@]}"; do
+        conditioned_v19_lane_path=${conditioned_v19_controller_binding%%:*}
+        /usr/bin/cmp "$lane/$conditioned_v19_lane_path" \
+            "$lane/build-closure/committed-$conditioned_v19_lane_path"
+    done
 fi
 test "$(/usr/bin/sha256sum "$lane/run-authoritative.sh" | \
     /usr/bin/cut -d' ' -f1)" = "$wrapper_hash"
@@ -8105,7 +8417,7 @@ test "$(/usr/bin/sha256sum "$lane/audit_v17_gfni_main_compare.py" | \
     /usr/bin/cut -d' ' -f1)" = "$auditor_hash"
 test "$(/usr/bin/sha256sum "$lane/leopard2_affinity_supervisor.py" | \
     /usr/bin/cut -d' ' -f1)" = "$supervisor_hash"
-if [[ "$passive_mode" == true ]]; then
+if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
     test "$(/usr/bin/sha256sum "$lane/passive_environment_census.py" | \
         /usr/bin/cut -d' ' -f1)" = "$passive_census_hash"
 fi

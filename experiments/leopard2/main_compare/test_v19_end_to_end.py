@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import argparse
 import copy
 import importlib.util
 import subprocess
@@ -15,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 MAIN_COMPARE = ROOT / "experiments/leopard2/main_compare"
+RUNNER_PATH = MAIN_COMPARE / "run_abba.py"
 
 
 def load_module(name: str, path: Path):
@@ -56,6 +58,32 @@ def expected_attempt_two() -> dict:
         prior_attempt_failure_sha256="0" * 64,
         prior_attempt_acquisition_sha256="1" * 64,
         prior_attempt_selection_status="no-candidate-pair-qualified",
+    )
+
+
+def attempt_cli_arguments(attempt: int) -> tuple[str, ...]:
+    if attempt == 1:
+        return ("--v19-attempt", "1")
+    if attempt == 2:
+        return (
+            "--v19-attempt", "2",
+            "--v19-prior-failure-sha256", "0" * 64,
+            "--v19-prior-acquisition-sha256", "1" * 64,
+            "--v19-prior-selection-status",
+            "no-candidate-pair-qualified",
+        )
+    raise ValueError("fixture attempt must be 1 or 2")
+
+
+def run_runner_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
+    optimization = (
+        ("-" + "O" * sys.flags.optimize,) if sys.flags.optimize else ())
+    return subprocess.run(
+        ["/usr/bin/python3", "-I", "-S", "-B", *optimization,
+         str(RUNNER_PATH),
+         *arguments],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, check=False, text=True, timeout=60,
     )
 
 
@@ -199,6 +227,171 @@ class V19EndToEndTests(unittest.TestCase):
             self.assertFalse(result["causal_performance_claim_eligible"])
             self.assertFalse(result["promotion_eligible"])
             self.assertFalse(result["promotion_passed"])
+
+    def test_runner_cli_binds_attempt_one_and_two_for_v19_replay(self) -> None:
+        for attempt_number, attempt in (
+                (1, expected_attempt_one()),
+                (2, expected_attempt_two())):
+            with self.subTest(kind="complete", attempt=attempt_number), \
+                    tempfile.TemporaryDirectory(
+                        prefix="leopard-v19-runner-cli-complete-") as temporary:
+                raw = canonical_raw()
+                raw["pair_qualification"]["attempt"] = copy.deepcopy(attempt)
+                raw = replay_fixtures.fixtures.resign(raw)
+                manifest = replay_fixtures.materialize_windowed_auditor_bundle(
+                    Path(temporary), raw)
+                completed = run_runner_cli(
+                    "verify", "--manifest", str(manifest),
+                    "--no-current-input-check",
+                    *attempt_cli_arguments(attempt_number))
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(
+                    completed.stdout,
+                    "exact-main ABBA bundle structurally verified only; "
+                    "current build/source closure was not revalidated\n")
+                self.assertEqual(completed.stderr, "")
+
+            with self.subTest(kind="failure", attempt=attempt_number), \
+                    tempfile.TemporaryDirectory(
+                        prefix="leopard-v19-runner-cli-failure-") as temporary:
+                root = Path(temporary)
+                failure = replay_fixtures.fixtures.\
+                    synthetic_unselected_v19_failure(acquired=False)
+                failure["pair_qualification"]["attempt"] = copy.deepcopy(
+                    attempt)
+                failure = replay_fixtures.fixtures.resign(failure)
+                failure_path = root / "failure.json"
+                runner.write_json_exclusive(failure_path, failure)
+                completed = run_runner_cli(
+                    "verify-failure", "--failure", str(failure_path),
+                    *attempt_cli_arguments(attempt_number))
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(
+                    completed.stdout,
+                    "failed exact-main campaign diagnostics and retained "
+                    "files verified; this is not valid performance evidence\n")
+                self.assertEqual(completed.stderr, "")
+
+    def test_runner_cli_rejects_missing_mismatched_and_legacy_authority(
+            self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leopard-v19-runner-cli-reject-") as temporary:
+            root = Path(temporary)
+            v19_manifest = \
+                replay_fixtures.materialize_windowed_auditor_bundle(
+                    root / "v19", canonical_raw())
+            v19_manifest.parent.chmod(0o700)
+            missing = run_runner_cli(
+                "verify", "--manifest", str(v19_manifest),
+                "--no-current-input-check")
+            self.assertEqual(missing.returncode, 1)
+            self.assertEqual(missing.stdout, "")
+            self.assertEqual(
+                missing.stderr,
+                "main comparison evidence error: v19 attempt authority must "
+                "be supplied exactly for a v19 manifest\n")
+
+            mismatched = run_runner_cli(
+                "verify", "--manifest", str(v19_manifest),
+                "--no-current-input-check", *attempt_cli_arguments(2))
+            self.assertEqual(mismatched.returncode, 1)
+            self.assertEqual(mismatched.stdout, "")
+            self.assertIn("v19 attempt differs", mismatched.stderr)
+
+            v19_failure = replay_fixtures.fixtures.\
+                synthetic_unselected_v19_failure(acquired=False)
+            v19_failure_path = root / "v19-failure" / "failure.json"
+            v19_failure_path.parent.mkdir(mode=0o700)
+            runner.write_json_exclusive(v19_failure_path, v19_failure)
+            missing_failure = run_runner_cli(
+                "verify-failure", "--failure", str(v19_failure_path))
+            self.assertEqual(missing_failure.returncode, 1)
+            self.assertEqual(missing_failure.stdout, "")
+            self.assertEqual(
+                missing_failure.stderr,
+                "main comparison evidence error: v19 attempt authority must "
+                "be supplied exactly for a v19 failure\n")
+
+            incomplete_attempt_failure = run_runner_cli(
+                "verify-failure", "--failure", str(v19_failure_path),
+                "--v19-attempt", "2")
+            self.assertEqual(incomplete_attempt_failure.returncode, 1)
+            self.assertEqual(incomplete_attempt_failure.stdout, "")
+            self.assertEqual(
+                incomplete_attempt_failure.stderr,
+                "main comparison evidence error: v19 attempt authority is "
+                "invalid: prior attempt failure hash is not exact lowercase "
+                "SHA-256\n")
+
+            mismatched_failure = run_runner_cli(
+                "verify-failure", "--failure", str(v19_failure_path),
+                *attempt_cli_arguments(2))
+            self.assertEqual(mismatched_failure.returncode, 1)
+            self.assertEqual(mismatched_failure.stdout, "")
+            self.assertIn("v19 attempt differs", mismatched_failure.stderr)
+
+            prior_without_attempt = run_runner_cli(
+                "verify", "--manifest", str(v19_manifest),
+                "--no-current-input-check",
+                "--v19-prior-failure-sha256", "0" * 64)
+            self.assertEqual(prior_without_attempt.returncode, 1)
+            self.assertEqual(prior_without_attempt.stdout, "")
+            self.assertEqual(
+                prior_without_attempt.stderr,
+                "main comparison evidence error: v19 prior-attempt flags "
+                "require --v19-attempt\n")
+
+            v18_raw = replay_fixtures.synthetic_windowed_auditor_raw(
+                runner.RAW_SCHEMA_V18)
+            v18_manifest = \
+                replay_fixtures.materialize_windowed_auditor_bundle(
+                    root / "v18", v18_raw)
+            v18_manifest.parent.chmod(0o700)
+            legacy_complete = run_runner_cli(
+                "verify", "--manifest", str(v18_manifest),
+                "--no-current-input-check", "--v19-attempt", "1")
+            self.assertEqual(legacy_complete.returncode, 1)
+            self.assertEqual(legacy_complete.stdout, "")
+            self.assertEqual(
+                legacy_complete.stderr,
+                "main comparison evidence error: v19 attempt authority must "
+                "be supplied exactly for a v19 manifest\n")
+
+            v18_failure = replay_fixtures.fixtures.synthetic_failure(
+                runner.RAW_SCHEMA_V18)
+            v18_failure_path = root / "v18-failure" / "failure.json"
+            v18_failure_path.parent.mkdir(mode=0o700)
+            runner.write_json_exclusive(v18_failure_path, v18_failure)
+            legacy_failure = run_runner_cli(
+                "verify-failure", "--failure", str(v18_failure_path),
+                "--v19-attempt", "1")
+            self.assertEqual(legacy_failure.returncode, 1)
+            self.assertEqual(legacy_failure.stdout, "")
+            self.assertEqual(
+                legacy_failure.stderr,
+                "main comparison evidence error: v19 attempt authority must "
+                "be supplied exactly for a v19 failure\n")
+
+            malformed_pair_options = argparse.Namespace(
+                v19_attempt=2,
+                v19_prior_failure_sha256="0" * 64,
+                v19_prior_acquisition_sha256="1" * 64,
+                v19_prior_selection_status="selected-lowest-primary",
+                v19_prior_selected_pair=object(),
+            )
+            with self.assertRaisesRegex(
+                    runner.EvidenceError,
+                    "must be BENCHMARK,SIBLING"):
+                runner.v19_attempt_from_options(malformed_pair_options)
+
+            with self.assertRaisesRegex(
+                    runner.EvidenceError,
+                    "supplied exactly for a v19 raw bundle"):
+                runner.validate_raw(
+                    replay_fixtures.fixtures.resign(v18_raw), None,
+                    check_files=False,
+                    check_current_inputs=False,
+                    expected_v19_attempt=expected_attempt_one())
 
     def test_all_consumers_reject_common_authority_and_continuity_splices(
             self) -> None:
