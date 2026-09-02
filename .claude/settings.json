@@ -4,7 +4,7 @@
       {
         "hooks": [
           {
-            "command": "/home/catid/.nvm/versions/node/v24.1.0/bin/bd prime --hook-json",
+            "command": "/usr/bin/env bd prime --hook-json",
             "type": "command"
           }
         ],
