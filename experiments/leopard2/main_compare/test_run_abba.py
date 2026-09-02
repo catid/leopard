@@ -40,6 +40,25 @@ sys.modules[SPEC.name] = runner
 SPEC.loader.exec_module(runner)
 
 
+def load_pair_v19_fixtures():
+    path = MODULE_PATH.with_name("test_pair_qualified_v19_contract.py")
+    module_name = "main_compare_test_pair_qualified_v19_fixtures"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    module_spec = importlib.util.spec_from_file_location(module_name, path)
+    if module_spec is None or module_spec.loader is None:
+        raise RuntimeError("cannot load pair-qualified v19 fixtures")
+    module = importlib.util.module_from_spec(module_spec)
+    sys.modules[module_name] = module
+    module_spec.loader.exec_module(module)
+    return module
+
+
+def expected_v19_attempt_one() -> dict:
+    return runner.pair_v19.pair_qualified_attempt_record(attempt=1)
+
+
 def load_plan_runner():
     path = MODULE_PATH.parents[1] / "decoder_dispatch" / \
         "plan_balanced_promotion.py"
@@ -408,6 +427,152 @@ def v17_execution_fixtures(
     return host, reservation, isolation, supervision
 
 
+def v19_qualification_components(
+    *, selected: bool = True,
+) -> tuple[dict, dict | None, dict, object]:
+    fixture_module = load_pair_v19_fixtures()
+    acquire = fixture_module.live.acquire
+    allowed = list(range(128))
+    topology_values = {acquire.ONLINE_CPUS_PATH: b"0-127\n"}
+    for logical_cpu in allowed:
+        primary = logical_cpu if logical_cpu < 64 else logical_cpu - 64
+        sibling_cpu = primary + 64
+        root = f"{acquire.SYSFS_CPU_ROOT}/cpu{logical_cpu}"
+        topology_values[root + "/topology/physical_package_id"] = b"0\n"
+        topology_values[root + "/topology/die_id"] = b"0\n"
+        topology_values[root + "/topology/core_id"] = \
+            f"{primary}\n".encode("ascii")
+        topology_values[root + "/topology/thread_siblings_list"] = \
+            f"{primary},{sibling_cpu}\n".encode("ascii")
+        topology_values[root + "/cache/index3/shared_cpu_list"] = b"0-127\n"
+
+    def proc_snapshot(idle_offset: int, *, reject_pairs: bool = False) -> bytes:
+        rows = [b"cpu  0 0 0 0 0 0 0 0 0 0"]
+        for logical_cpu in allowed:
+            user = 1 if reject_pairs and 1 <= logical_cpu <= 63 else 0
+            idle = 100_000 + logical_cpu + idle_offset - user
+            rows.append(
+                f"cpu{logical_cpu} {user} 0 0 {idle} 0 0 0 0 0 0"
+                .encode("ascii"))
+        rows.extend((b"intr 0", b"ctxt 0", b"btime 0", b"processes 0"))
+        return b"\n".join(rows) + b"\n"
+
+    proc_records = [
+        proc_snapshot(
+            index * 700 + index // 6,
+            reject_pairs=not selected and index == 12,
+        )
+        for index in range(13)
+    ]
+    if selected:
+        proc_records.extend((proc_snapshot(8_502), proc_snapshot(8_602)))
+    reader = fixture_module.fixtures.FakeHostReader(
+        proc_records=proc_records,
+        topology_variants=[topology_values],
+        allowed_values=[allowed], tick_values=[runner.CLOCK_TICKS_PER_SECOND])
+    qualification_policy = runner.v19_qualification_policy_record()
+    acquisition = acquire.acquire_pair_qualification(
+        reader, policy_value=qualification_policy,
+        window_count=runner.pair_v19.QUALIFICATION_WINDOW_COUNT,
+        nominal_window_ns=
+            runner.pair_v19.QUALIFICATION_NOMINAL_WINDOW_NS,
+        frozen_pair_from_prior_attempt=None)
+    bridge_record = None
+    if selected:
+        bridge_record = \
+            fixture_module.live.acquire_v19_pair_qualification_bridge(
+                reader, acquisition,
+                acquisition["scan"]["windows"][-1]["after"],
+                expected_policy=qualification_policy,
+                expected_policy_sha256=runner.pair_v19.contract.canonical_sha256(
+                    qualification_policy),
+                expected_frozen_pair=None,
+                expected_acquisition_window_count=
+                    runner.pair_v19.QUALIFICATION_WINDOW_COUNT,
+                expected_acquisition_nominal_window_ns=
+                    runner.pair_v19.QUALIFICATION_NOMINAL_WINDOW_NS,
+                expected_bridge_geometry=
+                    runner.pair_v19.bridge_geometry_record())
+    return acquisition, bridge_record, qualification_policy, fixture_module
+
+
+def v19_execution_fixtures(
+    campaign: Mapping[str, object],
+) -> tuple[dict, dict, dict, dict]:
+    cpu = 1
+    sibling = 65
+    allowed = list(range(128))
+
+    def policy(logical_cpu: int) -> dict:
+        value = host_cpu(logical_cpu)
+        value["cpuinfo"].update({
+            "vendor_id": "AuthenticAMD", "cpu family": "26", "model": "8",
+        })
+        value["topology"]["thread_siblings_list"] = f"{cpu},{sibling}"
+        value["topology"]["core_siblings_list"] = "0-127"
+        for cache in value["cache_hierarchy"]:
+            cache["shared_cpu_list"] = (
+                f"{cpu},{sibling}" if cache["level"] == "1"
+                else "0-127")
+            cache["shared_cpu_map"] = "fixture-mask"
+        return value
+
+    host = copy.deepcopy(HOST)
+    host["allowed_cpu_set_at_launch"] = allowed
+    host["online_cpu_set"] = allowed
+    host["online_cpu_list_text"] = runner.exact_text_content(
+        "0-127\n", "v19 fixture online CPU list")
+    host["benchmark_cpu"] = policy(cpu)
+    host["reserved_sibling"] = policy(sibling)
+
+    reservation_payload = {
+        "benchmark_cpu": cpu,
+        "nonce": "fixture-v19-nonce",
+        "owner": "v19 unit test",
+        "reserved_sibling": sibling,
+        "schema": runner.RESERVATION_SCHEMA,
+        "status": "held",
+    }
+    reservation = {
+        "path": "/fixture/v19-reservation.json",
+        "sha256": runner.sha256_bytes(
+            runner.canonical_bytes(reservation_payload)),
+        "payload": reservation_payload,
+        "lock": "exclusive_nonblocking",
+    }
+    lease_payload = runner.pair_lease_payload(cpu, sibling)
+    lease = {
+        "device": 1,
+        "directory_device": 1,
+        "directory_inode": 2,
+        "inode": 3,
+        "lock": "exclusive_nonblocking_pair_wide",
+        "path": str(
+            runner.pair_lease_directory() /
+            runner.pair_lease_name(cpu, sibling)),
+        "payload": lease_payload,
+        "sha256": runner.sha256_bytes(runner.canonical_bytes(lease_payload)),
+    }
+
+    acquisition, bridge_record, qualification_policy, fixture_module = \
+        v19_qualification_components()
+    if bridge_record is None:
+        raise RuntimeError("selected v19 fixture lacks its bridge")
+    first_before = fixture_module.first_window_before(bridge_record)
+    qualification = runner.pair_v19.pair_qualified_v19_record(
+        stage="complete", record_status="complete",
+        terminal=runner.pair_v19.SUCCESS_TERMINAL,
+        policy_value=qualification_policy,
+        expected_policy_sha256=
+            runner.pair_v19.contract.canonical_sha256(qualification_policy),
+        host_identity_sha256=
+            runner.pair_v19.contract.canonical_sha256(host),
+        attempt_value=runner.pair_v19.pair_qualified_attempt_record(attempt=1),
+        acquisition_value=acquisition, bridge_value=bridge_record,
+        first_window_before_value=first_before)
+    return host, reservation, lease, qualification
+
+
 def summary(samples: list[float], setup: bool = False) -> dict:
     middle = sorted(samples)[len(samples) // 2]
     deviations = sorted(abs(value - middle) for value in samples)
@@ -469,7 +634,8 @@ def baseline_result(
     if raw_schema in (
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
             runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
+            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17,
+            runner.RAW_SCHEMA_V18, runner.RAW_SCHEMA_V19):
         parameters["logical_shard_bytes"] = cell.shard_bytes
         resolved.update({
             "padded_application_bytes": False,
@@ -882,7 +1048,8 @@ def complete_build_fixture(
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
             runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
+            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17,
+            runner.RAW_SCHEMA_V18, runner.RAW_SCHEMA_V19):
         specification.pop("baseline_pure_avx2", None)
     elif raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         specification["baseline_pure_avx2"] = False
@@ -907,7 +1074,8 @@ def complete_build_fixture(
                 runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
                 runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
                 runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-                runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
+                runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17,
+                runner.RAW_SCHEMA_V18, runner.RAW_SCHEMA_V19):
             cache.update({
                 "LEO_MAIN_PURE_AVX2": (
                     "OFF" if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS else "ON"),
@@ -1175,7 +1343,8 @@ def complete_build_fixture(
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
             runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
+            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17,
+            runner.RAW_SCHEMA_V18, runner.RAW_SCHEMA_V19):
         if baseline:
             compile_identity["generated_attestation_header"] = None
         else:
@@ -1294,7 +1463,8 @@ def complete_runtime_fixture(
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
             runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
+            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17,
+            runner.RAW_SCHEMA_V18, runner.RAW_SCHEMA_V19):
         result["canonical_ldd_output"] = runner.canonical_ldd_output(
             raw, "fixture raw ldd output")
     else:
@@ -1578,7 +1748,8 @@ def cmake_fixture_identity(
                 runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
                 runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
                 runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-                runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
+                runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17,
+                runner.RAW_SCHEMA_V18, runner.RAW_SCHEMA_V19):
             specification.pop("baseline_pure_avx2", None)
         elif raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
             specification["baseline_pure_avx2"] = False
@@ -1644,7 +1815,8 @@ def cmake_fixture_identity(
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
             runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
             runner.RAW_SCHEMA_V14, runner.RAW_SCHEMA_V15,
-            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18):
+            runner.RAW_SCHEMA_V16, runner.RAW_SCHEMA_V17,
+            runner.RAW_SCHEMA_V18, runner.RAW_SCHEMA_V19):
         specification.pop("baseline_pure_avx2", None)
     elif raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
         specification["baseline_pure_avx2"] = False
@@ -1691,9 +1863,14 @@ def synthetic_raw(
             "reuse": 8,
             "iterations": 9,
             "warmup": 2,
-            "benchmark_cpu": 52,
-            "reserved_sibling": 116,
-            "allowed_cpu_set_at_launch": [0, 52, 116],
+            "benchmark_cpu": (
+                1 if raw_schema == runner.RAW_SCHEMA_V19 else 52),
+            "reserved_sibling": (
+                65 if raw_schema == runner.RAW_SCHEMA_V19 else 116),
+            "allowed_cpu_set_at_launch": (
+                list(range(128))
+                if raw_schema == runner.RAW_SCHEMA_V19
+                else [0, 52, 116]),
             "timeout_seconds": 120.0,
         })
     campaign["statistics"] = runner.statistics_policy(raw_schema)
@@ -1704,12 +1881,22 @@ def synthetic_raw(
     else:
         campaign.pop("candidate_mode", None)
     if raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
-        host, reservation, isolation, supervision = \
-            v17_execution_fixtures(campaign)
+        pair_qualification = None
+        if raw_schema == runner.RAW_SCHEMA_V19:
+            host, reservation, pair_lease, pair_qualification = \
+                v19_execution_fixtures(campaign)
+            isolation = None
+            supervision = None
+        else:
+            host, reservation, isolation, supervision = \
+                v17_execution_fixtures(campaign)
+            pair_lease = isolation["pair_lease"]
         if raw_schema == runner.RAW_SCHEMA_V18:
             supervision = None
     else:
         host, reservation, isolation = HOST, RESERVATION, ISOLATION
+        pair_lease = isolation["pair_lease"]
+        pair_qualification = None
         supervision = runner.supervision_record(
             "ab" * 32, 900, 2_100, campaign, reservation, isolation)
     invocations = []
@@ -1752,31 +1939,66 @@ def synthetic_raw(
                 "reservation_before": reservation,
                 "reservation_after": reservation,
             })
-            if raw_schema == runner.RAW_SCHEMA_V18:
+            if raw_schema in (
+                    runner.RAW_SCHEMA_V18, runner.RAW_SCHEMA_V19):
                 index = len(invocations) - 1
-                before_ns = 10_000 + index * 100
-                before_window = {
-                    "benchmark_cpu": cpu_stat(
-                        campaign["benchmark_cpu"],
-                        user=100 + index, idle=100 + index),
-                    "monotonic_ns": before_ns,
-                    "read_finished_monotonic_ns": before_ns,
-                    "read_started_monotonic_ns": before_ns - 2,
-                    "reserved_sibling": cpu_stat(
-                        campaign["reserved_sibling"],
-                        user=100, idle=100 + 2 * index),
-                }
-                after_window = {
-                    "benchmark_cpu": cpu_stat(
-                        campaign["benchmark_cpu"],
-                        user=101 + index, idle=101 + index),
-                    "monotonic_ns": before_ns + 20,
-                    "read_finished_monotonic_ns": before_ns + 22,
-                    "read_started_monotonic_ns": before_ns + 20,
-                    "reserved_sibling": cpu_stat(
-                        campaign["reserved_sibling"],
-                        user=100, idle=102 + 2 * index),
-                }
+                if raw_schema == runner.RAW_SCHEMA_V19:
+                    if index == 0:
+                        before_window = copy.deepcopy(
+                            pair_qualification["first_window_handoff"]
+                            ["first_window_before"])
+                    else:
+                        previous = invocations[-2]["cpu_window"]["after"]
+                        before_started = \
+                            previous["read_finished_monotonic_ns"] + 10
+                        before_window = {
+                            "benchmark_cpu": copy.deepcopy(
+                                previous["benchmark_cpu"]),
+                            "monotonic_ns": before_started + 2,
+                            "read_finished_monotonic_ns": before_started + 2,
+                            "read_started_monotonic_ns": before_started,
+                            "reserved_sibling": copy.deepcopy(
+                                previous["reserved_sibling"]),
+                        }
+                        for role in ("benchmark_cpu", "reserved_sibling"):
+                            before_window[role]["fields"]["idle"] += 1
+                            before_window[role]["total_jiffies"] += 1
+                    before_ns = before_window["monotonic_ns"]
+                    after_window = copy.deepcopy(before_window)
+                    after_window["benchmark_cpu"]["fields"]["user"] += 1
+                    after_window["benchmark_cpu"]["fields"]["idle"] += 1
+                    after_window["benchmark_cpu"]["total_jiffies"] += 2
+                    after_window["reserved_sibling"]["fields"]["idle"] += 2
+                    after_window["reserved_sibling"]["total_jiffies"] += 2
+                    after_window.update({
+                        "monotonic_ns": before_ns + 20,
+                        "read_finished_monotonic_ns": before_ns + 22,
+                        "read_started_monotonic_ns": before_ns + 20,
+                    })
+                else:
+                    before_ns = 10_000 + index * 100
+                    before_window = {
+                        "benchmark_cpu": cpu_stat(
+                            campaign["benchmark_cpu"],
+                            user=100 + index, idle=100 + index),
+                        "monotonic_ns": before_ns,
+                        "read_finished_monotonic_ns": before_ns,
+                        "read_started_monotonic_ns": before_ns - 2,
+                        "reserved_sibling": cpu_stat(
+                            campaign["reserved_sibling"],
+                            user=100, idle=100 + 2 * index),
+                    }
+                    after_window = {
+                        "benchmark_cpu": cpu_stat(
+                            campaign["benchmark_cpu"],
+                            user=101 + index, idle=101 + index),
+                        "monotonic_ns": before_ns + 20,
+                        "read_finished_monotonic_ns": before_ns + 22,
+                        "read_started_monotonic_ns": before_ns + 20,
+                        "reserved_sibling": cpu_stat(
+                            campaign["reserved_sibling"],
+                            user=100, idle=102 + 2 * index),
+                    }
                 invocations[-1]["cpu_window"] = runner.cpu_window_record(
                     campaign["benchmark_cpu"], campaign["reserved_sibling"],
                     cell.identifier, round_index, slot, implementation,
@@ -1786,15 +2008,27 @@ def synthetic_raw(
                     runner.SEALED_EXECUTABLE_PROTOCOL
                 invocations[-1]["executable_snapshot"] = copy.deepcopy(
                     executable_snapshots[implementation])
-    if raw_schema == runner.RAW_SCHEMA_V18:
+    if raw_schema in (runner.RAW_SCHEMA_V18, runner.RAW_SCHEMA_V19):
         windows = [invocation["cpu_window"] for invocation in invocations]
         first = windows[0]["before"]
         last = windows[-1]["after"]
+        if raw_schema == runner.RAW_SCHEMA_V19:
+            bridge_tail = pair_qualification["bridge"] \
+                ["campaign_presample_before"]
+            outer_before_ns = bridge_tail["read_finished_monotonic_ns"]
+            outer_before_cpu = bridge_tail["cpus"][
+                str(campaign["benchmark_cpu"])]
+            outer_before_sibling = bridge_tail["cpus"][
+                str(campaign["reserved_sibling"])]
+        else:
+            outer_before_ns = first["monotonic_ns"] - 10
+            outer_before_cpu = first["benchmark_cpu"]
+            outer_before_sibling = first["reserved_sibling"]
         isolation = runner.isolation_record_v2(
             campaign["benchmark_cpu"], campaign["reserved_sibling"],
-            isolation["pair_lease"], first["monotonic_ns"] - 10,
-            last["monotonic_ns"] + 10, first["benchmark_cpu"],
-            last["benchmark_cpu"], first["reserved_sibling"],
+            pair_lease, outer_before_ns,
+            last["read_finished_monotonic_ns"] + 10, outer_before_cpu,
+            last["benchmark_cpu"], outer_before_sibling,
             last["reserved_sibling"], windows)
     analysis = runner.analyze(invocations, campaign, raw_schema)
     payload = {
@@ -1816,6 +2050,8 @@ def synthetic_raw(
         payload["supervision"] = copy.deepcopy(supervision)
     if executable_snapshots is not None:
         payload["executable_snapshots"] = executable_snapshots
+    if raw_schema == runner.RAW_SCHEMA_V19:
+        payload["pair_qualification"] = pair_qualification
     return runner.signed(payload)
 
 
@@ -1847,7 +2083,8 @@ def write_complete_evidence_bundle(
                 runner.MANIFEST_SCHEMA_V11, runner.MANIFEST_SCHEMA_V12,
                 runner.MANIFEST_SCHEMA_V13, runner.MANIFEST_SCHEMA_V14,
                 runner.MANIFEST_SCHEMA_V15, runner.MANIFEST_SCHEMA_V16,
-                runner.MANIFEST_SCHEMA_V17, runner.MANIFEST_SCHEMA_V18):
+                runner.MANIFEST_SCHEMA_V17, runner.MANIFEST_SCHEMA_V18,
+                runner.MANIFEST_SCHEMA_V19):
             stdout_path.chmod(0o600)
             stderr_path.chmod(0o600)
         invocation["stdout"] = {
@@ -1889,6 +2126,7 @@ def write_complete_evidence_bundle(
         runner.MANIFEST_SCHEMA_V13, runner.MANIFEST_SCHEMA_V14,
         runner.MANIFEST_SCHEMA_V15, runner.MANIFEST_SCHEMA_V16,
         runner.MANIFEST_SCHEMA_V17, runner.MANIFEST_SCHEMA_V18,
+        runner.MANIFEST_SCHEMA_V19,
     ):
         manifest_payload["supervision"] = value["supervision"]
     if manifest_schema in (
@@ -1896,9 +2134,12 @@ def write_complete_evidence_bundle(
             runner.MANIFEST_SCHEMA_V10, runner.MANIFEST_SCHEMA_V11,
             runner.MANIFEST_SCHEMA_V12, runner.MANIFEST_SCHEMA_V13,
             runner.MANIFEST_SCHEMA_V14, runner.MANIFEST_SCHEMA_V15,
-            runner.MANIFEST_SCHEMA_V16, runner.MANIFEST_SCHEMA_V17, runner.MANIFEST_SCHEMA_V18):
+            runner.MANIFEST_SCHEMA_V16, runner.MANIFEST_SCHEMA_V17,
+            runner.MANIFEST_SCHEMA_V18, runner.MANIFEST_SCHEMA_V19):
         manifest_payload["executable_snapshots"] = \
             value["executable_snapshots"]
+    if manifest_schema == runner.MANIFEST_SCHEMA_V19:
+        manifest_payload["pair_qualification"] = value["pair_qualification"]
     manifest = runner.signed(manifest_payload)
     manifest_path = root / "manifest.json"
     runner.write_json_exclusive(manifest_path, manifest)
@@ -1987,9 +2228,10 @@ def synthetic_failure(raw_schema: str) -> dict:
         runner.RAW_SCHEMA_V16: runner.FAILURE_SCHEMA_V16,
         runner.RAW_SCHEMA_V17: runner.FAILURE_SCHEMA_V17,
         runner.RAW_SCHEMA_V18: runner.FAILURE_SCHEMA_V18,
+        runner.RAW_SCHEMA_V19: runner.FAILURE_SCHEMA_V19,
     }[raw_schema]
     failure_isolation = copy.deepcopy(raw["isolation"])
-    if raw_schema == runner.RAW_SCHEMA_V18:
+    if raw_schema in (runner.RAW_SCHEMA_V18, runner.RAW_SCHEMA_V19):
         before = failure_isolation["before"]
         after = failure_isolation["after"]
         failure_isolation = runner.isolation_record_v2(
@@ -2035,21 +2277,81 @@ def synthetic_failure(raw_schema: str) -> dict:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V16
     elif raw_schema == runner.RAW_SCHEMA_V17:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V17
-    elif raw_schema in runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS:
+    elif raw_schema == runner.RAW_SCHEMA_V18:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V18
+    elif raw_schema == runner.RAW_SCHEMA_V19:
+        payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V19
     if raw_schema in runner.SUPERVISION_SCHEMAS:
         payload["supervision"] = copy.deepcopy(raw["supervision"])
     if raw_schema in runner.SEALED_EXECUTABLE_SCHEMAS:
         payload["executable_snapshots"] = copy.deepcopy(
             raw["executable_snapshots"])
+    if raw_schema == runner.RAW_SCHEMA_V19:
+        qualification = raw["pair_qualification"]
+        payload["pair_qualification"] = \
+            runner.pair_v19.pair_qualified_v19_record(
+                stage="campaign", record_status="failed",
+                terminal="campaign-rejected",
+                policy_value=qualification["policy"],
+                expected_policy_sha256=qualification["policy_sha256"],
+                host_identity_sha256=qualification["host_identity_sha256"],
+                attempt_value=qualification["attempt"],
+                acquisition_value=qualification["acquisition"],
+                bridge_value=qualification["bridge"],
+                first_window_before_value=qualification
+                    ["first_window_handoff"]["first_window_before"])
     return runner.signed(payload)
+
+
+def synthetic_unselected_v19_failure(*, acquired: bool) -> dict:
+    failure = synthetic_failure(runner.RAW_SCHEMA_V19)
+    if acquired:
+        acquisition, unused_bridge, policy, unused_fixture_module = \
+            v19_qualification_components(selected=False)
+        del unused_bridge, unused_fixture_module
+        stage = "acquired"
+        terminal = "no-candidate-pair-qualified"
+    else:
+        policy = runner.v19_qualification_policy_record()
+        acquisition = None
+        stage = "identity"
+        terminal = "identity-failed"
+    failure["campaign"]["benchmark_cpu"] = None
+    failure["campaign"]["reserved_sibling"] = None
+    if acquisition is None:
+        failure["campaign"].pop("allowed_cpu_set_at_launch")
+    else:
+        failure["campaign"]["allowed_cpu_set_at_launch"] = \
+            acquisition["allowed_cpu_set_at_launch"]
+    for name in (
+            "host_initial", "reservation", "pair_lease", "isolation",
+            "supervision"):
+        failure[name] = None
+    failure["invocations"] = []
+    failure["pair_qualification"] = \
+        runner.pair_v19.pair_qualified_v19_record(
+            stage=stage, record_status="failed", terminal=terminal,
+            policy_value=policy,
+            expected_policy_sha256=
+                runner.pair_v19.contract.canonical_sha256(policy),
+            host_identity_sha256=
+                runner.pair_v19.contract.canonical_sha256(None),
+            attempt_value=
+                runner.pair_v19.pair_qualified_attempt_record(attempt=1),
+            acquisition_value=acquisition)
+    return resign(failure)
 
 
 class MainCompareRunnerTests(unittest.TestCase):
     def assert_rejected(self, value: dict) -> None:
         with self.assertRaises(runner.EvidenceError):
             runner.validate_raw(
-                resign(value), None, check_files=False, check_current_inputs=False)
+                resign(value), None, check_files=False,
+                check_current_inputs=False,
+                expected_v19_attempt=(
+                    expected_v19_attempt_one()
+                    if value.get("schema") == runner.RAW_SCHEMA_V19
+                    else None))
 
     def test_direct_script_help_loads_shared_git_capture(self) -> None:
         with tempfile.TemporaryDirectory(
@@ -8463,6 +8765,329 @@ class MainCompareRunnerTests(unittest.TestCase):
             name: runner.sha256_bytes(runner.canonical_bytes(value))
             for name, value in objects.items()
         }, expected)
+
+    def test_v19_dormant_success_manifest_and_failure_contracts(self) -> None:
+        self.assertEqual((runner.RAW_SCHEMA, runner.MANIFEST_SCHEMA,
+                          runner.FAILURE_SCHEMA),
+                         (runner.RAW_SCHEMA_V18,
+                          runner.MANIFEST_SCHEMA_V18,
+                          runner.FAILURE_SCHEMA_V18))
+        self.assertEqual(
+            runner.FROZEN_CPU_PAIR_SCHEMAS,
+            frozenset((runner.RAW_SCHEMA_V17, runner.RAW_SCHEMA_V18)))
+        self.assertIn(runner.RAW_SCHEMA_V19,
+                      runner.GFNI_ENCODE_CAMPAIGN_SCHEMAS)
+        self.assertIn(runner.RAW_SCHEMA_V19,
+                      runner.WINDOWED_CONTAMINATION_SCHEMAS)
+        self.assertEqual(
+            runner.candidate_compile_actions_for_raw_schema(
+                runner.RAW_SCHEMA_V19),
+            runner.candidate_compile_actions_for_raw_schema(
+                runner.RAW_SCHEMA_V18))
+        promotion = load_plan_runner()
+        self.assertNotIn(
+            runner.MANIFEST_SCHEMA_V19, promotion.EXACT_MANIFEST_SCHEMAS)
+        self.assertNotIn(runner.RAW_SCHEMA_V19,
+                         promotion.EXACT_RAW_SCHEMAS)
+        self.assertNotIn(
+            (runner.MANIFEST_SCHEMA_V19, runner.RAW_SCHEMA_V19),
+            promotion.EXACT_SCHEMA_PAIRS)
+
+        raw = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V19)
+        runner.validate_raw(
+            raw, None, False, False,
+            expected_v19_attempt=expected_v19_attempt_one())
+        qualification = raw["pair_qualification"]
+        self.assertEqual(qualification["selected_pair"], {
+            "benchmark_cpu": 1, "reserved_sibling": 65,
+        })
+        self.assertEqual(qualification["terminal"], "NOT_PROMOTED")
+        self.assertEqual(qualification["shared_host_claim_ceiling"], {
+            "promotion_eligible": False,
+            "host_exclusivity_proved": False,
+            "whole_campaign_interval_observed": False,
+            "causal_performance_claim_allowed": False,
+        })
+        self.assertEqual(
+            raw["isolation"]["before"]["monotonic_ns"],
+            qualification["bridge"]["campaign_presample_before"]
+                ["read_finished_monotonic_ns"])
+        self.assertEqual(
+            raw["invocations"][0]["cpu_window"]["before"],
+            qualification["first_window_handoff"]["first_window_before"])
+
+        failure = synthetic_failure(runner.RAW_SCHEMA_V19)
+        runner.validate_failure(
+            failure, Path("/unused"), check_files=False,
+            expected_v19_attempt=expected_v19_attempt_one())
+        self.assertEqual(
+            (failure["pair_qualification"]["stage"],
+             failure["pair_qualification"]["terminal"]),
+            ("campaign", "campaign-rejected"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = write_complete_evidence_bundle(
+                Path(directory), copy.deepcopy(raw),
+                runner.MANIFEST_SCHEMA_V19)
+            manifest, retained, unused_analysis, unused_snapshot = \
+                runner.verified_campaign_bundle(
+                    manifest_path, no_current_input_check=True,
+                    expected_v19_attempt=expected_v19_attempt_one())
+            del unused_analysis, unused_snapshot
+            self.assertEqual(
+                manifest["pair_qualification"],
+                retained["pair_qualification"])
+
+    def test_v19_policy_and_attempt_are_externally_bound(self) -> None:
+        raw = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V19)
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_raw(
+                raw, None, check_files=False, check_current_inputs=False)
+
+        attempt_two = runner.pair_v19.pair_qualified_attempt_record(
+            attempt=2,
+            prior_attempt_failure_sha256="f" * 64,
+            prior_attempt_selection_status="not-acquired")
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_raw(
+                raw, None, check_files=False, check_current_inputs=False,
+                expected_v19_attempt=attempt_two)
+
+        for ticks, primaries in (
+                (runner.CLOCK_TICKS_PER_SECOND + 1,
+                 list(runner.V19_CANDIDATE_PRIMARY_CPUS)),
+                (runner.CLOCK_TICKS_PER_SECOND, [1])):
+            with self.subTest(ticks=ticks, primaries=primaries):
+                failure = synthetic_unselected_v19_failure(acquired=False)
+                alternate_policy = \
+                    runner.pair_v19.contract.qualification_policy_record(
+                        clock_ticks_per_second=ticks,
+                        candidate_primary_cpus=primaries,
+                        excluded_pairs=[], domain_mode="pair-only")
+                failure["pair_qualification"] = \
+                    runner.pair_v19.pair_qualified_v19_record(
+                        stage="identity", record_status="failed",
+                        terminal="identity-failed",
+                        policy_value=alternate_policy,
+                        expected_policy_sha256=
+                            runner.pair_v19.contract.canonical_sha256(
+                                alternate_policy),
+                        host_identity_sha256=
+                            runner.pair_v19.contract.canonical_sha256(None),
+                        attempt_value=expected_v19_attempt_one())
+                with self.assertRaises(runner.EvidenceError):
+                    runner.validate_failure(
+                        resign(failure), Path("/unused"), check_files=False,
+                        expected_v19_attempt=expected_v19_attempt_one())
+
+    def test_v19_pair_qualification_splices_fail_closed(self) -> None:
+        raw = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V19)
+
+        # Exercise the pair and launch-affinity bindings directly so an
+        # earlier generic campaign/host check cannot mask either assertion.
+        changed_pair_campaign = copy.deepcopy(raw["campaign"])
+        changed_pair_campaign["benchmark_cpu"] = 2
+        changed_pair_campaign["reserved_sibling"] = 66
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_pair_qualified_v19_binding(
+                raw["pair_qualification"], changed_pair_campaign,
+                raw["host_initial"], expected_v19_attempt_one(),
+                required_record_status="complete")
+
+        changed_affinity_campaign = copy.deepcopy(raw["campaign"])
+        changed_affinity_campaign["allowed_cpu_set_at_launch"] = \
+            changed_affinity_campaign["allowed_cpu_set_at_launch"][:-1]
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_pair_qualified_v19_binding(
+                raw["pair_qualification"], changed_affinity_campaign,
+                raw["host_initial"], expected_v19_attempt_one(),
+                required_record_status="complete")
+
+        changed_pair = copy.deepcopy(raw)
+        changed_pair["campaign"]["benchmark_cpu"] = 3
+        self.assert_rejected(resign(changed_pair))
+
+        changed_host = copy.deepcopy(raw)
+        changed_host["host_initial"]["system"]["node"] = "other-host"
+        changed_host["host_final"] = copy.deepcopy(
+            changed_host["host_initial"])
+        self.assert_rejected(resign(changed_host))
+
+        changed_claim = copy.deepcopy(raw)
+        changed_claim["pair_qualification"]["shared_host_claim_ceiling"] \
+            ["promotion_eligible"] = True
+        self.assert_rejected(resign(changed_claim))
+
+        qualification = raw["pair_qualification"]
+        fixture_module = load_pair_v19_fixtures()
+        later_before = fixture_module.first_window_before(
+            qualification["bridge"], elapsed_ns=2_000_000)
+        changed_handoff = copy.deepcopy(raw)
+        changed_handoff["pair_qualification"] = \
+            runner.pair_v19.pair_qualified_v19_record(
+                stage="complete", record_status="complete",
+                terminal=runner.pair_v19.SUCCESS_TERMINAL,
+                policy_value=qualification["policy"],
+                expected_policy_sha256=qualification["policy_sha256"],
+                host_identity_sha256=qualification["host_identity_sha256"],
+                attempt_value=qualification["attempt"],
+                acquisition_value=qualification["acquisition"],
+                bridge_value=qualification["bridge"],
+                first_window_before_value=later_before)
+        self.assert_rejected(resign(changed_handoff))
+
+        changed_outer = copy.deepcopy(raw)
+        first = changed_outer["invocations"][0]["cpu_window"]["before"]
+        last = changed_outer["invocations"][-1]["cpu_window"]["after"]
+        changed_outer["isolation"] = runner.isolation_record_v2(
+            changed_outer["campaign"]["benchmark_cpu"],
+            changed_outer["campaign"]["reserved_sibling"],
+            changed_outer["isolation"]["pair_lease"],
+            first["read_started_monotonic_ns"],
+            last["read_finished_monotonic_ns"] + 10,
+            first["benchmark_cpu"], last["benchmark_cpu"],
+            first["reserved_sibling"], last["reserved_sibling"],
+            [invocation["cpu_window"]
+             for invocation in changed_outer["invocations"]])
+        self.assert_rejected(resign(changed_outer))
+
+        failure = synthetic_failure(runner.RAW_SCHEMA_V19)
+        canonical_failed_qualification = copy.deepcopy(
+            failure["pair_qualification"])
+        failure["pair_qualification"]["terminal"] = "bridge-not-accepted"
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(failure), Path("/unused"), check_files=False,
+                expected_v19_attempt=expected_v19_attempt_one())
+
+        failed_inside_raw = copy.deepcopy(raw)
+        failed_inside_raw["pair_qualification"] = \
+            canonical_failed_qualification
+        self.assert_rejected(resign(failed_inside_raw))
+
+        complete_inside_failure = synthetic_failure(runner.RAW_SCHEMA_V19)
+        complete_inside_failure["pair_qualification"] = copy.deepcopy(
+            raw["pair_qualification"])
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(complete_inside_failure), Path("/unused"),
+                check_files=False,
+                expected_v19_attempt=expected_v19_attempt_one())
+
+        spliced_failure_isolation = synthetic_failure(
+            runner.RAW_SCHEMA_V19)
+        isolation = spliced_failure_isolation["isolation"]
+        changed_before_cpu = copy.deepcopy(
+            isolation["before"]["benchmark_cpu"])
+        changed_before_cpu["fields"]["idle"] += 1
+        changed_before_cpu["total_jiffies"] += 1
+        spliced_failure_isolation["isolation"] = \
+            runner.isolation_record_v2(
+                spliced_failure_isolation["campaign"]["benchmark_cpu"],
+                spliced_failure_isolation["campaign"]["reserved_sibling"],
+                isolation["pair_lease"],
+                isolation["before"]["monotonic_ns"],
+                isolation["after"]["monotonic_ns"],
+                changed_before_cpu, isolation["after"]["benchmark_cpu"],
+                isolation["before"]["reserved_sibling"],
+                isolation["after"]["reserved_sibling"], [])
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(spliced_failure_isolation), Path("/unused"),
+                check_files=False,
+                expected_v19_attempt=expected_v19_attempt_one())
+
+    def test_v19_selected_pre_campaign_failures_are_closed(self) -> None:
+        failure = synthetic_failure(runner.RAW_SCHEMA_V19)
+        complete = failure["pair_qualification"]
+        fixture_module = load_pair_v19_fixtures()
+        late_before = fixture_module.first_window_before(
+            complete["bridge"],
+            elapsed_ns=runner.pair_v19.MAXIMUM_HANDOFF_ELAPSED_NS + 1)
+        cases = (
+            ("acquired", "bridge-not-accepted", None, None),
+            ("bridged", "first-window-handoff-unavailable",
+             complete["bridge"], None),
+            ("handoff", "first-window-handoff-late",
+             complete["bridge"], late_before),
+        )
+        accepted: dict[str, dict] = {}
+        for stage, terminal, bridge, first_before in cases:
+            with self.subTest(stage=stage):
+                retained = copy.deepcopy(failure)
+                retained["isolation"] = None
+                retained["invocations"] = []
+                retained["pair_qualification"] = \
+                    runner.pair_v19.pair_qualified_v19_record(
+                        stage=stage, record_status="failed",
+                        terminal=terminal,
+                        policy_value=complete["policy"],
+                        expected_policy_sha256=complete["policy_sha256"],
+                        host_identity_sha256=
+                            complete["host_identity_sha256"],
+                        attempt_value=complete["attempt"],
+                        acquisition_value=complete["acquisition"],
+                        bridge_value=bridge,
+                        first_window_before_value=first_before)
+                retained = resign(retained)
+                runner.validate_failure(
+                    retained, Path("/unused"), check_files=False,
+                    expected_v19_attempt=expected_v19_attempt_one())
+                accepted[stage] = retained
+
+        retained_isolation = copy.deepcopy(accepted["bridged"])
+        retained_isolation["isolation"] = copy.deepcopy(failure["isolation"])
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(retained_isolation), Path("/unused"),
+                check_files=False,
+                expected_v19_attempt=expected_v19_attempt_one())
+
+        retained_invocation = copy.deepcopy(accepted["bridged"])
+        retained_invocation["invocations"] = [{}]
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(retained_invocation), Path("/unused"),
+                check_files=False,
+                expected_v19_attempt=expected_v19_attempt_one())
+
+    def test_v19_unselected_failure_prefixes_are_closed(self) -> None:
+        for acquired in (False, True):
+            with self.subTest(acquired=acquired):
+                failure = synthetic_unselected_v19_failure(
+                    acquired=acquired)
+                runner.validate_failure(
+                    failure, Path("/unused"), check_files=False,
+                    expected_v19_attempt=expected_v19_attempt_one())
+                self.assertIsNone(
+                    failure["pair_qualification"]["selected_pair"])
+
+                pair_claim = copy.deepcopy(failure)
+                pair_claim["campaign"]["benchmark_cpu"] = 1
+                pair_claim["campaign"]["reserved_sibling"] = 65
+                with self.assertRaises(runner.EvidenceError):
+                    runner.validate_failure(
+                        resign(pair_claim), Path("/unused"),
+                        check_files=False,
+                        expected_v19_attempt=expected_v19_attempt_one())
+
+                retained_state = copy.deepcopy(failure)
+                retained_state["reservation"] = copy.deepcopy(
+                    synthetic_raw(raw_schema=runner.RAW_SCHEMA_V19)
+                    ["reservation"])
+                with self.assertRaises(runner.EvidenceError):
+                    runner.validate_failure(
+                        resign(retained_state), Path("/unused"),
+                        check_files=False,
+                        expected_v19_attempt=expected_v19_attempt_one())
+
+        malformed_identity = synthetic_unselected_v19_failure(acquired=False)
+        malformed_identity["identities_initial"] = []
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(malformed_identity), Path("/unused"),
+                check_files=False,
+                expected_v19_attempt=expected_v19_attempt_one())
 
     def test_decoder_promotion_excludes_encode_only_v17_and_v18(self) -> None:
         plan = load_plan_runner()
