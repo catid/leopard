@@ -35,6 +35,8 @@ FAILED_CORE_SCHEMA = \
     "leopard2-v19-gfni-main-conditioned-passive-failed-core-manifest/v1"
 ATTEMPT_LINEAGE_SCHEMA = \
     "leopard2-v19-gfni-main-conditioned-attempt-lineage/v1"
+FAILURE_EXIT_STATUS_SCHEMA = \
+    "leopard2-v19-conditioned-campaign-exit-status/v1"
 GENERATION = "passive-v3"
 EVIDENCE_CLASS = \
     "conditioned-passive-windowed-shared-host-observation/v1"
@@ -127,6 +129,9 @@ SUCCESS_CORE_ENTRIES = COMMON_CORE_ENTRIES | frozenset((
     "passive-environment-policy.json",
     "audit.json",
 ))
+FAILURE_CORE_ENTRIES = COMMON_CORE_ENTRIES | frozenset((
+    "campaign-exit-status.json",
+))
 
 SUCCESS_TERMINAL_KEYS = frozenset((
     "schema", "status", "acquisition_generation", "evidence_class",
@@ -145,7 +150,8 @@ FAILURE_TERMINAL_KEYS = frozenset((
     "controller_source_tree", "selected_pair",
     "pair_qualification_stage", "pair_qualification_terminal",
     "promotion_eligible", "promotion_passed", "campaign_exit_status",
-    "failure_sha256", "core_manifest_sha256", "core_sha256sums_sha256",
+    "campaign_exit_status_sha256", "failure_sha256",
+    "core_manifest_sha256", "core_sha256sums_sha256",
     "preregistration_sha256", "controller_closure_sha256",
     "shared_host_claim_ceiling",
 ))
@@ -173,6 +179,7 @@ COMPLETE_CORE_KEYS = COMMON_CORE_KEYS | frozenset((
 FAILED_CORE_KEYS = COMMON_CORE_KEYS | frozenset((
     "campaign_failure_sha256", "failure_verify_status", "failure_verified",
     "pair_qualification_stage", "pair_qualification_terminal",
+    "campaign_exit_status_sha256",
 ))
 LINEAGE_KEYS = frozenset((
     "schema", "acquisition_generation", "attempt", "attempt_budget",
@@ -737,6 +744,23 @@ def validate_preflight_identity(
                     f"v19 {role} preflight identity differs")
 
 
+def validate_failure_preflight_identity(
+    failure: dict[str, Any], preregistration: dict[str, Any],
+) -> None:
+    initial = failure.get("identities_initial")
+    invocations = failure.get("invocations")
+    require(type(initial) is dict and type(invocations) is list,
+            "v19 failure lacks its preflight identity boundary")
+    # A failure has no final campaign manifest/identity.  Reuse the exact
+    # success identity validator with the retained initial identity as both
+    # endpoints, while still validating every retained invocation endpoint.
+    validate_preflight_identity({
+        "identities_initial": initial,
+        "identities_final": initial,
+        "invocations": invocations,
+    }, {"identities": initial}, preregistration)
+
+
 def validate_common_records(
     envelope: Path, terminal_path: Path, *, success: bool,
     trusted_source_root: Path, authority_envelope: Path,
@@ -751,7 +775,7 @@ def validate_common_records(
              {"FAILED.json", "SHA256SUMS", "TREE-METADATA.json", "core"}),
             "sealed v19 envelope file set differs")
     expected_core_entries = SUCCESS_CORE_ENTRIES if success else \
-        COMMON_CORE_ENTRIES
+        FAILURE_CORE_ENTRIES
     require(set(path.name for path in core.iterdir()) == expected_core_entries,
             "sealed v19 core file set differs")
     core_checksum_paths = regular_files(
@@ -1160,7 +1184,7 @@ def validate_success(
 def validate_failure(
     core: Path, terminal: dict[str, Any], manifest: dict[str, Any],
     lineage: dict[str, Any], authority: dict[str, Any],
-    trusted_source_root: Path,
+    trusted_source_root: Path, require_preflight_identity: bool,
 ) -> dict[str, Any]:
     terminal_pair = pair(
         terminal["selected_pair"], "failure terminal selected pair",
@@ -1168,12 +1192,27 @@ def validate_failure(
     manifest_pair = pair(
         manifest["selected_pair"], "failure manifest selected pair",
         nullable=True)
+    exit_status_path = core / "campaign-exit-status.json"
+    # run_abba's failure record does not contain its caller's shell status.
+    # The wrapper therefore retains this separately produced, core-hashed
+    # record as the replay source of truth for campaign_exit_status.
+    exit_status_record = load_json(exit_status_path)
+    require(set(exit_status_record) == {"campaign_exit_status", "schema"} and
+            exit_status_record["schema"] == FAILURE_EXIT_STATUS_SCHEMA and
+            type(exit_status_record["campaign_exit_status"]) is int and
+            1 <= exit_status_record["campaign_exit_status"] <= 255,
+            "v19 retained campaign exit status differs")
+    retained_exit_status = exit_status_record["campaign_exit_status"]
+    exit_status_sha256 = sha256_file(exit_status_path)
     require(exact_json_equal(terminal_pair, manifest_pair) and
             type(terminal["campaign_exit_status"]) is int and
-            1 <= terminal["campaign_exit_status"] <= 255 and
+            terminal["campaign_exit_status"] == retained_exit_status and
             type(manifest["campaign_exit_status"]) is int and
             manifest["campaign_exit_status"] ==
                 terminal["campaign_exit_status"] and
+            terminal["campaign_exit_status_sha256"] ==
+                manifest["campaign_exit_status_sha256"] ==
+                exit_status_sha256 and
             type(manifest["failure_verify_status"]) is int and
             manifest["failure_verify_status"] == 0 and
             manifest["failure_verified"] is True,
@@ -1183,6 +1222,10 @@ def validate_failure(
             manifest["campaign_failure_sha256"] == sha256_file(failure_path),
             "v19 failure hash binding differs")
     failure = load_json(failure_path)
+    if require_preflight_identity:
+        validate_failure_preflight_identity(
+            failure,
+            load_json(core / "conditioned-v19-preregistration.json"))
     retained = failure.get("retained_files")
     require(type(retained) is list,
             "v19 failure retained-file inventory differs")
@@ -1277,7 +1320,8 @@ def verify_envelope(
             envelope, core, terminal, manifest, lineage, authority,
             trusted_source_root, require_preflight_identity)
     return validate_failure(
-        core, terminal, manifest, lineage, authority, trusted_source_root)
+        core, terminal, manifest, lineage, authority, trusted_source_root,
+        require_preflight_identity)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

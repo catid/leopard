@@ -422,16 +422,17 @@ require(preregistration_sha256 == preregistration_expected,
 resource_envelope = preregistration.get("resource_envelope")
 require(type(resource_envelope) is dict,
         "v19 producer resource envelope differs")
-failure_exit_status = None
-if kind in ("failed-core", "failure-terminal"):
+if kind == "failure-exit-status":
     failure_request = load(request_path)
     require(set(failure_request) == {"campaign_exit_status"} and
             type(failure_request["campaign_exit_status"]) is int and
             1 <= failure_request["campaign_exit_status"] <= 255,
             "v19 failure producer exit status differs")
-    failure_exit_status = failure_request["campaign_exit_status"]
-
-if kind == "lineage":
+    result = {
+        "schema": "leopard2-v19-conditioned-campaign-exit-status/v1",
+        "campaign_exit_status": failure_request["campaign_exit_status"],
+    }
+elif kind == "lineage":
     request = load(request_path)
     require(set(request) == {
                 "controller_source_commit", "controller_source_tree",
@@ -472,6 +473,23 @@ else:
     lineage_path = os.path.join(core, "attempt-lineage.json")
     lineage = load(lineage_path)
     _campaign, qualification = qualification_record()
+    failure_exit_status = None
+    failure_exit_status_sha256 = None
+    if kind in ("failed-core", "failure-terminal"):
+        failure_exit_status_path = os.path.join(
+            core, "campaign-exit-status.json")
+        failure_exit_status_record = load(failure_exit_status_path)
+        require(set(failure_exit_status_record) == {
+                    "campaign_exit_status", "schema"} and
+                failure_exit_status_record["schema"] ==
+                    "leopard2-v19-conditioned-campaign-exit-status/v1" and
+                type(failure_exit_status_record["campaign_exit_status"])
+                    is int and
+                1 <= failure_exit_status_record["campaign_exit_status"] <= 255,
+                "v19 retained campaign exit status differs")
+        failure_exit_status = \
+            failure_exit_status_record["campaign_exit_status"]
+        failure_exit_status_sha256 = digest(failure_exit_status_path)
     common = {
         "acquisition_generation": generation,
         "attempt": lineage["attempt"],
@@ -536,6 +554,7 @@ else:
             "promotion_eligible": False,
             "promotion_passed": False,
             "campaign_exit_status": failure_exit_status,
+            "campaign_exit_status_sha256": failure_exit_status_sha256,
             "campaign_failure_sha256": digest(failure_path),
             "failure_verify_status": 0,
             "failure_verified": True,
@@ -570,13 +589,17 @@ else:
             failure_path = os.path.join(core, "campaign", "failure.json")
             require(manifest.get("status") == "failed" and
                     manifest.get("campaign_exit_status") ==
-                        failure_exit_status,
+                        failure_exit_status and
+                    manifest.get("campaign_exit_status_sha256") ==
+                        failure_exit_status_sha256,
                     "v19 failed terminal producer input differs")
             result = {
                 **terminal_common,
                 "schema": "leopard2-v19-gfni-main-conditioned-passive-failed-envelope/v1",
                 "pair_qualification_stage": qualification.get("stage"),
                 "pair_qualification_terminal": qualification.get("terminal"),
+                "campaign_exit_status_sha256":
+                    failure_exit_status_sha256,
                 "failure_sha256": digest(failure_path),
             }
     else:
@@ -5715,6 +5738,8 @@ verify_conditioned_v19_campaign_core()
     local expected_source_tree=
     local expected_controller_source_commit=
     local expected_controller_source_tree=
+    local trusted_current_source_commit=
+    local trusted_current_source_tree=
     local expected_selected_pair=
     local expected_terminal_sha256=
     local expected_outer_sha256sums_sha256=
@@ -5855,6 +5880,17 @@ leopard2-v19-gfni-main-conditioned-passive-failed-envelope/v1
     case "$source_authority_mode" in
         current-source-required)
             replay_authority_arguments+=(--require-trusted-source-match)
+            trusted_current_source_commit="$(/usr/bin/git -C "$repo" \
+                rev-parse --verify HEAD^{commit})" || exit 1
+            trusted_current_source_tree="$(/usr/bin/git -C "$repo" \
+                rev-parse --verify HEAD^{tree})" || exit 1
+            test "$expected_controller_source_commit" = \
+                "$trusted_current_source_commit" || exit 1
+            test "$expected_controller_source_tree" = \
+                "$trusted_current_source_tree" || exit 1
+            verify_conditioned_v19_core_source_authority \
+                "$verified_core" "$trusted_current_source_commit" \
+                "$trusted_current_source_tree" || exit 1
             ;;
         retained-commit-authorized)
             replay_authority_arguments+=(--require-preflight-identity)
@@ -7899,12 +7935,12 @@ if [[ $# -ge 3 && $1 == --emit-conditioned-v19-record &&
             test "$4" = "${3%/*}/${3##*/}-record-request.json"
             test "$4" = "$(/usr/bin/readlink -f "$4")"
             ;;
-        failed-core|failure-terminal)
+        failure-exit-status)
             test $# -eq 4
             test "$4" = "${3%/*}/${3##*/}-record-request.json"
             test "$4" = "$(/usr/bin/readlink -f "$4")"
             ;;
-        complete-core|success-terminal)
+        complete-core|failed-core|success-terminal|failure-terminal)
             test $# -eq 3
             ;;
         *) exit 1 ;;

@@ -264,7 +264,7 @@ def unseal(envelope: Path) -> None:
             path.chmod(0o700 if executable else 0o600)
 
 
-def seal(envelope: Path, *, failure_exit_status: int | None = None) -> None:
+def seal(envelope: Path) -> None:
     core = envelope / "core"
     for path in (envelope / "TREE-METADATA.json",
                  envelope / "SHA256SUMS", core / "SHA256SUMS"):
@@ -286,12 +286,8 @@ def seal(envelope: Path, *, failure_exit_status: int | None = None) -> None:
             terminal_path = success_path
             terminal = emitted_record("success-terminal", envelope)
         else:
-            if failure_exit_status is None:
-                raise RuntimeError("synthetic failure lacks its shell exit status")
             terminal_path = failure_path
-            terminal = emitted_record(
-                "failure-terminal", envelope,
-                {"campaign_exit_status": failure_exit_status})
+            terminal = emitted_record("failure-terminal", envelope)
         write_json(terminal_path, terminal)
     else:
         terminal["core_manifest_sha256"] = sha256(core / "manifest.json")
@@ -445,13 +441,16 @@ def build_failure(
     failure["pair_qualification"]["attempt"] = copy.deepcopy(authority)
     failure = fixture_module.resign(failure)
     write_json(campaign / "failure.json", failure)
+    write_json(
+        core / "campaign-exit-status.json",
+        emitted_record(
+            "failure-exit-status", envelope,
+            {"campaign_exit_status": campaign_exit_status}))
     lineage = attempt_lineage(envelope, authority, prior_attempts)
     write_json(core / "attempt-lineage.json", lineage)
-    manifest = emitted_record(
-        "failed-core", envelope,
-        {"campaign_exit_status": campaign_exit_status})
+    manifest = emitted_record("failed-core", envelope)
     write_json(core / "manifest.json", manifest)
-    seal(envelope, failure_exit_status=campaign_exit_status)
+    seal(envelope)
     return envelope
 
 
@@ -637,6 +636,22 @@ class V19WrapperReplayTests(unittest.TestCase):
                 record["attempt_lineage_sha256"] = lineage_hash
                 replace_json(record_path, record)
 
+        def controller_source_cross_splice(envelope: Path) -> None:
+            lineage_path = envelope / "core/attempt-lineage.json"
+            lineage = json.loads(lineage_path.read_bytes())
+            lineage["controller_source_commit"] = CANDIDATE_SOURCE_COMMIT
+            lineage["controller_source_tree"] = CANDIDATE_SOURCE_TREE
+            replace_json(lineage_path, lineage)
+            lineage_hash = sha256(lineage_path)
+            for record_path in (
+                    envelope / "core/manifest.json",
+                    envelope / "NOT_PROMOTED.json"):
+                record = json.loads(record_path.read_bytes())
+                record["controller_source_commit"] = CANDIDATE_SOURCE_COMMIT
+                record["controller_source_tree"] = CANDIDATE_SOURCE_TREE
+                record["attempt_lineage_sha256"] = lineage_hash
+                replace_json(record_path, record)
+
         cases = (
             ("authority", authority),
             ("controller", controller),
@@ -654,6 +669,8 @@ class V19WrapperReplayTests(unittest.TestCase):
             ("extra-campaign-directory", extra_campaign_directory),
             ("extra-campaign-file", extra_campaign_file),
             ("candidate-source-cross-splice", candidate_source_cross_splice),
+            ("controller-source-cross-splice",
+             controller_source_cross_splice),
         )
         for label, mutation in cases:
             with self.subTest(splice=label), tempfile.TemporaryDirectory(
@@ -956,6 +973,21 @@ class V19WrapperReplayTests(unittest.TestCase):
         with self.assertRaises(replay.ReplayError):
             replay.validate_preflight_identity(
                 raw, campaign_manifest, preregistration)
+
+        failure = {
+            "identities_initial": copy.deepcopy(identity),
+            "invocations": [{
+                "identity_before": copy.deepcopy(identity),
+                "identity_after": copy.deepcopy(identity),
+            }],
+        }
+        replay.validate_failure_preflight_identity(
+            failure, preregistration)
+        failure["identities_initial"]["baseline_archive"]["sha256"] = \
+            "1" * 64
+        with self.assertRaises(replay.ReplayError):
+            replay.validate_failure_preflight_identity(
+                failure, preregistration)
 
 
 if __name__ == "__main__":
