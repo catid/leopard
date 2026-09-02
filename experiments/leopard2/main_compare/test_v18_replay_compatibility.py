@@ -219,6 +219,10 @@ def materialize_windowed_auditor_bundle(
             relative = f"{prefix}.{stream_name}"
             stream_path = evidence_root / relative
             stream_path.parent.mkdir(parents=True, exist_ok=True)
+            parent = stream_path.parent
+            while parent != evidence_root:
+                parent.chmod(0o700)
+                parent = parent.parent
             stream_path.write_bytes(stream_bytes)
             stream_path.chmod(0o600)
             invocation[stream_name] = {
