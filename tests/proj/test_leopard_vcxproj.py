@@ -1232,10 +1232,18 @@ class CMakeProductionGraph(object):
         "leopard2_v18_passive_auditor_optimized_self_test": 1,
         "leopard2_v18_passive_wrapper_contract_self_test": 1,
         "leopard2_v18_replay_compatibility_self_test": 1,
+        "leopard2_v19_end_to_end_self_test": 1,
+        "leopard2_v19_end_to_end_optimized_self_test": 1,
+        "leopard2_v19_wrapper_replay_self_test": 1,
+        "leopard2_v19_wrapper_replay_optimized_self_test": 1,
         "leopard2_pair_qualification_contract_self_test": 1,
         "leopard2_pair_qualification_contract_optimized_self_test": 1,
         "leopard2_pair_qualification_acquire_self_test": 1,
         "leopard2_pair_qualification_acquire_optimized_self_test": 1,
+        "leopard2_pair_qualification_bridge_acquire_self_test": 1,
+        "leopard2_pair_qualification_bridge_acquire_optimized_self_test": 1,
+        "leopard2_pair_qualified_v19_contract_self_test": 1,
+        "leopard2_pair_qualified_v19_contract_optimized_self_test": 1,
         "leopard2_pair_qualification_bridge_contract_self_test": 1,
         "leopard2_pair_qualification_bridge_contract_optimized_self_test": 1,
         "leopard2_pair_qualification_verify_self_test": 1,
@@ -1327,8 +1335,16 @@ class CMakeProductionGraph(object):
         "leopard2_v18_passive_auditor_optimized_self_test",
         "leopard2_v18_passive_wrapper_contract_self_test",
         "leopard2_v18_replay_compatibility_self_test",
+        "leopard2_v19_end_to_end_self_test",
+        "leopard2_v19_end_to_end_optimized_self_test",
+        "leopard2_v19_wrapper_replay_self_test",
+        "leopard2_v19_wrapper_replay_optimized_self_test",
         "leopard2_pair_qualification_acquire_self_test",
         "leopard2_pair_qualification_acquire_optimized_self_test",
+        "leopard2_pair_qualification_bridge_acquire_self_test",
+        "leopard2_pair_qualification_bridge_acquire_optimized_self_test",
+        "leopard2_pair_qualified_v19_contract_self_test",
+        "leopard2_pair_qualified_v19_contract_optimized_self_test",
         "leopard2_pair_qualification_bridge_contract_self_test",
         "leopard2_pair_qualification_bridge_contract_optimized_self_test",
         "leopard2_pair_qualification_verify_self_test",
@@ -1383,7 +1399,7 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "31155fb24db5bdc153a7a11301bfd757819c8cb45262c0ab57afbdcebaedad06"
+        "e92101df3ab26aa9f506207630c41c0f417993d46618557aecc8c099ff2b6b43"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1480,6 +1496,16 @@ class CMakeProductionGraph(object):
             "PROPERTIES", "ENVIRONMENT", "PYTHONDONTWRITEBYTECODE=1",
             "TIMEOUT", "300")): 1,
         ("set_tests_properties", (
+            "leopard2_v19_end_to_end_self_test",
+            "leopard2_v19_end_to_end_optimized_self_test",
+            "PROPERTIES", "ENVIRONMENT", "PYTHONDONTWRITEBYTECODE=1",
+            "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_v19_wrapper_replay_self_test",
+            "leopard2_v19_wrapper_replay_optimized_self_test",
+            "PROPERTIES", "ENVIRONMENT", "PYTHONDONTWRITEBYTECODE=1",
+            "RUN_SERIAL", "TRUE", "TIMEOUT", "1800")): 1,
+        ("set_tests_properties", (
             "leopard2_pair_qualification_contract_self_test", "PROPERTIES",
             "TIMEOUT", "300")): 1,
         ("set_tests_properties", (
@@ -1488,6 +1514,10 @@ class CMakeProductionGraph(object):
         ("set_tests_properties", (
             "leopard2_pair_qualification_acquire_self_test",
             "leopard2_pair_qualification_acquire_optimized_self_test",
+            "leopard2_pair_qualification_bridge_acquire_self_test",
+            "leopard2_pair_qualification_bridge_acquire_optimized_self_test",
+            "leopard2_pair_qualified_v19_contract_self_test",
+            "leopard2_pair_qualified_v19_contract_optimized_self_test",
             "leopard2_pair_qualification_bridge_contract_self_test",
             "leopard2_pair_qualification_bridge_contract_optimized_self_test",
             "leopard2_pair_qualification_verify_self_test",

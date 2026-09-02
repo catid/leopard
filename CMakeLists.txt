@@ -3631,6 +3631,42 @@ if(LEO2_BUILD_TESTS)
                 PROPERTIES
                     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
                     TIMEOUT 300)
+            # V19 remains dormant and NOT ARMED.  These suites replay only
+            # synthetic sealed evidence through the frozen runner, auditor,
+            # census, pair verifier, and wrapper dispatches; they perform no
+            # host scan, pair lease, build, benchmark, or timing.
+            add_test(
+                NAME leopard2_v19_end_to_end_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_end_to_end.py)
+            add_test(
+                NAME leopard2_v19_end_to_end_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_end_to_end.py)
+            add_test(
+                NAME leopard2_v19_wrapper_replay_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_wrapper_replay.py)
+            add_test(
+                NAME leopard2_v19_wrapper_replay_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_wrapper_replay.py)
+            set_tests_properties(
+                leopard2_v19_end_to_end_self_test
+                leopard2_v19_end_to_end_optimized_self_test
+                PROPERTIES
+                    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+                    TIMEOUT 300)
+            # Each synthetic envelope verification runs the wrapper's
+            # bash/jq pipeline and two full Python replay verifiers.  Keep the
+            # suite off parallel CTest lanes under the 512 MiB no-swap limit.
+            set_tests_properties(
+                leopard2_v19_wrapper_replay_self_test
+                leopard2_v19_wrapper_replay_optimized_self_test
+                PROPERTIES
+                    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+                    RUN_SERIAL TRUE
+                    TIMEOUT 1800)
             add_test(
                 NAME leopard2_lab_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}

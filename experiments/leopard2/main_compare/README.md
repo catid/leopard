@@ -393,6 +393,85 @@ retain `leopard2-v18-gfni-main-passive-wrapper-failure/v1`. The lineage commits
 to each earlier attempt's canonical path and outer `SHA256SUMS`, and durable
 verification reopens the complete failed-attempt chain.
 
+### Version 19 conditioned-passive pair-qualified screen (dormant, NOT ARMED)
+
+Version 19 is preregistered but deliberately incapable of live acquisition at
+this revision. Its canonical preregistration record has
+`live_acquisition_armed:false` and SHA-256
+`27c1b7d76a0ecdbe194d6e6b62c01e48b1c7d10fc8ef99ebad4d76238669f0c1`.
+An invocation of `--conditioned-passive-v19 --attempt N --attempt-budget 2`
+validates that fixed point and then exits 2 with
+`conditioned v19 authoritative acquisition is NOT ARMED at this preregistration
+commit; no scan, lane, or workload was created`. Arming requires a new
+preregistration commit. The exhausted `passive-v2` producer also refuses a fresh
+`--passive-shared-host` run; the three rejected v18 attempts are frozen by
+`v18_failure_lineage_sha256`
+`0743214bb7b3a37dff7c00a4f1d302ec300c903c153477c3d57c5a0d10a2780c`.
+
+If a later preregistration arms acquisition, its ordering is fixed as follows:
+
+1. acquire `/tmp/leopard-gf8-authoritative.lock`;
+2. freeze identities, build, test, and seal the lane-owned executables;
+3. qualify a pair for exactly twelve nominal seven-second windows;
+4. acquire a bridge of exactly two nominal one-second windows, with the scan
+   tail equal to the bridge head and the bridge tail serving as the campaign
+   presample;
+5. independently verify the selected pair;
+6. acquire its dynamic pair lease and reservation;
+7. narrow the controller away from that pair;
+8. capture the pre-campaign census; and
+9. start the first campaign window no more than 5,000,000,000 ns after the
+   bridge tail.
+
+The canonical lock begins before qualification and remains held through
+terminal sealing. No pair lease may be held during qualification or the bridge;
+it is acquired only after an accepted bridge. Executables are immutable,
+lane-owned artifacts whose source identity and SHA-256 are verified both before
+and after any future timing.
+
+The attempt budget is exactly two. Attempt one selects the lowest primary from
+a fresh qualifying screen. Attempt two either freezes the selected pair with no
+fallback, or performs one fresh retry only when attempt one selected no pair.
+Reports must say `attempt N of 2`, cite the v17 and v18 rejections, and retain
+lanes as `.research/leopard-79h/<commit7>-v19-conditioned-main-a<N>`. Thresholds
+and policy may not be retuned. After two attempts the campaign stops; any
+successor requires both a new preregistration and a dedicated or
+OS-exclusive environment.
+
+The false-claim ceiling is immutable:
+`promotion_eligible:false`, `host_exclusivity_proved:false`,
+`whole_campaign_interval_observed:false`, and
+`causal_performance_claim_allowed:false`. Its SHA-256 is
+`c23366107b618bc6666d44675a3b301f49cc5bebd0e0f0a36b8a4bc1d4858257`.
+A success terminal is therefore always `NOT_PROMOTED`. The two ratios remain
+correlated and must not be multiplied; the strongest permitted classification
+is a host/compiler/API/workload-specific conditioned-passive nominal
+observation on a shared host.
+
+The frozen resource envelope permits one substantial process, 536,870,912
+bytes of memory, zero swap, one Release build job (within an authorized cap of
+two), and one sanitizer job. The retained preflight is
+`.research/leopard-79h/cf7a705-v19-build-preflight-ripper-a3`, binding candidate
+commit `cf7a7056e0bd7f54b8da436a39cae857beab10c1` and exact-main baseline commit
+`6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198` on `ripper`. CPU 0 and sibling 64
+are housekeeping; primaries 1 through 63 use sibling offset 64 with no host
+fallback or foreign-process mutation.
+
+Version 19 uses `leopard2-main-compare-{raw,manifest,failure}/v19`, independent
+audit schema
+`leopard2-main-compare-v19-conditioned-passive-independent-audit/v1`, census
+policy `leopard2-passive-shared-host-policy/v3`, and generation `passive-v3`.
+Its complete and failed cores, success and failure terminals, attempt lineage,
+exit status, wrapper preregistration, and controller closure all have separately
+versioned v19 schemas. The CTest entries
+`leopard2_v19_end_to_end_self_test`,
+`leopard2_v19_end_to_end_optimized_self_test`,
+`leopard2_v19_wrapper_replay_self_test`, and
+`leopard2_v19_wrapper_replay_optimized_self_test` exercise synthetic evidence
+only. Wrapper fixtures live under `/tmp/leopard-v19-wrapper-replay.*`; these
+tests acquire no campaign lock or lease and perform no scan, build, benchmark,
+timing, or workload.
+
 The fresh v16 producer enforces that boundary before capturing executables or
 starting timing: the Git-bound `leopard2.cpp` must contain exactly one selector
 initializer in the historical default-disabled `2U` form.  Missing, duplicated,
