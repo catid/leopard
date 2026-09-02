@@ -156,6 +156,103 @@ def v18_snapshot(raw: dict, phase: str, *, cpu52_extra: int = 0,
     return value
 
 
+def v19_controller(raw: dict) -> dict:
+    qualification = raw["pair_qualification"]
+    selected = qualification["selected_pair"]
+    benchmark_cpu = selected["benchmark_cpu"]
+    reserved_sibling = selected["reserved_sibling"]
+    launch = list(qualification["acquisition"]["allowed_cpu_set_at_launch"])
+    verified_ns = qualification["bridge"]["bridge_finished_monotonic_ns"]
+    return {
+        "schema": census.CONTROLLER_SCHEMA_V19,
+        "acquisition_generation": "passive-v3",
+        "wrapper_pid": 100,
+        "before_allowed_cpus": list(launch),
+        "after_allowed_cpus": [
+            cpu for cpu in launch
+            if cpu not in (benchmark_cpu, reserved_sibling)
+        ],
+        "runner_launch_allowed_cpus": list(launch),
+        "benchmark_cpu": benchmark_cpu,
+        "reserved_sibling": reserved_sibling,
+        "affinity_mutation_scope":
+            "wrapper-process-and-owned-descendants-only",
+        "active_affinity_supervisor_executed": False,
+        "verified_acquisition_sha256": qualification["acquisition_sha256"],
+        "verified_bridge_sha256": qualification["bridge_sha256"],
+        "pair_verification_completed_monotonic_ns": verified_ns,
+        "affinity_narrowing_started_monotonic_ns": verified_ns,
+        "affinity_narrowing_finished_monotonic_ns": verified_ns,
+    }
+
+
+def v19_snapshot(raw: dict, phase: str) -> dict:
+    qualification = raw["pair_qualification"]
+    selected = qualification["selected_pair"]
+    benchmark_cpu = selected["benchmark_cpu"]
+    reserved_sibling = selected["reserved_sibling"]
+    controller_value = v19_controller(raw)
+    value = snapshot(phase)
+    lease_uid = raw["isolation"]["pair_lease"]["payload"]["uid"]
+    value["uid"] = lease_uid
+    value["reserved_cpus"] = sorted((benchmark_cpu, reserved_sibling))
+    value["collector"]["allowed_cpus"] = [
+        controller_value["after_allowed_cpus"][0]]
+    wrapper = value["same_uid_processes"]["entries"][0]
+    wrapper["uid"] = lease_uid
+    wrapper["cpus_allowed"] = list(controller_value["after_allowed_cpus"])
+    wrapper["reserved_pair_intersection"] = []
+    if phase == "pre":
+        tail = qualification["bridge"]["campaign_presample_before"]
+        started = tail["read_finished_monotonic_ns"] + 1
+        finished = started + 1
+        boundary = finished + 1
+        first_started = qualification["first_window_handoff"] \
+            ["first_window_before"]["read_started_monotonic_ns"]
+        if boundary > first_started:
+            raise RuntimeError("v19 fixture has no pre-census handoff gap")
+        sources = {
+            str(benchmark_cpu): tail["cpus"][str(benchmark_cpu)],
+            str(reserved_sibling): tail["cpus"][str(reserved_sibling)],
+        }
+    else:
+        outer = raw["isolation"]["after"]
+        boundary = outer["monotonic_ns"] + 1
+        started = boundary + 1
+        finished = started + 1
+        sources = {
+            str(benchmark_cpu): outer["benchmark_cpu"],
+            str(reserved_sibling): outer["reserved_sibling"],
+        }
+    value.update({
+        "scan_started_monotonic_ns": started,
+        "scan_finished_monotonic_ns": finished,
+        "activity_boundary_monotonic_ns": boundary,
+        "proc_stat": {
+            key: census_cpu_from_raw(record)
+            for key, record in sources.items()
+        },
+    })
+    reseal_snapshot(value)
+    return value
+
+
+def rebuild_v19_isolation(raw: dict, *, before_ns: int | None = None) -> None:
+    pair = raw["pair_qualification"]["selected_pair"]
+    benchmark_cpu = pair["benchmark_cpu"]
+    reserved_sibling = pair["reserved_sibling"]
+    windows = [invocation["cpu_window"] for invocation in raw["invocations"]]
+    current = raw["isolation"]
+    raw["isolation"] = runner_fixtures.runner.isolation_record_v2(
+        benchmark_cpu, reserved_sibling, current["pair_lease"],
+        current["before"]["monotonic_ns"] if before_ns is None else before_ns,
+        current["after"]["monotonic_ns"],
+        current["before"]["benchmark_cpu"],
+        current["after"]["benchmark_cpu"],
+        current["before"]["reserved_sibling"],
+        current["after"]["reserved_sibling"], windows)
+
+
 def raw_evidence() -> dict:
     return {
         "schema": census.RAW_SCHEMA_V17,
@@ -327,6 +424,409 @@ def snapshot(phase: str) -> dict:
 
 
 class PassiveEvidenceTests(unittest.TestCase):
+    def test_legacy_census_policy_outputs_are_frozen(self) -> None:
+        v17 = census.compare(
+            snapshot("pre"), snapshot("post"), raw_evidence(), controller())
+        self.assertEqual(
+            census.digest_payload(v17),
+            "d54e6f35278ae28e5f28d8a5597c422bf3a8f4cf106574c45e277eaa4d4220cb")
+
+        raw = runner_fixtures.synthetic_raw(
+            raw_schema=runner_fixtures.runner.RAW_SCHEMA_V18)
+        v18 = census.compare(
+            v18_snapshot(raw, "pre"),
+            v18_snapshot(raw, "post", cpu52_extra=5, cpu116_extra=7),
+            raw, v18_controller())
+        self.assertEqual(
+            census.digest_payload(v18),
+            "f9a19b78a2d0fc005fcd60ddbb8b0be83aa989f607dff5dd71dcb27cfd759495")
+
+    def test_v19_conditioned_policy_replays_dynamic_pair(self) -> None:
+        with mock.patch.object(
+                runner_fixtures.runner.os, "getuid", return_value=4242):
+            raw = runner_fixtures.synthetic_raw(
+                raw_schema=runner_fixtures.runner.RAW_SCHEMA_V19)
+        self.assertEqual(v19_snapshot(raw, "pre")["uid"], 4242)
+        policy = census.compare(
+            v19_snapshot(raw, "pre"), v19_snapshot(raw, "post"), raw,
+            v19_controller(raw),
+            expected_v19_attempt=runner_fixtures.expected_v19_attempt_one())
+        self.assertEqual(policy["schema"], census.POLICY_SCHEMA_V3)
+        self.assertEqual(policy["acquisition_generation"], "passive-v3")
+        self.assertEqual(policy["pair_qualification"]["selected_pair"], {
+            "benchmark_cpu": 1, "reserved_sibling": 65})
+        self.assertEqual(
+            policy["pair_qualification"]["terminal"], "NOT_PROMOTED")
+        self.assertTrue(policy["pair_qualification"]
+                        ["fixed_point_replayed_independently"])
+        self.assertTrue(policy["handoff_census"]["accepted"])
+        self.assertFalse(policy["cpu_pair_exclusive"])
+        self.assertFalse(policy["causal_performance_claim_eligible"])
+        self.assertFalse(policy["promotion_eligible"])
+        self.assertFalse(policy["promotion_passed"])
+        self.assertEqual(policy["shared_host_claim_ceiling"], {
+            "promotion_eligible": False,
+            "host_exclusivity_proved": False,
+            "whole_campaign_interval_observed": False,
+            "causal_performance_claim_allowed": False,
+        })
+
+    def test_v19_compare_is_pure_and_performs_no_live_host_observation(
+            self) -> None:
+        raw = runner_fixtures.synthetic_raw(
+            raw_schema=runner_fixtures.runner.RAW_SCHEMA_V19)
+        with (
+                mock.patch.object(
+                    census, "bounded_read",
+                    side_effect=AssertionError("unexpected host read")),
+                mock.patch.object(
+                    census.os, "sched_getaffinity",
+                    side_effect=AssertionError("unexpected affinity read")),
+                mock.patch.object(
+                    census.time, "clock_gettime_ns",
+                    side_effect=AssertionError("unexpected clock read"))):
+            policy = census.compare(
+                v19_snapshot(raw, "pre"), v19_snapshot(raw, "post"), raw,
+                v19_controller(raw),
+                expected_v19_attempt=
+                    runner_fixtures.expected_v19_attempt_one())
+        self.assertEqual(policy["schema"], census.POLICY_SCHEMA_V3)
+
+    def test_v19_census_rejects_conditioning_and_join_splices(self) -> None:
+        raw = runner_fixtures.synthetic_raw(
+            raw_schema=runner_fixtures.runner.RAW_SCHEMA_V19)
+        pre = v19_snapshot(raw, "pre")
+        post = v19_snapshot(raw, "post")
+        controller_value = v19_controller(raw)
+        attempt = runner_fixtures.expected_v19_attempt_one()
+
+        def reject(label: str, expected_error: str, mutation) -> None:
+            candidate_pre = copy.deepcopy(pre)
+            candidate_post = copy.deepcopy(post)
+            candidate_raw = copy.deepcopy(raw)
+            candidate_controller = copy.deepcopy(controller_value)
+            candidate_attempt = copy.deepcopy(attempt)
+            mutation(candidate_pre, candidate_post, candidate_raw,
+                     candidate_controller, candidate_attempt)
+            with self.subTest(splice=label):
+                with self.assertRaises(census.CensusError) as caught:
+                    census.compare(
+                        candidate_pre, candidate_post, candidate_raw,
+                        candidate_controller,
+                        expected_v19_attempt=candidate_attempt)
+                self.assertIn(expected_error, str(caught.exception))
+
+        def snapshot_pair(pre_value, _post, _raw, _controller, _attempt):
+            pre_value["reserved_cpus"] = [1, 66]
+            reseal_snapshot(pre_value)
+
+        def snapshot_time(pre_value, _post, raw_value, _controller, _attempt):
+            first_ns = raw_value["pair_qualification"] \
+                ["first_window_handoff"]["first_window_before"] \
+                ["read_started_monotonic_ns"]
+            pre_value["activity_boundary_monotonic_ns"] = first_ns + 1
+            reseal_snapshot(pre_value)
+
+        def snapshot_counter(
+                pre_value, _post, _raw, _controller, _attempt):
+            record = pre_value["proc_stat"]["1"]
+            record["fields"]["idle"] -= 1
+            record["total_jiffies"] -= 1
+            reseal_snapshot(pre_value)
+
+        def policy_splice(_pre, _post, raw_value, _controller, _attempt):
+            raw_value["pair_qualification"]["policy"] \
+                ["candidate_primary_cpus"].pop()
+
+        def attempt_splice(_pre, _post, _raw, _controller, attempt_value):
+            attempt_value.clear()
+            attempt_value.update(census.v19_attempt_record(
+                attempt=2,
+                prior_attempt_failure_sha256="0" * 64,
+                prior_attempt_acquisition_sha256="1" * 64,
+                prior_attempt_selection_status=
+                    "no-candidate-pair-qualified"))
+
+        def pair_splice(_pre, _post, raw_value, _controller, _attempt):
+            raw_value["pair_qualification"]["selected_pair"] \
+                ["reserved_sibling"] = 66
+
+        def bridge_splice(_pre, _post, raw_value, _controller, _attempt):
+            raw_value["pair_qualification"]["bridge"] \
+                ["bridge_tail_sha256"] = "0" * 64
+
+        def handoff_splice(_pre, _post, raw_value, _controller, _attempt):
+            raw_value["pair_qualification"]["first_window_handoff"] \
+                ["handoff_elapsed_ns"] = 0
+
+        def lineage_splice(_pre, _post, raw_value, _controller, _attempt):
+            raw_value["pair_qualification"]["v18_failure_lineage"] \
+                ["attempts"][0]["envelope_sha256sums_sha256"] = "0" * 64
+
+        def host_splice(_pre, _post, raw_value, _controller, _attempt):
+            for name in ("host_initial", "host_final"):
+                raw_value[name]["system"]["release"] = "changed-fixture"
+
+        def claim_splice(_pre, _post, raw_value, _controller, _attempt):
+            raw_value["pair_qualification"]["shared_host_claim_ceiling"] \
+                ["promotion_eligible"] = True
+
+        def controller_splice(
+                _pre, _post, _raw, controller_record, _attempt):
+            controller_record["runner_launch_allowed_cpus"].pop()
+
+        def controller_bridge_splice(
+                _pre, _post, _raw, controller_record, _attempt):
+            controller_record["verified_bridge_sha256"] = "0" * 64
+
+        def controller_time_splice(
+                _pre, _post, _raw, controller_record, _attempt):
+            controller_record[
+                "pair_verification_completed_monotonic_ns"] -= 1
+
+        def controller_order_splice(
+                _pre, _post, _raw, controller_record, _attempt):
+            controller_record[
+                "pair_verification_completed_monotonic_ns"] += 1
+
+        def acquisition_campaign_splice(
+                _pre, _post, raw_value, controller_record, _attempt):
+            raw_value["campaign"]["allowed_cpu_set_at_launch"].append(128)
+            controller_record["before_allowed_cpus"].append(128)
+            controller_record["after_allowed_cpus"].append(128)
+            controller_record["runner_launch_allowed_cpus"].append(128)
+
+        def isolation_bridge_splice(
+                _pre, _post, raw_value, _controller, _attempt):
+            rebuild_v19_isolation(
+                raw_value,
+                before_ns=raw_value["isolation"]["before"]
+                    ["monotonic_ns"] + 1)
+
+        def first_window_splice(
+                _pre, _post, raw_value, _controller, _attempt):
+            invocation = raw_value["invocations"][0]
+            old_window = invocation["cpu_window"]
+            changed_before = copy.deepcopy(old_window["before"])
+            for name in ("monotonic_ns", "read_started_monotonic_ns",
+                         "read_finished_monotonic_ns"):
+                changed_before[name] += 1
+            invocation["cpu_window"] = runner_fixtures.runner.cpu_window_record(
+                1, 65, invocation["cell_id"], invocation["round"],
+                invocation["slot"], invocation["implementation"],
+                changed_before, old_window["after"],
+                old_window["child_started_monotonic_ns"],
+                invocation["duration_ns"])
+            rebuild_v19_isolation(raw_value)
+
+        def lease_splice(_pre, _post, raw_value, _controller, _attempt):
+            lease = raw_value["isolation"]["pair_lease"]
+            lease["payload"]["cpus"] = [1, 66]
+            uid = lease["payload"]["uid"]
+            lease["path"] = (
+                f"/run/user/{uid}/leopard2-cpu-leases/"
+                f"leopard2-cpu-pair-{uid}-1-66.lock")
+            lease["sha256"] = census.digest_payload(lease["payload"])
+
+        def lease_owner_splice(
+                _pre, _post, raw_value, _controller, _attempt):
+            lease = raw_value["isolation"]["pair_lease"]
+            lease["payload"]["uid"] += 1
+            uid = lease["payload"]["uid"]
+            lease["path"] = (
+                f"/run/user/{uid}/leopard2-cpu-leases/"
+                f"leopard2-cpu-pair-{uid}-1-65.lock")
+            lease["sha256"] = census.digest_payload(lease["payload"])
+
+        def status_splice(_pre, _post, raw_value, _controller, _attempt):
+            raw_value["pair_qualification"]["record_status"] = "failed"
+
+        mutations = (
+            ("controller affinity",
+             "passive controller affinity contract differs",
+             controller_splice),
+            ("controller bridge binding",
+             "passive-v3 bridge verification and affinity narrowing",
+             controller_bridge_splice),
+            ("controller verification ordering",
+             "passive-v3 bridge verification and affinity narrowing",
+             controller_time_splice),
+            ("controller verification before narrowing",
+             "passive-v3 controller verification record differs",
+             controller_order_splice),
+            ("snapshot selected pair", "pre census host identity differs",
+             snapshot_pair),
+            ("snapshot handoff timestamp",
+             "passive-v3 census is not nested", snapshot_time),
+            ("snapshot handoff counter", "CPU 1 counters escape",
+             snapshot_counter),
+            ("qualification policy", "v19 qualification policy differs",
+             policy_splice),
+            ("external attempt authority", "v19 attempt differs",
+             attempt_splice),
+            ("selected pair",
+             "v19 selected pair, acquisition hash, or status differs",
+             pair_splice),
+            ("qualification bridge", "v19 bridge differs",
+             bridge_splice),
+            ("first-window handoff", "v19 handoff differs",
+             handoff_splice),
+            ("v18 failure lineage", "v19 failure lineage differs",
+             lineage_splice),
+            ("host identity hash", "v19 qualification host identity differs",
+             host_splice),
+            ("claim ceiling", "v19 claim ceiling", claim_splice),
+            ("qualification status",
+             "requires complete NOT_PROMOTED v19 evidence", status_splice),
+            ("acquisition/campaign affinity",
+             "passive-v3 controller or campaign affinity differs",
+             acquisition_campaign_splice),
+            ("dynamic pair lease", "passive-v3 CPU pair lease identity differs",
+             lease_splice),
+            ("pair lease census owner",
+             "passive-v3 pair lease owner differs from the census",
+             lease_owner_splice),
+            ("bridge/isolation join",
+             "passive-v3 bridge tail or first-window handoff differs",
+             isolation_bridge_splice),
+            ("handoff/first-window join",
+             "passive-v3 bridge tail or first-window handoff differs",
+             first_window_splice),
+        )
+        for label, expected_error, mutation in mutations:
+            reject(label, expected_error, mutation)
+        if sys.flags.optimize == 0:
+            completed = subprocess.run([
+                sys.executable, "-O", "-I", "-S", "-B", str(Path(__file__)),
+                "PassiveEvidenceTests."
+                "test_v19_census_rejects_conditioning_and_join_splices",
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+                text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_v19_census_cli_accepts_external_attempt_and_dynamic_verify(
+            self) -> None:
+        raw = runner_fixtures.synthetic_raw(
+            raw_schema=runner_fixtures.runner.RAW_SCHEMA_V19)
+        values = {
+            "pre.json": v19_snapshot(raw, "pre"),
+            "post.json": v19_snapshot(raw, "post"),
+            "raw.json": raw,
+            "controller.json": v19_controller(raw),
+        }
+        script = ROOT / "experiments/leopard2/main_compare" / \
+            "passive_environment_census.py"
+        with tempfile.TemporaryDirectory(
+                prefix="leopard-v19-census-cli-") as temporary:
+            root = Path(temporary)
+            for name, value in values.items():
+                (root / name).write_bytes(census.canonical_bytes(value) + b"\n")
+            for optimized in (False, True):
+                output = root / f"policy-{'opt' if optimized else 'normal'}.json"
+                command = [sys.executable]
+                if optimized:
+                    command.append("-O")
+                command.extend((
+                    "-I", "-S", "-B", str(script), "compare",
+                    "--pre", str(root / "pre.json"),
+                    "--post", str(root / "post.json"),
+                    "--raw", str(root / "raw.json"),
+                    "--controller", str(root / "controller.json"),
+                    "--output", str(output), "--v19-attempt", "1"))
+                completed = subprocess.run(
+                    command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    check=False, text=True)
+                with self.subTest(optimized=optimized):
+                    self.assertEqual(
+                        completed.returncode, 0, completed.stderr)
+                    self.assertEqual(
+                        census.load_json(output)["schema"],
+                        census.POLICY_SCHEMA_V3)
+
+            verified = subprocess.run([
+                sys.executable, "-I", "-S", "-B", str(script), "verify",
+                "--input", str(root / "pre.json"), "--phase", "pre",
+                "--generation", "passive-v3", "--reserved-cpus", "1,65",
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+                text=True)
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+
+            missing_authority = subprocess.run([
+                sys.executable, "-I", "-S", "-B", str(script), "compare",
+                "--pre", str(root / "pre.json"),
+                "--post", str(root / "post.json"),
+                "--raw", str(root / "raw.json"),
+                "--controller", str(root / "controller.json"),
+                "--output", str(root / "missing-authority.json"),
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+                text=True)
+            self.assertNotEqual(missing_authority.returncode, 0)
+            self.assertIn(
+                "passive-v3 compare requires --v19-attempt",
+                missing_authority.stderr)
+
+            missing_pair = subprocess.run([
+                sys.executable, "-I", "-S", "-B", str(script), "verify",
+                "--input", str(root / "pre.json"), "--phase", "pre",
+                "--generation", "passive-v3",
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+                text=True)
+            self.assertNotEqual(missing_pair.returncode, 0)
+            self.assertIn(
+                "passive-v3 verify requires --reserved-cpus",
+                missing_pair.stderr)
+
+            legacy_values = {
+                "legacy-pre.json": snapshot("pre"),
+                "legacy-post.json": snapshot("post"),
+                "legacy-raw.json": raw_evidence(),
+                "legacy-controller.json": controller(),
+            }
+            for name, value in legacy_values.items():
+                (root / name).write_bytes(census.canonical_bytes(value) + b"\n")
+            legacy_flag = subprocess.run([
+                sys.executable, "-I", "-S", "-B", str(script), "compare",
+                "--pre", str(root / "legacy-pre.json"),
+                "--post", str(root / "legacy-post.json"),
+                "--raw", str(root / "legacy-raw.json"),
+                "--controller", str(root / "legacy-controller.json"),
+                "--output", str(root / "legacy-policy.json"),
+                "--v19-attempt", "1",
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+                text=True)
+            self.assertNotEqual(legacy_flag.returncode, 0)
+            self.assertIn(
+                "v19 attempt flags require a passive-v3 raw record",
+                legacy_flag.stderr)
+
+            legacy_pair = subprocess.run([
+                sys.executable, "-I", "-S", "-B", str(script), "verify",
+                "--input", str(root / "legacy-pre.json"), "--phase", "pre",
+                "--generation", "passive-v1", "--reserved-cpus", "52,116",
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+                text=True)
+            self.assertNotEqual(legacy_pair.returncode, 0)
+            self.assertIn(
+                "--reserved-cpus is only valid for passive-v3 verify",
+                legacy_pair.stderr)
+
+    def test_census_self_test_stdout_is_frozen_normal_and_optimized(self) -> None:
+        script = ROOT / "experiments/leopard2/main_compare" / \
+            "passive_environment_census.py"
+        for optimized in (False, True):
+            command = [sys.executable]
+            if optimized:
+                command.append("-O")
+            command.extend(("-I", "-S", "-B", str(script), "self-test"))
+            completed = subprocess.run(
+                command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                check=False, text=True)
+            with self.subTest(optimized=optimized):
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(
+                    completed.stdout,
+                    "passive environment census self-test passed\n")
+
     def test_passive_policy_is_permanently_nonpromotion(self) -> None:
         policy = census.compare(
             snapshot("pre"), snapshot("post"), raw_evidence(), controller())
