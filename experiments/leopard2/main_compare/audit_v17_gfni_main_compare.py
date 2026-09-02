@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
-"""Independent retained-only replay of the v17 GFNI exact-main campaign.
+"""Independent retained-only replay of v17-v19 GFNI exact-main campaigns.
 
 The auditor intentionally imports neither ``run_abba`` nor any of its policy
 helpers.  It never executes a benchmark.  It reopens the signed manifest, raw
-bundle, and retained child streams, then independently reconstructs the v17
+bundle, and retained child streams, then independently reconstructs the frozen
 workload, production route, CPU-isolation result, timer floors, and clustered
-ABBA inference.
+ABBA inference.  The dormant v19 branch additionally replays pair
+qualification from external attempt authority without producer imports.
 """
 
 from __future__ import annotations
@@ -34,12 +35,16 @@ PASSIVE_AUDIT_SCHEMA_V17 = \
     "leopard2-main-compare-v17-passive-independent-audit/v1"
 PASSIVE_AUDIT_SCHEMA_V18 = \
     "leopard2-main-compare-v18-passive-independent-audit/v1"
+PASSIVE_AUDIT_SCHEMA_V19 = \
+    "leopard2-main-compare-v19-conditioned-passive-independent-audit/v1"
 AUDIT_SCHEMA = AUDIT_SCHEMA_V17
 PASSIVE_AUDIT_SCHEMA = PASSIVE_AUDIT_SCHEMA_V17
 MANIFEST_SCHEMA_V17 = "leopard2-main-compare-manifest/v17"
 MANIFEST_SCHEMA_V18 = "leopard2-main-compare-manifest/v18"
+MANIFEST_SCHEMA_V19 = "leopard2-main-compare-manifest/v19"
 RAW_SCHEMA_V17 = "leopard2-main-compare-raw/v17"
 RAW_SCHEMA_V18 = "leopard2-main-compare-raw/v18"
+RAW_SCHEMA_V19 = "leopard2-main-compare-raw/v19"
 MANIFEST_SCHEMA = MANIFEST_SCHEMA_V17
 RAW_SCHEMA = RAW_SCHEMA_V17
 BASELINE_SCHEMA = "leopard-main-benchmark-v1"
@@ -302,6 +307,123 @@ RAW_KEYS = {
     "input_specification", "identities_initial", "executable_snapshots",
     "invocations", "identities_final", "host_final", "analysis", "digest",
 }
+MANIFEST_V19_KEYS = {*MANIFEST_KEYS, "pair_qualification"}
+RAW_V19_KEYS = {*RAW_KEYS, "pair_qualification"}
+V19_PAIR_KEYS = {"benchmark_cpu", "reserved_sibling"}
+V19_POLICY_KEYS = {
+    "schema", "clock_ticks_per_second", "candidate_primary_cpus",
+    "excluded_pairs", "domain_mode", "candidate_rule", "selection_rule",
+    "frozen_pair_rule", "observation",
+}
+V19_OBSERVATION_KEYS = {
+    "counter_source", "counter_fields", "idle_fields", "nonidle_fields",
+    "tick_cap_formula", "liveness_lower_slack_jiffies",
+    "nonidle_limit_jiffies", "liveness_rule",
+}
+V19_TOPOLOGY_KEYS = {"schema", "cpus"}
+V19_TOPOLOGY_CPU_KEYS = {
+    "cpu", "online", "physical_package_id", "die_id", "core_id",
+    "thread_siblings", "domain_cpus",
+}
+V19_SNAPSHOT_KEYS = {
+    "cpus", "read_started_monotonic_ns", "read_finished_monotonic_ns",
+}
+V19_COUNTER_KEYS = {"cpu", "fields", "total_jiffies"}
+V19_DELTA_KEYS = {
+    "cpu", "fields", "idle_jiffies", "nonidle_jiffies", "total_jiffies",
+}
+V19_WINDOW_KEYS = {
+    "schema", "phase", "index", "before", "after", "window_ns",
+    "wide_window_ns", "elapsed_tick_cap", "wide_elapsed_tick_cap",
+    "liveness_lower_bound_jiffies", "delta", "nonidle_cpus",
+    "not_live_cpus", "clock_ticks_per_second", "policy",
+}
+V19_AGGREGATE_KEYS = {
+    *V19_DELTA_KEYS, "nonidle_window_count", "not_live_window_count",
+    "overall_live",
+}
+V19_CANDIDATE_KEYS = {
+    "benchmark_cpu", "reserved_sibling", "domain_cpus", "pair_idle",
+    "pair_live", "domain_idle", "domain_live", "qualified",
+}
+V19_SCAN_KEYS = {
+    "schema", "policy", "allowed_cpu_set_at_launch", "topology_before",
+    "topology_after", "topology_reread_identical", "windows",
+    "cpu_aggregates", "candidate_pairs", "eligible_pairs", "selected",
+    "frozen_pair_from_prior_attempt", "selection_status",
+    "scan_started_monotonic_ns", "scan_finished_monotonic_ns",
+    "realized_scan_total_ns", "wide_scan_total_ns",
+    "overall_elapsed_tick_cap", "overall_wide_elapsed_tick_cap",
+    "overall_liveness_lower_bound_jiffies", "scan_window_count",
+    "max_proc_stat_read_ns", "excluded_pair_count", "candidate_pair_count",
+    "eligible_pair_count", "candidate_timing_performed",
+}
+V19_ACQUISITION_KEYS = {
+    "schema", "acquisition_method", "sources", "policy", "policy_sha256",
+    "requested_window_count", "nominal_window_ns",
+    "frozen_pair_from_prior_attempt", "allowed_cpu_set_at_launch",
+    "allowed_cpu_set_after_scan", "clock_ticks_per_second_at_launch",
+    "clock_ticks_per_second_after_scan", "topology_before_sha256",
+    "topology_after_sha256", "scan", "scan_sha256",
+    "host_mutation_performed", "candidate_timing_performed",
+}
+V19_BRIDGE_GEOMETRY_KEYS = {
+    "minimum_window_count", "maximum_window_count", "nominal_window_ns",
+    "maximum_handoff_elapsed_ns",
+}
+V19_QUALIFICATION_GEOMETRY_KEYS = {"window_count", "nominal_window_ns"}
+V19_BRIDGE_KEYS = {
+    "schema", "handoff_rule", "acceptance_rule", "acquisition_sha256",
+    "scan_sha256", "policy_sha256", "selected_pair",
+    "frozen_pair_from_prior_attempt", "acquisition_geometry",
+    "acquisition_geometry_sha256", "bridge_geometry",
+    "bridge_geometry_sha256", "observed_cpus", "guarded_cpus",
+    "scan_tail_sha256", "windows", "cpu_aggregates",
+    "bridge_head_sha256", "bridge_tail_sha256",
+    "campaign_presample_before", "campaign_presample_before_sha256",
+    "bridge_started_monotonic_ns", "bridge_finished_monotonic_ns",
+    "bridge_deadline_monotonic_ns", "realized_bridge_total_ns",
+    "wide_bridge_total_ns", "overall_elapsed_tick_cap",
+    "overall_wide_elapsed_tick_cap", "overall_liveness_lower_bound_jiffies",
+    "bridge_window_count", "nonidle_guarded_cpus", "not_live_guarded_cpus",
+    "bridge_accepted", "host_mutation_performed",
+    "candidate_timing_performed", "shared_host_claim_ceiling",
+}
+V19_ATTEMPT_KEYS = {
+    "schema", "attempt", "attempt_budget", "frozen_pair_from_prior_attempt",
+    "prior_attempt_failure_sha256", "prior_attempt_acquisition_sha256",
+    "prior_attempt_selection_status", "prior_attempt_selected_pair",
+    "fresh_selection_permitted", "selection_rule", "frozen_pair_rule",
+}
+V19_HANDOFF_KEYS = {
+    "schema", "selected_pair", "bridge_tail_sha256",
+    "bridge_tail_read_finished_monotonic_ns", "first_window_before",
+    "first_window_before_sha256", "first_window_before_read_started_monotonic_ns",
+    "handoff_elapsed_ns", "maximum_handoff_elapsed_ns",
+    "selected_pair_nonidle_delta", "accepted", "failure_terminal",
+}
+V19_FIRST_WINDOW_KEYS = {
+    "benchmark_cpu", "monotonic_ns", "read_finished_monotonic_ns",
+    "read_started_monotonic_ns", "reserved_sibling",
+}
+V19_LINEAGE_KEYS = {"schema", "source_commit", "source_tree", "attempts"}
+V19_LINEAGE_ENTRY_KEYS = {
+    "attempt", "envelope", "envelope_sha256sums_sha256",
+}
+V19_CLAIM_KEYS = {
+    "promotion_eligible", "host_exclusivity_proved",
+    "whole_campaign_interval_observed", "causal_performance_claim_allowed",
+}
+V19_RECORD_KEYS = {
+    "schema", "stage", "record_status", "attempt", "policy",
+    "policy_sha256", "host_identity_sha256", "qualification_geometry",
+    "qualification_geometry_sha256", "acquisition", "acquisition_sha256",
+    "selected_pair", "selection_status", "bridge", "bridge_sha256",
+    "bridge_geometry_sha256", "first_window_handoff",
+    "v18_failure_lineage", "v18_failure_lineage_sha256",
+    "shared_host_claim_ceiling", "terminal", "host_mutation_performed",
+    "candidate_timing_performed",
+}
 CAMPAIGN_KEYS = {
     "rounds", "order", "cells", "candidate_mode", "batch", "reuse",
     "iterations", "warmup", "threads", "child_environment", "benchmark_cpu",
@@ -369,6 +491,76 @@ MAX_STDOUT_BYTES = 8 * 1024 * 1024
 MAX_STDERR_BYTES = 1024 * 1024
 MAX_CPU_ID = 1_048_575
 MAX_CPU_LIST_ENTRIES = 4096
+V19_MAX_COUNTER = (1 << 64) - 1
+V19_MAX_MONOTONIC_NS = (1 << 63) - 1
+V19_MAX_WINDOWS = 4096
+V19_MAX_JSON_BYTES = 64 * 1024 * 1024
+V19_POLICY_SCHEMA = "leopard2-pair-qualification-policy/v1"
+V19_TOPOLOGY_SCHEMA = "leopard2-pair-qualification-topology/v1"
+V19_WINDOW_SCHEMA = "leopard2-pair-qualification-window/v1"
+V19_SCAN_SCHEMA = "leopard2-pair-qualification-scan/v1"
+V19_ACQUISITION_SCHEMA = "leopard2-pair-qualification-acquisition/v1"
+V19_ACQUISITION_METHOD = \
+    "read-only-linux-sysfs-proc-stat-shared-snapshot-chain/v1"
+V19_BRIDGE_SCHEMA = "leopard2-pair-qualification-bridge/v1"
+V19_HANDOFF_RULE = \
+    "exact-scan-tail-shared-n-plus-one-presample-before/v1"
+V19_BRIDGE_ACCEPTANCE_RULE = \
+    "selected-pair-or-domain-zero-nonidle-live-fixed-point/v1"
+V19_RECORD_SCHEMA = "leopard2-main-compare-pair-qualification/v1"
+V19_ATTEMPT_SCHEMA = "leopard2-main-compare-pair-qualified-attempt/v1"
+V19_HANDOFF_SCHEMA = "leopard2-main-compare-first-window-handoff/v1"
+V19_LINEAGE_SCHEMA = "leopard2-main-compare-v18-failure-lineage/v1"
+V19_CANDIDATE_RULE = "explicit-primary-symmetric-smt2-online-allowed/v1"
+V19_SELECTION_RULE = "lowest-primary-unless-frozen/v1"
+V19_FROZEN_PAIR_RULE = "require-frozen-when-present-no-fallback/v1"
+V19_TICK_CAP_FORMULA = \
+    "(elapsed_ns * clock_ticks_per_second) // 1000000000 + 1"
+V19_LIVENESS_LOWER_SLACK_JIFFIES = 2
+V19_NONIDLE_LIMIT_JIFFIES = 0
+V19_LIVENESS_RULE = (
+    "narrow_tick_cap - 2 >= 1 and narrow_tick_cap - 2 <= "
+    "total_jiffies_delta <= wide_tick_cap"
+)
+V19_COUNTER_SOURCE = "/proc/stat"
+V19_COUNTER_FIELDS = CPU_STAT_FIELDS
+V19_IDLE_FIELDS = ("idle", "iowait")
+V19_NONIDLE_FIELDS = (
+    "user", "nice", "system", "irq", "softirq", "steal",
+)
+V19_CANDIDATE_PRIMARY_CPUS = tuple(range(1, 64))
+V19_ATTEMPT_BUDGET = 2
+V19_QUALIFICATION_WINDOW_COUNT = 12
+V19_QUALIFICATION_NOMINAL_WINDOW_NS = 7_000_000_000
+V19_BRIDGE_WINDOW_COUNT = 2
+V19_BRIDGE_NOMINAL_WINDOW_NS = 1_000_000_000
+V19_MAXIMUM_HANDOFF_ELAPSED_NS = 5_000_000_000
+V19_SUCCESS_TERMINAL = "NOT_PROMOTED"
+V19_SOURCE_ITEMS = (
+    ("allowed_cpu_set_at_launch", "sched_getaffinity(0)"),
+    ("clock_ticks_per_second", "sysconf(SC_CLK_TCK)"),
+    ("counter_source", "/proc/stat"),
+    ("monotonic_clock", "time.monotonic_ns"),
+    ("online_cpus", "/sys/devices/system/cpu/online"),
+    ("physical_package_id",
+     "/sys/devices/system/cpu/cpu{cpu}/topology/physical_package_id"),
+    ("die_id", "/sys/devices/system/cpu/cpu{cpu}/topology/die_id"),
+    ("core_id", "/sys/devices/system/cpu/cpu{cpu}/topology/core_id"),
+    ("thread_siblings",
+     "/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list"),
+    ("domain_cpus",
+     "/sys/devices/system/cpu/cpu{cpu}/cache/index3/shared_cpu_list"),
+)
+V19_V18_SOURCE_COMMIT = "c8f825d0a033d31d220b0ebce9cc8871e8c2fc6d"
+V19_V18_SOURCE_TREE = "2c17a0a7bcea20274d2593cb204442c4c817e464"
+V19_V18_FAILURES = (
+    (1, ".research/leopard-79h/c8f825d-v18-passive-main-a1",
+     "ce65c3a49ef1c1d89ba51ea03d0af4742d6790e6f2ea2662917d9ef9a9d945d7"),
+    (2, ".research/leopard-79h/c8f825d-v18-passive-main-a2",
+     "a1bf0eda157c251f33f7260ebd76931d88054d460bd07a97bcba2811384b2c10"),
+    (3, ".research/leopard-79h/c8f825d-v18-passive-main-a3",
+     "fe5b40cc98753cbd794ee019cb0e2643d0ccee0aca4c5fd7b2e0b27df8a86139"),
+)
 MAX_GIT_TREE_OBJECTS = 65_536
 MAX_GIT_TREE_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_TRACKED_SOURCE_FILES = 16_384
@@ -477,6 +669,1123 @@ def exact_json_equal(left: Any, right: Any) -> bool:
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def v19_exact_json_equal(left: Any, right: Any) -> bool:
+    """Compare v19 JSON without Python bool/int or int/float coercion."""
+    if type(left) is not type(right):
+        return False
+    if type(left) is dict:
+        return set(left) == set(right) and all(
+            v19_exact_json_equal(left[key], right[key]) for key in left)
+    if type(left) is list:
+        return len(left) == len(right) and all(
+            v19_exact_json_equal(a, b) for a, b in zip(left, right))
+    return left == right
+
+
+def v19_canonical_bytes(value: Any) -> bytes:
+    """Mirror the v19 contract spelling, including Unicode and final LF."""
+    try:
+        return (json.dumps(
+            value, allow_nan=False, ensure_ascii=False,
+            separators=(",", ":"), sort_keys=True) + "\n").encode(
+                "utf-8", errors="strict")
+    except (TypeError, ValueError, UnicodeError, RecursionError) as error:
+        raise AuditError(f"v19 value is not canonical finite JSON: {error}") \
+            from error
+
+
+def v19_sha256(value: Any) -> str:
+    return sha256_bytes(v19_canonical_bytes(value))
+
+
+def v19_bounded_int(
+    value: Any, minimum: int, maximum: int, label: str,
+) -> int:
+    require(type(value) is int and minimum <= value <= maximum,
+            f"{label} is not an exact bounded integer")
+    return value
+
+
+def v19_hex64(value: Any, label: str) -> str:
+    require(type(value) is str and HEX256.fullmatch(value) is not None,
+            f"{label} is not exact lowercase SHA-256")
+    return value
+
+
+def v19_cpu_list(
+    value: Any, label: str, *, allow_empty: bool = False,
+) -> list[int]:
+    require(type(value) is list and (allow_empty or value) and
+            len(value) <= MAX_CPU_LIST_ENTRIES,
+            f"{label} is not a bounded CPU list")
+    result = [
+        v19_bounded_int(cpu, 0, MAX_CPU_ID, f"{label} entry")
+        for cpu in value
+    ]
+    require(result == sorted(set(result)), f"{label} is not canonical")
+    return result
+
+
+def v19_pair(value: Any, label: str, *, allow_none: bool = False
+             ) -> dict[str, int] | None:
+    if value is None:
+        require(allow_none, f"{label} is absent")
+        return None
+    pair = exact_keys(value, V19_PAIR_KEYS, label)
+    benchmark = v19_bounded_int(
+        pair["benchmark_cpu"], 0, MAX_CPU_ID, f"{label} benchmark CPU")
+    sibling = v19_bounded_int(
+        pair["reserved_sibling"], 0, MAX_CPU_ID, f"{label} reserved sibling")
+    require(benchmark != sibling, f"{label} repeats one logical CPU")
+    return {"benchmark_cpu": benchmark, "reserved_sibling": sibling}
+
+
+def v19_claim_ceiling() -> dict[str, bool]:
+    return {
+        "promotion_eligible": False,
+        "host_exclusivity_proved": False,
+        "whole_campaign_interval_observed": False,
+        "causal_performance_claim_allowed": False,
+    }
+
+
+def v19_observation_policy() -> dict[str, Any]:
+    return {
+        "counter_source": V19_COUNTER_SOURCE,
+        "counter_fields": list(V19_COUNTER_FIELDS),
+        "idle_fields": list(V19_IDLE_FIELDS),
+        "nonidle_fields": list(V19_NONIDLE_FIELDS),
+        "tick_cap_formula": V19_TICK_CAP_FORMULA,
+        "liveness_lower_slack_jiffies":
+            V19_LIVENESS_LOWER_SLACK_JIFFIES,
+        "nonidle_limit_jiffies": V19_NONIDLE_LIMIT_JIFFIES,
+        "liveness_rule": V19_LIVENESS_RULE,
+    }
+
+
+def v19_policy_record() -> dict[str, Any]:
+    return {
+        "schema": V19_POLICY_SCHEMA,
+        "clock_ticks_per_second": PASSIVE_CLOCK_TICKS,
+        "candidate_primary_cpus": list(V19_CANDIDATE_PRIMARY_CPUS),
+        "excluded_pairs": [],
+        "domain_mode": "pair-only",
+        "candidate_rule": V19_CANDIDATE_RULE,
+        "selection_rule": V19_SELECTION_RULE,
+        "frozen_pair_rule": V19_FROZEN_PAIR_RULE,
+        "observation": v19_observation_policy(),
+    }
+
+
+def validate_v19_policy(value: Any) -> dict[str, Any]:
+    policy = exact_keys(value, V19_POLICY_KEYS, "v19 qualification policy")
+    exact_keys(
+        policy["observation"], V19_OBSERVATION_KEYS,
+        "v19 qualification observation policy")
+    expected = v19_policy_record()
+    require(v19_exact_json_equal(policy, expected),
+            "v19 qualification policy differs from preregistration")
+    return expected
+
+
+def v19_attempt_record(
+    *, attempt: int, prior_attempt_failure_sha256: Any = None,
+    prior_attempt_acquisition_sha256: Any = None,
+    prior_attempt_selection_status: Any = None,
+    prior_attempt_selected_pair: Any = None,
+) -> dict[str, Any]:
+    number = v19_bounded_int(
+        attempt, 1, V19_ATTEMPT_BUDGET, "v19 attempt")
+    selected = v19_pair(
+        prior_attempt_selected_pair, "v19 prior selected pair",
+        allow_none=True)
+    if number == 1:
+        require(prior_attempt_failure_sha256 is None and
+                prior_attempt_acquisition_sha256 is None and
+                prior_attempt_selection_status is None and selected is None,
+                "v19 attempt 1 carries prior-attempt state")
+        failure_hash = acquisition_hash = selection_status = None
+        frozen = None
+        fresh = True
+    else:
+        failure_hash = v19_hex64(
+            prior_attempt_failure_sha256, "v19 prior attempt failure hash")
+        require(prior_attempt_selection_status in (
+                    "not-acquired", "no-candidate-pair-qualified",
+                    "selected-lowest-primary"),
+                "v19 prior selection status differs")
+        selection_status = prior_attempt_selection_status
+        if selection_status == "not-acquired":
+            require(prior_attempt_acquisition_sha256 is None and
+                    selected is None,
+                    "v19 not-acquired prior attempt carries acquisition")
+            acquisition_hash = None
+        else:
+            acquisition_hash = v19_hex64(
+                prior_attempt_acquisition_sha256,
+                "v19 prior attempt acquisition hash")
+        if selection_status == "selected-lowest-primary":
+            require(selected is not None,
+                    "v19 selected prior attempt lacks its pair")
+            frozen = dict(selected)
+            fresh = False
+        else:
+            require(selected is None,
+                    "v19 unselected prior attempt carries a pair")
+            frozen = None
+            fresh = True
+    return {
+        "schema": V19_ATTEMPT_SCHEMA,
+        "attempt": number,
+        "attempt_budget": V19_ATTEMPT_BUDGET,
+        "frozen_pair_from_prior_attempt": frozen,
+        "prior_attempt_failure_sha256": failure_hash,
+        "prior_attempt_acquisition_sha256": acquisition_hash,
+        "prior_attempt_selection_status": selection_status,
+        "prior_attempt_selected_pair": selected,
+        "fresh_selection_permitted": fresh,
+        "selection_rule": V19_SELECTION_RULE,
+        "frozen_pair_rule": V19_FROZEN_PAIR_RULE,
+    }
+
+
+def validate_v19_attempt(value: Any, expected_value: Any) -> dict[str, Any]:
+    attempt = exact_keys(value, V19_ATTEMPT_KEYS, "v19 attempt record")
+    expected = exact_keys(
+        expected_value, V19_ATTEMPT_KEYS, "expected v19 attempt record")
+    rebuilt = v19_attempt_record(
+        attempt=expected["attempt"],
+        prior_attempt_failure_sha256=
+            expected["prior_attempt_failure_sha256"],
+        prior_attempt_acquisition_sha256=
+            expected["prior_attempt_acquisition_sha256"],
+        prior_attempt_selection_status=
+            expected["prior_attempt_selection_status"],
+        prior_attempt_selected_pair=expected["prior_attempt_selected_pair"])
+    require(v19_exact_json_equal(expected, rebuilt) and
+            v19_exact_json_equal(attempt, rebuilt),
+            "v19 attempt differs from external authority")
+    return rebuilt
+
+
+def v19_lineage_record() -> dict[str, Any]:
+    return {
+        "schema": V19_LINEAGE_SCHEMA,
+        "source_commit": V19_V18_SOURCE_COMMIT,
+        "source_tree": V19_V18_SOURCE_TREE,
+        "attempts": [{
+            "attempt": attempt,
+            "envelope": envelope,
+            "envelope_sha256sums_sha256": digest,
+        } for attempt, envelope, digest in V19_V18_FAILURES],
+    }
+
+
+def validate_v19_lineage(value: Any) -> dict[str, Any]:
+    lineage = exact_keys(value, V19_LINEAGE_KEYS, "v19 failure lineage")
+    require(type(lineage["attempts"]) is list and
+            len(lineage["attempts"]) == len(V19_V18_FAILURES),
+            "v19 failure lineage attempt count differs")
+    for entry in lineage["attempts"]:
+        exact_keys(entry, V19_LINEAGE_ENTRY_KEYS,
+                   "v19 failure lineage entry")
+    expected = v19_lineage_record()
+    require(v19_exact_json_equal(lineage, expected),
+            "v19 failure lineage differs from frozen v18 failures")
+    return expected
+
+
+def v19_counter_fields(value: Any, label: str) -> dict[str, int]:
+    require(type(value) is dict and set(value) == set(V19_COUNTER_FIELDS),
+            f"{label} counter fields differ")
+    return {
+        field: v19_bounded_int(
+            value[field], 0, V19_MAX_COUNTER, f"{label} {field}")
+        for field in V19_COUNTER_FIELDS
+    }
+
+
+def v19_counter(value: Any, expected_cpu: int, label: str
+                ) -> dict[str, Any]:
+    record = exact_keys(value, V19_COUNTER_KEYS, label)
+    require(type(record["cpu"]) is int and record["cpu"] == expected_cpu,
+            f"{label} CPU differs")
+    fields = v19_counter_fields(record["fields"], label)
+    total = v19_bounded_int(
+        record["total_jiffies"], 0, V19_MAX_COUNTER, f"{label} total")
+    expected = {"cpu": expected_cpu, "fields": fields,
+                "total_jiffies": total}
+    require(total == sum(fields.values()) and
+            v19_exact_json_equal(record, expected),
+            f"{label} total or canonical shape differs")
+    return expected
+
+
+def v19_snapshot(
+    value: Any, expected_cpus: Sequence[int], label: str,
+) -> dict[str, Any]:
+    snapshot = exact_keys(value, V19_SNAPSHOT_KEYS, label)
+    cpus = list(expected_cpus)
+    require(cpus == sorted(set(cpus)) and
+            all(type(cpu) is int and 0 <= cpu <= MAX_CPU_ID for cpu in cpus),
+            f"{label} expected CPU universe differs")
+    started = v19_bounded_int(
+        snapshot["read_started_monotonic_ns"], 0, V19_MAX_MONOTONIC_NS,
+        f"{label} read start")
+    finished = v19_bounded_int(
+        snapshot["read_finished_monotonic_ns"], started,
+        V19_MAX_MONOTONIC_NS, f"{label} read finish")
+    table = snapshot["cpus"]
+    require(type(table) is dict and set(table) == {str(cpu) for cpu in cpus},
+            f"{label} CPU table differs")
+    expected = {
+        "cpus": {
+            str(cpu): v19_counter(
+                table[str(cpu)], cpu, f"{label} CPU {cpu}")
+            for cpu in cpus
+        },
+        "read_started_monotonic_ns": started,
+        "read_finished_monotonic_ns": finished,
+    }
+    require(v19_exact_json_equal(snapshot, expected),
+            f"{label} is not canonical")
+    return expected
+
+
+def v19_counter_delta(
+    before: Mapping[str, Any], after: Mapping[str, Any], label: str,
+) -> dict[str, Any]:
+    cpu = before["cpu"]
+    require(type(cpu) is int and after.get("cpu") == cpu and
+            type(after.get("cpu")) is int,
+            f"{label} CPU changed")
+    fields: dict[str, int] = {}
+    for field in V19_COUNTER_FIELDS:
+        first = before["fields"][field]
+        last = after["fields"][field]
+        require(last >= first, f"{label} {field} counter regressed")
+        fields[field] = last - first
+    idle = sum(fields[field] for field in V19_IDLE_FIELDS)
+    nonidle = sum(fields[field] for field in V19_NONIDLE_FIELDS)
+    total = sum(fields.values())
+    v19_bounded_int(total, 0, V19_MAX_COUNTER, f"{label} total")
+    return {
+        "cpu": cpu, "fields": fields, "idle_jiffies": idle,
+        "nonidle_jiffies": nonidle, "total_jiffies": total,
+    }
+
+
+def v19_topology(value: Any) -> dict[str, Any]:
+    topology = exact_keys(value, V19_TOPOLOGY_KEYS, "v19 topology")
+    raw_entries = topology["cpus"]
+    require(topology["schema"] == V19_TOPOLOGY_SCHEMA and
+            type(raw_entries) is list and
+            0 < len(raw_entries) <= MAX_CPU_LIST_ENTRIES,
+            "v19 topology shape differs")
+    entries: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_entries):
+        entry = exact_keys(
+            raw, V19_TOPOLOGY_CPU_KEYS, f"v19 topology CPU {index}")
+        cpu = v19_bounded_int(
+            entry["cpu"], 0, MAX_CPU_ID, "v19 topology CPU")
+        require(type(entry["online"]) is bool,
+                "v19 topology online flag differs")
+        siblings = v19_cpu_list(
+            entry["thread_siblings"], "v19 thread siblings")
+        domain = v19_cpu_list(entry["domain_cpus"], "v19 domain CPUs")
+        require(len(siblings) in (1, 2) and cpu in siblings and cpu in domain,
+                "v19 topology membership differs")
+        entries.append({
+            "cpu": cpu, "online": entry["online"],
+            "physical_package_id": v19_bounded_int(
+                entry["physical_package_id"], 0, (1 << 31) - 1,
+                "v19 package ID"),
+            "die_id": v19_bounded_int(
+                entry["die_id"], 0, (1 << 31) - 1, "v19 die ID"),
+            "core_id": v19_bounded_int(
+                entry["core_id"], 0, (1 << 31) - 1, "v19 core ID"),
+            "thread_siblings": siblings, "domain_cpus": domain,
+        })
+    require([entry["cpu"] for entry in entries] ==
+            sorted({entry["cpu"] for entry in entries}),
+            "v19 topology CPUs are unordered or duplicated")
+    by_cpu = {entry["cpu"]: entry for entry in entries}
+    domain_ids: dict[tuple[int, ...], int] = {}
+    domain_id_by_cpu: dict[int, int] = {}
+    for entry in entries:
+        signature = tuple(entry["domain_cpus"])
+        domain_id_by_cpu[entry["cpu"]] = domain_ids.setdefault(
+            signature, len(domain_ids))
+    physical_groups: dict[tuple[int, int, int], list[int]] = {}
+    for entry in entries:
+        physical = (entry["physical_package_id"], entry["die_id"],
+                    entry["core_id"])
+        prior = physical_groups.setdefault(
+            physical, entry["thread_siblings"])
+        require(prior == entry["thread_siblings"],
+                "v19 physical core names multiple sibling groups")
+        for sibling_cpu in entry["thread_siblings"]:
+            require(sibling_cpu in by_cpu,
+                    "v19 topology names a missing sibling")
+            sibling = by_cpu[sibling_cpu]
+            require(sibling["thread_siblings"] == entry["thread_siblings"] and
+                    (sibling["physical_package_id"], sibling["die_id"],
+                     sibling["core_id"]) == physical and
+                    domain_id_by_cpu[sibling_cpu] ==
+                        domain_id_by_cpu[entry["cpu"]],
+                    "v19 topology sibling symmetry differs")
+        for domain_cpu in entry["domain_cpus"]:
+            require(domain_cpu in by_cpu,
+                    "v19 topology names a missing domain CPU")
+            member = by_cpu[domain_cpu]
+            require(domain_id_by_cpu[domain_cpu] ==
+                        domain_id_by_cpu[entry["cpu"]] and
+                    member["physical_package_id"] ==
+                        entry["physical_package_id"] and
+                    member["die_id"] == entry["die_id"],
+                    "v19 topology domain symmetry differs")
+    expected = {"schema": V19_TOPOLOGY_SCHEMA, "cpus": entries}
+    require(v19_exact_json_equal(topology, expected),
+            "v19 topology is not canonical")
+    return expected
+
+
+def v19_candidate_pairs(
+    policy: Mapping[str, Any], topology: Mapping[str, Any],
+    allowed: Sequence[int],
+) -> list[dict[str, Any]]:
+    by_cpu = {entry["cpu"]: entry for entry in topology["cpus"]}
+    allowed_set = set(allowed)
+    for cpu in allowed:
+        require(cpu in by_cpu and by_cpu[cpu]["online"],
+                "v19 launch affinity contains a missing or offline CPU")
+    candidates: list[dict[str, Any]] = []
+    physical_pairs: set[frozenset[int]] = set()
+    excluded_by_primary = {
+        exclusion["benchmark_cpu"]: exclusion
+        for exclusion in policy["excluded_pairs"]
+    }
+    for primary in policy["candidate_primary_cpus"]:
+        require(primary in by_cpu,
+                "v19 candidate primary is missing from topology")
+        entry = by_cpu[primary]
+        require(len(entry["thread_siblings"]) == 2,
+                "v19 candidate is not exact SMT2")
+        sibling = next(
+            cpu for cpu in entry["thread_siblings"] if cpu != primary)
+        physical = frozenset((primary, sibling))
+        require(physical not in physical_pairs,
+                "v19 policy repeats a physical core")
+        physical_pairs.add(physical)
+        exclusion = excluded_by_primary.get(primary)
+        if exclusion is not None:
+            require(exclusion["reserved_sibling"] == sibling,
+                    "v19 excluded pair differs from topology")
+            continue
+        if not (entry["online"] and by_cpu[sibling]["online"] and
+                primary in allowed_set and sibling in allowed_set):
+            continue
+        candidates.append({
+            "benchmark_cpu": primary, "reserved_sibling": sibling,
+            "domain_cpus": list(entry["domain_cpus"]),
+        })
+    return candidates
+
+
+def v19_tick_cap(elapsed_ns: int, ticks: int) -> int:
+    return (elapsed_ns * ticks) // 1_000_000_000 + 1
+
+
+def v19_window(
+    value: Any, *, policy: Mapping[str, Any], phase: str, index: int,
+    observed_cpus: Sequence[int],
+) -> dict[str, Any]:
+    window = exact_keys(value, V19_WINDOW_KEYS, "v19 observation window")
+    require(phase in ("qualification", "bridge") and
+            type(index) is int and 0 <= index < V19_MAX_WINDOWS,
+            "v19 observation window identity differs")
+    cpus = list(observed_cpus)
+    before = v19_snapshot(window["before"], cpus, "v19 window before")
+    after = v19_snapshot(window["after"], cpus, "v19 window after")
+    narrow = (after["read_started_monotonic_ns"] -
+              before["read_finished_monotonic_ns"])
+    wide = (after["read_finished_monotonic_ns"] -
+            before["read_started_monotonic_ns"])
+    require(narrow > 0 and wide >= narrow,
+            "v19 observation interval differs")
+    ticks = policy["clock_ticks_per_second"]
+    narrow_cap = v19_tick_cap(narrow, ticks)
+    wide_cap = v19_tick_cap(wide, ticks)
+    lower = narrow_cap - V19_LIVENESS_LOWER_SLACK_JIFFIES
+    deltas: dict[str, Any] = {}
+    nonidle: list[int] = []
+    not_live: list[int] = []
+    for cpu in cpus:
+        delta = v19_counter_delta(
+            before["cpus"][str(cpu)], after["cpus"][str(cpu)],
+            f"v19 window CPU {cpu}")
+        deltas[str(cpu)] = delta
+        if delta["nonidle_jiffies"] > V19_NONIDLE_LIMIT_JIFFIES:
+            nonidle.append(cpu)
+        if not (lower >= 1 and lower <= delta["total_jiffies"] <= wide_cap):
+            not_live.append(cpu)
+    expected = {
+        "schema": V19_WINDOW_SCHEMA, "phase": phase, "index": index,
+        "before": before, "after": after, "window_ns": narrow,
+        "wide_window_ns": wide, "elapsed_tick_cap": narrow_cap,
+        "wide_elapsed_tick_cap": wide_cap,
+        "liveness_lower_bound_jiffies": lower, "delta": deltas,
+        "nonidle_cpus": nonidle, "not_live_cpus": not_live,
+        "clock_ticks_per_second": ticks,
+        "policy": v19_observation_policy(),
+    }
+    require(v19_exact_json_equal(window, expected),
+            "v19 observation window differs from fixed-point replay")
+    return expected
+
+
+def v19_scan(
+    value: Any, policy: Mapping[str, Any], frozen_value: Any,
+) -> dict[str, Any]:
+    scan = exact_keys(value, V19_SCAN_KEYS, "v19 qualification scan")
+    require(scan["schema"] == V19_SCAN_SCHEMA and
+            v19_exact_json_equal(scan["policy"], policy),
+            "v19 scan policy or schema differs")
+    frozen = v19_pair(
+        frozen_value, "v19 frozen pair", allow_none=True)
+    require(v19_exact_json_equal(
+                scan["frozen_pair_from_prior_attempt"], frozen),
+            "v19 scan frozen pair differs")
+    topology_before = v19_topology(scan["topology_before"])
+    topology_after = v19_topology(scan["topology_after"])
+    require(v19_exact_json_equal(topology_before, topology_after),
+            "v19 topology changed during qualification")
+    allowed = v19_cpu_list(
+        scan["allowed_cpu_set_at_launch"], "v19 launch affinity")
+    candidates = v19_candidate_pairs(policy, topology_before, allowed)
+    observed = sorted({
+        cpu for candidate in candidates for cpu in candidate["domain_cpus"]
+    })
+    raw_windows = scan["windows"]
+    require(type(raw_windows) is list and
+            0 < len(raw_windows) <= V19_MAX_WINDOWS,
+            "v19 qualification window list differs")
+    windows: list[dict[str, Any]] = []
+    for index, raw_window in enumerate(raw_windows):
+        window = v19_window(
+            raw_window, policy=policy, phase="qualification", index=index,
+            observed_cpus=observed)
+        if windows:
+            require(v19_exact_json_equal(
+                        windows[-1]["after"], window["before"]),
+                    "v19 qualification windows do not share endpoints")
+        windows.append(window)
+    first, last = windows[0]["before"], windows[-1]["after"]
+    narrow = (last["read_started_monotonic_ns"] -
+              first["read_finished_monotonic_ns"])
+    wide = (last["read_finished_monotonic_ns"] -
+            first["read_started_monotonic_ns"])
+    require(narrow > 0 and wide >= narrow,
+            "v19 qualification aggregate interval differs")
+    ticks = policy["clock_ticks_per_second"]
+    overall_cap = v19_tick_cap(narrow, ticks)
+    overall_wide_cap = v19_tick_cap(wide, ticks)
+    overall_lower = overall_cap - V19_LIVENESS_LOWER_SLACK_JIFFIES
+    nonidle_sets = [set(window["nonidle_cpus"]) for window in windows]
+    not_live_sets = [set(window["not_live_cpus"]) for window in windows]
+    aggregates: dict[str, Any] = {}
+    for cpu in observed:
+        aggregate = v19_counter_delta(
+            first["cpus"][str(cpu)], last["cpus"][str(cpu)],
+            f"v19 scan aggregate CPU {cpu}")
+        summed = {
+            field: sum(window["delta"][str(cpu)]["fields"][field]
+                       for window in windows)
+            for field in V19_COUNTER_FIELDS
+        }
+        require(summed == aggregate["fields"],
+                "v19 qualification windows do not telescope")
+        aggregates[str(cpu)] = {
+            **aggregate,
+            "nonidle_window_count": sum(
+                cpu in values for values in nonidle_sets),
+            "not_live_window_count": sum(
+                cpu in values for values in not_live_sets),
+            "overall_live": (
+                overall_lower >= 1 and
+                overall_lower <= aggregate["total_jiffies"] <=
+                    overall_wide_cap),
+        }
+    candidate_results: list[dict[str, Any]] = []
+    eligible: list[dict[str, int]] = []
+    for candidate in candidates:
+        pair_cpus = (
+            candidate["benchmark_cpu"], candidate["reserved_sibling"])
+        domain = candidate["domain_cpus"]
+        pair_idle = all(
+            aggregates[str(cpu)]["nonidle_jiffies"] == 0 and
+            aggregates[str(cpu)]["nonidle_window_count"] == 0
+            for cpu in pair_cpus)
+        pair_live = all(
+            aggregates[str(cpu)]["overall_live"] and
+            aggregates[str(cpu)]["not_live_window_count"] == 0
+            for cpu in pair_cpus)
+        domain_idle = all(
+            aggregates[str(cpu)]["nonidle_jiffies"] == 0 and
+            aggregates[str(cpu)]["nonidle_window_count"] == 0
+            for cpu in domain)
+        domain_live = all(
+            aggregates[str(cpu)]["overall_live"] and
+            aggregates[str(cpu)]["not_live_window_count"] == 0
+            for cpu in domain)
+        qualified = pair_idle and pair_live and (
+            policy["domain_mode"] == "pair-only" or
+            (domain_idle and domain_live))
+        result = {
+            **candidate, "pair_idle": pair_idle, "pair_live": pair_live,
+            "domain_idle": domain_idle, "domain_live": domain_live,
+            "qualified": qualified,
+        }
+        candidate_results.append(result)
+        if qualified:
+            eligible.append({
+                "benchmark_cpu": candidate["benchmark_cpu"],
+                "reserved_sibling": candidate["reserved_sibling"],
+            })
+    if frozen is not None:
+        by_cpu = {entry["cpu"]: entry for entry in topology_before["cpus"]}
+        static_pairs = []
+        excluded_primaries = {
+            exclusion["benchmark_cpu"]
+            for exclusion in policy["excluded_pairs"]
+        }
+        for primary in policy["candidate_primary_cpus"]:
+            entry = by_cpu[primary]
+            sibling = next(
+                cpu for cpu in entry["thread_siblings"] if cpu != primary)
+            if primary not in excluded_primaries:
+                static_pairs.append({
+                    "benchmark_cpu": primary,
+                    "reserved_sibling": sibling})
+        require(frozen in static_pairs,
+                "v19 frozen pair is not a static candidate")
+        if frozen in eligible:
+            selected = dict(frozen)
+            selection_status = "selected-frozen-pair"
+        else:
+            selected = None
+            selection_status = "frozen-pair-did-not-requalify"
+    elif eligible:
+        selected = dict(eligible[0])
+        selection_status = "selected-lowest-primary"
+    else:
+        selected = None
+        selection_status = "no-candidate-pair-qualified"
+    expected = {
+        "schema": V19_SCAN_SCHEMA, "policy": dict(policy),
+        "allowed_cpu_set_at_launch": allowed,
+        "topology_before": topology_before, "topology_after": topology_after,
+        "topology_reread_identical": True, "windows": windows,
+        "cpu_aggregates": aggregates, "candidate_pairs": candidate_results,
+        "eligible_pairs": eligible, "selected": selected,
+        "frozen_pair_from_prior_attempt": frozen,
+        "selection_status": selection_status,
+        "scan_started_monotonic_ns": first["read_started_monotonic_ns"],
+        "scan_finished_monotonic_ns": last["read_finished_monotonic_ns"],
+        "realized_scan_total_ns": narrow, "wide_scan_total_ns": wide,
+        "overall_elapsed_tick_cap": overall_cap,
+        "overall_wide_elapsed_tick_cap": overall_wide_cap,
+        "overall_liveness_lower_bound_jiffies": overall_lower,
+        "scan_window_count": len(windows),
+        "max_proc_stat_read_ns": max(
+            snapshot["read_finished_monotonic_ns"] -
+            snapshot["read_started_monotonic_ns"]
+            for snapshot in (
+                [windows[0]["before"]] +
+                [window["after"] for window in windows])),
+        "excluded_pair_count": len(policy["excluded_pairs"]),
+        "candidate_pair_count": len(candidate_results),
+        "eligible_pair_count": len(eligible),
+        "candidate_timing_performed": False,
+    }
+    require(v19_exact_json_equal(scan, expected),
+            "v19 qualification scan differs from fixed-point replay")
+    return expected
+
+
+def v19_acquisition_geometry() -> dict[str, int]:
+    return {
+        "requested_window_count": V19_QUALIFICATION_WINDOW_COUNT,
+        "nominal_window_ns": V19_QUALIFICATION_NOMINAL_WINDOW_NS,
+    }
+
+
+def v19_qualification_geometry() -> dict[str, int]:
+    return {
+        "window_count": V19_QUALIFICATION_WINDOW_COUNT,
+        "nominal_window_ns": V19_QUALIFICATION_NOMINAL_WINDOW_NS,
+    }
+
+
+def v19_bridge_geometry() -> dict[str, int]:
+    return {
+        "minimum_window_count": V19_BRIDGE_WINDOW_COUNT,
+        "maximum_window_count": V19_BRIDGE_WINDOW_COUNT,
+        "nominal_window_ns": V19_BRIDGE_NOMINAL_WINDOW_NS,
+        "maximum_handoff_elapsed_ns": V19_MAXIMUM_HANDOFF_ELAPSED_NS,
+    }
+
+
+def validate_v19_bridge_geometry(value: Any) -> dict[str, int]:
+    geometry = exact_keys(
+        value, V19_BRIDGE_GEOMETRY_KEYS, "v19 bridge geometry")
+    minimum = v19_bounded_int(
+        geometry["minimum_window_count"], 1, V19_MAX_WINDOWS,
+        "v19 minimum bridge window count")
+    maximum = v19_bounded_int(
+        geometry["maximum_window_count"], minimum, V19_MAX_WINDOWS,
+        "v19 maximum bridge window count")
+    nominal = v19_bounded_int(
+        geometry["nominal_window_ns"], 1, 86_400_000_000_000,
+        "v19 nominal bridge duration")
+    handoff = v19_bounded_int(
+        geometry["maximum_handoff_elapsed_ns"], 1,
+        V19_MAX_MONOTONIC_NS, "v19 maximum bridge handoff duration")
+    require(minimum * nominal <= handoff,
+            "v19 bridge geometry cannot contain its minimum windows")
+    expected = v19_bridge_geometry()
+    require(v19_exact_json_equal(geometry, expected),
+            "v19 bridge geometry differs from preregistration")
+    return expected
+
+
+def v19_acquisition(
+    value: Any, policy: Mapping[str, Any], frozen_value: Any,
+) -> dict[str, Any]:
+    acquisition = exact_keys(
+        value, V19_ACQUISITION_KEYS, "v19 qualification acquisition")
+    require(len(v19_canonical_bytes(acquisition)) <= V19_MAX_JSON_BYTES,
+            "v19 acquisition exceeds its canonical byte bound")
+    frozen = v19_pair(
+        frozen_value, "v19 acquisition frozen pair", allow_none=True)
+    require(acquisition["schema"] == V19_ACQUISITION_SCHEMA and
+            acquisition["acquisition_method"] == V19_ACQUISITION_METHOD and
+            type(acquisition["sources"]) is dict and
+            v19_exact_json_equal(
+                acquisition["sources"], dict(V19_SOURCE_ITEMS)) and
+            v19_exact_json_equal(acquisition["policy"], policy) and
+            acquisition["policy_sha256"] == v19_sha256(policy) and
+            type(acquisition["requested_window_count"]) is int and
+            acquisition["requested_window_count"] ==
+                V19_QUALIFICATION_WINDOW_COUNT and
+            type(acquisition["nominal_window_ns"]) is int and
+            acquisition["nominal_window_ns"] ==
+                V19_QUALIFICATION_NOMINAL_WINDOW_NS and
+            v19_exact_json_equal(
+                acquisition["frozen_pair_from_prior_attempt"], frozen),
+            "v19 acquisition identity differs")
+    allowed_launch = v19_cpu_list(
+        acquisition["allowed_cpu_set_at_launch"],
+        "v19 acquisition launch affinity")
+    allowed_after = v19_cpu_list(
+        acquisition["allowed_cpu_set_after_scan"],
+        "v19 acquisition final affinity")
+    require(allowed_launch == allowed_after,
+            "v19 launch affinity changed during acquisition")
+    ticks_launch = v19_bounded_int(
+        acquisition["clock_ticks_per_second_at_launch"], 1, 1_000_000,
+        "v19 acquisition launch clock rate")
+    ticks_after = v19_bounded_int(
+        acquisition["clock_ticks_per_second_after_scan"], 1, 1_000_000,
+        "v19 acquisition final clock rate")
+    require(ticks_launch == ticks_after == policy["clock_ticks_per_second"],
+            "v19 acquisition clock rate changed or differs from policy")
+    scan = v19_scan(acquisition["scan"], policy, frozen)
+    require(scan["scan_window_count"] == V19_QUALIFICATION_WINDOW_COUNT and
+            scan["allowed_cpu_set_at_launch"] == allowed_launch and
+            all(window["window_ns"] >=
+                V19_QUALIFICATION_NOMINAL_WINDOW_NS
+                for window in scan["windows"]),
+            "v19 acquisition scan geometry or affinity differs")
+    before_hash = v19_sha256(scan["topology_before"])
+    after_hash = v19_sha256(scan["topology_after"])
+    scan_hash = v19_sha256(scan)
+    require(acquisition["topology_before_sha256"] == before_hash and
+            acquisition["topology_after_sha256"] == after_hash and
+            acquisition["scan_sha256"] == scan_hash and
+            type(acquisition["host_mutation_performed"]) is bool and
+            acquisition["host_mutation_performed"] is False and
+            type(acquisition["candidate_timing_performed"]) is bool and
+            acquisition["candidate_timing_performed"] is False and
+            scan["candidate_timing_performed"] is False,
+            "v19 acquisition hashes, mutation, or timing flags differ")
+    expected = {
+        "schema": V19_ACQUISITION_SCHEMA,
+        "acquisition_method": V19_ACQUISITION_METHOD,
+        "sources": dict(V19_SOURCE_ITEMS), "policy": dict(policy),
+        "policy_sha256": v19_sha256(policy),
+        "requested_window_count": V19_QUALIFICATION_WINDOW_COUNT,
+        "nominal_window_ns": V19_QUALIFICATION_NOMINAL_WINDOW_NS,
+        "frozen_pair_from_prior_attempt": frozen,
+        "allowed_cpu_set_at_launch": allowed_launch,
+        "allowed_cpu_set_after_scan": allowed_after,
+        "clock_ticks_per_second_at_launch": ticks_launch,
+        "clock_ticks_per_second_after_scan": ticks_after,
+        "topology_before_sha256": before_hash,
+        "topology_after_sha256": after_hash, "scan": scan,
+        "scan_sha256": scan_hash, "host_mutation_performed": False,
+        "candidate_timing_performed": False,
+    }
+    require(v19_exact_json_equal(acquisition, expected),
+            "v19 acquisition differs from fixed-point replay")
+    return expected
+
+
+def v19_bridge_from_validated_acquisition(
+    value: Any, acquisition: Mapping[str, Any],
+    policy: Mapping[str, Any], frozen_value: Any,
+) -> dict[str, Any]:
+    bridge = exact_keys(value, V19_BRIDGE_KEYS, "v19 qualification bridge")
+    require(len(v19_canonical_bytes(bridge)) <= V19_MAX_JSON_BYTES,
+            "v19 bridge exceeds its canonical byte bound")
+    frozen = v19_pair(
+        frozen_value, "v19 bridge frozen pair", allow_none=True)
+    geometry = validate_v19_bridge_geometry(bridge["bridge_geometry"])
+    require(bridge["schema"] == V19_BRIDGE_SCHEMA and
+            bridge["handoff_rule"] == V19_HANDOFF_RULE and
+            bridge["acceptance_rule"] == V19_BRIDGE_ACCEPTANCE_RULE and
+            v19_exact_json_equal(
+                bridge["frozen_pair_from_prior_attempt"], frozen),
+            "v19 bridge identity differs")
+    scan = acquisition["scan"]
+    selected = v19_pair(scan["selected"], "v19 bridge selected pair")
+    require(selected is not None and scan["selection_status"] in (
+                "selected-lowest-primary", "selected-frozen-pair"),
+            "v19 bridge lacks a selected acquisition")
+    scan_tail = scan["windows"][-1]["after"]
+    observed = sorted(int(cpu) for cpu in scan_tail["cpus"])
+    require(observed and len(observed) <= MAX_CPU_LIST_ENTRIES,
+            "v19 bridge observed CPU universe differs")
+    raw_windows = bridge["windows"]
+    require(type(raw_windows) is list and
+            geometry["minimum_window_count"] <= len(raw_windows) <=
+                geometry["maximum_window_count"],
+            "v19 bridge window count differs")
+    windows: list[dict[str, Any]] = []
+    for index, raw_window in enumerate(raw_windows):
+        window = v19_window(
+            raw_window, policy=policy, phase="bridge", index=index,
+            observed_cpus=observed)
+        if index == 0:
+            require(v19_exact_json_equal(window["before"], scan_tail),
+                    "v19 bridge head differs from qualification tail")
+        else:
+            require(v19_exact_json_equal(
+                        windows[-1]["after"], window["before"]),
+                    "v19 bridge windows do not share endpoints")
+        windows.append(window)
+    require(all(window["window_ns"] >= V19_BRIDGE_NOMINAL_WINDOW_NS
+                for window in windows),
+            "v19 bridge contains a short observation window")
+    first, last = windows[0]["before"], windows[-1]["after"]
+    started = first["read_finished_monotonic_ns"]
+    finished = last["read_finished_monotonic_ns"]
+    require(started <= V19_MAX_MONOTONIC_NS -
+                V19_MAXIMUM_HANDOFF_ELAPSED_NS,
+            "v19 bridge deadline overflows monotonic time")
+    deadline = started + V19_MAXIMUM_HANDOFF_ELAPSED_NS
+    require(finished <= deadline,
+            "v19 bridge closes after its fixed deadline")
+    narrow = last["read_started_monotonic_ns"] - started
+    wide = (last["read_finished_monotonic_ns"] -
+            first["read_started_monotonic_ns"])
+    require(narrow > 0 and wide >= narrow,
+            "v19 bridge aggregate interval differs")
+    ticks = policy["clock_ticks_per_second"]
+    overall_cap = v19_tick_cap(narrow, ticks)
+    overall_wide_cap = v19_tick_cap(wide, ticks)
+    overall_lower = overall_cap - V19_LIVENESS_LOWER_SLACK_JIFFIES
+    nonidle_sets = [set(window["nonidle_cpus"]) for window in windows]
+    not_live_sets = [set(window["not_live_cpus"]) for window in windows]
+    aggregates: dict[str, Any] = {}
+    for cpu in observed:
+        aggregate = v19_counter_delta(
+            first["cpus"][str(cpu)], last["cpus"][str(cpu)],
+            f"v19 bridge aggregate CPU {cpu}")
+        summed = {
+            field: sum(window["delta"][str(cpu)]["fields"][field]
+                       for window in windows)
+            for field in V19_COUNTER_FIELDS
+        }
+        require(summed == aggregate["fields"],
+                "v19 bridge windows do not telescope")
+        aggregates[str(cpu)] = {
+            **aggregate,
+            "nonidle_window_count": sum(
+                cpu in values for values in nonidle_sets),
+            "not_live_window_count": sum(
+                cpu in values for values in not_live_sets),
+            "overall_live": (
+                overall_lower >= 1 and
+                overall_lower <= aggregate["total_jiffies"] <=
+                    overall_wide_cap),
+        }
+    candidates = [
+        candidate for candidate in scan["candidate_pairs"]
+        if candidate["benchmark_cpu"] == selected["benchmark_cpu"] and
+        candidate["reserved_sibling"] == selected["reserved_sibling"]
+    ]
+    require(len(candidates) == 1 and candidates[0]["qualified"] is True,
+            "v19 bridge pair was not independently qualified")
+    guarded = (
+        list(candidates[0]["domain_cpus"])
+        if policy["domain_mode"] == "pair-and-domain"
+        else sorted(selected.values()))
+    require(set(guarded) <= set(observed),
+            "v19 bridge guard escapes observed CPUs")
+    nonidle_guarded = [
+        cpu for cpu in guarded
+        if aggregates[str(cpu)]["nonidle_jiffies"] != 0 or
+        aggregates[str(cpu)]["nonidle_window_count"] != 0
+    ]
+    not_live_guarded = [
+        cpu for cpu in guarded
+        if not aggregates[str(cpu)]["overall_live"] or
+        aggregates[str(cpu)]["not_live_window_count"] != 0
+    ]
+    acquisition_geometry = v19_acquisition_geometry()
+    scan_tail_hash = v19_sha256(scan_tail)
+    bridge_tail_hash = v19_sha256(last)
+    expected = {
+        "schema": V19_BRIDGE_SCHEMA, "handoff_rule": V19_HANDOFF_RULE,
+        "acceptance_rule": V19_BRIDGE_ACCEPTANCE_RULE,
+        "acquisition_sha256": v19_sha256(acquisition),
+        "scan_sha256": v19_sha256(scan),
+        "policy_sha256": v19_sha256(policy),
+        "selected_pair": selected,
+        "frozen_pair_from_prior_attempt": frozen,
+        "acquisition_geometry": acquisition_geometry,
+        "acquisition_geometry_sha256": v19_sha256(acquisition_geometry),
+        "bridge_geometry": geometry,
+        "bridge_geometry_sha256": v19_sha256(geometry),
+        "observed_cpus": observed, "guarded_cpus": guarded,
+        "scan_tail_sha256": scan_tail_hash, "windows": windows,
+        "cpu_aggregates": aggregates,
+        "bridge_head_sha256": v19_sha256(first),
+        "bridge_tail_sha256": bridge_tail_hash,
+        "campaign_presample_before": last,
+        "campaign_presample_before_sha256": bridge_tail_hash,
+        "bridge_started_monotonic_ns": started,
+        "bridge_finished_monotonic_ns": finished,
+        "bridge_deadline_monotonic_ns": deadline,
+        "realized_bridge_total_ns": narrow,
+        "wide_bridge_total_ns": wide,
+        "overall_elapsed_tick_cap": overall_cap,
+        "overall_wide_elapsed_tick_cap": overall_wide_cap,
+        "overall_liveness_lower_bound_jiffies": overall_lower,
+        "bridge_window_count": len(windows),
+        "nonidle_guarded_cpus": nonidle_guarded,
+        "not_live_guarded_cpus": not_live_guarded,
+        "bridge_accepted": not nonidle_guarded and not not_live_guarded,
+        "host_mutation_performed": False,
+        "candidate_timing_performed": False,
+        "shared_host_claim_ceiling": v19_claim_ceiling(),
+    }
+    require(v19_exact_json_equal(bridge, expected),
+            "v19 bridge differs from fixed-point replay")
+    return expected
+
+
+def v19_first_window_before(
+    value: Any, selected: Mapping[str, int],
+) -> dict[str, Any]:
+    before = exact_keys(
+        value, V19_FIRST_WINDOW_KEYS, "v19 first-window before snapshot")
+    started = v19_bounded_int(
+        before["read_started_monotonic_ns"], 0, V19_MAX_MONOTONIC_NS,
+        "v19 first-window read start")
+    finished = v19_bounded_int(
+        before["read_finished_monotonic_ns"], started,
+        V19_MAX_MONOTONIC_NS, "v19 first-window read finish")
+    require(type(before["monotonic_ns"]) is int and
+            before["monotonic_ns"] == finished,
+            "v19 first-window monotonic boundary differs")
+    expected = {
+        "benchmark_cpu": v19_counter(
+            before["benchmark_cpu"], selected["benchmark_cpu"],
+            "v19 first-window benchmark CPU"),
+        "monotonic_ns": finished,
+        "read_finished_monotonic_ns": finished,
+        "read_started_monotonic_ns": started,
+        "reserved_sibling": v19_counter(
+            before["reserved_sibling"], selected["reserved_sibling"],
+            "v19 first-window reserved sibling"),
+    }
+    require(v19_exact_json_equal(before, expected),
+            "v19 first-window before snapshot differs")
+    return expected
+
+
+def v19_nonidle_delta(
+    before: Mapping[str, Any], after: Mapping[str, Any], label: str,
+) -> int:
+    total = 0
+    for field in V19_COUNTER_FIELDS:
+        first = before["fields"][field]
+        last = after["fields"][field]
+        require(last >= first, f"{label} {field} counter regressed")
+        if field in V19_NONIDLE_FIELDS:
+            total += last - first
+    return v19_bounded_int(total, 0, V19_MAX_COUNTER, f"{label} nonidle")
+
+
+def v19_handoff(
+    value: Any, bridge: Mapping[str, Any], selected: Mapping[str, int],
+) -> dict[str, Any]:
+    handoff = exact_keys(value, V19_HANDOFF_KEYS, "v19 first-window handoff")
+    require(bridge["bridge_accepted"] is True and
+            v19_exact_json_equal(bridge["selected_pair"], selected) and
+            v19_exact_json_equal(handoff["selected_pair"], selected),
+            "v19 handoff lacks its accepted selected bridge")
+    tail = bridge["campaign_presample_before"]
+    tail_hash = v19_sha256(tail)
+    require(bridge["bridge_tail_sha256"] == tail_hash and
+            bridge["campaign_presample_before_sha256"] == tail_hash,
+            "v19 handoff bridge-tail binding differs")
+    before = v19_first_window_before(
+        handoff["first_window_before"], selected)
+    tail_finished = v19_bounded_int(
+        tail["read_finished_monotonic_ns"], 0, V19_MAX_MONOTONIC_NS,
+        "v19 bridge-tail read finish")
+    first_started = before["read_started_monotonic_ns"]
+    require(first_started >= tail_finished,
+            "v19 first-window starts before the bridge tail")
+    elapsed = first_started - tail_finished
+    deltas: dict[str, int] = {}
+    for role in ("benchmark_cpu", "reserved_sibling"):
+        cpu = selected[role]
+        require(str(cpu) in tail["cpus"],
+                "v19 bridge tail omits the selected pair")
+        tail_counter = v19_counter(
+            tail["cpus"][str(cpu)], cpu, f"v19 bridge-tail {role}")
+        deltas[role] = v19_nonidle_delta(
+            tail_counter, before[role], f"v19 first-window {role}")
+    late = elapsed > V19_MAXIMUM_HANDOFF_ELAPSED_NS
+    nonidle = any(delta != 0 for delta in deltas.values())
+    failure = (
+        "first-window-handoff-late" if late else
+        "first-window-handoff-selected-pair-nonidle" if nonidle else None)
+    expected = {
+        "schema": V19_HANDOFF_SCHEMA, "selected_pair": dict(selected),
+        "bridge_tail_sha256": tail_hash,
+        "bridge_tail_read_finished_monotonic_ns": tail_finished,
+        "first_window_before": before,
+        "first_window_before_sha256": v19_sha256(before),
+        "first_window_before_read_started_monotonic_ns": first_started,
+        "handoff_elapsed_ns": elapsed,
+        "maximum_handoff_elapsed_ns": V19_MAXIMUM_HANDOFF_ELAPSED_NS,
+        "selected_pair_nonidle_delta": deltas,
+        "accepted": not late and not nonidle,
+        "failure_terminal": failure,
+    }
+    require(v19_exact_json_equal(handoff, expected),
+            "v19 handoff differs from fixed-point replay")
+    return expected
+
+
+def validate_v19_qualification(
+    value: Any, expected_attempt: Any, *,
+    expected_host_identity_sha256: Any,
+) -> tuple[dict[str, Any], tuple[int, int]]:
+    record = exact_keys(
+        value, V19_RECORD_KEYS, "pair-qualified v19 record")
+    require(len(v19_canonical_bytes(record)) <= V19_MAX_JSON_BYTES,
+            "pair-qualified v19 record exceeds its canonical byte bound")
+    require(record["schema"] == V19_RECORD_SCHEMA and
+            record["stage"] == "complete" and
+            record["record_status"] == "complete" and
+            record["terminal"] == V19_SUCCESS_TERMINAL,
+            "auditor requires complete NOT_PROMOTED v19 evidence")
+    policy = validate_v19_policy(record["policy"])
+    policy_hash = v19_sha256(policy)
+    require(record["policy_sha256"] == policy_hash,
+            "v19 qualification policy hash differs")
+    host_hash = v19_hex64(
+        record["host_identity_sha256"], "v19 host identity hash")
+    require(host_hash == v19_hex64(
+                expected_host_identity_sha256,
+                "expected v19 host identity hash"),
+            "v19 qualification host identity differs")
+    attempt = validate_v19_attempt(record["attempt"], expected_attempt)
+    geometry = exact_keys(
+        record["qualification_geometry"],
+        V19_QUALIFICATION_GEOMETRY_KEYS, "v19 qualification geometry")
+    expected_geometry = v19_qualification_geometry()
+    require(v19_exact_json_equal(geometry, expected_geometry) and
+            record["qualification_geometry_sha256"] ==
+                v19_sha256(expected_geometry),
+            "v19 qualification geometry differs")
+    acquisition = v19_acquisition(
+        record["acquisition"], policy,
+        attempt["frozen_pair_from_prior_attempt"])
+    selected = v19_pair(
+        acquisition["scan"]["selected"], "v19 selected pair")
+    require(selected is not None and
+            v19_exact_json_equal(record["selected_pair"], selected) and
+            record["selection_status"] ==
+                acquisition["scan"]["selection_status"] and
+            record["acquisition_sha256"] == v19_sha256(acquisition),
+            "v19 selected pair, acquisition hash, or status differs")
+    bridge = v19_bridge_from_validated_acquisition(
+        record["bridge"], acquisition, policy,
+        attempt["frozen_pair_from_prior_attempt"])
+    require(bridge["bridge_accepted"] is True and
+            record["bridge_sha256"] == v19_sha256(bridge) and
+            record["bridge_geometry_sha256"] ==
+                v19_sha256(v19_bridge_geometry()),
+            "v19 record lacks an accepted bridge fixed point")
+    handoff = v19_handoff(
+        record["first_window_handoff"], bridge, selected)
+    require(handoff["accepted"] is True,
+            "v19 record lacks an accepted first-window handoff")
+    lineage = validate_v19_lineage(record["v18_failure_lineage"])
+    claims = exact_keys(
+        record["shared_host_claim_ceiling"], V19_CLAIM_KEYS,
+        "v19 shared-host claim ceiling")
+    require(v19_exact_json_equal(claims, v19_claim_ceiling()) and
+            record["v18_failure_lineage_sha256"] == v19_sha256(lineage) and
+            type(record["host_mutation_performed"]) is bool and
+            record["host_mutation_performed"] is False and
+            type(record["candidate_timing_performed"]) is bool and
+            record["candidate_timing_performed"] is False,
+            "v19 claim ceiling, lineage hash, mutation, or timing differs")
+    expected = {
+        "schema": V19_RECORD_SCHEMA, "stage": "complete",
+        "record_status": "complete", "attempt": attempt,
+        "policy": policy, "policy_sha256": policy_hash,
+        "host_identity_sha256": host_hash,
+        "qualification_geometry": expected_geometry,
+        "qualification_geometry_sha256": v19_sha256(expected_geometry),
+        "acquisition": acquisition,
+        "acquisition_sha256": v19_sha256(acquisition),
+        "selected_pair": selected,
+        "selection_status": acquisition["scan"]["selection_status"],
+        "bridge": bridge, "bridge_sha256": v19_sha256(bridge),
+        "bridge_geometry_sha256": v19_sha256(v19_bridge_geometry()),
+        "first_window_handoff": handoff,
+        "v18_failure_lineage": lineage,
+        "v18_failure_lineage_sha256": v19_sha256(lineage),
+        "shared_host_claim_ceiling": v19_claim_ceiling(),
+        "terminal": V19_SUCCESS_TERMINAL,
+        "host_mutation_performed": False,
+        "candidate_timing_performed": False,
+    }
+    require(v19_exact_json_equal(record, expected),
+            "v19 record differs from full fixed-point replay")
+    return expected, (
+        selected["benchmark_cpu"], selected["reserved_sibling"])
 
 
 def sha1_object(kind: str, content: bytes) -> str:
@@ -3018,9 +4327,9 @@ def supervision_for_mode(value: Any, manifest_value: Any,
                          mode: str, *,
                          cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR
                          ) -> dict[str, Any] | None:
-    require(mode in ("required", "absent", "windowed"),
+    require(mode in ("required", "absent", "windowed", "conditioned"),
             "unknown supervision audit mode")
-    if mode in ("absent", "windowed"):
+    if mode in ("absent", "windowed", "conditioned"):
         require(value is None and manifest_value is None,
                 "passive audit requires null raw/manifest supervision")
         return None
@@ -3115,15 +4424,103 @@ def windowed_observation(
 
 def audit_mode_result_fields(
         supervision_mode: str,
-        contamination: Mapping[str, Any] | None) -> dict[str, Any]:
-    require(supervision_mode in ("required", "absent", "windowed"),
+        contamination: Mapping[str, Any] | None,
+        qualification: Mapping[str, Any] | None = None,
+        cpu_pair: tuple[int, int] = LEGACY_CPU_PAIR) -> dict[str, Any]:
+    require(supervision_mode in (
+                "required", "absent", "windowed", "conditioned"),
             "invalid audit result supervision mode")
     if supervision_mode == "required":
         require(contamination is None,
                 "supervised audit unexpectedly has passive contamination")
+        require(qualification is None,
+                "legacy supervised audit carries v19 qualification")
         return {"schema": AUDIT_SCHEMA}
     require(type(contamination) is dict,
             "passive audit lacks validated contamination")
+    if supervision_mode == "conditioned":
+        require(type(qualification) is dict and
+                qualification.get("stage") == "complete" and
+                qualification.get("record_status") == "complete" and
+                qualification.get("terminal") == V19_SUCCESS_TERMINAL and
+                v19_exact_json_equal(
+                    qualification.get("shared_host_claim_ceiling"),
+                    v19_claim_ceiling()),
+                "conditioned audit lacks complete v19 qualification")
+        windowed = contamination.get("windowed")
+        require(type(windowed) is dict and
+                windowed.get("benchmark_cpu_nonidle_excess_jiffies") == 0 and
+                windowed.get("reserved_sibling_nonidle_jiffies") == 0,
+                "conditioned audit lacks zero retained-window screens")
+        benchmark_cpu, reserved_sibling = cpu_pair
+        return {
+            "schema": PASSIVE_AUDIT_SCHEMA_V19,
+            "audit_mode": "conditioned-passive-windowed-shared-host-observation",
+            "acquisition_generation": "passive-v3",
+            "evidence_class":
+                "conditioned-passive-windowed-shared-host-observation/v1",
+            "affinity_supervisor_binding_verified": False,
+            "promotion_eligible": False,
+            "promotion_passed": False,
+            "causal_performance_claim_eligible": False,
+            "cpu_pair_exclusive": False,
+            "windowed_observation": dict(contamination),
+            "pair_qualification": {
+                "schema": qualification["schema"],
+                "attempt": dict(qualification["attempt"]),
+                "selected_pair": dict(qualification["selected_pair"]),
+                "policy_sha256": qualification["policy_sha256"],
+                "acquisition_sha256": qualification["acquisition_sha256"],
+                "bridge_sha256": qualification["bridge_sha256"],
+                "first_window_before_sha256": qualification[
+                    "first_window_handoff"]["first_window_before_sha256"],
+                "v18_failure_lineage_sha256": qualification[
+                    "v18_failure_lineage_sha256"],
+                "shared_host_claim_ceiling": dict(
+                    qualification["shared_host_claim_ceiling"]),
+                "terminal": qualification["terminal"],
+                "fixed_point_replayed_independently": True,
+            },
+            "isolation_claim": {
+                "schema":
+                    "leopard2-v19-conditioned-passive-isolation-claim/v1",
+                "mechanism": (
+                    "read-only pair qualification and bridge for dynamic "
+                    f"CPU{benchmark_cpu}/CPU{reserved_sibling}, owned-process "
+                    "taskset pinning, reservation file, pair lease, and exact "
+                    "per-invocation jiffy rejection screens"
+                ),
+                "campaign_supervision": None,
+                "foreign_process_affinity_mutation_claimed": False,
+                "foreign_process_signalling_claimed": False,
+                "benchmark_cpu_exclusive_ownership_claimed": False,
+                "same_uid_pair_exclusion_certificate": False,
+                "cgroup_or_os_exclusive_certificate": False,
+                "qualification_bridge_fixed_point_verified": True,
+                "bridge_tail_to_campaign_presample_verified": True,
+                "first_retained_window_handoff_verified": True,
+                "every_retained_window_benchmark_cpu_excess_zero": True,
+                "every_retained_window_reserved_sibling_nonidle_zero": True,
+                "whole_campaign_and_out_of_window_activity_gated": False,
+                "windowed_screen": "per retained benchmark invocation",
+                "out_of_window_activity_gated": False,
+                "counter_resolution":
+                    "frozen x86-64 Linux /proc/stat USER_HZ=100 contract",
+                "interval_complete_task_observation": False,
+                "benchmark_cpu_foreign_work_attributable": False,
+                "causal_performance_claim_eligible": False,
+                "promotion_eligible": False,
+                "promotion_passed": False,
+                "shared_host_claim_ceiling": v19_claim_ceiling(),
+                "scope": (
+                    "host, compiler, API, workload, and dynamically selected "
+                    "pair specific; noncausal, nonexclusive, not "
+                    "generalizable, and never promotion evidence"
+                ),
+            },
+        }
+    require(qualification is None,
+            "legacy passive audit carries v19 qualification")
     if supervision_mode == "windowed":
         windowed = contamination.get("windowed")
         require(type(windowed) is dict and
@@ -3316,15 +4713,23 @@ def validate_campaign(
     return value
 
 
-def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[str, Any]:
-    require(supervision_mode in ("required", "absent", "windowed"),
+def replay(
+    manifest_path: Path, *, supervision_mode: str = "required",
+    expected_v19_attempt: Any = None,
+) -> dict[str, Any]:
+    require(supervision_mode in (
+                "required", "absent", "windowed", "conditioned"),
             "invalid supervision audit mode")
-    windowed_mode = supervision_mode == "windowed"
+    conditioned_mode = supervision_mode == "conditioned"
+    windowed_mode = supervision_mode in ("windowed", "conditioned")
+    require((expected_v19_attempt is not None) == conditioned_mode,
+            "external v19 attempt authority is required only for conditioned replay")
     expected_manifest_schema = (
+        MANIFEST_SCHEMA_V19 if conditioned_mode else
         MANIFEST_SCHEMA_V18 if windowed_mode else MANIFEST_SCHEMA_V17)
-    expected_raw_schema = RAW_SCHEMA_V18 if windowed_mode else RAW_SCHEMA_V17
-    cpu_pair = cpu_pair_for_raw_schema(expected_raw_schema)
-    benchmark_cpu, reserved_sibling = cpu_pair
+    expected_raw_schema = (
+        RAW_SCHEMA_V19 if conditioned_mode else
+        RAW_SCHEMA_V18 if windowed_mode else RAW_SCHEMA_V17)
     expected_invocation_keys = (
         INVOCATION_V18_KEYS if windowed_mode else INVOCATION_KEYS)
     manifest_path = canonical_existing_file(manifest_path)
@@ -3333,7 +4738,9 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
     manifest_bytes, manifest_file = stable_file(
         manifest_path, MAX_MANIFEST_BYTES)
     manifest = strict_json_bytes(manifest_bytes, "manifest")
-    manifest = exact_keys(manifest, MANIFEST_KEYS, "manifest")
+    manifest = exact_keys(
+        manifest, MANIFEST_V19_KEYS if conditioned_mode else MANIFEST_KEYS,
+        "manifest")
     verify_signature(manifest, "manifest")
     validate_timestamp(manifest["created_utc"], "manifest created_utc")
     require(manifest["schema"] == expected_manifest_schema and
@@ -3351,14 +4758,33 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
             HEX256.fullmatch(raw_info["payload_digest"]) is not None,
             "manifest/raw file identity differs")
     raw = strict_json_bytes(raw_bytes, "raw bundle")
-    raw = exact_keys(raw, RAW_KEYS, "raw bundle")
+    raw = exact_keys(
+        raw, RAW_V19_KEYS if conditioned_mode else RAW_KEYS, "raw bundle")
     verify_signature(raw, "raw bundle")
     validate_timestamp(raw["created_utc"], "raw created_utc")
     require(raw["schema"] == expected_raw_schema and
             raw["validity_is_independent_of_speed"] is True and
             raw_info["payload_digest"] == raw["digest"],
             "raw bundle does not match the requested audit generation")
+    qualification: dict[str, Any] | None = None
+    if conditioned_mode:
+        require(v19_exact_json_equal(
+                    manifest["pair_qualification"],
+                    raw["pair_qualification"]),
+                "manifest v19 qualification differs from raw evidence")
+        qualification, cpu_pair = validate_v19_qualification(
+            raw["pair_qualification"], expected_v19_attempt,
+            expected_host_identity_sha256=v19_sha256(raw["host_initial"]))
+    else:
+        cpu_pair = cpu_pair_for_raw_schema(expected_raw_schema)
+    benchmark_cpu, reserved_sibling = cpu_pair
     campaign = validate_campaign(raw["campaign"], cpu_pair=cpu_pair)
+    if conditioned_mode:
+        require(qualification is not None and v19_exact_json_equal(
+                    campaign["allowed_cpu_set_at_launch"],
+                    qualification["acquisition"]
+                        ["allowed_cpu_set_at_launch"]),
+                "v19 campaign launch affinity differs from acquisition")
     require(type(raw["identities_initial"]) is dict and
             exact_json_equal(raw["identities_initial"], raw["identities_final"]),
             "input identities changed during the campaign")
@@ -3481,6 +4907,23 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
         validate_isolation(
             raw["isolation"], campaign, total_duration,
             cpu_pair=cpu_pair))
+    if conditioned_mode:
+        require(qualification is not None and cpu_windows,
+                "complete v19 evidence lacks retained CPU windows")
+        bridge_tail = qualification["bridge"]["campaign_presample_before"]
+        expected_isolation_before = {
+            "benchmark_cpu": bridge_tail["cpus"][str(benchmark_cpu)],
+            "monotonic_ns": bridge_tail["read_finished_monotonic_ns"],
+            "reserved_sibling": bridge_tail["cpus"][str(reserved_sibling)],
+        }
+        require(exact_json_equal(
+                    isolation["before"], expected_isolation_before),
+                "v19 isolation presample differs from accepted bridge tail")
+        require(v19_exact_json_equal(
+                    cpu_windows[0]["before"],
+                    qualification["first_window_handoff"]
+                        ["first_window_before"]),
+                "v19 first retained CPU window differs from accepted handoff")
     supervision = supervision_for_mode(
         raw["supervision"], manifest["supervision"], campaign, reservation,
         isolation, supervision_mode, cpu_pair=cpu_pair)
@@ -3497,6 +4940,11 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
         cpu_pair=cpu_pair)
     require(exact_json_equal(host_initial, host_final),
             "host identity changed during the campaign")
+    if conditioned_mode:
+        require(qualification is not None and
+                qualification["host_identity_sha256"] ==
+                    v19_sha256(host_initial),
+                "v19 qualification is not bound to validated host identity")
     analysis = analyze(accepted)
     require(exact_json_equal(analysis, raw["analysis"]),
             "raw clustered ABBA analysis differs from retained samples")
@@ -3517,7 +4965,8 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
         Path(__file__).resolve(strict=True), 8 * 1024 * 1024)
     del auditor_bytes
     return {
-        **audit_mode_result_fields(supervision_mode, contamination),
+        **audit_mode_result_fields(
+            supervision_mode, contamination, qualification, cpu_pair),
         "status": "complete",
         "audit_passed": True,
         "timing_performed": False,
@@ -3575,7 +5024,8 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
         },
         "gate_results": {
             "manifest_raw_digest_chain": True,
-            ("v18_schema_and_contract" if windowed_mode
+            ("v19_schema_and_conditioned_contract" if conditioned_mode
+             else "v18_schema_and_contract" if windowed_mode
              else "v17_schema_and_contract"): True,
             "native_exact_main_identity": True,
             "full_git_source_object_closure": True,
@@ -3584,6 +5034,19 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
             "generated_attestation_and_configuration_bytes": True,
             "canonical_runtime_dependency_closure": True,
             **({
+                "pair_qualification_fixed_point_independently_replayed": True,
+                "external_attempt_authority_verified": True,
+                "dynamic_pair_bound_to_campaign_host_and_lease": True,
+                "accepted_bridge_tail_bound_to_campaign_presample": True,
+                "accepted_handoff_bound_to_first_retained_window": True,
+                "reservation_pair_lease_null_supervision_windowed_closure": True,
+                "benchmark_cpu_nonidle_excess_zero_in_every_retained_window": True,
+                "reserved_sibling_nonidle_zero_in_every_retained_window": True,
+                "out_of_window_activity_disclosed_not_gated": True,
+                "shared_host_claim_ceiling_all_false": True,
+                "benchmark_cpu_exclusivity_not_claimed": True,
+                "promotion_eligibility_not_claimed": True,
+            } if conditioned_mode else {
                 "reservation_pair_lease_null_supervision_windowed_closure": True,
                 "benchmark_cpu_nonidle_excess_zero_in_every_retained_window": True,
                 "reserved_sibling_nonidle_zero_in_every_retained_window": True,
@@ -3627,7 +5090,8 @@ def replay(manifest_path: Path, *, supervision_mode: str = "required") -> dict[s
                     "descriptive_only": True,
                     "windowed_screen_is_noncausal_and_nonexclusive": True,
                 } if windowed_mode else {}),
-            } if supervision_mode in ("absent", "windowed") else {}),
+            } if supervision_mode in (
+                "absent", "windowed", "conditioned") else {}),
         },
     }
 
@@ -4583,6 +6047,109 @@ def self_test() -> None:
         bad_host, "self-test", [0, CPU, SIBLING]),
                    "non-x86 host for x86 GFNI campaign")
 
+    require(v19_canonical_bytes({"\N{LATIN SMALL LETTER E WITH ACUTE}": 1}) ==
+            "{\"\N{LATIN SMALL LETTER E WITH ACUTE}\":1}\n".encode("utf-8") and
+            v19_sha256({"a": 1}) == sha256_bytes(b'{"a":1}\n'),
+            "v19 newline/Unicode canonicalization differs")
+    attempt_one = v19_attempt_record(attempt=1)
+    validate_v19_attempt(attempt_one, clone(attempt_one))
+    changed_attempt = clone(attempt_one)
+    changed_attempt["attempt"] = 2
+    expect_failure(lambda: validate_v19_attempt(
+        changed_attempt, attempt_one), "substituted v19 attempt")
+    expect_failure(lambda: v19_attempt_record(attempt=True),
+                   "boolean v19 attempt")
+    lineage = v19_lineage_record()
+    validate_v19_lineage(lineage)
+    changed_lineage = clone(lineage)
+    changed_lineage["attempts"][0]["envelope_sha256sums_sha256"] = "0" * 64
+    expect_failure(lambda: validate_v19_lineage(changed_lineage),
+                   "substituted v19 failure lineage")
+    require(v19_claim_ceiling() == {
+                "promotion_eligible": False,
+                "host_exclusivity_proved": False,
+                "whole_campaign_interval_observed": False,
+                "causal_performance_claim_allowed": False,
+            }, "v19 shared-host claim ceiling differs")
+    expect_failure(lambda: cpu_pair_for_raw_schema(RAW_SCHEMA_V19),
+                   "v19 relabelled through the legacy CPU-pair helper")
+
+    selected = {"benchmark_cpu": 1, "reserved_sibling": 65}
+
+    def v19_test_counter(cpu: int, *, idle: int, user: int = 0
+                         ) -> dict[str, Any]:
+        fields = {
+            "user": user, "nice": 0, "system": 0, "idle": idle,
+            "iowait": 0, "irq": 0, "softirq": 0, "steal": 0,
+        }
+        return {"cpu": cpu, "fields": fields,
+                "total_jiffies": sum(fields.values())}
+
+    tail = {
+        "cpus": {
+            "1": v19_test_counter(1, idle=100),
+            "65": v19_test_counter(65, idle=100),
+        },
+        "read_started_monotonic_ns": 90,
+        "read_finished_monotonic_ns": 100,
+    }
+    tail_hash = v19_sha256(tail)
+    handoff_bridge = {
+        "bridge_accepted": True, "selected_pair": selected,
+        "campaign_presample_before": tail,
+        "bridge_tail_sha256": tail_hash,
+        "campaign_presample_before_sha256": tail_hash,
+    }
+
+    def v19_test_handoff(
+        elapsed: int, *, benchmark_user: int = 0,
+    ) -> dict[str, Any]:
+        first_started = tail["read_finished_monotonic_ns"] + elapsed
+        before = {
+            "benchmark_cpu": v19_test_counter(
+                1, idle=600, user=benchmark_user),
+            "monotonic_ns": first_started + 2,
+            "read_finished_monotonic_ns": first_started + 2,
+            "read_started_monotonic_ns": first_started,
+            "reserved_sibling": v19_test_counter(65, idle=600),
+        }
+        late = elapsed > V19_MAXIMUM_HANDOFF_ELAPSED_NS
+        nonidle = benchmark_user != 0
+        return {
+            "schema": V19_HANDOFF_SCHEMA, "selected_pair": selected,
+            "bridge_tail_sha256": tail_hash,
+            "bridge_tail_read_finished_monotonic_ns": 100,
+            "first_window_before": before,
+            "first_window_before_sha256": v19_sha256(before),
+            "first_window_before_read_started_monotonic_ns": first_started,
+            "handoff_elapsed_ns": elapsed,
+            "maximum_handoff_elapsed_ns":
+                V19_MAXIMUM_HANDOFF_ELAPSED_NS,
+            "selected_pair_nonidle_delta": {
+                "benchmark_cpu": benchmark_user,
+                "reserved_sibling": 0,
+            },
+            "accepted": not late and not nonidle,
+            "failure_terminal": (
+                "first-window-handoff-late" if late else
+                "first-window-handoff-selected-pair-nonidle"
+                if nonidle else None),
+        }
+
+    boundary_handoff = v19_handoff(
+        v19_test_handoff(V19_MAXIMUM_HANDOFF_ELAPSED_NS),
+        handoff_bridge, selected)
+    require(boundary_handoff["accepted"] is True,
+            "v19 inclusive handoff boundary was rejected")
+    late_handoff = v19_handoff(
+        v19_test_handoff(
+            V19_MAXIMUM_HANDOFF_ELAPSED_NS + 1, benchmark_user=1),
+        handoff_bridge, selected)
+    require(late_handoff["accepted"] is False and
+            late_handoff["failure_terminal"] ==
+                "first-window-handoff-late",
+            "v19 late handoff did not take precedence over nonidle")
+
     with tempfile.TemporaryDirectory(prefix="leopard-v17-audit-self-test.") \
             as directory:
         root = Path(directory).resolve()
@@ -4615,17 +6182,35 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument(
-        "--supervision", choices=("required", "absent", "windowed"),
+        "--supervision",
+        choices=("required", "absent", "windowed", "conditioned"),
         default="required",
         help=("require the existing supervisor handshake or explicitly require "
               "JSON-null supervision under the historical aggregate passive "
-              "screen or the v18 per-invocation windowed screen"),
+              "screen, the v18 per-invocation windowed screen, or the v19 "
+              "externally authorized conditioned screen"),
     )
+    parser.add_argument("--v19-attempt", type=int, choices=(1, 2))
+    parser.add_argument("--v19-prior-failure-sha256")
+    parser.add_argument("--v19-prior-acquisition-sha256")
+    parser.add_argument(
+        "--v19-prior-selection-status",
+        choices=("not-acquired", "no-candidate-pair-qualified",
+                 "selected-lowest-primary"))
+    parser.add_argument(
+        "--v19-prior-selected-pair", metavar="BENCHMARK,SIBLING")
     options = parser.parse_args()
     manifest = options.manifest if options.manifest is not None else options.report
+    v19_options = (
+        options.v19_attempt, options.v19_prior_failure_sha256,
+        options.v19_prior_acquisition_sha256,
+        options.v19_prior_selection_status,
+        options.v19_prior_selected_pair,
+    )
     if options.self_test:
         require(manifest is None and options.output is None and
-                options.supervision == "required",
+                options.supervision == "required" and
+                all(value is None for value in v19_options),
                 "--self-test cannot be combined with replay options")
         self_test()
         return 0
@@ -4635,7 +6220,37 @@ def main() -> int:
             "audit paths must be absolute")
     require(manifest != options.output,
             "audit output aliases the manifest")
-    result = replay(manifest, supervision_mode=options.supervision)
+    expected_v19_attempt = None
+    if options.supervision == "conditioned":
+        require(options.v19_attempt is not None,
+                "conditioned replay requires --v19-attempt")
+        prior_pair = None
+        if options.v19_prior_selected_pair is not None:
+            components = options.v19_prior_selected_pair.split(",")
+            require(len(components) == 2 and
+                    all(component and component.isascii() and
+                        component.isdecimal() and len(component) <= 7 and
+                        (component == "0" or not component.startswith("0"))
+                        for component in components),
+                    "--v19-prior-selected-pair must be BENCHMARK,SIBLING")
+            prior_pair = {
+                "benchmark_cpu": int(components[0], 10),
+                "reserved_sibling": int(components[1], 10),
+            }
+        expected_v19_attempt = v19_attempt_record(
+            attempt=options.v19_attempt,
+            prior_attempt_failure_sha256=options.v19_prior_failure_sha256,
+            prior_attempt_acquisition_sha256=
+                options.v19_prior_acquisition_sha256,
+            prior_attempt_selection_status=
+                options.v19_prior_selection_status,
+            prior_attempt_selected_pair=prior_pair)
+    else:
+        require(all(value is None for value in v19_options),
+                "v19 attempt flags require --supervision conditioned")
+    result = replay(
+        manifest, supervision_mode=options.supervision,
+        expected_v19_attempt=expected_v19_attempt)
     write_canonical(options.output, result)
     print(json.dumps({
         "affinity_supervisor_binding_verified": result.get(
@@ -4655,5 +6270,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (AuditError, UnicodeError, json.JSONDecodeError, OSError) as error:
-        print(f"v17/v18 independent audit failed: {error}", file=sys.stderr)
+        print(f"v17-v19 independent audit failed: {error}", file=sys.stderr)
         raise SystemExit(1) from error
