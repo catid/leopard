@@ -28,9 +28,21 @@ fi
 shift
 
 passive_mode=false
+conditioned_v19_mode=false
 attempt=
 attempt_budget=
-if [[ ${1:-} == --passive-shared-host ]]; then
+if [[ ${1:-} == --conditioned-passive-v19 ]]; then
+    conditioned_v19_mode=true
+    shift
+    if [[ ${1:-} != --attempt || ${3:-} != --attempt-budget ]]; then
+        /usr/bin/printf '%s requires --attempt N --attempt-budget 2\n' \
+            --conditioned-passive-v19 >&2
+        exit 2
+    fi
+    attempt=${2:-}
+    attempt_budget=${4:-}
+    shift 4
+elif [[ ${1:-} == --passive-shared-host ]]; then
     passive_mode=true
     shift
     if [[ ${1:-} != --attempt || ${3:-} != --attempt-budget ]]; then
@@ -93,12 +105,224 @@ relative_build_provenance=tools/leopard2_build_provenance.py
 relative_auditor=experiments/leopard2/main_compare/audit_v17_gfni_main_compare.py
 relative_census=experiments/leopard2/main_compare/passive_environment_census.py
 relative_supervisor=tools/leopard2_affinity_supervisor.py
+relative_pair_v19_contract=experiments/leopard2/main_compare/pair_qualified_v19_contract.py
 lock=/tmp/leopard-gf8-authoritative.lock
 passive_housekeeping_jq='[.allowed_cpus[] | select(. != 52 and . != 116)]
     | map(tostring) | join(",") | select(length > 0)'
 passive_timeout_argument_jq='.campaign.timeout_seconds
     | select(type == "number" and . == 600)
     | "600"'
+conditioned_v19_preregistration_schema=leopard2-v19-conditioned-main-wrapper-preregistration/v1
+conditioned_v19_generation=passive-v3
+conditioned_v19_armed=false
+conditioned_v19_host=ripper
+conditioned_v19_cpu_model='AMD Threadripper PRO 9985WX'
+conditioned_v19_policy_sha256=e2d605446ab3eb9b726d90ab5c62a9a4c5f4f39ce8bb91e7246061017f5f4494
+conditioned_v19_qualification_geometry_sha256=4a6142a6b24a2005fb656324e1f85f141dced35fb670e94022f86e593bb7b7da
+conditioned_v19_bridge_geometry_sha256=adef2524f1df9c0f5266878b163656f0e70bc9fc21c79a4d8047dd90652c15b1
+conditioned_v19_failure_lineage_sha256=0743214bb7b3a37dff7c00a4f1d302ec300c903c153477c3d57c5a0d10a2780c
+conditioned_v19_claim_ceiling_sha256=c23366107b618bc6666d44675a3b301f49cc5bebd0e0f0a36b8a4bc1d4858257
+conditioned_v19_preflight_source_commit=cf7a7056e0bd7f54b8da436a39cae857beab10c1
+conditioned_v19_preflight_source_tree=499697b4ee71ce7b2a12831f7d72d0e423cd0806
+conditioned_v19_preflight_baseline_commit=6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198
+conditioned_v19_preflight_baseline_tree=b7c8830d96a978f6ec14fe747095f066e351ae72
+conditioned_v19_preflight_outer_sha256=1df9404c4424628e63492ade557d6f61ac06884b9a36932dd69b884aec1c02d7
+conditioned_v19_preflight_provenance_sha256=8626d0bcb22b0448abbefd14e09573ca86bdb05d3b169c829862ffa5ccfd11fb
+conditioned_v19_preflight_candidate_binary_sha256=85556059be75f98665464084a192db4f6284b0e90ec285d2791eee785f9458ab
+conditioned_v19_preflight_candidate_archive_sha256=0c013cee36866f1b64e75cb8b1124732be699720f68d5e7011750c939c54d881
+conditioned_v19_preflight_baseline_binary_sha256=bb011abbabe74e1a581b77593916be1d9f0a1b1bf586eed6ef927a473cc9edf8
+conditioned_v19_preflight_baseline_archive_sha256=9e006068fbdd72e318ba854688d614183e949c3fd36ff1192b1f490e7ca47260
+conditioned_v19_preregistration_sha256=27c1b7d76a0ecdbe194d6e6b62c01e48b1c7d10fc8ef99ebad4d76238669f0c1
+
+conditioned_v19_preregistration_record()
+{
+    /usr/bin/jq -cS -n \
+        --arg schema "$conditioned_v19_preregistration_schema" \
+        --arg generation "$conditioned_v19_generation" \
+        --argjson armed "$conditioned_v19_armed" \
+        --arg host "$conditioned_v19_host" \
+        --arg cpu_model "$conditioned_v19_cpu_model" \
+        --arg policy_sha256 "$conditioned_v19_policy_sha256" \
+        --arg qualification_geometry_sha256 \
+            "$conditioned_v19_qualification_geometry_sha256" \
+        --arg bridge_geometry_sha256 \
+            "$conditioned_v19_bridge_geometry_sha256" \
+        --arg failure_lineage_sha256 \
+            "$conditioned_v19_failure_lineage_sha256" \
+        --arg claim_ceiling_sha256 \
+            "$conditioned_v19_claim_ceiling_sha256" \
+        --arg preflight_source_commit \
+            "$conditioned_v19_preflight_source_commit" \
+        --arg preflight_source_tree \
+            "$conditioned_v19_preflight_source_tree" \
+        --arg preflight_baseline_commit \
+            "$conditioned_v19_preflight_baseline_commit" \
+        --arg preflight_baseline_tree \
+            "$conditioned_v19_preflight_baseline_tree" \
+        --arg preflight_outer_sha256 \
+            "$conditioned_v19_preflight_outer_sha256" \
+        --arg preflight_provenance_sha256 \
+            "$conditioned_v19_preflight_provenance_sha256" \
+        --arg preflight_candidate_binary_sha256 \
+            "$conditioned_v19_preflight_candidate_binary_sha256" \
+        --arg preflight_candidate_archive_sha256 \
+            "$conditioned_v19_preflight_candidate_archive_sha256" \
+        --arg preflight_baseline_binary_sha256 \
+            "$conditioned_v19_preflight_baseline_binary_sha256" \
+        --arg preflight_baseline_archive_sha256 \
+            "$conditioned_v19_preflight_baseline_archive_sha256" \
+        --arg canonical_lock "$lock" '
+        {
+            schema:$schema,
+            acquisition_generation:$generation,
+            live_acquisition_armed:$armed,
+            host_authority:{
+                hostname:$host,
+                cpu_model:$cpu_model,
+                eligible_hosts:[$host],
+                no_fallback:true,
+                no_swap_required:true,
+                foreign_process_mutation_authorized:false,
+                logical_cpu_count:128,
+                physical_core_count:64,
+                numa_node_count:1,
+                l3_domain_count:8,
+                housekeeping_pair:{benchmark_cpu:0,reserved_sibling:64},
+                candidate_primary_cpus:[range(1;64)],
+                sibling_offset:64
+            },
+            qualification:{
+                policy_schema:"leopard2-pair-qualification-policy/v1",
+                policy_sha256:$policy_sha256,
+                geometry_sha256:$qualification_geometry_sha256,
+                window_count:12,
+                nominal_window_ns:7000000000,
+                domain_mode:"pair-only",
+                selection_rule:"lowest-primary-unless-frozen/v1",
+                nonidle_limit_jiffies:0
+            },
+            bridge:{
+                geometry_sha256:$bridge_geometry_sha256,
+                minimum_window_count:2,
+                maximum_window_count:2,
+                nominal_window_ns:1000000000,
+                maximum_handoff_elapsed_ns:5000000000,
+                scan_tail_equals_bridge_head:true,
+                bridge_tail_is_campaign_presample:true,
+                canonical_lock_held:true,
+                pair_lease_held:false,
+                pair_lease_acquired_only_after_accepted_bridge:true
+            },
+            attempt_contract:{
+                schema:"leopard2-main-compare-pair-qualified-attempt/v1",
+                attempt_budget:2,
+                attempt_one_selection:"fresh-lowest-qualified-primary",
+                attempt_two_rule:"freeze-selected-pair-no-fallback-or-one-fresh-retry-after-no-selection",
+                failure_lineage_sha256:$failure_lineage_sha256,
+                exhausted_prior_generation:"passive-v2"
+            },
+            resource_envelope:{
+                memory_max_bytes:536870912,
+                memory_swap_max_bytes:0,
+                release_authorized_max_jobs:2,
+                release_max_jobs:1,
+                release_max_jobs_basis:"retained-preflight-proven-cap",
+                sanitizer_max_jobs:1,
+                maximum_substantial_processes:1
+            },
+            build_preflight:{
+                retained_lane:".research/leopard-79h/cf7a705-v19-build-preflight-ripper-a3",
+                source_commit:$preflight_source_commit,
+                source_tree:$preflight_source_tree,
+                baseline_commit:$preflight_baseline_commit,
+                baseline_tree:$preflight_baseline_tree,
+                outer_sha256sums_sha256:$preflight_outer_sha256,
+                provenance_record_sha256:$preflight_provenance_sha256,
+                build_type:"Release",
+                build_system:"Unix Makefiles",
+                compiler:"GNU c++ 13.3.0",
+                parallelism:1,
+                execution_scope:"systemd-user-service",
+                memory_max_bytes:536870912,
+                memory_swap_max_bytes:0,
+                limit_nofile:65536,
+                zero_proc_swaps_rows:true,
+                observed_memory_peak_bytes:391512064,
+                memory_events:{max:0,oom:0,oom_kill:0},
+                candidate_binary_sha256:$preflight_candidate_binary_sha256,
+                candidate_archive_sha256:$preflight_candidate_archive_sha256,
+                baseline_binary_sha256:$preflight_baseline_binary_sha256,
+                baseline_archive_sha256:$preflight_baseline_archive_sha256,
+                first_replay_artifacts_byte_identical:true,
+                builds_succeeded:true,
+                provenance_validation_passed:true,
+                benchmark_executable_executed:false,
+                qualification_scan_performed:false,
+                candidate_workload_executed:false,
+                v19_attempt_consumed:false,
+                foreign_process_mutation_performed:false,
+                timing_performed:false
+            },
+            artifact_execution:{
+                canonical_lock:$canonical_lock,
+                lock_begins_before_qualification:true,
+                lock_held_through_terminal_sealing:true,
+                lane_owned_immutable_executables:true,
+                execute_from_mutable_build_directory:false,
+                source_identity_bound:true,
+                sha256_verified_before_future_timing:true,
+                sha256_verified_after_future_timing:true
+            },
+            claim_ceiling:{
+                promotion_eligible:false,
+                host_exclusivity_proved:false,
+                whole_campaign_interval_observed:false,
+                causal_performance_claim_allowed:false
+            },
+            claim_ceiling_sha256:$claim_ceiling_sha256,
+            success_terminal:"NOT_PROMOTED",
+            reporting:{
+                classification:"host/compiler/API/workload-specific conditioned-passive nominal observation on a shared host",
+                conditioning_disclosure:"CPU pair selected by a prospectively frozen pair-only qualification screen",
+                attempt_statement_template:"attempt N of 2",
+                ratios_are_correlated_and_must_not_be_multiplied:true,
+                v17_v18_rejections_cited:true
+            },
+            stage_order:[
+                "acquire-canonical-lock",
+                "freeze-identities-build-test-and-seal",
+                "qualify-pair-12x7s",
+                "bridge-2x1s",
+                "independently-verify-selected-pair",
+                "acquire-dynamic-pair-lease-and-reservation",
+                "narrow-controller-away-from-selected-pair",
+                "capture-pre-census",
+                "start-first-window-within-5s-of-bridge-tail"
+            ],
+            stop_rule:{
+                maximum_v19_attempts:2,
+                thresholds_or_policy_may_be_retuned:false,
+                successor_requires_new_preregistration:true,
+                successor_requires_dedicated_or_os_exclusive_environment:true
+            },
+            host_mutation_authorized:false,
+            timing_performed:false
+        }'
+}
+
+conditioned_v19_preregistration_digest()
+{
+    conditioned_v19_preregistration_record | \
+        /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1
+}
+
+validate_conditioned_v19_attempt_contract()
+{
+    local observed_attempt=$1
+    local observed_budget=$2
+    [[ "$observed_attempt" =~ ^[1-2]$ ]] || return 1
+    test "$observed_budget" = 2
+}
 
 validate_attempt_contract()
 {
@@ -1823,6 +2047,340 @@ require_empty_output()
     local observed_output
     observed_output="$("$@")" || return 1
     test -z "$observed_output"
+}
+
+conditioned_v19_contract_self_test()
+{
+    local self_test_root=
+    local preregistration_path=
+    local validator_path=
+    local bad_attempt=
+    local bad_budget=
+    test "$conditioned_v19_armed" = false || return 1
+    validate_conditioned_v19_attempt_contract 1 2 || return 1
+    validate_conditioned_v19_attempt_contract 2 2 || return 1
+    for bad_attempt in 0 3 01 -1 true ''; do
+        if validate_conditioned_v19_attempt_contract "$bad_attempt" 2; then
+            return 1
+        fi
+    done
+    for bad_budget in 0 1 3 02 true ''; do
+        if validate_conditioned_v19_attempt_contract 1 "$bad_budget"; then
+            return 1
+        fi
+    done
+    test "$(conditioned_v19_preregistration_digest)" = \
+        "$conditioned_v19_preregistration_sha256" || return 1
+    (
+        self_test_root="$(/usr/bin/mktemp -d \
+            /tmp/leopard-v19-wrapper-contract-self-test.XXXXXX)" || return 1
+        trap '/usr/bin/find "$self_test_root" -depth -delete' EXIT
+        preregistration_path="$self_test_root/preregistration.json"
+        validator_path="$self_test_root/validate.py"
+        conditioned_v19_preregistration_record > "$preregistration_path" || \
+            return 1
+        /usr/bin/tee "$validator_path" >/dev/null <<'PY'
+#!/usr/bin/python3
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def require_rejected(operation, message):
+    try:
+        operation()
+    except v19.PairQualifiedV19Error:
+        return
+    raise ValueError(message)
+
+
+def load_module(name, path):
+    specification = importlib.util.spec_from_file_location(name, path)
+    require(specification is not None and specification.loader is not None,
+            f"cannot load {path}")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[name] = module
+    specification.loader.exec_module(module)
+    return module
+
+
+preregistration_path = Path(sys.argv[1])
+expected_digest = sys.argv[2]
+repo = Path(sys.argv[3])
+runner_path = repo / sys.argv[4]
+v19_contract_path = repo / sys.argv[5]
+data = preregistration_path.read_bytes()
+require(data.endswith(b"\n") and data.count(b"\n") == 1,
+        "preregistration is not one LF-terminated JSON value")
+value = json.loads(data)
+require(type(value) is dict, "preregistration is not an object")
+runner = load_module("wrapper_conditioned_v19_runner", runner_path)
+v19 = runner.pair_v19
+require(Path(v19.__file__).resolve() == v19_contract_path.resolve(),
+        "runner loaded the v19 contract from another path")
+canonical = v19.contract.canonical_json_bytes
+digest = lambda record: hashlib.sha256(canonical(record)).hexdigest()
+require(data == canonical(value), "preregistration is not canonical JSON")
+require(hashlib.sha256(data).hexdigest() == expected_digest,
+        "preregistration digest differs")
+require(set(value) == {
+    "acquisition_generation", "artifact_execution", "attempt_contract",
+    "bridge", "build_preflight", "claim_ceiling",
+    "claim_ceiling_sha256", "host_authority",
+    "host_mutation_authorized", "live_acquisition_armed", "qualification",
+    "reporting", "resource_envelope", "schema", "stage_order",
+    "stop_rule", "success_terminal", "timing_performed",
+}, "preregistration has an unexpected key set")
+require(value["schema"] ==
+        "leopard2-v19-conditioned-main-wrapper-preregistration/v1" and
+        value["acquisition_generation"] == "passive-v3" and
+        value["live_acquisition_armed"] is False and
+        value["host_mutation_authorized"] is False and
+        value["timing_performed"] is False and
+        value["success_terminal"] == "NOT_PROMOTED",
+        "preregistration authority or terminal differs")
+require(runner.RAW_SCHEMA == runner.RAW_SCHEMA_V18 and
+        runner.MANIFEST_SCHEMA == runner.MANIFEST_SCHEMA_V18 and
+        runner.FAILURE_SCHEMA == runner.FAILURE_SCHEMA_V18 and
+        runner.FAILURE_EVIDENCE_CONTRACT ==
+        runner.FAILURE_EVIDENCE_CONTRACT_V18,
+        "dormant v19 changed an active runner alias")
+require(value["qualification"] == {
+    "policy_schema": "leopard2-pair-qualification-policy/v1",
+    "policy_sha256": digest(runner.v19_qualification_policy_record()),
+    "geometry_sha256": digest(v19.qualification_geometry_record()),
+    "window_count": v19.QUALIFICATION_WINDOW_COUNT,
+    "nominal_window_ns": v19.QUALIFICATION_NOMINAL_WINDOW_NS,
+    "domain_mode": "pair-only",
+    "selection_rule": "lowest-primary-unless-frozen/v1",
+    "nonidle_limit_jiffies": 0,
+}, "qualification preregistration differs from the pure contract")
+policy = runner.v19_qualification_policy_record()
+require(policy["candidate_primary_cpus"] == list(range(1, 64)) and
+        policy["excluded_pairs"] == [] and
+        policy["observation"]["nonidle_limit_jiffies"] == 0,
+        "candidate or exclusion policy differs")
+bridge = v19.bridge_geometry_record()
+require(value["bridge"] == {
+    "geometry_sha256": digest(bridge),
+    "minimum_window_count": v19.BRIDGE_WINDOW_COUNT,
+    "maximum_window_count": v19.BRIDGE_WINDOW_COUNT,
+    "nominal_window_ns": v19.BRIDGE_NOMINAL_WINDOW_NS,
+    "maximum_handoff_elapsed_ns": v19.MAXIMUM_HANDOFF_ELAPSED_NS,
+    "scan_tail_equals_bridge_head": True,
+    "bridge_tail_is_campaign_presample": True,
+    "canonical_lock_held": True,
+    "pair_lease_held": False,
+    "pair_lease_acquired_only_after_accepted_bridge": True,
+}, "bridge preregistration differs from the pure contract")
+lineage = v19.v18_failure_lineage_record()
+require(value["attempt_contract"] == {
+    "schema": v19.ATTEMPT_SCHEMA,
+    "attempt_budget": v19.ATTEMPT_BUDGET,
+    "attempt_one_selection": "fresh-lowest-qualified-primary",
+    "attempt_two_rule":
+        "freeze-selected-pair-no-fallback-or-one-fresh-retry-after-no-selection",
+    "failure_lineage_sha256": digest(lineage),
+    "exhausted_prior_generation": "passive-v2",
+}, "attempt preregistration differs from the pure contract")
+attempt_one = v19.pair_qualified_attempt_record(attempt=1)
+require(attempt_one == {
+    "schema": v19.ATTEMPT_SCHEMA,
+    "attempt": 1,
+    "attempt_budget": 2,
+    "frozen_pair_from_prior_attempt": None,
+    "prior_attempt_failure_sha256": None,
+    "prior_attempt_acquisition_sha256": None,
+    "prior_attempt_selection_status": None,
+    "prior_attempt_selected_pair": None,
+    "fresh_selection_permitted": True,
+    "selection_rule": "lowest-primary-unless-frozen/v1",
+    "frozen_pair_rule": "require-frozen-when-present-no-fallback/v1",
+}, "attempt-one authority differs")
+attempt_two_frozen = v19.pair_qualified_attempt_record(
+    attempt=2, prior_attempt_failure_sha256="a" * 64,
+    prior_attempt_acquisition_sha256="b" * 64,
+    prior_attempt_selection_status="selected-lowest-primary",
+    prior_attempt_selected_pair={"benchmark_cpu": 1, "reserved_sibling": 65})
+require(attempt_two_frozen["frozen_pair_from_prior_attempt"] ==
+        {"benchmark_cpu": 1, "reserved_sibling": 65} and
+        attempt_two_frozen["fresh_selection_permitted"] is False and
+        v19.validate_pair_qualified_attempt(attempt_two_frozen) ==
+        attempt_two_frozen, "attempt-two frozen-pair authority differs")
+attempt_two_fresh = v19.pair_qualified_attempt_record(
+    attempt=2, prior_attempt_failure_sha256="c" * 64,
+    prior_attempt_acquisition_sha256="d" * 64,
+    prior_attempt_selection_status="no-candidate-pair-qualified")
+require(attempt_two_fresh["frozen_pair_from_prior_attempt"] is None and
+        attempt_two_fresh["fresh_selection_permitted"] is True and
+        v19.validate_pair_qualified_attempt(attempt_two_fresh) ==
+        attempt_two_fresh, "attempt-two fresh-retry authority differs")
+attempt_two_not_acquired = v19.pair_qualified_attempt_record(
+    attempt=2, prior_attempt_failure_sha256="e" * 64,
+    prior_attempt_selection_status="not-acquired")
+require(attempt_two_not_acquired["prior_attempt_acquisition_sha256"] is None and
+        attempt_two_not_acquired["fresh_selection_permitted"] is True and
+        v19.validate_pair_qualified_attempt(attempt_two_not_acquired) ==
+        attempt_two_not_acquired, "attempt-two not-acquired authority differs")
+bad_budget = dict(attempt_one)
+bad_budget["attempt_budget"] = 3
+require_rejected(lambda: v19.validate_pair_qualified_attempt(bad_budget),
+                 "attempt validator accepted a changed budget")
+require_rejected(
+    lambda: v19.pair_qualified_attempt_record(
+        attempt=2, prior_attempt_failure_sha256="z" * 64,
+        prior_attempt_selection_status="not-acquired"),
+    "attempt validator accepted a malformed prior failure hash")
+require_rejected(
+    lambda: v19.pair_qualified_attempt_record(
+        attempt=2, prior_attempt_failure_sha256="f" * 64,
+        prior_attempt_acquisition_sha256="0" * 64,
+        prior_attempt_selection_status="selected-lowest-primary"),
+    "attempt validator accepted a selected status without a frozen pair")
+require_rejected(
+    lambda: v19.pair_qualified_attempt_record(
+        attempt=2, prior_attempt_failure_sha256="1" * 64,
+        prior_attempt_acquisition_sha256="2" * 64,
+        prior_attempt_selection_status="no-candidate-pair-qualified",
+        prior_attempt_selected_pair={
+            "benchmark_cpu": 1, "reserved_sibling": 65}),
+    "attempt validator accepted fallback after a selected pair")
+require(lineage == {
+    "schema": "leopard2-main-compare-v18-failure-lineage/v1",
+    "source_commit": "c8f825d0a033d31d220b0ebce9cc8871e8c2fc6d",
+    "source_tree": "2c17a0a7bcea20274d2593cb204442c4c817e464",
+    "attempts": [
+        {"attempt": 1,
+         "envelope": ".research/leopard-79h/c8f825d-v18-passive-main-a1",
+         "envelope_sha256sums_sha256":
+             "ce65c3a49ef1c1d89ba51ea03d0af4742d6790e6f2ea2662917d9ef9a9d945d7"},
+        {"attempt": 2,
+         "envelope": ".research/leopard-79h/c8f825d-v18-passive-main-a2",
+         "envelope_sha256sums_sha256":
+             "a1bf0eda157c251f33f7260ebd76931d88054d460bd07a97bcba2811384b2c10"},
+        {"attempt": 3,
+         "envelope": ".research/leopard-79h/c8f825d-v18-passive-main-a3",
+         "envelope_sha256sums_sha256":
+             "fe5b40cc98753cbd794ee019cb0e2643d0ccee0aca4c5fd7b2e0b27df8a86139"},
+    ],
+}, "exhausted v18 failure lineage differs")
+claim_ceiling = {
+    "promotion_eligible": False,
+    "host_exclusivity_proved": False,
+    "whole_campaign_interval_observed": False,
+    "causal_performance_claim_allowed": False,
+}
+require(value["claim_ceiling"] == claim_ceiling and
+        value["claim_ceiling_sha256"] == digest(claim_ceiling),
+        "claim ceiling differs")
+require(value["host_authority"] == {
+    "hostname": "ripper",
+    "cpu_model": "AMD Threadripper PRO 9985WX",
+    "eligible_hosts": ["ripper"],
+    "no_fallback": True,
+    "no_swap_required": True,
+    "foreign_process_mutation_authorized": False,
+    "logical_cpu_count": 128,
+    "physical_core_count": 64,
+    "numa_node_count": 1,
+    "l3_domain_count": 8,
+    "housekeeping_pair": {"benchmark_cpu": 0, "reserved_sibling": 64},
+    "candidate_primary_cpus": list(range(1, 64)),
+    "sibling_offset": 64,
+}, "ripper host authority differs")
+require(value["resource_envelope"] == {
+    "memory_max_bytes": 536870912,
+    "memory_swap_max_bytes": 0,
+    "release_authorized_max_jobs": 2,
+    "release_max_jobs": 1,
+    "release_max_jobs_basis": "retained-preflight-proven-cap",
+    "sanitizer_max_jobs": 1,
+    "maximum_substantial_processes": 1,
+}, "resource envelope differs")
+require(value["build_preflight"] == {
+    "retained_lane":
+        ".research/leopard-79h/cf7a705-v19-build-preflight-ripper-a3",
+    "source_commit": "cf7a7056e0bd7f54b8da436a39cae857beab10c1",
+    "source_tree": "499697b4ee71ce7b2a12831f7d72d0e423cd0806",
+    "baseline_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "baseline_tree": "b7c8830d96a978f6ec14fe747095f066e351ae72",
+    "outer_sha256sums_sha256":
+        "1df9404c4424628e63492ade557d6f61ac06884b9a36932dd69b884aec1c02d7",
+    "provenance_record_sha256":
+        "8626d0bcb22b0448abbefd14e09573ca86bdb05d3b169c829862ffa5ccfd11fb",
+    "build_type": "Release",
+    "build_system": "Unix Makefiles",
+    "compiler": "GNU c++ 13.3.0",
+    "parallelism": 1,
+    "execution_scope": "systemd-user-service",
+    "memory_max_bytes": 536870912,
+    "memory_swap_max_bytes": 0,
+    "limit_nofile": 65536,
+    "zero_proc_swaps_rows": True,
+    "observed_memory_peak_bytes": 391512064,
+    "memory_events": {"max": 0, "oom": 0, "oom_kill": 0},
+    "candidate_binary_sha256":
+        "85556059be75f98665464084a192db4f6284b0e90ec285d2791eee785f9458ab",
+    "candidate_archive_sha256":
+        "0c013cee36866f1b64e75cb8b1124732be699720f68d5e7011750c939c54d881",
+    "baseline_binary_sha256":
+        "bb011abbabe74e1a581b77593916be1d9f0a1b1bf586eed6ef927a473cc9edf8",
+    "baseline_archive_sha256":
+        "9e006068fbdd72e318ba854688d614183e949c3fd36ff1192b1f490e7ca47260",
+    "first_replay_artifacts_byte_identical": True,
+    "builds_succeeded": True,
+    "provenance_validation_passed": True,
+    "benchmark_executable_executed": False,
+    "qualification_scan_performed": False,
+    "candidate_workload_executed": False,
+    "v19_attempt_consumed": False,
+    "foreign_process_mutation_performed": False,
+    "timing_performed": False,
+}, "build-only preflight binding differs")
+require(value["artifact_execution"]["canonical_lock"] ==
+        "/tmp/leopard-gf8-authoritative.lock" and
+        value["artifact_execution"]["execute_from_mutable_build_directory"]
+        is False and
+        all(value["artifact_execution"][name] is True for name in (
+            "lock_begins_before_qualification",
+            "lock_held_through_terminal_sealing",
+            "lane_owned_immutable_executables", "source_identity_bound",
+            "sha256_verified_before_future_timing",
+            "sha256_verified_after_future_timing")),
+        "lock or immutable artifact contract differs")
+require(value["stage_order"] == [
+    "acquire-canonical-lock", "freeze-identities-build-test-and-seal",
+    "qualify-pair-12x7s", "bridge-2x1s",
+    "independently-verify-selected-pair",
+    "acquire-dynamic-pair-lease-and-reservation",
+    "narrow-controller-away-from-selected-pair", "capture-pre-census",
+    "start-first-window-within-5s-of-bridge-tail",
+], "stage ordering differs")
+require(value["stop_rule"] == {
+    "maximum_v19_attempts": 2,
+    "thresholds_or_policy_may_be_retuned": False,
+    "successor_requires_new_preregistration": True,
+    "successor_requires_dedicated_or_os_exclusive_environment": True,
+}, "stop rule differs")
+PY
+        require_empty_output /usr/bin/python3 -I -S -B "$validator_path" \
+            "$preregistration_path" \
+            "$conditioned_v19_preregistration_sha256" "$repo" \
+            "$relative_runner" "$relative_pair_v19_contract" || return 1
+        require_empty_output /usr/bin/python3 -O -I -S -B "$validator_path" \
+            "$preregistration_path" \
+            "$conditioned_v19_preregistration_sha256" "$repo" \
+            "$relative_runner" "$relative_pair_v19_contract" || return 1
+    ) || return 1
+    /usr/bin/printf \
+        'v19 conditioned wrapper preregistration self-test passed\n'
 }
 
 passive_contract_self_test()
@@ -5729,7 +6287,22 @@ verify_envelope()
 
 if [[ $# -eq 1 && $1 == --self-test-passive-contract ]]; then
     test "$passive_mode" = false
+    test "$conditioned_v19_mode" = false
     passive_contract_self_test
+    exit 0
+fi
+
+if [[ $# -eq 1 && $1 == --print-conditioned-v19-preregistration ]]; then
+    test "$passive_mode" = false
+    test "$conditioned_v19_mode" = false
+    conditioned_v19_preregistration_record
+    exit 0
+fi
+
+if [[ $# -eq 1 && $1 == --self-test-conditioned-v19-contract ]]; then
+    test "$passive_mode" = false
+    test "$conditioned_v19_mode" = false
+    conditioned_v19_contract_self_test
     exit 0
 fi
 
@@ -5738,6 +6311,7 @@ if [[ $# -eq 4 && $1 == --verify-v18-complete-core-semantics &&
       $3 == /tmp/leopard-v18-complete-core-replay.*/NOT_PROMOTED.json &&
       $4 == /tmp/leopard-v18-complete-core-replay.*/postseal-audit.json ]]; then
     test "$passive_mode" = false
+    test "$conditioned_v19_mode" = false
     verify_v18_complete_core_claim_bindings_preflight "$2/core"
     verify_envelope "$2" "$3" "$4"
     exit 0
@@ -5750,16 +6324,45 @@ if [[ $# -eq 2 && $1 == --verify && $2 == /* ]]; then
             --passive-shared-host >&2
         exit 2
     fi
+    if [[ "$conditioned_v19_mode" == true ]]; then
+        /usr/bin/printf \
+            '%s cannot be combined with --verify; generation comes from the sealed envelope\n' \
+            --conditioned-passive-v19 >&2
+        exit 2
+    fi
     verify_envelope "$2"
     exit 0
 fi
 
 if [[ $# -ne 1 || $1 != /* ]]; then
+    /usr/bin/printf 'usage: %s --conditioned-passive-v19 --attempt N --attempt-budget 2 /absolute/repository/.research/envelope\n' \
+        "$0" >&2
     /usr/bin/printf 'usage: %s --passive-shared-host --attempt N --attempt-budget 3 /absolute/repository/.research/envelope\n' \
         "$0" >&2
     /usr/bin/printf '       %s --verify /absolute/repository/.research/envelope\n' \
         "$0" >&2
     /usr/bin/printf '       %s --self-test-passive-contract\n' "$0" >&2
+    /usr/bin/printf \
+        '       %s --self-test-conditioned-v19-contract\n' "$0" >&2
+    /usr/bin/printf \
+        '       %s --print-conditioned-v19-preregistration\n' "$0" >&2
+    exit 2
+fi
+if [[ "$conditioned_v19_mode" == true ]]; then
+    if ! validate_conditioned_v19_attempt_contract \
+            "$attempt" "$attempt_budget"; then
+        /usr/bin/printf \
+            'conditioned v19 acquisition requires --attempt N (1..2) and --attempt-budget 2\n' >&2
+        exit 2
+    fi
+    if [[ "$(conditioned_v19_preregistration_digest)" != \
+          "$conditioned_v19_preregistration_sha256" ]]; then
+        /usr/bin/printf \
+            'conditioned v19 wrapper preregistration fixed point differs\n' >&2
+        exit 2
+    fi
+    /usr/bin/printf \
+        'conditioned v19 authoritative acquisition is NOT ARMED at this preregistration commit; no scan, lane, or workload was created\n' >&2
     exit 2
 fi
 if [[ "$passive_mode" != true ]]; then
@@ -5772,6 +6375,9 @@ if ! validate_attempt_contract "$attempt" "$attempt_budget"; then
         'passive v18 acquisition requires --attempt N (1..3) and --attempt-budget 3\n' >&2
     exit 2
 fi
+/usr/bin/printf \
+    'fresh passive-v2 v18 acquisition is disabled because its three-attempt budget is exhausted; retained v18 envelopes remain verifiable\n' >&2
+exit 2
 envelope=$1
 case "$envelope" in
     "$repo"/.research/*) ;;
