@@ -123,6 +123,18 @@ def common_sources(core: Path) -> None:
         copy_source(ROOT / source_path, core / lane_path, 0o600)
 
 
+def trusted_source_snapshot(destination: Path) -> Path:
+    destination.mkdir(mode=0o700)
+    for _core_name, relative in replay.TRUSTED_SOURCE_BINDINGS:
+        copy_source(ROOT / relative, destination / relative, 0o400)
+    for path in sorted(
+            (item for item in destination.rglob("*") if item.is_dir()),
+            reverse=True):
+        path.chmod(0o500)
+    destination.chmod(0o500)
+    return destination
+
+
 def wrapper_records(core: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     preregistration_data = command_output(
         str(WRAPPER), "--print-conditioned-v19-preregistration")
@@ -298,7 +310,9 @@ def seal(envelope: Path) -> None:
         outer_paths.append("postseal-audit.json")
     outer_paths.append("core/SHA256SUMS")
     write_bytes(envelope / "SHA256SUMS", checksum_lines(envelope, outer_paths))
-    write_json(envelope / "TREE-METADATA.json", tree_metadata(envelope))
+    write_bytes(
+        envelope / "TREE-METADATA.json",
+        replay.canonical_json_bytes(tree_metadata(envelope), ensure_ascii=True))
     with (envelope / "SHA256SUMS").open("ab") as stream:
         stream.write(
             f"{sha256(envelope / 'TREE-METADATA.json')}  "
@@ -380,6 +394,7 @@ def build_failure(
     prior_attempts: list[dict[str, Any]] | None = None,
     campaign_exit_status: int = 1,
     selected_with_streams: bool = False,
+    null_identity: bool = False,
 ) -> Path:
     if authority is None:
         prior_envelope = envelope_path(envelope.parent, 1)
@@ -438,6 +453,11 @@ def build_failure(
     else:
         failure = fixture_module.synthetic_unselected_v19_failure(
             acquired=False)
+    if null_identity:
+        if selected_with_streams:
+            raise ValueError("a selected synthetic failure cannot lack identity")
+        failure["identities_initial"] = None
+        failure["executable_snapshots"] = None
     failure["pair_qualification"]["attempt"] = copy.deepcopy(authority)
     failure = fixture_module.resign(failure)
     write_json(campaign / "failure.json", failure)
@@ -460,6 +480,23 @@ def run_wrapper(envelope: Path) -> subprocess.CompletedProcess[str]:
          str(envelope)],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, check=False, text=True, timeout=120)
+
+
+def run_replay(
+    envelope: Path, trusted_source: Path, *,
+    require_preflight_identity: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    optimization = ["-O"] if not __debug__ else []
+    arguments = [
+        "/usr/bin/python3", "-I", "-S", "-B", *optimization,
+        str(REPLAY_PATH), "--envelope", str(envelope),
+        "--trusted-source-root", str(trusted_source),
+    ]
+    if require_preflight_identity:
+        arguments.append("--require-preflight-identity")
+    return subprocess.run(
+        arguments, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, check=False, text=True, timeout=180)
 
 
 def mutate_reseal(envelope: Path, mutation: Callable[[Path], None]) -> None:
@@ -614,6 +651,26 @@ class V19WrapperReplayTests(unittest.TestCase):
                 value["campaign_exit_status"] = False
                 replace_json(path, value)
 
+        def attempt_type(envelope: Path) -> None:
+            for path in (envelope / "core/manifest.json",
+                         envelope / "NOT_PROMOTED.json"):
+                value = json.loads(path.read_bytes())
+                value["attempt"] = 1.0
+                replace_json(path, value)
+
+        def attempt_budget_type(envelope: Path) -> None:
+            lineage_path = envelope / "core/attempt-lineage.json"
+            lineage_record = json.loads(lineage_path.read_bytes())
+            lineage_record["attempt_budget"] = 2.0
+            replace_json(lineage_path, lineage_record)
+            lineage_hash = sha256(lineage_path)
+            for path in (envelope / "core/manifest.json",
+                         envelope / "NOT_PROMOTED.json"):
+                value = json.loads(path.read_bytes())
+                value["attempt_budget"] = 2.0
+                value["attempt_lineage_sha256"] = lineage_hash
+                replace_json(path, value)
+
         def extra_campaign_directory(envelope: Path) -> None:
             (envelope / "core/campaign/unbound-empty").mkdir(mode=0o700)
 
@@ -666,6 +723,8 @@ class V19WrapperReplayTests(unittest.TestCase):
             ("terminal", terminal),
             ("hash", hash_binding),
             ("exit-status-type", exit_status_type),
+            ("attempt-type", attempt_type),
+            ("attempt-budget-type", attempt_budget_type),
             ("extra-campaign-directory", extra_campaign_directory),
             ("extra-campaign-file", extra_campaign_file),
             ("candidate-source-cross-splice", candidate_source_cross_splice),
@@ -845,6 +904,74 @@ class V19WrapperReplayTests(unittest.TestCase):
             self.assertNotEqual(completed.returncode, 0)
             self.assertEqual(completed.stdout, "")
 
+    def test_recursive_preflight_requirement_and_core_types_are_closed(
+            self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leopard-v19-wrapper-replay.") as temporary:
+            root = Path(temporary)
+            trusted_source = trusted_source_snapshot(root / "trusted-source")
+            prior = build_failure(
+                envelope_path(root, 1),
+                authority=census.v19_attempt_record(attempt=1),
+                prior_attempts=[], null_identity=True)
+            prior_terminal = prior / "FAILED.json"
+            prior_attempts = [{
+                "attempt": 1,
+                "envelope": str(prior),
+                "terminal": "FAILED.json",
+                "terminal_schema": replay.FAILURE_TERMINAL_SCHEMA,
+                "envelope_sha256sums_sha256": sha256(prior / "SHA256SUMS"),
+                "terminal_sha256": sha256(prior_terminal),
+            }]
+            envelope = build_failure(
+                envelope_path(root, 2),
+                authority=attempt_two_not_acquired(sha256(prior_terminal)),
+                prior_attempts=prior_attempts, null_identity=True)
+            completed = run_replay(
+                envelope, trusted_source, require_preflight_identity=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(json.loads(completed.stdout)["status"], "failed")
+
+        with tempfile.TemporaryDirectory(
+                prefix="leopard-v19-wrapper-replay.") as temporary:
+            root = Path(temporary)
+            trusted_source = trusted_source_snapshot(root / "trusted-source")
+            prior = build_failure(
+                envelope_path(root, 1),
+                authority=census.v19_attempt_record(attempt=1),
+                prior_attempts=[])
+            prior_terminal = prior / "FAILED.json"
+            prior_attempts = [{
+                "attempt": 1,
+                "envelope": str(prior),
+                "terminal": "FAILED.json",
+                "terminal_schema": replay.FAILURE_TERMINAL_SCHEMA,
+                "envelope_sha256sums_sha256": sha256(prior / "SHA256SUMS"),
+                "terminal_sha256": sha256(prior_terminal),
+            }]
+            envelope = build_failure(
+                envelope_path(root, 2),
+                authority=attempt_two_not_acquired(sha256(prior_terminal)),
+                prior_attempts=prior_attempts, null_identity=True)
+            completed = run_replay(
+                envelope, trusted_source, require_preflight_identity=True)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("preflight identity differs", completed.stderr)
+
+        with tempfile.TemporaryDirectory(
+                prefix="leopard-v19-wrapper-replay.") as temporary:
+            root = Path(temporary)
+            trusted_source = trusted_source_snapshot(root / "trusted-source")
+            envelope = build_success(envelope_path(root, 1))
+            unseal(envelope)
+            mistyped = envelope / "core/run-authoritative.sh"
+            mistyped.unlink()
+            mistyped.mkdir(mode=0o700)
+            seal(envelope)
+            completed = run_replay(envelope, trusted_source)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("core entry type differs", completed.stderr)
+
     def test_conditioned_failure_paths_dominate_legacy_emitters(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")
         for function_name in ("failure_record", "postseal_failure_record"):
@@ -988,6 +1115,31 @@ class V19WrapperReplayTests(unittest.TestCase):
         with self.assertRaises(replay.ReplayError):
             replay.validate_failure_preflight_identity(
                 failure, preregistration)
+
+        null_identity_failure = {
+            "executable_snapshots": None,
+            "identities_initial": None,
+            "invocations": [],
+            "pair_qualification": {
+                "acquisition": None,
+                "acquisition_sha256": None,
+                "bridge": None,
+                "bridge_sha256": None,
+                "first_window_handoff": None,
+                "record_status": "failed",
+                "selected_pair": None,
+                "selection_status": None,
+                "stage": "identity",
+                "terminal": "identity-failed",
+            },
+        }
+        replay.validate_failure_preflight_identity(
+            null_identity_failure, preregistration)
+        null_identity_failure["pair_qualification"]["stage"] = "acquired"
+        with self.assertRaisesRegex(
+                replay.ReplayError, "escaped the identity-stage prefix"):
+            replay.validate_failure_preflight_identity(
+                null_identity_failure, preregistration)
 
 
 if __name__ == "__main__":

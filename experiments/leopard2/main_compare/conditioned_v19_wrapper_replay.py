@@ -219,10 +219,11 @@ def exact_json_equal(left: Any, right: Any) -> bool:
     return left == right
 
 
-def canonical_json_bytes(value: Any) -> bytes:
+def canonical_json_bytes(value: Any, *, ensure_ascii: bool = False) -> bytes:
     return (json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) +
-        "\n").encode("utf-8")
+        value, ensure_ascii=ensure_ascii, sort_keys=True,
+        separators=(",", ":")) + "\n").encode(
+            "ascii" if ensure_ascii else "utf-8")
 
 
 def unique_object(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
@@ -278,14 +279,16 @@ def read_bytes(path: Path, *, maximum: int = 256 << 20) -> bytes:
         os.close(descriptor)
 
 
-def load_json(path: Path, *, canonical: bool = True) -> dict[str, Any]:
+def load_json(
+    path: Path, *, canonical: bool = True, ensure_ascii: bool = False,
+) -> dict[str, Any]:
     data = read_bytes(path)
     value = json.loads(
         data.decode("utf-8"), object_pairs_hook=unique_object,
         parse_constant=lambda token: fail(f"non-finite JSON value: {token}"))
     require(type(value) is dict, f"retained JSON is not an object: {path}")
     if canonical:
-        require(data == canonical_json_bytes(value),
+        require(data == canonical_json_bytes(value, ensure_ascii=ensure_ascii),
                 f"retained JSON is not canonical: {path}")
     return value
 
@@ -353,7 +356,10 @@ def verify_tree_safety(root: Path) -> None:
 
 
 def verify_tree_metadata_manifest(root: Path) -> None:
-    document = load_json(root / "TREE-METADATA.json")
+    # The shared v18/v19 tree-metadata producer deliberately uses canonical
+    # ASCII JSON so arbitrary path bytes represented by Unicode code points
+    # remain portable across the shell and retained Python verifiers.
+    document = load_json(root / "TREE-METADATA.json", ensure_ascii=True)
     require(set(document) == {
                 "entries", "excluded_paths", "final_mode_policy", "root",
                 "schema", "self_policy", "uid_gid_policy"} and
@@ -490,6 +496,7 @@ def validate_attempt_lineage(
     terminal: dict[str, Any], envelope: Path, authority_envelope: Path,
     core: Path,
     require_trusted_source_match: bool,
+    require_preflight_identity: bool,
 ) -> dict[str, Any]:
     require(set(lineage) == LINEAGE_KEYS and
             lineage["schema"] == ATTEMPT_LINEAGE_SCHEMA and
@@ -497,6 +504,7 @@ def validate_attempt_lineage(
             "v19 attempt lineage identity differs")
     attempt_number = lineage["attempt"]
     require(type(attempt_number) is int and 1 <= attempt_number <= 2 and
+            type(lineage["attempt_budget"]) is int and
             lineage["attempt_budget"] == 2,
             "v19 attempt lineage budget differs")
     hex40(lineage["source_commit"], "lineage source commit")
@@ -554,6 +562,7 @@ def validate_attempt_lineage(
         prior_result = verify_envelope(
             retained_envelope, trusted_source_root,
             require_trusted_source_match=require_trusted_source_match,
+            require_preflight_identity=require_preflight_identity,
             authority_envelope=expected_envelope)
         require(prior_result["attempt"] == index and
                 prior_result["status"] == "failed" and
@@ -749,7 +758,26 @@ def validate_failure_preflight_identity(
 ) -> None:
     initial = failure.get("identities_initial")
     invocations = failure.get("invocations")
-    require(type(initial) is dict and type(invocations) is list,
+    require(type(invocations) is list,
+            "v19 failure lacks its preflight identity boundary")
+    if initial is None:
+        qualification = failure.get("pair_qualification")
+        require(type(qualification) is dict and
+                qualification.get("stage") == "identity" and
+                qualification.get("record_status") == "failed" and
+                qualification.get("terminal") == "identity-failed" and
+                qualification.get("acquisition") is None and
+                qualification.get("acquisition_sha256") is None and
+                qualification.get("bridge") is None and
+                qualification.get("bridge_sha256") is None and
+                qualification.get("first_window_handoff") is None and
+                qualification.get("selected_pair") is None and
+                qualification.get("selection_status") is None and
+                invocations == [] and
+                failure.get("executable_snapshots") is None,
+                "v19 null preflight identity escaped the identity-stage prefix")
+        return
+    require(type(initial) is dict,
             "v19 failure lacks its preflight identity boundary")
     # A failure has no final campaign manifest/identity.  Reuse the exact
     # success identity validator with the retained initial identity as both
@@ -765,6 +793,7 @@ def validate_common_records(
     envelope: Path, terminal_path: Path, *, success: bool,
     trusted_source_root: Path, authority_envelope: Path,
     require_trusted_source_match: bool,
+    require_preflight_identity: bool,
 ) -> tuple[
     Path, dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]
 ]:
@@ -778,6 +807,14 @@ def validate_common_records(
         FAILURE_CORE_ENTRIES
     require(set(path.name for path in core.iterdir()) == expected_core_entries,
             "sealed v19 core file set differs")
+    for entry_name in expected_core_entries:
+        metadata = (core / entry_name).lstat()
+        if entry_name == "campaign":
+            valid_type = stat.S_ISDIR(metadata.st_mode)
+        else:
+            valid_type = stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1
+        require(valid_type,
+                f"sealed v19 core entry type differs: {entry_name}")
     core_checksum_paths = regular_files(
         core, omit=frozenset(("SHA256SUMS",)))
     verify_checksum_file(
@@ -814,7 +851,13 @@ def validate_common_records(
             manifest["acquisition_generation"] == GENERATION and
             terminal["evidence_class"] == EVIDENCE_CLASS and
             manifest["evidence_class"] == EVIDENCE_CLASS and
+            type(terminal["attempt"]) is int and
+            1 <= terminal["attempt"] <= 2 and
+            type(manifest["attempt"]) is int and
+            1 <= manifest["attempt"] <= 2 and
+            type(terminal["attempt_budget"]) is int and
             terminal["attempt_budget"] == 2 and
+            type(manifest["attempt_budget"]) is int and
             manifest["attempt_budget"] == 2 and
             terminal["attempt"] == manifest["attempt"] and
             terminal["attempt_lineage_sha256"] ==
@@ -872,7 +915,8 @@ def validate_common_records(
     authority = validate_attempt_lineage(
         lineage, trusted_source_root=trusted_source_root, terminal=terminal,
         envelope=envelope, authority_envelope=authority_envelope, core=core,
-        require_trusted_source_match=require_trusted_source_match)
+        require_trusted_source_match=require_trusted_source_match,
+        require_preflight_identity=require_preflight_identity)
     require(lineage["source_commit"] == manifest["source_commit"] and
             lineage["source_tree"] == manifest["source_tree"] and
             lineage["controller_source_commit"] ==
@@ -1314,7 +1358,8 @@ def verify_envelope(
         envelope, terminal_path, success=success,
         trusted_source_root=trusted_source_root,
         authority_envelope=authority_envelope,
-        require_trusted_source_match=require_trusted_source_match)
+        require_trusted_source_match=require_trusted_source_match,
+        require_preflight_identity=require_preflight_identity)
     if success:
         return validate_success(
             envelope, core, terminal, manifest, lineage, authority,
