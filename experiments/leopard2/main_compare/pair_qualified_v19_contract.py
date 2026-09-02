@@ -118,6 +118,11 @@ RECORD_KEYS = frozenset((
     "candidate_timing_performed",
 ))
 
+# The v18 ancestry is content-addressed historical authority, not a live-path
+# dependency.  Its three envelope paths are disclosure labels bound to the
+# exact retained SHA256SUMS digests below.  Separate v18 compatibility gates
+# replay the sealed copies; v19 replay intentionally remains possible if the
+# archival paths are offline after those bytes have been pinned.
 _V18_SOURCE_COMMIT = "c8f825d0a033d31d220b0ebce9cc8871e8c2fc6d"
 _V18_SOURCE_TREE = "2c17a0a7bcea20274d2593cb204442c4c817e464"
 _V18_FAILURES = (

@@ -114,6 +114,7 @@ relative_pair_qualification_bridge_contract=experiments/leopard2/main_compare/pa
 relative_pair_qualification_bridge_acquire=experiments/leopard2/main_compare/pair_qualification_bridge_acquire.py
 relative_pair_qualification_verify=experiments/leopard2/main_compare/pair_qualification_verify.py
 relative_pair_v19_contract=experiments/leopard2/main_compare/pair_qualified_v19_contract.py
+relative_conditioned_v19_replay=experiments/leopard2/main_compare/conditioned_v19_wrapper_replay.py
 conditioned_v19_controller_bindings=(
     "pair_qualification_acquire.py:$relative_pair_qualification_acquire"
     "pair_qualification_bridge_acquire.py:$relative_pair_qualification_bridge_acquire"
@@ -330,6 +331,260 @@ conditioned_v19_preregistration_digest()
 {
     conditioned_v19_preregistration_record | \
         /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1
+}
+
+conditioned_v19_record()
+{
+    local record_kind=$1
+    local record_envelope=$2
+    local record_request=${3:-}
+    /usr/bin/python3 -I -S -B - \
+        "$record_kind" "$record_envelope" "$record_request" <<'PY'
+import copy
+import hashlib
+import json
+import os
+import re
+import sys
+
+kind, envelope, request_path = sys.argv[1:]
+envelope = os.path.abspath(envelope)
+core = os.path.join(envelope, "core")
+hex40 = re.compile(r"^[0-9a-f]{40}$")
+hex64 = re.compile(r"^[0-9a-f]{64}$")
+generation = "passive-v3"
+evidence_class = \
+    "conditioned-passive-windowed-shared-host-observation/v1"
+preregistration_expected = \
+    "27c1b7d76a0ecdbe194d6e6b62c01e48b1c7d10fc8ef99ebad4d76238669f0c1"
+failure_lineage_expected = \
+    "0743214bb7b3a37dff7c00a4f1d302ec300c903c153477c3d57c5a0d10a2780c"
+claim = {
+    "promotion_eligible": False,
+    "host_exclusivity_proved": False,
+    "whole_campaign_interval_observed": False,
+    "causal_performance_claim_allowed": False,
+}
+
+def strict_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise SystemExit("duplicate JSON key in v19 producer input")
+        result[key] = value
+    return result
+
+def load(path):
+    with open(path, "rb") as stream:
+        raw = stream.read()
+    value = json.loads(raw.decode("utf-8"), object_pairs_hook=strict_object)
+    canonical = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8") + b"\n"
+    if type(value) is not dict or raw != canonical:
+        raise SystemExit("non-canonical v19 producer input: " + path)
+    return value
+
+def digest(path):
+    value = hashlib.sha256()
+    with open(path, "rb") as stream:
+        while True:
+            block = stream.read(1 << 20)
+            if not block:
+                break
+            value.update(block)
+    return value.hexdigest()
+
+def require(condition, message):
+    if not condition:
+        raise SystemExit(message)
+
+def qualification_record():
+    raw_path = os.path.join(core, "campaign", "raw.json")
+    failure_path = os.path.join(core, "campaign", "failure.json")
+    require(os.path.isfile(raw_path) != os.path.isfile(failure_path),
+            "v19 producer needs exactly one campaign record")
+    record = load(raw_path if os.path.isfile(raw_path) else failure_path)
+    qualification = record.get("pair_qualification")
+    require(type(qualification) is dict,
+            "v19 producer campaign lacks pair qualification")
+    return record, qualification
+
+preregistration_path = os.path.join(
+    core, "conditioned-v19-preregistration.json")
+closure_path = os.path.join(
+    core, "conditioned-v19-controller-closure.json")
+preregistration = load(preregistration_path)
+preregistration_sha256 = digest(preregistration_path)
+closure_sha256 = digest(closure_path)
+require(preregistration_sha256 == preregistration_expected,
+        "v19 producer preregistration differs")
+resource_envelope = preregistration.get("resource_envelope")
+require(type(resource_envelope) is dict,
+        "v19 producer resource envelope differs")
+failure_exit_status = None
+if kind in ("failed-core", "failure-terminal"):
+    failure_request = load(request_path)
+    require(set(failure_request) == {"campaign_exit_status"} and
+            type(failure_request["campaign_exit_status"]) is int and
+            1 <= failure_request["campaign_exit_status"] <= 255,
+            "v19 failure producer exit status differs")
+    failure_exit_status = failure_request["campaign_exit_status"]
+
+if kind == "lineage":
+    request = load(request_path)
+    require(set(request) == {
+                "controller_source_commit", "controller_source_tree",
+                "external_attempt", "prior_attempts"},
+            "v19 lineage producer request differs")
+    require(type(request["controller_source_commit"]) is str and
+            hex40.fullmatch(request["controller_source_commit"]) is not None and
+            type(request["controller_source_tree"]) is str and
+            hex40.fullmatch(request["controller_source_tree"]) is not None and
+            type(request["external_attempt"]) is dict and
+            type(request["prior_attempts"]) is list,
+            "v19 lineage producer authority differs")
+    _campaign, qualification = qualification_record()
+    v18_sha256 = qualification.get("v18_failure_lineage_sha256")
+    require(v18_sha256 == failure_lineage_expected,
+            "v19 lineage producer v18 failure lineage differs")
+    attempt = request["external_attempt"].get("attempt")
+    budget = request["external_attempt"].get("attempt_budget")
+    require(type(attempt) is int and 1 <= attempt <= 2 and budget == 2 and
+            len(request["prior_attempts"]) == attempt - 1,
+            "v19 lineage producer attempt differs")
+    result = {
+        "schema": "leopard2-v19-gfni-main-conditioned-attempt-lineage/v1",
+        "acquisition_generation": generation,
+        "attempt": attempt,
+        "attempt_budget": 2,
+        "source_commit": preregistration["build_preflight"]["source_commit"],
+        "source_tree": preregistration["build_preflight"]["source_tree"],
+        "controller_source_commit": request["controller_source_commit"],
+        "controller_source_tree": request["controller_source_tree"],
+        "prior_attempts": copy.deepcopy(request["prior_attempts"]),
+        "external_attempt": copy.deepcopy(request["external_attempt"]),
+        "v18_failure_lineage_sha256": v18_sha256,
+        "preregistration_sha256": preregistration_sha256,
+        "controller_closure_sha256": closure_sha256,
+    }
+else:
+    lineage_path = os.path.join(core, "attempt-lineage.json")
+    lineage = load(lineage_path)
+    _campaign, qualification = qualification_record()
+    common = {
+        "acquisition_generation": generation,
+        "attempt": lineage["attempt"],
+        "attempt_budget": 2,
+        "attempt_lineage_sha256": digest(lineage_path),
+        "source_commit": lineage["source_commit"],
+        "source_tree": lineage["source_tree"],
+        "controller_source_commit": lineage["controller_source_commit"],
+        "controller_source_tree": lineage["controller_source_tree"],
+        "selected_pair": copy.deepcopy(qualification.get("selected_pair")),
+        "preregistration_sha256": preregistration_sha256,
+        "controller_closure_sha256": closure_sha256,
+        "shared_host_claim_ceiling": copy.deepcopy(claim),
+    }
+    if kind == "complete-core":
+        audit_sha256 = digest(os.path.join(core, "audit.json"))
+        postseal_sha256 = digest(os.path.join(envelope, "postseal-audit.json"))
+        require(audit_sha256 == postseal_sha256,
+                "v19 producer pre/postseal audit differs")
+        result = {
+            **common,
+            "schema": "leopard2-v19-gfni-main-conditioned-passive-core-manifest/v1",
+            "status": "complete",
+            "evidence_class": evidence_class,
+            "resource_envelope": copy.deepcopy(resource_envelope),
+            "promotion_eligible": False,
+            "promotion_passed": False,
+            "campaign_exit_status": 0,
+            "campaign_manifest_sha256": digest(
+                os.path.join(core, "campaign", "manifest.json")),
+            "campaign_raw_sha256": digest(
+                os.path.join(core, "campaign", "raw.json")),
+            "audit_sha256": audit_sha256,
+            "postseal_audit_sha256": postseal_sha256,
+            "controller_affinity_sha256": digest(
+                os.path.join(core, "controller-affinity.json")),
+            "environment_census_pre_sha256": digest(
+                os.path.join(core, "environment-census-pre.json")),
+            "environment_census_post_sha256": digest(
+                os.path.join(core, "environment-census-post.json")),
+            "passive_environment_policy_sha256": digest(
+                os.path.join(core, "passive-environment-policy.json")),
+            "pair_qualification_policy_sha256": digest(
+                os.path.join(core, "pair-qualification-policy.json")),
+            "pair_qualification_acquisition_sha256": digest(
+                os.path.join(core, "pair-qualification-acquisition.json")),
+            "pair_qualification_bridge_sha256": digest(
+                os.path.join(core, "pair-qualification-bridge.json")),
+            "pair_qualification_verdict_sha256": digest(
+                os.path.join(core, "pair-qualification-verdict.json")),
+            "independent_auditor_supervision_mode": "conditioned",
+            "active_affinity_supervisor_executed": False,
+        }
+    elif kind == "failed-core":
+        failure_path = os.path.join(core, "campaign", "failure.json")
+        result = {
+            **common,
+            "schema": "leopard2-v19-gfni-main-conditioned-passive-failed-core-manifest/v1",
+            "status": "failed",
+            "evidence_class": evidence_class,
+            "resource_envelope": copy.deepcopy(resource_envelope),
+            "promotion_eligible": False,
+            "promotion_passed": False,
+            "campaign_exit_status": failure_exit_status,
+            "campaign_failure_sha256": digest(failure_path),
+            "failure_verify_status": 0,
+            "failure_verified": True,
+            "pair_qualification_stage": qualification.get("stage"),
+            "pair_qualification_terminal": qualification.get("terminal"),
+        }
+    elif kind in ("success-terminal", "failure-terminal"):
+        manifest_path = os.path.join(core, "manifest.json")
+        manifest = load(manifest_path)
+        core_sums_path = os.path.join(core, "SHA256SUMS")
+        terminal_common = {
+            **common,
+            "status": "complete" if kind == "success-terminal" else "failed",
+            "evidence_class": evidence_class,
+            "promotion_eligible": False,
+            "promotion_passed": False,
+            "campaign_exit_status": (
+                0 if kind == "success-terminal" else failure_exit_status),
+            "core_manifest_sha256": digest(manifest_path),
+            "core_sha256sums_sha256": digest(core_sums_path),
+        }
+        if kind == "success-terminal":
+            require(manifest.get("status") == "complete" and
+                    qualification.get("terminal") == "NOT_PROMOTED",
+                    "v19 success terminal producer input differs")
+            result = {
+                **terminal_common,
+                "schema": "leopard2-v19-gfni-main-conditioned-passive-not-promoted-envelope/v1",
+                "pair_qualification_terminal": "NOT_PROMOTED",
+            }
+        else:
+            failure_path = os.path.join(core, "campaign", "failure.json")
+            require(manifest.get("status") == "failed" and
+                    manifest.get("campaign_exit_status") ==
+                        failure_exit_status,
+                    "v19 failed terminal producer input differs")
+            result = {
+                **terminal_common,
+                "schema": "leopard2-v19-gfni-main-conditioned-passive-failed-envelope/v1",
+                "pair_qualification_stage": qualification.get("stage"),
+                "pair_qualification_terminal": qualification.get("terminal"),
+                "failure_sha256": digest(failure_path),
+            }
+    else:
+        raise SystemExit("unknown conditioned v19 producer record")
+
+sys.stdout.write(json.dumps(
+    result, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+PY
 }
 
 conditioned_v19_controller_closure_record()
@@ -4698,6 +4953,1030 @@ copy_directory(source_root, destination_root)
 PY
 }
 
+snapshot_conditioned_v19_evidence()
+{
+    local source_envelope=$1
+    local destination_parent=$2
+    local source_commit=$3
+    local source_attempt=$4
+    /usr/bin/python3 -I -S -B - \
+        "$source_envelope" "$destination_parent" \
+        "$source_commit" "$source_attempt" <<'PY'
+import os
+import re
+import stat
+import sys
+
+source, destination_parent, source_commit, source_attempt_text = sys.argv[1:]
+hex40 = re.compile(r"^[0-9a-f]{40}$")
+
+def require(condition, message):
+    if not condition:
+        raise SystemExit(message)
+
+require(source == os.path.abspath(source) and
+        source == os.path.realpath(source),
+        "conditioned v19 snapshot source is not canonical")
+require(destination_parent == os.path.abspath(destination_parent) and
+        not os.path.lexists(destination_parent),
+        "conditioned v19 snapshot destination differs")
+require(hex40.fullmatch(source_commit) is not None and
+        source_attempt_text in ("1", "2"),
+        "conditioned v19 snapshot authority differs")
+source_attempt = int(source_attempt_text)
+source_parent = os.path.dirname(source)
+current_name = os.path.basename(source)
+require(current_name ==
+        f"{source_commit[:7]}-v19-conditioned-main-a{source_attempt}",
+        "conditioned v19 snapshot envelope name differs")
+required_names = [current_name]
+if source_attempt == 2:
+    required_names.append(
+        f"{source_commit[:7]}-v19-conditioned-main-a1")
+
+directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+file_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
+require(hasattr(os, "O_NOFOLLOW"),
+        "conditioned v19 snapshot requires O_NOFOLLOW")
+directory_flags |= os.O_NOFOLLOW
+file_flags |= os.O_NOFOLLOW
+stable_fields = (
+    "st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid",
+    "st_size", "st_mtime_ns", "st_ctime_ns",
+)
+held_nodes = []
+
+def same(left, right):
+    return all(getattr(left, field) == getattr(right, field)
+               for field in stable_fields)
+
+def safe_owner(metadata, *, directory):
+    require(metadata.st_uid == os.geteuid() and
+            metadata.st_gid == os.getegid() and
+            not stat.S_IMODE(metadata.st_mode) & 0o222,
+            "conditioned v19 snapshot source is not sealed and owner-only")
+    if directory:
+        require(stat.S_ISDIR(metadata.st_mode),
+                "conditioned v19 snapshot expected a directory")
+    else:
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1,
+                "conditioned v19 snapshot expected a single-link file")
+
+def hold_tree(parent_descriptor, name, descriptor, before, *, close):
+    safe_owner(before, directory=True)
+    names = sorted(os.listdir(descriptor), key=os.fsencode)
+    require(len(names) == len(set(names)),
+            "conditioned v19 snapshot directory has duplicate names")
+    held_nodes.append({
+        "before": before, "close": close, "descriptor": descriptor,
+        "directory": True, "name": name, "names": names,
+        "parent": parent_descriptor,
+    })
+    for child_name in names:
+        linked = os.stat(
+            child_name, dir_fd=descriptor, follow_symlinks=False)
+        if stat.S_ISDIR(linked.st_mode):
+            child = os.open(child_name, directory_flags, dir_fd=descriptor)
+            opened = os.fstat(child)
+            require(same(linked, opened),
+                    "conditioned v19 snapshot directory was replaced")
+            hold_tree(
+                descriptor, child_name, child, opened, close=True)
+        elif stat.S_ISREG(linked.st_mode):
+            safe_owner(linked, directory=False)
+            child = os.open(child_name, file_flags, dir_fd=descriptor)
+            opened = os.fstat(child)
+            require(same(linked, opened),
+                    "conditioned v19 snapshot file was replaced")
+            held_nodes.append({
+                "before": opened, "close": True, "descriptor": child,
+                "directory": False, "name": child_name, "names": None,
+                "parent": descriptor,
+            })
+        else:
+            raise SystemExit(
+                "conditioned v19 snapshot contains a special node")
+
+def verify_held_tree():
+    for node in held_nodes:
+        after = os.fstat(node["descriptor"])
+        linked_after = os.stat(
+            node["name"], dir_fd=node["parent"], follow_symlinks=False)
+        require(same(node["before"], after) and
+                same(node["before"], linked_after),
+                "conditioned v19 snapshot held node changed")
+        if node["directory"]:
+            names_after = sorted(
+                os.listdir(node["descriptor"]), key=os.fsencode)
+            require(names_after == node["names"],
+                    "conditioned v19 snapshot held directory changed")
+
+total_bytes = 0
+
+def read_exact_twice(descriptor, metadata):
+    global total_bytes
+    require(0 <= metadata.st_size <= 64 << 20,
+            "conditioned v19 snapshot file exceeds its bound")
+    total_bytes += metadata.st_size
+    require(total_bytes <= 1 << 30,
+            "conditioned v19 snapshot exceeds its total bound")
+
+    def once():
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        chunks = []
+        remaining = metadata.st_size
+        while remaining:
+            block = os.read(descriptor, min(1 << 20, remaining))
+            require(block != b"",
+                    "conditioned v19 snapshot file shortened")
+            chunks.append(block)
+            remaining -= len(block)
+        require(os.read(descriptor, 1) == b"",
+                "conditioned v19 snapshot file grew")
+        return b"".join(chunks)
+
+    first = once()
+    second = once()
+    require(first == second,
+            "conditioned v19 snapshot file changed between reads")
+    return first
+
+def write_snapshot_file(path, data, mode):
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC |
+        os.O_NOFOLLOW,
+        0o600)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            require(written > 0,
+                    "conditioned v19 snapshot destination write shortened")
+            view = view[written:]
+        os.fchmod(descriptor, mode)
+        os.fsync(descriptor)
+        copied = os.fstat(descriptor)
+        require(stat.S_ISREG(copied.st_mode) and copied.st_nlink == 1 and
+                stat.S_IMODE(copied.st_mode) == mode and
+                copied.st_size == len(data),
+                "conditioned v19 snapshot destination file differs")
+    finally:
+        os.close(descriptor)
+
+def copy_directory(source_descriptor, destination, before):
+    safe_owner(before, directory=True)
+    os.mkdir(destination, 0o700)
+    names_before = sorted(os.listdir(source_descriptor), key=os.fsencode)
+    require(len(names_before) == len(set(names_before)),
+            "conditioned v19 snapshot directory has duplicate names")
+    for name in names_before:
+        require(name not in ("", ".", ".."),
+                "conditioned v19 snapshot node name differs")
+        linked = os.stat(
+            name, dir_fd=source_descriptor, follow_symlinks=False)
+        destination_path = os.path.join(destination, name)
+        if stat.S_ISDIR(linked.st_mode):
+            child = os.open(name, directory_flags, dir_fd=source_descriptor)
+            try:
+                opened = os.fstat(child)
+                require(same(linked, opened),
+                        "conditioned v19 snapshot directory was replaced")
+                copy_directory(child, destination_path, opened)
+                after = os.fstat(child)
+                linked_after = os.stat(
+                    name, dir_fd=source_descriptor, follow_symlinks=False)
+                require(same(opened, after) and same(opened, linked_after),
+                        "conditioned v19 snapshot directory changed")
+            finally:
+                os.close(child)
+        elif stat.S_ISREG(linked.st_mode):
+            safe_owner(linked, directory=False)
+            child = os.open(name, file_flags, dir_fd=source_descriptor)
+            try:
+                opened = os.fstat(child)
+                require(same(linked, opened),
+                        "conditioned v19 snapshot file was replaced")
+                data = read_exact_twice(child, opened)
+                after = os.fstat(child)
+                linked_after = os.stat(
+                    name, dir_fd=source_descriptor, follow_symlinks=False)
+                require(same(opened, after) and same(opened, linked_after),
+                        "conditioned v19 snapshot file changed")
+            finally:
+                os.close(child)
+            write_snapshot_file(
+                destination_path, data, stat.S_IMODE(opened.st_mode))
+        else:
+            raise SystemExit(
+                "conditioned v19 snapshot contains a special node")
+    names_after = sorted(os.listdir(source_descriptor), key=os.fsencode)
+    after = os.fstat(source_descriptor)
+    require(names_after == names_before and same(before, after),
+            "conditioned v19 snapshot directory changed during capture")
+    os.chmod(destination, stat.S_IMODE(before.st_mode))
+    destination_descriptor = os.open(destination, directory_flags)
+    try:
+        os.fsync(destination_descriptor)
+    finally:
+        os.close(destination_descriptor)
+
+parent_descriptor = os.open(source_parent, directory_flags)
+root_descriptors = []
+try:
+    parent_before = os.fstat(parent_descriptor)
+    parent_linked = os.lstat(source_parent)
+    require(same(parent_before, parent_linked),
+            "conditioned v19 snapshot parent was replaced")
+    parent_names_before = sorted(
+        os.listdir(parent_descriptor), key=os.fsencode)
+    for name in required_names:
+        linked = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        descriptor = os.open(name, directory_flags, dir_fd=parent_descriptor)
+        opened = os.fstat(descriptor)
+        require(same(linked, opened),
+                "conditioned v19 snapshot root was replaced")
+        safe_owner(opened, directory=True)
+        root_descriptors.append((name, descriptor, opened))
+
+    for name, descriptor, opened in root_descriptors:
+        hold_tree(
+            parent_descriptor, name, descriptor, opened, close=False)
+
+    os.mkdir(destination_parent, 0o700)
+    for name, descriptor, opened in root_descriptors:
+        copy_directory(
+            descriptor, os.path.join(destination_parent, name), opened)
+
+    parent_names_after = sorted(
+        os.listdir(parent_descriptor), key=os.fsencode)
+    verify_held_tree()
+    parent_after = os.fstat(parent_descriptor)
+    parent_linked_after = os.lstat(source_parent)
+    require(parent_names_after == parent_names_before and
+            same(parent_before, parent_after) and
+            same(parent_before, parent_linked_after),
+            "conditioned v19 snapshot namespace changed during capture")
+    for name, descriptor, opened in root_descriptors:
+        after = os.fstat(descriptor)
+        linked_after = os.stat(
+            name, dir_fd=parent_descriptor, follow_symlinks=False)
+        require(same(opened, after) and same(opened, linked_after),
+                "conditioned v19 snapshot root changed during capture")
+    destination_descriptor = os.open(destination_parent, directory_flags)
+    try:
+        os.fsync(destination_descriptor)
+    finally:
+        os.close(destination_descriptor)
+finally:
+    for node in reversed(held_nodes):
+        if node["close"]:
+            os.close(node["descriptor"])
+    for _name, descriptor, _opened in root_descriptors:
+        os.close(descriptor)
+    os.close(parent_descriptor)
+PY
+}
+
+conditioned_v19_tree_identity()
+{
+    local identity_action=$1
+    local identity_root=$2
+    local identity_manifest=$3
+    /usr/bin/python3 -I -S -B - \
+        "$identity_action" "$identity_root" "$identity_manifest" <<'PY'
+import hashlib
+import json
+import os
+import stat
+import sys
+
+action, root, manifest = sys.argv[1:]
+
+def require(condition, message):
+    if not condition:
+        raise SystemExit(message)
+
+def canonical(value):
+    return (json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) +
+        "\n").encode("utf-8")
+
+require(action in ("write", "verify") and
+        root == os.path.abspath(root) and root == os.path.realpath(root) and
+        manifest == os.path.abspath(manifest),
+        "conditioned v19 tree identity arguments differ")
+stable_fields = (
+    "st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid",
+    "st_size", "st_mtime_ns", "st_ctime_ns",
+)
+file_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
+require(hasattr(os, "O_NOFOLLOW"),
+        "conditioned v19 tree identity requires O_NOFOLLOW")
+file_flags |= os.O_NOFOLLOW
+total = 0
+
+def same(left, right):
+    return all(getattr(left, field) == getattr(right, field)
+               for field in stable_fields)
+
+def record(path, relative):
+    global total
+    linked = os.lstat(path)
+    require(not stat.S_ISLNK(linked.st_mode) and
+            linked.st_uid == os.geteuid() and
+            linked.st_gid == os.getegid() and
+            not stat.S_IMODE(linked.st_mode) & 0o222,
+            "conditioned v19 tree identity found an unsafe node")
+    digest = None
+    if stat.S_ISDIR(linked.st_mode):
+        kind = "directory"
+    elif stat.S_ISREG(linked.st_mode) and linked.st_nlink == 1:
+        kind = "file"
+        require(0 <= linked.st_size <= 64 << 20,
+                "conditioned v19 identity file exceeds its bound")
+        total += linked.st_size
+        require(total <= 1 << 30,
+                "conditioned v19 identity tree exceeds its bound")
+        descriptor = os.open(path, file_flags)
+        try:
+            opened = os.fstat(descriptor)
+            require(same(linked, opened),
+                    "conditioned v19 identity file was replaced")
+            value = hashlib.sha256()
+            remaining = opened.st_size
+            while remaining:
+                block = os.read(descriptor, min(1 << 20, remaining))
+                require(block != b"",
+                        "conditioned v19 identity file shortened")
+                value.update(block)
+                remaining -= len(block)
+            require(os.read(descriptor, 1) == b"",
+                    "conditioned v19 identity file grew")
+            after = os.fstat(descriptor)
+            linked_after = os.lstat(path)
+            require(same(opened, after) and same(opened, linked_after),
+                    "conditioned v19 identity file changed")
+            digest = value.hexdigest()
+        finally:
+            os.close(descriptor)
+    else:
+        raise SystemExit(
+            "conditioned v19 tree identity found a special node")
+    return {
+        "ctime_ns": linked.st_ctime_ns,
+        "dev": linked.st_dev,
+        "gid": linked.st_gid,
+        "ino": linked.st_ino,
+        "mode": format(stat.S_IMODE(linked.st_mode), "04o"),
+        "mtime_ns": linked.st_mtime_ns,
+        "nlink": linked.st_nlink,
+        "path": relative,
+        "sha256": digest,
+        "size": linked.st_size,
+        "type": kind,
+        "uid": linked.st_uid,
+    }
+
+def document():
+    entries = [record(root, ".")]
+    for directory, directory_names, filenames in os.walk(
+            root, topdown=True, followlinks=False):
+        directory_names.sort(key=os.fsencode)
+        filenames.sort(key=os.fsencode)
+        for name in (*directory_names, *filenames):
+            path = os.path.join(directory, name)
+            relative = os.path.relpath(path, root)
+            entries.append(record(path, relative))
+    entries.sort(key=lambda item: os.fsencode(item["path"]))
+    return {
+        "entries": entries,
+        "root": root,
+        "schema": "leopard2-conditioned-v19-private-tree-identity/v1",
+    }
+
+observed = document()
+if action == "write":
+    require(not os.path.lexists(manifest),
+            "conditioned v19 tree identity already exists")
+    descriptor = os.open(
+        manifest,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC |
+        os.O_NOFOLLOW,
+        0o400)
+    try:
+        data = canonical(observed)
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            require(written > 0,
+                    "conditioned v19 identity write shortened")
+            view = view[written:]
+        os.fchmod(descriptor, 0o400)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+else:
+    descriptor = os.open(manifest, file_flags)
+    try:
+        metadata = os.fstat(descriptor)
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and
+                metadata.st_uid == os.geteuid() and
+                metadata.st_gid == os.getegid() and
+                stat.S_IMODE(metadata.st_mode) == 0o400 and
+                metadata.st_size <= 16 << 20,
+                "conditioned v19 identity manifest metadata differs")
+        data = b""
+        while len(data) < metadata.st_size:
+            block = os.read(descriptor, metadata.st_size - len(data))
+            require(block != b"",
+                    "conditioned v19 identity manifest shortened")
+            data += block
+        require(os.read(descriptor, 1) == b"",
+                "conditioned v19 identity manifest grew")
+    finally:
+        os.close(descriptor)
+    expected = json.loads(data.decode("utf-8"))
+    require(data == canonical(expected) and expected == observed,
+            "conditioned v19 private tree identity changed")
+PY
+}
+
+verify_conditioned_v19_core_source_authority()
+{
+    local verified_core=$1
+    local source_commit=$2
+    local source_tree=$3
+    local binding=
+    local core_path=
+    local relative_path=
+    local -a source_bindings=(
+        "run-authoritative.sh:$relative_wrapper"
+        "conditioned_v19_wrapper_replay.py:$relative_conditioned_v19_replay"
+        "run_abba.py:$relative_runner"
+        "git_capture.py:$relative_git_capture"
+        "leopard2_build_provenance.py:$relative_build_provenance"
+        "balanced_evidence_common.py:$relative_helper"
+        "audit_v17_gfni_main_compare.py:$relative_auditor"
+        "passive_environment_census.py:$relative_census"
+    )
+    verify_source_tree_at_commit "$source_commit" "$source_tree" || return 1
+    for binding in "${conditioned_v19_controller_bindings[@]}"; do
+        source_bindings+=("${binding%%:*}:${binding#*:}")
+    done
+    for binding in "${source_bindings[@]}"; do
+        core_path=${binding%%:*}
+        relative_path=${binding#*:}
+        verify_core_file_at_source_commit \
+            "$verified_core/$core_path" "$source_commit" "$relative_path" || \
+            return 1
+    done
+}
+
+materialize_conditioned_v19_trusted_source()
+{
+    local trusted_root=$1
+    local source_mode=$2
+    local relative_path=
+    local binding=
+    local -a relative_paths=(
+        "$relative_wrapper"
+        "$relative_conditioned_v19_replay"
+        "$relative_runner"
+        "$relative_git_capture"
+        "$relative_build_provenance"
+        "$relative_helper"
+        "$relative_auditor"
+        "$relative_census"
+    )
+    test ! -e "$trusted_root"
+    for binding in "${conditioned_v19_controller_bindings[@]}"; do
+        relative_paths+=("${binding#*:}")
+    done
+    case "$source_mode" in
+        current-source-required|retained-commit-authorized) ;;
+        *) return 1 ;;
+    esac
+    /usr/bin/python3 -I -S -B - \
+        "$repo" "$trusted_root" \
+        "$trusted_root.snapshot-SHA256SUMS" \
+        "${relative_paths[@]}" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+
+source_root, destination_root, source_manifest, *relative_paths = sys.argv[1:]
+
+def require(condition, message):
+    if not condition:
+        raise SystemExit(message)
+
+require(source_root == os.path.abspath(source_root) and
+        source_root == os.path.realpath(source_root) and
+        destination_root == os.path.abspath(destination_root) and
+        source_manifest == os.path.abspath(source_manifest) and
+        not os.path.lexists(destination_root) and
+        not os.path.lexists(source_manifest) and relative_paths,
+        "conditioned v19 trusted-source snapshot arguments differ")
+require(len(relative_paths) == len(set(relative_paths)),
+        "conditioned v19 trusted-source path set differs")
+directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+file_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
+require(hasattr(os, "O_NOFOLLOW"),
+        "conditioned v19 trusted-source snapshot requires O_NOFOLLOW")
+directory_flags |= os.O_NOFOLLOW
+file_flags |= os.O_NOFOLLOW
+stable_fields = (
+    "st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid",
+    "st_size", "st_mtime_ns", "st_ctime_ns",
+)
+
+def same(left, right):
+    return all(getattr(left, field) == getattr(right, field)
+               for field in stable_fields)
+
+root_descriptor = os.open(source_root, directory_flags)
+directory_nodes = {}
+file_nodes = []
+source_hashes = []
+try:
+    root_before = os.fstat(root_descriptor)
+    require(same(root_before, os.lstat(source_root)),
+            "conditioned v19 trusted-source root was replaced")
+    directory_nodes[""] = {
+        "before": root_before, "descriptor": root_descriptor,
+        "name": None, "names": sorted(
+            os.listdir(root_descriptor), key=os.fsencode), "parent": None,
+    }
+
+    def directory(relative):
+        if relative in directory_nodes:
+            return directory_nodes[relative]["descriptor"]
+        parent_relative, name = os.path.split(relative)
+        parent = directory(parent_relative)
+        linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        descriptor = os.open(name, directory_flags, dir_fd=parent)
+        opened = os.fstat(descriptor)
+        require(stat.S_ISDIR(opened.st_mode) and same(linked, opened),
+                "conditioned v19 trusted-source directory was replaced")
+        directory_nodes[relative] = {
+            "before": opened, "descriptor": descriptor, "name": name,
+            "names": sorted(os.listdir(descriptor), key=os.fsencode),
+            "parent": parent,
+        }
+        return descriptor
+
+    for relative in relative_paths:
+        require(relative and not relative.startswith("/") and
+                all(part not in ("", ".", "..")
+                    for part in relative.split("/")),
+                "conditioned v19 trusted-source path is not canonical")
+        parent_relative, name = os.path.split(relative)
+        parent = directory(parent_relative)
+        linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        descriptor = os.open(name, file_flags, dir_fd=parent)
+        opened = os.fstat(descriptor)
+        require(stat.S_ISREG(opened.st_mode) and opened.st_nlink == 1 and
+                opened.st_uid == os.geteuid() and
+                opened.st_gid == os.getegid() and same(linked, opened) and
+                0 <= opened.st_size <= 64 << 20,
+                "conditioned v19 trusted-source file differs")
+        file_nodes.append({
+            "before": opened, "descriptor": descriptor, "name": name,
+            "parent": parent, "relative": relative,
+        })
+
+    os.mkdir(destination_root, 0o700)
+    total = 0
+    for node in file_nodes:
+        opened = node["before"]
+        total += opened.st_size
+        require(total <= 512 << 20,
+                "conditioned v19 trusted-source snapshot exceeds its bound")
+        destination = os.path.join(destination_root, node["relative"])
+        os.makedirs(os.path.dirname(destination), mode=0o700, exist_ok=True)
+        output = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC |
+            os.O_NOFOLLOW,
+            0o400)
+        try:
+            os.lseek(node["descriptor"], 0, os.SEEK_SET)
+            source_hash = hashlib.sha256()
+            remaining = opened.st_size
+            while remaining:
+                block = os.read(node["descriptor"], min(1 << 20, remaining))
+                require(block != b"",
+                        "conditioned v19 trusted-source file shortened")
+                source_hash.update(block)
+                view = memoryview(block)
+                while view:
+                    written = os.write(output, view)
+                    require(written > 0,
+                            "conditioned v19 trusted-source write shortened")
+                    view = view[written:]
+                remaining -= len(block)
+            require(os.read(node["descriptor"], 1) == b"",
+                    "conditioned v19 trusted-source file grew")
+            os.fchmod(output, 0o400)
+            os.fsync(output)
+            source_hashes.append(
+                (node["relative"], source_hash.hexdigest()))
+        finally:
+            os.close(output)
+
+    for node in file_nodes:
+        after = os.fstat(node["descriptor"])
+        linked_after = os.stat(
+            node["name"], dir_fd=node["parent"], follow_symlinks=False)
+        require(same(node["before"], after) and
+                same(node["before"], linked_after),
+                "conditioned v19 trusted-source file changed during capture")
+    for node in directory_nodes.values():
+        after = os.fstat(node["descriptor"])
+        require(same(node["before"], after) and
+                sorted(os.listdir(node["descriptor"]), key=os.fsencode) ==
+                    node["names"],
+                "conditioned v19 trusted-source directory changed")
+        if node["parent"] is not None:
+            linked_after = os.stat(
+                node["name"], dir_fd=node["parent"], follow_symlinks=False)
+            require(same(node["before"], linked_after),
+                    "conditioned v19 trusted-source directory was replaced")
+    require(same(root_before, os.lstat(source_root)),
+            "conditioned v19 trusted-source root changed")
+    source_hashes.sort(key=lambda item: os.fsencode(item[0]))
+    manifest_data = "".join(
+        f"{digest}  ./{relative}\n" for relative, digest in source_hashes
+    ).encode("ascii")
+    manifest_descriptor = os.open(
+        source_manifest,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC |
+        os.O_NOFOLLOW,
+        0o400)
+    try:
+        view = memoryview(manifest_data)
+        while view:
+            written = os.write(manifest_descriptor, view)
+            require(written > 0,
+                    "conditioned v19 trusted-source manifest write shortened")
+            view = view[written:]
+        os.fchmod(manifest_descriptor, 0o400)
+        os.fsync(manifest_descriptor)
+    finally:
+        os.close(manifest_descriptor)
+finally:
+    for node in file_nodes:
+        os.close(node["descriptor"])
+    for relative, node in sorted(
+            directory_nodes.items(), key=lambda item: len(item[0]),
+            reverse=True):
+        if relative:
+            os.close(node["descriptor"])
+    os.close(root_descriptor)
+
+for directory_path, _names, _files in os.walk(destination_root):
+    os.chmod(directory_path, 0o500)
+expected_files = {relative: digest for relative, digest in source_hashes}
+actual_files = {}
+actual_directories = {""}
+for directory_path, directory_names, filenames in os.walk(
+        destination_root, topdown=True, followlinks=False):
+    relative_directory = os.path.relpath(directory_path, destination_root)
+    if relative_directory == ".":
+        relative_directory = ""
+    metadata = os.lstat(directory_path)
+    require(stat.S_ISDIR(metadata.st_mode) and
+            not stat.S_ISLNK(metadata.st_mode) and
+            stat.S_IMODE(metadata.st_mode) == 0o500,
+            "conditioned v19 trusted-source destination directory differs")
+    for name in directory_names:
+        relative = os.path.join(relative_directory, name) \
+            if relative_directory else name
+        actual_directories.add(relative)
+    for name in filenames:
+        relative = os.path.join(relative_directory, name) \
+            if relative_directory else name
+        path = os.path.join(directory_path, name)
+        metadata = os.lstat(path)
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and
+                stat.S_IMODE(metadata.st_mode) == 0o400,
+                "conditioned v19 trusted-source destination file differs")
+        value = hashlib.sha256()
+        with open(path, "rb") as stream:
+            while True:
+                block = stream.read(1 << 20)
+                if not block:
+                    break
+                value.update(block)
+        actual_files[relative] = value.hexdigest()
+expected_directories = {""}
+for relative in expected_files:
+    parent = os.path.dirname(relative)
+    while parent:
+        expected_directories.add(parent)
+        parent = os.path.dirname(parent)
+require(actual_files == expected_files and
+        actual_directories == expected_directories,
+        "conditioned v19 trusted-source destination closure differs")
+sys.stdout.write(hashlib.sha256(manifest_data).hexdigest() + "\n")
+PY
+}
+
+verify_conditioned_v19_campaign_core()
+(
+    local authority_envelope=$1
+    local source_authority_mode=$2
+    local replay_root=
+    local snapshot_parent=
+    local verified_envelope=
+    local verified_core=
+    local trusted_source_root=
+    local trusted_source_sums=
+    local trusted_source_sums_sha256=
+    local evidence_identity=
+    local evidence_identity_sha256=
+    local trusted_source_identity=
+    local trusted_source_identity_sha256=
+    local replay_verifier=
+    local normal_output=
+    local optimized_output=
+    local normal_stderr=
+    local optimized_stderr=
+    local terminal_file=
+    local terminal_path=
+    local terminal_schema=
+    local expected_status=
+    local expected_terminal=
+    local expected_attempt=
+    local expected_campaign_exit_status=
+    local expected_source_commit=
+    local expected_source_tree=
+    local expected_controller_source_commit=
+    local expected_controller_source_tree=
+    local expected_selected_pair=
+    local expected_terminal_sha256=
+    local expected_outer_sha256sums_sha256=
+    local expected_envelope_name=
+    local -a replay_authority_arguments=()
+    local command_status=0
+    test -d "$authority_envelope" || exit 1
+    test ! -L "$authority_envelope" || exit 1
+    test "$authority_envelope" = \
+        "$(/usr/bin/readlink -f "$authority_envelope")" || exit 1
+    if [[ -f "$authority_envelope/NOT_PROMOTED.json" &&
+          ! -e "$authority_envelope/FAILED.json" ]]; then
+        terminal_file=NOT_PROMOTED.json
+        expected_status=complete
+        expected_terminal=NOT_PROMOTED
+        terminal_schema=\
+leopard2-v19-gfni-main-conditioned-passive-not-promoted-envelope/v1
+    elif [[ -f "$authority_envelope/FAILED.json" &&
+            ! -e "$authority_envelope/NOT_PROMOTED.json" ]]; then
+        terminal_file=FAILED.json
+        expected_status=failed
+        terminal_schema=\
+leopard2-v19-gfni-main-conditioned-passive-failed-envelope/v1
+    else
+        exit 1
+    fi
+    terminal_path="$authority_envelope/$terminal_file"
+    test ! -L "$terminal_path" || exit 1
+    test "$(/usr/bin/jq -er '.schema | strings' "$terminal_path")" = \
+        "$terminal_schema" || exit 1
+    test "$(/usr/bin/jq -er '.status | strings' "$terminal_path")" = \
+        "$expected_status" || exit 1
+    if [[ "$terminal_file" == FAILED.json ]]; then
+        expected_terminal="$(/usr/bin/jq -er \
+            '.pair_qualification_terminal | strings' "$terminal_path")" || \
+            exit 1
+    fi
+    expected_attempt="$(/usr/bin/jq -er \
+        '.attempt | numbers | select(. == floor and . >= 1 and . <= 2)' \
+        "$terminal_path")" || exit 1
+    expected_campaign_exit_status="$(/usr/bin/jq -er \
+        '.campaign_exit_status | numbers |
+         select(. == floor and . >= 0 and . <= 255)' \
+        "$terminal_path")" || exit 1
+    if [[ "$expected_status" == complete ]]; then
+        test "$expected_campaign_exit_status" -eq 0 || exit 1
+    else
+        test "$expected_campaign_exit_status" -ge 1 || exit 1
+    fi
+    expected_source_commit="$(/usr/bin/jq -er \
+        '.source_commit | strings |
+         select(length == 40 and test("^[0-9a-f]{40}$"))' \
+        "$terminal_path")" || exit 1
+    expected_source_tree="$(/usr/bin/jq -er \
+        '.source_tree | strings |
+         select(length == 40 and test("^[0-9a-f]{40}$"))' \
+        "$terminal_path")" || exit 1
+    expected_controller_source_commit="$(/usr/bin/jq -er \
+        '.controller_source_commit | strings |
+         select(length == 40 and test("^[0-9a-f]{40}$"))' \
+        "$terminal_path")" || exit 1
+    expected_controller_source_tree="$(/usr/bin/jq -er \
+        '.controller_source_tree | strings |
+         select(length == 40 and test("^[0-9a-f]{40}$"))' \
+        "$terminal_path")" || exit 1
+    /usr/bin/jq -e '
+        has("selected_pair") and
+        (.selected_pair == null or
+         (.selected_pair | type == "object" and
+          keys == ["benchmark_cpu", "reserved_sibling"] and
+          (.benchmark_cpu | type == "number" and . == floor and . >= 0) and
+          (.reserved_sibling | type == "number" and . == floor and . >= 0) and
+          .benchmark_cpu != .reserved_sibling))
+    ' "$terminal_path" >/dev/null || exit 1
+    expected_selected_pair="$(/usr/bin/jq -cS '.selected_pair' \
+        "$terminal_path")" || exit 1
+    expected_terminal_sha256="$(/usr/bin/sha256sum "$terminal_path" | \
+        /usr/bin/cut -d' ' -f1)" || exit 1
+    expected_outer_sha256sums_sha256="$(/usr/bin/sha256sum \
+        "$authority_envelope/SHA256SUMS" | /usr/bin/cut -d' ' -f1)" || \
+        exit 1
+    expected_envelope_name=\
+"${expected_source_commit:0:7}-v19-conditioned-main-a$expected_attempt"
+    test "${authority_envelope##*/}" = "$expected_envelope_name" || exit 1
+
+    replay_root="$(/usr/bin/mktemp -d \
+        /tmp/leopard-v19-wrapper-semantic-replay.XXXXXX)" || exit 1
+    cleanup_conditioned_v19_campaign_core()
+    {
+        command_status=$?
+        trap - EXIT
+        /usr/bin/find "$replay_root" -type d \
+            -exec /usr/bin/chmod u+rwx {} + || command_status=1
+        /usr/bin/find "$replay_root" -type f \
+            -exec /usr/bin/chmod u+rw {} + || command_status=1
+        if ! /usr/bin/find "$replay_root" -depth -delete; then
+            command_status=1
+        fi
+        exit "$command_status"
+    }
+    trap cleanup_conditioned_v19_campaign_core EXIT
+    normal_output="$replay_root/normal.json"
+    optimized_output="$replay_root/optimized.json"
+    normal_stderr="$replay_root/normal.stderr"
+    optimized_stderr="$replay_root/optimized.stderr"
+    snapshot_parent="$replay_root/evidence"
+    snapshot_conditioned_v19_evidence \
+        "$authority_envelope" "$snapshot_parent" \
+        "$expected_source_commit" "$expected_attempt" || exit 1
+    /usr/bin/chmod 0500 "$snapshot_parent" || exit 1
+    evidence_identity="$replay_root/evidence-identity.json"
+    conditioned_v19_tree_identity \
+        write "$snapshot_parent" "$evidence_identity" || exit 1
+    evidence_identity_sha256="$(/usr/bin/sha256sum "$evidence_identity" | \
+        /usr/bin/cut -d' ' -f1)" || exit 1
+    verified_envelope="$snapshot_parent/$expected_envelope_name"
+    verified_core="$verified_envelope/core"
+    terminal_path="$verified_envelope/$terminal_file"
+    test "$(/usr/bin/sha256sum "$terminal_path" | \
+        /usr/bin/cut -d' ' -f1)" = "$expected_terminal_sha256" || exit 1
+    test "$(/usr/bin/sha256sum "$verified_envelope/SHA256SUMS" | \
+        /usr/bin/cut -d' ' -f1)" = \
+        "$expected_outer_sha256sums_sha256" || exit 1
+
+    trusted_source_root="$replay_root/trusted-source"
+    trusted_source_sums_sha256="$(
+        materialize_conditioned_v19_trusted_source \
+            "$trusted_source_root" "$source_authority_mode"
+    )" || exit 1
+    test "${#trusted_source_sums_sha256}" -eq 64 || exit 1
+    test -z "${trusted_source_sums_sha256//[0-9a-f]/}" || exit 1
+    trusted_source_sums="$trusted_source_root.snapshot-SHA256SUMS"
+    trusted_source_identity="$replay_root/trusted-source-identity.json"
+    conditioned_v19_tree_identity \
+        write "$trusted_source_root" "$trusted_source_identity" || exit 1
+    trusted_source_identity_sha256="$(/usr/bin/sha256sum \
+        "$trusted_source_identity" | /usr/bin/cut -d' ' -f1)" || exit 1
+    case "$source_authority_mode" in
+        current-source-required)
+            replay_authority_arguments+=(--require-trusted-source-match)
+            ;;
+        retained-commit-authorized)
+            replay_authority_arguments+=(--require-preflight-identity)
+            verify_source_tree_at_commit \
+                "$expected_controller_source_commit" \
+                "$expected_controller_source_tree" || exit 1
+            verify_conditioned_v19_core_source_authority \
+                "$verified_core" "$expected_controller_source_commit" \
+                "$expected_controller_source_tree" || exit 1
+            ;;
+        *) exit 1 ;;
+    esac
+    verify_source_tree_at_commit \
+        "$expected_source_commit" "$expected_source_tree" || exit 1
+    replay_verifier=\
+"$trusted_source_root/$relative_conditioned_v19_replay"
+    test -d "$verified_envelope" || exit 1
+    test ! -L "$verified_envelope" || exit 1
+    test -f "$verified_envelope/SHA256SUMS" || exit 1
+    test -f "$verified_envelope/TREE-METADATA.json" || exit 1
+    test -f "$verified_envelope/core/SHA256SUMS" || exit 1
+    test -f "$replay_verifier" || exit 1
+    test ! -L "$replay_verifier" || exit 1
+    verify_conditioned_v19_private_snapshots()
+    {
+        test "$(/usr/bin/sha256sum "$evidence_identity" | \
+            /usr/bin/cut -d' ' -f1)" = "$evidence_identity_sha256" || \
+            return 1
+        test "$(/usr/bin/sha256sum "$trusted_source_identity" | \
+            /usr/bin/cut -d' ' -f1)" = \
+            "$trusted_source_identity_sha256" || return 1
+        test "$(/usr/bin/sha256sum "$trusted_source_sums" | \
+            /usr/bin/cut -d' ' -f1)" = \
+            "$trusted_source_sums_sha256" || return 1
+        conditioned_v19_tree_identity \
+            verify "$snapshot_parent" "$evidence_identity" || return 1
+        conditioned_v19_tree_identity \
+            verify "$trusted_source_root" "$trusted_source_identity" || \
+            return 1
+        (
+            cd "$trusted_source_root"
+            /usr/bin/sha256sum -c "$trusted_source_sums"
+        ) >/dev/null || return 1
+    }
+    verify_conditioned_v19_private_snapshots || exit 1
+    (
+        cd "$trusted_source_root"
+        /usr/bin/sha256sum -c "$trusted_source_sums"
+    ) >/dev/null || exit 1
+    (
+        cd "$verified_envelope"
+        /usr/bin/sha256sum -c SHA256SUMS
+    ) >/dev/null || exit 1
+    (
+        cd "$verified_envelope/core"
+        /usr/bin/sha256sum -c SHA256SUMS
+    ) >/dev/null || exit 1
+    verify_sealed_tree "$verified_envelope" || exit 1
+    verify_tree_metadata_manifest "$verified_envelope" || exit 1
+    /usr/bin/python3 -I -S -B "$replay_verifier" \
+        --envelope "$verified_envelope" \
+        --authority-envelope "$authority_envelope" \
+        --trusted-source-root "$trusted_source_root" \
+        "${replay_authority_arguments[@]}" \
+        > "$normal_output" 2> "$normal_stderr" || exit 1
+    verify_conditioned_v19_private_snapshots || exit 1
+    /usr/bin/python3 -I -S -B -O "$replay_verifier" \
+        --envelope "$verified_envelope" \
+        --authority-envelope "$authority_envelope" \
+        --trusted-source-root "$trusted_source_root" \
+        "${replay_authority_arguments[@]}" \
+        > "$optimized_output" 2> "$optimized_stderr" || exit 1
+    verify_conditioned_v19_private_snapshots || exit 1
+    test ! -s "$normal_stderr" || exit 1
+    test ! -s "$optimized_stderr" || exit 1
+    /usr/bin/cmp "$normal_output" "$optimized_output" || exit 1
+    validate_single_json_object "$normal_output" || exit 1
+    /usr/bin/jq -e \
+        --arg status "$expected_status" \
+        --arg terminal "$expected_terminal" \
+        --arg terminal_file "$terminal_file" \
+        --argjson attempt "$expected_attempt" \
+        --argjson campaign_exit_status "$expected_campaign_exit_status" \
+        --argjson selected_pair "$expected_selected_pair" \
+        --arg source_commit "$expected_source_commit" \
+        --arg source_tree "$expected_source_tree" \
+        --arg controller_source_commit \
+            "$expected_controller_source_commit" \
+        --arg controller_source_tree "$expected_controller_source_tree" \
+        --arg terminal_sha256 "$expected_terminal_sha256" \
+        --arg outer_sha256sums_sha256 \
+            "$expected_outer_sha256sums_sha256" '
+        keys == ([
+            "attempt", "campaign_exit_status", "controller_source_commit",
+            "controller_source_tree", "outer_sha256sums_sha256",
+            "selected_pair", "source_commit", "source_tree", "status",
+            "terminal", "terminal_file", "terminal_sha256"
+        ] | sort) and
+        .attempt == $attempt and
+        .campaign_exit_status == $campaign_exit_status and
+        .controller_source_commit == $controller_source_commit and
+        .controller_source_tree == $controller_source_tree and
+        .outer_sha256sums_sha256 == $outer_sha256sums_sha256 and
+        .selected_pair == $selected_pair and
+        .source_commit == $source_commit and .source_tree == $source_tree and
+        .status == $status and .terminal == $terminal and
+        .terminal_file == $terminal_file and
+        .terminal_sha256 == $terminal_sha256
+    ' "$normal_output" >/dev/null || exit 1
+    (
+        cd "$verified_envelope"
+        /usr/bin/sha256sum -c SHA256SUMS
+    ) >/dev/null || exit 1
+    (
+        cd "$verified_envelope/core"
+        /usr/bin/sha256sum -c SHA256SUMS
+    ) >/dev/null || exit 1
+    verify_sealed_tree "$verified_envelope" || exit 1
+    verify_tree_metadata_manifest "$verified_envelope" || exit 1
+    verify_conditioned_v19_private_snapshots || exit 1
+)
+
 verify_envelope()
 {
     local verified_envelope=$1
@@ -4854,11 +6133,20 @@ verify_envelope()
             core_schema=leopard2-v18-gfni-main-passive-core-manifest/v1
             audit_schema=leopard2-main-compare-v18-passive-independent-audit/v1
             ;;
+        NOT_PROMOTED.json:leopard2-v19-gfni-main-conditioned-passive-not-promoted-envelope/v1)
+            evidence_generation=passive-v3
+            core_schema=leopard2-v19-gfni-main-conditioned-passive-core-manifest/v1
+            audit_schema=leopard2-main-compare-v19-conditioned-passive-independent-audit/v1
+            ;;
         FAILED.json:leopard2-v17-gfni-main-failed-envelope/v1)
             evidence_generation=failed-v1
             ;;
         FAILED.json:leopard2-v18-gfni-main-failed-envelope/v1)
             evidence_generation=failed-v2
+            ;;
+        FAILED.json:leopard2-v19-gfni-main-conditioned-passive-failed-envelope/v1)
+            evidence_generation=failed-v3
+            core_schema=leopard2-v19-gfni-main-conditioned-passive-failed-core-manifest/v1
             ;;
         *)
             return 1
@@ -4889,6 +6177,43 @@ verify_envelope()
     test "$(/usr/bin/jq -er \
         '.promotion_passed | booleans | tostring' "$status_file")" = \
         "$promotion_value"
+    if [[ "$evidence_generation" == passive-v3 ||
+          "$evidence_generation" == failed-v3 ]]; then
+        local v19_source_commit=
+        local v19_source_tree=
+        local v19_controller_source_commit=
+        local v19_controller_source_tree=
+        local v19_attempt=
+        local expected_v19_envelope=
+        v19_source_commit="$(/usr/bin/jq -er \
+            '.source_commit | strings |
+             select(length == 40 and test("^[0-9a-f]{40}$"))' \
+            "$status_file")"
+        v19_source_tree="$(/usr/bin/jq -er \
+            '.source_tree | strings |
+             select(length == 40 and test("^[0-9a-f]{40}$"))' \
+            "$status_file")"
+        v19_controller_source_commit="$(/usr/bin/jq -er \
+            '.controller_source_commit | strings |
+             select(length == 40 and test("^[0-9a-f]{40}$"))' \
+            "$status_file")"
+        v19_controller_source_tree="$(/usr/bin/jq -er \
+            '.controller_source_tree | strings |
+             select(length == 40 and test("^[0-9a-f]{40}$"))' \
+            "$status_file")"
+        v19_attempt="$(/usr/bin/jq -er \
+            '.attempt | numbers | select(. == floor and . >= 1 and . <= 2)' \
+            "$status_file")"
+        expected_v19_envelope=\
+"$repo/.research/leopard-79h/${v19_source_commit:0:7}-v19-conditioned-main-a$v19_attempt"
+        test "$verified_envelope" = "$expected_v19_envelope"
+        verify_conditioned_v19_campaign_core \
+            "$verified_envelope" retained-commit-authorized
+        /usr/bin/printf \
+            'authoritative v19 conditioned envelope verified: %s\n' \
+            "$verified_envelope"
+        return 0
+    fi
     if [[ "$evidence_generation" == passive-v1 ]]; then
         /usr/bin/jq -e '
             keys == ([
@@ -6563,6 +7888,52 @@ if [[ $# -eq 1 && $1 == --self-test-conditioned-v19-contract ]]; then
     exit 0
 fi
 
+if [[ $# -ge 3 && $1 == --emit-conditioned-v19-record &&
+      $3 == /tmp/leopard-v19-wrapper-replay.* ]]; then
+    test "$passive_mode" = false
+    test "$conditioned_v19_mode" = false
+    test "$3" = "$(/usr/bin/readlink -f "$3")"
+    case "$2" in
+        lineage)
+            test $# -eq 4
+            test "$4" = "${3%/*}/${3##*/}-record-request.json"
+            test "$4" = "$(/usr/bin/readlink -f "$4")"
+            ;;
+        failed-core|failure-terminal)
+            test $# -eq 4
+            test "$4" = "${3%/*}/${3##*/}-record-request.json"
+            test "$4" = "$(/usr/bin/readlink -f "$4")"
+            ;;
+        complete-core|success-terminal)
+            test $# -eq 3
+            ;;
+        *) exit 1 ;;
+    esac
+    conditioned_v19_record "$2" "$3" "${4:-}"
+    exit 0
+fi
+
+if [[ $# -eq 2 && $1 == --verify-conditioned-v19-campaign-core &&
+      $2 == /tmp/leopard-v19-wrapper-replay.* ]]; then
+    test "$passive_mode" = false
+    test "$conditioned_v19_mode" = false
+    test "$2" = "$(/usr/bin/readlink -f "$2")"
+    verify_conditioned_v19_campaign_core \
+        "$2" current-source-required
+    /usr/bin/printf 'conditioned v19 campaign core verified: %s\n' "$2"
+    exit 0
+fi
+
+if [[ $# -eq 4 &&
+      $1 == --verify-conditioned-v19-core-source-authority &&
+      $2 == /tmp/leopard-v19-wrapper-replay.*/core ]]; then
+    test "$passive_mode" = false
+    test "$conditioned_v19_mode" = false
+    test "$2" = "$(/usr/bin/readlink -f "$2")"
+    verify_conditioned_v19_core_source_authority "$2" "$3" "$4"
+    exit 0
+fi
+
 if [[ $# -eq 4 && $1 == --verify-v18-complete-core-semantics &&
       $2 == /* &&
       $3 == /tmp/leopard-v18-complete-core-replay.*/NOT_PROMOTED.json &&
@@ -6682,6 +8053,12 @@ failure_record()
     local failed_verification_status=1
     trap - ERR
     set +e
+    if [[ "$conditioned_v19_mode" == true ]]; then
+        /usr/bin/printf \
+            'conditioned v19 wrapper failed in stage %s with status %s; refusing legacy v18 failure emission\n' \
+            "$stage" "$status" >&2
+        exit "$status"
+    fi
     if [[ -n "$lane" && -d "$envelope" ]]; then
         /usr/bin/chmod u+w "$envelope" 2>/dev/null
         if [[ ! -d "$lane" ]]; then
@@ -6775,6 +8152,12 @@ postseal_failure_record()
     local failed_verification_status=1
     trap - ERR
     set +e
+    if [[ "$conditioned_v19_mode" == true ]]; then
+        /usr/bin/printf \
+            'conditioned v19 postseal failed in stage %s with status %s; refusing legacy v18 failure emission\n' \
+            "$stage" "$status" >&2
+        exit "$status"
+    fi
     exec 8>&-
     if [[ -d "$envelope" && -f "$lane/SHA256SUMS" ]]; then
         /usr/bin/chmod u+w "$envelope" 2>/dev/null
@@ -7141,6 +8524,9 @@ if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
         "$lane/passive_environment_census.py"
 fi
 if [[ "$conditioned_v19_mode" == true ]]; then
+    /usr/bin/cp --reflink=never \
+        "$candidate_source/$relative_conditioned_v19_replay" \
+        "$lane/conditioned_v19_wrapper_replay.py"
     copy_conditioned_v19_controller_closure \
         "$candidate_source" "$lane"
     conditioned_v19_controller_closure_record "$candidate_source" \
@@ -7152,6 +8538,9 @@ fi
     "$lane/leopard2_affinity_supervisor.py"
 if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
     /usr/bin/chmod 0555 "$lane/passive_environment_census.py"
+fi
+if [[ "$conditioned_v19_mode" == true ]]; then
+    /usr/bin/chmod 0555 "$lane/conditioned_v19_wrapper_replay.py"
 fi
 /usr/bin/chmod 0444 \
     "$lane/git_capture.py" \
@@ -7667,6 +9056,9 @@ if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
         > "$lane/build-closure/committed-passive-census.py"
 fi
 if [[ "$conditioned_v19_mode" == true ]]; then
+    /usr/bin/git -C "$repo" show \
+        "$commit:$relative_conditioned_v19_replay" \
+        > "$lane/build-closure/committed-conditioned-v19-wrapper-replay.py"
     for conditioned_v19_controller_binding in \
             "${conditioned_v19_controller_bindings[@]}"; do
         conditioned_v19_lane_path=${conditioned_v19_controller_binding%%:*}
@@ -7695,6 +9087,8 @@ if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
         "$lane/build-closure/committed-passive-census.py"
 fi
 if [[ "$conditioned_v19_mode" == true ]]; then
+    /usr/bin/cmp "$lane/conditioned_v19_wrapper_replay.py" \
+        "$lane/build-closure/committed-conditioned-v19-wrapper-replay.py"
     for conditioned_v19_controller_binding in \
             "${conditioned_v19_controller_bindings[@]}"; do
         conditioned_v19_lane_path=${conditioned_v19_controller_binding%%:*}
@@ -8122,6 +9516,13 @@ if [[ "$passive_mode" == true && "$campaign_status" -eq 0 ]]; then
 fi
 
 if [[ "$campaign_status" -ne 0 ]]; then
+    if [[ "$conditioned_v19_mode" == true ]]; then
+        trap - ERR
+        /usr/bin/printf \
+            'conditioned v19 campaign failed with status %s; refusing legacy v18 failure emission\n' \
+            "$campaign_status" >&2
+        exit "$campaign_status"
+    fi
     next_stage verify_and_seal_failed_campaign
     failure_verified=false
     failure_verify_status=1
@@ -8397,6 +9798,9 @@ if [[ "$passive_mode" == true || "$conditioned_v19_mode" == true ]]; then
         "$lane/passive_environment_census.py"
 fi
 if [[ "$conditioned_v19_mode" == true ]]; then
+    /usr/bin/cmp \
+        "$candidate_source/$relative_conditioned_v19_replay" \
+        "$lane/conditioned_v19_wrapper_replay.py"
     validate_conditioned_v19_controller_copy \
         "$candidate_source" "$lane"
     compare_conditioned_v19_controller_closure_record \

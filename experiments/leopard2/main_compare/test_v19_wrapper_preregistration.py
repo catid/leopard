@@ -257,6 +257,13 @@ class V19WrapperPreregistrationTests(unittest.TestCase):
             )
             guarded_dispatches = (
                 hidden_verify,
+                ("--verify-conditioned-v19-campaign-core",
+                 "/tmp/leopard-v19-wrapper-replay.fixture"),
+                ("--verify-conditioned-v19-core-source-authority",
+                 "/tmp/leopard-v19-wrapper-replay.fixture/core",
+                 "0" * 40, "1" * 40),
+                ("--emit-conditioned-v19-record", "complete-core",
+                 "/tmp/leopard-v19-wrapper-replay.fixture"),
                 ("--print-conditioned-v19-preregistration",),
                 ("--print-conditioned-v19-controller-closure",),
                 ("--self-test-conditioned-v19-contract",),
