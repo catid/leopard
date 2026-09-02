@@ -1075,6 +1075,11 @@ def _stable_fields(status: os.stat_result) -> tuple[int, ...]:
     )
 
 
+def _raise_walk_error(error: OSError) -> None:
+    """Make recursive guard enumeration fail closed on ``scandir`` errors."""
+    raise error
+
+
 class _InotifyMutationGuard:
     """Retain a fail-closed event history for exact pathnames or a tree."""
 
@@ -1088,7 +1093,9 @@ class _InotifyMutationGuard:
         IN_MOVE_SELF | IN_UNMOUNT | IN_IGNORED | IN_DONT_FOLLOW
     )
 
-    def __init__(self, label: str) -> None:
+    def __init__(
+        self, label: str, *, publish: Any | None = None,
+    ) -> None:
         require(sys.platform.startswith("linux"),
                 f"{label} pathname mutation guard requires Linux")
         self.label = label
@@ -1098,6 +1105,13 @@ class _InotifyMutationGuard:
         # self/unmount/overflow events remain unconditionally relevant.
         self.rules: dict[int, set[bytes] | None] = {}
         self.mutations: list[str] = []
+        require(publish is None or callable(publish),
+                f"{label} pathname mutation guard publisher is invalid")
+        if publish is not None:
+            # Publish an inert, close-safe owner before allocating the fd.  A
+            # signal between constructor return and caller assignment can
+            # otherwise strand the fully initialized inotify instance.
+            publish(self)
         descriptor = -1
         retained_file = None
         try:
@@ -1225,24 +1239,116 @@ class _InotifyMutationGuard:
                 {os.fsencode(component)})
             current = current / component
         try:
-            directories = [absolute]
+            # Arm each parent before discovering descendants.  Collecting the
+            # whole directory list first leaves a window in which a newly
+            # created subtree can persist without ever receiving a watch.
+            self._add_watch(
+                absolute, self._DIRECTORY_MASK | IN_ONLYDIR, None)
             for directory, child_directories, _files in os.walk(
-                    absolute, topdown=True, followlinks=False):
+                    absolute, topdown=True, followlinks=False,
+                    onerror=_raise_walk_error):
                 child_directories.sort()
                 parent = Path(directory)
                 for name in child_directories:
                     child = parent / name
-                    require(not child.is_symlink(),
-                            f"{self.label} tree contains a directory symlink")
-                    directories.append(child)
-            for directory in directories:
-                self._add_watch(
-                    directory,
-                    self._DIRECTORY_MASK | IN_ONLYDIR,
-                    None)
+                    status = child.lstat()
+                    require(
+                        stat.S_ISDIR(status.st_mode) and
+                        not stat.S_ISLNK(status.st_mode),
+                        f"{self.label} tree contains a directory symlink")
+                    self._add_watch(
+                        child, self._DIRECTORY_MASK | IN_ONLYDIR, None)
+                    require(
+                        _stable_fields(child.lstat()) ==
+                            _stable_fields(status),
+                        f"{self.label} tree child changed while its "
+                        "directory watch was armed")
         except OSError as error:
             raise BuildProvenanceError(
                 f"cannot enumerate guarded {self.label} tree: {error}") \
+                from error
+
+    def add_topology_tree(
+        self, root: Path | str, *,
+        excluded_root_entries: Sequence[str] = (),
+        guarded_leaf_names: Sequence[str] = (),
+    ) -> None:
+        """Watch every directory-entry mutation below a retained root.
+
+        Unlike :meth:`add_tree`, this topology-only guard treats symlinks as
+        leaf entries instead of rejecting a tree that contains a symlink to a
+        directory.  Callers retain and hash relevant leaf inodes separately.
+        Exact root entries may be excluded from descent when another guard
+        already owns the complete subtree; their names remain watched at the
+        root, so replacing an excluded entry still fails closed.
+        """
+        absolute = self._absolute_lexical(Path(root))
+        excluded = {os.fsencode(name) for name in excluded_root_entries}
+        guarded_leaves = {os.fsencode(name) for name in guarded_leaf_names}
+        require(
+            absolute.is_absolute() and len(absolute.parts) >= 2 and
+            all(name and b"/" not in name and b"\0" not in name
+                for name in excluded | guarded_leaves),
+            f"{self.label} guarded topology tree request is invalid")
+        parts = absolute.parts
+        current = Path(parts[0])
+        for component in parts[1:]:
+            self._add_watch(
+                current,
+                self._DIRECTORY_MASK | IN_ONLYDIR,
+                {os.fsencode(component)})
+            current = current / component
+        try:
+            # Arm the root before enumeration.  Each parent is therefore
+            # watched before os.walk exposes or descends into its children.
+            self._add_watch(
+                absolute, self._DIRECTORY_MASK | IN_ONLYDIR, None)
+            for directory, child_directories, files in os.walk(
+                    absolute, topdown=True, followlinks=False,
+                    onerror=_raise_walk_error):
+                child_directories.sort()
+                files.sort()
+                parent = Path(directory)
+                for name in files:
+                    if os.fsencode(name) not in guarded_leaves:
+                        continue
+                    leaf = parent / name
+                    status = leaf.lstat()
+                    require(
+                        stat.S_ISREG(status.st_mode),
+                        f"{self.label} guarded topology leaf is not regular")
+                    self.add_file_path(leaf)
+                    require(
+                        _stable_fields(leaf.lstat()) ==
+                            _stable_fields(status),
+                        f"{self.label} guarded topology leaf changed while "
+                        "its inode watch was armed")
+                retained_children: list[str] = []
+                for name in child_directories:
+                    encoded = os.fsencode(name)
+                    if parent == absolute and encoded in excluded:
+                        continue
+                    child = parent / name
+                    status = child.lstat()
+                    if stat.S_ISLNK(status.st_mode):
+                        continue
+                    require(
+                        stat.S_ISDIR(status.st_mode),
+                        f"{self.label} topology child is not a directory")
+                    self._add_watch(
+                        child, self._DIRECTORY_MASK | IN_ONLYDIR, None)
+                    require(
+                        _stable_fields(child.lstat()) ==
+                            _stable_fields(status),
+                        f"{self.label} topology child changed while its "
+                        "directory watch was armed")
+                    retained_children.append(name)
+                # Prevent os.walk from following skipped symlink or excluded
+                # directory entries even if their targets are directories.
+                child_directories[:] = retained_children
+        except OSError as error:
+            raise BuildProvenanceError(
+                f"cannot enumerate guarded {self.label} topology: {error}") \
                 from error
 
     def add_directory_path(self, path: Path | str) -> None:
@@ -7123,14 +7229,38 @@ def _replay_recipe_candidates(build: Path) -> list[Path]:
         lexical / "CMakeFiles/Makefile.cmake",
         lexical / "CMakeFiles/cmake.check_cache",
     }
-    for pattern in (
-            "CMakeFiles/**/*.make",
-            "CMakeFiles/**/*.cmake",
-            "CMakeFiles/**/link.txt"):
-        for path in lexical.glob(pattern):
-            candidates.add(path)
-            require(len(candidates) <= MAX_REPLAY_RECIPE_FILES,
+    recipe_root = lexical / "CMakeFiles"
+    try:
+        root_status = recipe_root.lstat()
+        require(
+            stat.S_ISDIR(root_status.st_mode) and
+            not stat.S_ISLNK(root_status.st_mode),
+            "private replay recipe root is not a regular directory")
+        for directory, child_directories, files in os.walk(
+                recipe_root, topdown=True, followlinks=False,
+                onerror=_raise_walk_error):
+            child_directories.sort()
+            files.sort()
+            parent = Path(directory)
+            for name in child_directories:
+                child = parent / name
+                child_status = child.lstat()
+                require(
+                    stat.S_ISDIR(child_status.st_mode) and
+                    not stat.S_ISLNK(child_status.st_mode),
+                    "private replay recipe parent is a symlink")
+            for name in files:
+                path = parent / name
+                relative = path.relative_to(lexical).as_posix()
+                if not _is_replay_recipe_relative_path(relative):
+                    continue
+                candidates.add(path)
+                require(
+                    len(candidates) <= MAX_REPLAY_RECIPE_FILES,
                     "private replay recipe inventory exceeds its file bound")
+    except OSError as error:
+        raise BuildProvenanceError(
+            f"cannot enumerate private replay recipes: {error}") from error
     result = []
     for path in sorted(candidates):
         try:

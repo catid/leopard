@@ -26,7 +26,7 @@ import unittest
 from unittest import mock
 from dataclasses import asdict
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 
 MODULE_PATH = Path(__file__).with_name("run_abba.py")
@@ -1331,6 +1331,62 @@ def git_object_fixture(kind: str, raw: bytes) -> dict:
     }
 
 
+def expanding_empty_tree_closure(
+        depth: int = 32) -> tuple[str, dict[str, bytes]]:
+    """Build a small object DAG whose naive path expansion is exponential."""
+    raw_objects: dict[str, bytes] = {}
+    empty = git_object_fixture("tree", b"")
+    child = empty["object_id"]
+    raw_objects[child] = b""
+    for _index in range(depth):
+        raw = (
+            b"40000 a\0" + bytes.fromhex(child) +
+            b"40000 b\0" + bytes.fromhex(child))
+        identity = git_object_fixture("tree", raw)
+        child = identity["object_id"]
+        raw_objects[child] = raw
+    return child, raw_objects
+
+
+def expanding_productive_tree_closure(
+        width: int = 16 * 1024,
+        depth: int = 2046) -> tuple[str, dict[str, bytes]]:
+    """Build a compact shared DAG with maximum leaves and near-maximum paths."""
+    raw_objects: dict[str, bytes] = {}
+    blob_id = "2" * 40
+    bottom_raw = b"100644 z\0" + bytes.fromhex(blob_id)
+    bottom = git_object_fixture("tree", bottom_raw)
+    child = bottom["object_id"]
+    raw_objects[child] = bottom_raw
+    for _index in range(depth - 1):
+        raw = b"40000 a\0" + bytes.fromhex(child)
+        identity = git_object_fixture("tree", raw)
+        child = identity["object_id"]
+        raw_objects[child] = raw
+
+    def root_name(index: int) -> bytes:
+        return bytes((
+            ord("a") + index // (26 * 26),
+            ord("a") + (index // 26) % 26,
+            ord("a") + index % 26,
+        ))
+
+    root_raw = b"".join(
+        b"40000 " + root_name(index) + b"\0" + bytes.fromhex(child)
+        for index in range(width))
+    root = git_object_fixture("tree", root_raw)
+    raw_objects[root["object_id"]] = root_raw
+    return root["object_id"], raw_objects
+
+
+def encode_git_tree(entries: Sequence[Mapping[str, str]]) -> bytes:
+    return b"".join(
+        entry["git_mode"].encode("ascii") + b" " +
+        entry["name"].encode("utf-8") + b"\0" +
+        bytes.fromhex(entry["object_id"])
+        for entry in entries)
+
+
 def rich_git_source_fixture(
     path: str,
     head: str,
@@ -2188,6 +2244,244 @@ class MainCompareRunnerTests(unittest.TestCase):
             runner.git_capture.validate_git_capture(
                 candidate_identity, str(candidate.resolve()),
                 candidate_commit, require_detached=False)
+
+    def test_git_capture_binds_executable_layout_and_nested_git(self) -> None:
+        baseline_path = SPECIFICATION["baseline_source_root"]
+
+        def validate(value: dict) -> None:
+            runner.git_capture.validate_git_capture(
+                value, baseline_path, runner.MAIN_COMMIT,
+                require_detached=True)
+
+        identity = complete_source_fixture("baseline")
+        validate(identity)
+
+        executable_splice = copy.deepcopy(identity)
+        executable_splice["git_executable"]["source"]["path"] = \
+            "/tmp/alternate-git"
+        with self.assertRaisesRegex(
+                runner.git_capture.GitCaptureError,
+                "source executable identity"):
+            validate(executable_splice)
+
+        layout_relabel = copy.deepcopy(identity)
+        layout_relabel["git_metadata"]["layout"] = "linked-worktree"
+        with self.assertRaisesRegex(
+                runner.git_capture.GitCaptureError,
+                "metadata layout differs"):
+            validate(layout_relabel)
+
+        metadata_splice = copy.deepcopy(identity)
+        alternate_gitdir = "/tmp/alternate-source/.git"
+        metadata_splice["git_metadata"].update({
+            "gitdir": alternate_gitdir,
+            "commondir": alternate_gitdir,
+            "guarded_components": [alternate_gitdir],
+        })
+        with self.assertRaisesRegex(
+                runner.git_capture.GitCaptureError,
+                "metadata layout differs"):
+            validate(metadata_splice)
+
+        nested_splice = copy.deepcopy(identity)
+        nested = nested_splice["submodules"][0]["identity"]
+        alternate_sha256 = "b" * 64
+        nested["git_executable"]["source"]["sha256"] = alternate_sha256
+        nested["git_executable"]["sealed"]["sha256"] = alternate_sha256
+        nested["git_executable"]["sealed"]["source_sha256"] = \
+            alternate_sha256
+        nested_digest = runner.git_capture._digest(nested)
+        nested_splice["submodules"][0]["identity_sha256"] = nested_digest
+        nested_path = nested_splice["submodules"][0]["path"]
+        next(
+            record for record in nested_splice["tracked_files"]
+            if record["path"] == nested_path
+        )["identity_sha256"] = nested_digest
+        nested_splice["tracked_files_sha256"] = runner.git_capture._digest(
+            nested_splice["tracked_files"])
+        with self.assertRaisesRegex(
+                runner.git_capture.GitCaptureError,
+                "submodule used a different Git executable"):
+            validate(nested_splice)
+
+    def test_git_tree_flattener_accepts_a_shared_productive_dag(self) -> None:
+        blob_id = "1" * 40
+        child_raw = b"100644 leaf\0" + bytes.fromhex(blob_id)
+        child_id = git_object_fixture("tree", child_raw)["object_id"]
+        root_raw = (
+            b"40000 a\0" + bytes.fromhex(child_id) +
+            b"40000 b\0" + bytes.fromhex(child_id))
+        root_id = git_object_fixture("tree", root_raw)["object_id"]
+        self.assertEqual(
+            runner.git_capture._flatten_tree_objects(
+                root_id, {root_id: root_raw, child_id: child_raw}),
+            [
+                {
+                    "path": "a/leaf", "git_mode": "100644",
+                    "git_type": "blob", "object_id": blob_id,
+                },
+                {
+                    "path": "b/leaf", "git_mode": "100644",
+                    "git_type": "blob", "object_id": blob_id,
+                },
+            ],
+        )
+
+    def test_git_validators_reject_exponential_empty_tree_dag(self) -> None:
+        dag_root, dag_raw_objects = expanding_empty_tree_closure()
+        generic = complete_source_fixture("candidate")
+        generic_commit_raw = (
+            f"tree {dag_root}\n"
+            "author Fixture <fixture@example.com> 1 +0000\n"
+            "committer Fixture <fixture@example.com> 1 +0000\n\n"
+            "expanding empty DAG\n"
+        ).encode("ascii")
+        generic_commit = git_object_fixture("commit", generic_commit_raw)
+        generic.update({
+            "head": generic_commit["object_id"],
+            "tree": dag_root,
+            "commit_object": generic_commit,
+            "tree_objects": [
+                git_object_fixture("tree", raw)
+                for _object_id, raw in sorted(dag_raw_objects.items())
+            ],
+        })
+        with self.assertRaisesRegex(
+                runner.git_capture.GitCaptureError,
+                "expands beyond its traversal bound"):
+            runner.git_capture.validate_git_capture(
+                generic, SPECIFICATION["candidate_source_root"],
+                generic_commit["object_id"], require_detached=False)
+
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-main-git-expanding-dag-") as directory:
+            root = Path(directory)
+            commit = initialize_git_fixture(root)
+            subprocess.run(
+                ["/usr/bin/git", "-C", str(root), "checkout", "-q",
+                 "--detach", commit], check=True)
+            direct = runner.git_capture.capture_direct_git_identity(
+                root, require_clean=True)
+            original_root = direct["tree"]
+            original_record = next(
+                record for record in direct["tree_objects"]
+                if record["object_id"] == original_root)
+            original_raw = runner.git_capture._validate_object_identity(
+                original_record, "tree", original_root,
+                "expanding-DAG original root")
+            entries = runner.git_capture._parse_tree_object(
+                original_raw, "expanding-DAG original root")
+            dag_name = "__leopard_empty_dag__"
+            self.assertNotIn(dag_name, {
+                entry["name"] for entry in entries})
+            entries.append({
+                "name": dag_name,
+                "git_mode": "40000",
+                "git_type": "tree",
+                "object_id": dag_root,
+            })
+            entries.sort(key=lambda entry: (
+                entry["name"].encode("utf-8") +
+                (b"/" if entry["git_type"] == "tree" else b"")))
+            forged_root_raw = encode_git_tree(entries)
+            forged_root = git_object_fixture("tree", forged_root_raw)
+            tree_records = {
+                record["object_id"]: copy.deepcopy(record)
+                for record in direct["tree_objects"]
+                if record["object_id"] != original_root
+            }
+            tree_records.update({
+                object_id: git_object_fixture("tree", raw)
+                for object_id, raw in dag_raw_objects.items()
+            })
+            tree_records[forged_root["object_id"]] = forged_root
+            direct["tree_objects"] = [
+                tree_records[object_id]
+                for object_id in sorted(tree_records)
+            ]
+            original_commit_raw = \
+                runner.git_capture._validate_object_identity(
+                    direct["commit_object"], "commit", direct["head"],
+                    "expanding-DAG original commit")
+            _old_tree_line, separator, commit_tail = \
+                original_commit_raw.partition(b"\n")
+            self.assertTrue(separator)
+            forged_commit_raw = (
+                b"tree " + forged_root["object_id"].encode("ascii") +
+                b"\n" + commit_tail)
+            forged_commit = git_object_fixture("commit", forged_commit_raw)
+            direct.update({
+                "head": forged_commit["object_id"],
+                "tree": forged_root["object_id"],
+                "detached": True,
+                "head_ref": None,
+                "commit_object": forged_commit,
+            })
+            direct["identity_sha256"] = runner.git_capture._digest({
+                key: item for key, item in direct.items()
+                if key != "identity_sha256"
+            })
+            with self.assertRaisesRegex(
+                    runner.git_capture.GitCaptureError,
+                    "expands beyond its traversal bound"):
+                runner.git_capture.validate_direct_git_capture(
+                    direct, str(root.resolve()), require_clean=True)
+
+    def test_git_validators_reject_productive_path_byte_amplification(
+            self) -> None:
+        dag_root, dag_raw_objects = expanding_productive_tree_closure()
+        tree_records = [
+            git_object_fixture("tree", raw)
+            for _object_id, raw in sorted(dag_raw_objects.items())
+        ]
+        commit_raw = (
+            f"tree {dag_root}\n"
+            "author Fixture <fixture@example.com> 1 +0000\n"
+            "committer Fixture <fixture@example.com> 1 +0000\n\n"
+            "productive path amplification\n"
+        ).encode("ascii")
+        commit_identity = git_object_fixture("commit", commit_raw)
+
+        generic = complete_source_fixture("candidate")
+        generic.update({
+            "head": commit_identity["object_id"],
+            "tree": dag_root,
+            "commit_object": commit_identity,
+            "tree_objects": copy.deepcopy(tree_records),
+        })
+        with self.assertRaisesRegex(
+                runner.git_capture.GitCaptureError,
+                "expanded path-byte bound"):
+            runner.git_capture.validate_git_capture(
+                generic, SPECIFICATION["candidate_source_root"],
+                commit_identity["object_id"], require_detached=False)
+
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-main-git-path-amplification-") as directory:
+            root = Path(directory)
+            original_head = initialize_git_fixture(root)
+            subprocess.run(
+                ["/usr/bin/git", "-C", str(root), "checkout", "-q",
+                 "--detach", original_head], check=True)
+            direct = runner.git_capture.capture_direct_git_identity(
+                root, require_clean=True)
+            direct.update({
+                "head": commit_identity["object_id"],
+                "tree": dag_root,
+                "detached": True,
+                "head_ref": None,
+                "commit_object": copy.deepcopy(commit_identity),
+                "tree_objects": copy.deepcopy(tree_records),
+            })
+            direct["identity_sha256"] = runner.git_capture._digest({
+                key: item for key, item in direct.items()
+                if key != "identity_sha256"
+            })
+            with self.assertRaisesRegex(
+                    runner.git_capture.GitCaptureError,
+                    "expanded path-byte bound"):
+                runner.git_capture.validate_direct_git_capture(
+                    direct, str(root.resolve()), require_clean=True)
 
     def test_git_capture_tree_closure_rejects_coherent_transcript_forgery(
             self) -> None:

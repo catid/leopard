@@ -3362,6 +3362,21 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                     provenance._TemporaryReplayRecipeTransport(
                         build, expanding, set(expanding))
 
+    def test_replay_recipe_enumeration_fails_closed_on_scandir_error(
+            self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-provenance-recipe-enumeration-") as directory:
+            build = Path(directory) / "build"
+            (build / "CMakeFiles").mkdir(parents=True)
+            with mock.patch.object(
+                    provenance.os, "scandir",
+                    side_effect=PermissionError(
+                        "injected replay recipe enumeration failure")):
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "cannot enumerate private replay recipes"):
+                    provenance._replay_recipe_candidates(build)
+
     def test_replay_recipe_transport_close_recovers_from_interruption(
             self) -> None:
         with tempfile.TemporaryDirectory(

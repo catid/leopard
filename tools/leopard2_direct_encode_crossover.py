@@ -15,9 +15,10 @@ grid with per-cell batches 1, 4, and 16.  It compares forced direct and forced
 transform encode-execution timing only: it does not exercise production AUTO,
 provide simultaneous campaign-wide inference, or authorize promotion.
 ``sparse-high-production-auto-avx2`` creates a no-hook production archive and
-runs the fresh 88-cell v11 campaign: 56 R>=4 candidates, 18 padded-side-two
-structural controls, and 14 backend/thread performance controls.  Retained v10
-result trees remain replayable under their frozen schema and grid identities.
+runs the fresh 88-cell v13 campaign: 56 R>=4 candidates, 18 padded-side-two
+structural controls, and 14 backend/thread performance controls.  Retained
+v10/v11 result trees remain replayable under their frozen schemas and grid
+identities.
 
 Typical use::
 
@@ -72,28 +73,40 @@ from pathlib import Path
 
 SCHEMA_V7 = "leopard2-direct-encode-crossover/v7"
 SCHEMA_V8 = "leopard2-direct-encode-crossover/v8"
-SCHEMA = "leopard2-direct-encode-crossover/v9"
+SCHEMA_V9 = "leopard2-direct-encode-crossover/v9"
+SCHEMA = "leopard2-direct-encode-crossover/v12"
 PRODUCTION_AUTO_SCHEMA_V10 = "leopard2-direct-encode-crossover/v10"
-PRODUCTION_AUTO_SCHEMA = "leopard2-direct-encode-crossover/v11"
+PRODUCTION_AUTO_SCHEMA_V11 = "leopard2-direct-encode-crossover/v11"
+PRODUCTION_AUTO_SCHEMA = "leopard2-direct-encode-crossover/v13"
 PRODUCTION_AUTO_SCHEMAS = (
-    PRODUCTION_AUTO_SCHEMA_V10, PRODUCTION_AUTO_SCHEMA,
+    PRODUCTION_AUTO_SCHEMA_V10, PRODUCTION_AUTO_SCHEMA_V11,
+    PRODUCTION_AUTO_SCHEMA,
 )
 JOB_SCHEMA_V7 = "leopard2-direct-encode-crossover-job/v7"
 JOB_SCHEMA_V8 = "leopard2-direct-encode-crossover-job/v8"
-JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v9"
+JOB_SCHEMA_V9 = "leopard2-direct-encode-crossover-job/v9"
+JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v12"
 PRODUCTION_AUTO_JOB_SCHEMA_V10 = "leopard2-direct-encode-crossover-job/v10"
-PRODUCTION_AUTO_JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v11"
+PRODUCTION_AUTO_JOB_SCHEMA_V11 = "leopard2-direct-encode-crossover-job/v11"
+PRODUCTION_AUTO_JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v13"
 ANALYSIS_SCHEMA_V4 = "leopard2-direct-encode-crossover-analysis/v4"
-ANALYSIS_SCHEMA = "leopard2-direct-encode-crossover-analysis/v5"
+ANALYSIS_SCHEMA_V5 = "leopard2-direct-encode-crossover-analysis/v5"
+ANALYSIS_SCHEMA = "leopard2-direct-encode-crossover-analysis/v8"
 PRODUCTION_AUTO_ANALYSIS_SCHEMA_V6 = (
     "leopard2-direct-encode-crossover-analysis/v6"
 )
-PRODUCTION_AUTO_ANALYSIS_SCHEMA = (
+PRODUCTION_AUTO_ANALYSIS_SCHEMA_V7 = (
     "leopard2-direct-encode-crossover-analysis/v7"
 )
-PRODUCTION_AUTO_ANALYSIS_SCHEMAS = (
-    PRODUCTION_AUTO_ANALYSIS_SCHEMA_V6, PRODUCTION_AUTO_ANALYSIS_SCHEMA,
+PRODUCTION_AUTO_ANALYSIS_SCHEMA = (
+    "leopard2-direct-encode-crossover-analysis/v9"
 )
+PRODUCTION_AUTO_ANALYSIS_SCHEMAS = (
+    PRODUCTION_AUTO_ANALYSIS_SCHEMA_V6,
+    PRODUCTION_AUTO_ANALYSIS_SCHEMA_V7,
+    PRODUCTION_AUTO_ANALYSIS_SCHEMA,
+)
+DIRECT_SOURCE_IDENTITY_SCHEMA = "leopard2-direct-source-identity/v1"
 CELL_SCHEMA_V1 = "leopard2-direct-encode-crossover-cell/v1"
 CELL_SCHEMA_V2 = "leopard2-direct-encode-crossover-cell/v2"
 CELL_SCHEMA_V3 = "leopard2-direct-encode-crossover-cell/v3"
@@ -472,7 +485,7 @@ GIT_ENVIRONMENT_V7.update({
     "GIT_OPTIONAL_LOCKS": "0",
 })
 GIT_ENVIRONMENT = dict(GIT_ENVIRONMENT_V7)
-SOURCE_IDENTITY_LOCK = threading.Lock()
+SOURCE_IDENTITY_LOCK = threading.RLock()
 RUNTIME_LAUNCHER_NAMES_V7 = (
     "python", "script", "build_provenance", "git_capture",
     "link_common", "containment",
@@ -514,7 +527,8 @@ def is_production_auto_analysis_schema(analysis_schema):
 def production_auto_cell_schema(manifest_schema):
     if manifest_schema == PRODUCTION_AUTO_SCHEMA_V10:
         return CELL_SCHEMA_V3
-    if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+    if manifest_schema in (
+            PRODUCTION_AUTO_SCHEMA_V11, PRODUCTION_AUTO_SCHEMA):
         return CELL_SCHEMA_V4
     raise CrossoverError("outer schema has no production-AUTO cell dialect")
 
@@ -522,7 +536,8 @@ def production_auto_cell_schema(manifest_schema):
 def production_auto_benchmark_schema(manifest_schema):
     if manifest_schema == PRODUCTION_AUTO_SCHEMA_V10:
         return PRODUCTION_AUTO_BENCHMARK_SCHEMA_V1
-    if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+    if manifest_schema in (
+            PRODUCTION_AUTO_SCHEMA_V11, PRODUCTION_AUTO_SCHEMA):
         return PRODUCTION_AUTO_BENCHMARK_SCHEMA
     raise CrossoverError("outer schema has no production-AUTO benchmark dialect")
 
@@ -1347,7 +1362,9 @@ def retained_runtime_launcher_contract(manifest_schema):
             RUNTIME_LAUNCHER_NAMES_V7,
             RUNTIME_LAUNCHER_SOURCE_PATHS_V7,
         )
-    if manifest_schema in (SCHEMA_V8, SCHEMA, PRODUCTION_AUTO_SCHEMA):
+    if manifest_schema in (
+            SCHEMA_V8, SCHEMA_V9, SCHEMA,
+            PRODUCTION_AUTO_SCHEMA_V11, PRODUCTION_AUTO_SCHEMA):
         return RUNTIME_LAUNCHER_NAMES, RUNTIME_LAUNCHER_SOURCE_PATHS
     raise CrossoverError("retained launcher schema is unsupported")
 
@@ -1561,7 +1578,8 @@ def validate_current_executable_identity(identity, description):
             close_sealed_snapshot(snapshot)
 
 
-def load_sealed_python_module(snapshot, module_name, description):
+def load_sealed_python_module(
+        snapshot, module_name, description, publish=True):
     if (not isinstance(module_name, str) or
             not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", module_name)):
         raise CrossoverError(
@@ -1574,15 +1592,17 @@ def load_sealed_python_module(snapshot, module_name, description):
     module.__file__ = snapshot["path"]
     module.__package__ = ""
     previous = sys.modules.get(module_name)
-    sys.modules[module_name] = module
+    if publish:
+        sys.modules[module_name] = module
     try:
         code = compile(value, snapshot["path"], "exec")
         exec(code, module.__dict__)  # pylint: disable=exec-used
     except BaseException:
-        if previous is None:
-            sys.modules.pop(module_name, None)
-        else:
-            sys.modules[module_name] = previous
+        if publish:
+            if previous is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = previous
         raise
     return module
 
@@ -1598,6 +1618,15 @@ def outer_schema_contract(manifest_schema):
             "controlled_build_schema": PRODUCTION_AUTO_CONTROLLED_BUILD_SCHEMA,
             "job_schema": PRODUCTION_AUTO_JOB_SCHEMA_V10,
         }
+    if manifest_schema == PRODUCTION_AUTO_SCHEMA_V11:
+        return {
+            "analysis_schema": PRODUCTION_AUTO_ANALYSIS_SCHEMA_V7,
+            "build_configuration_attestation_schema":
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+            "build_configuration_file_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
+            "controlled_build_schema": PRODUCTION_AUTO_CONTROLLED_BUILD_SCHEMA,
+            "job_schema": PRODUCTION_AUTO_JOB_SCHEMA_V11,
+        }
     if manifest_schema == PRODUCTION_AUTO_SCHEMA:
         return {
             "analysis_schema": PRODUCTION_AUTO_ANALYSIS_SCHEMA,
@@ -1606,6 +1635,7 @@ def outer_schema_contract(manifest_schema):
             "build_configuration_file_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
             "controlled_build_schema": PRODUCTION_AUTO_CONTROLLED_BUILD_SCHEMA,
             "job_schema": PRODUCTION_AUTO_JOB_SCHEMA,
+            "source_identity_schema": DIRECT_SOURCE_IDENTITY_SCHEMA,
         }
     if manifest_schema == SCHEMA:
         return {
@@ -1615,10 +1645,21 @@ def outer_schema_contract(manifest_schema):
             "build_configuration_file_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
             "controlled_build_schema": CONTROLLED_BUILD_SCHEMA,
             "job_schema": JOB_SCHEMA,
+            "source_identity_schema": DIRECT_SOURCE_IDENTITY_SCHEMA,
+        }
+    if manifest_schema == SCHEMA_V9:
+        return {
+            "analysis_schema": ANALYSIS_SCHEMA_V5,
+            "build_configuration_attestation_schema":
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14,
+            "build_configuration_file_schema":
+                BUILD_CONFIGURATION_FILE_SCHEMA_V16,
+            "controlled_build_schema": CONTROLLED_BUILD_SCHEMA,
+            "job_schema": JOB_SCHEMA_V9,
         }
     if manifest_schema == SCHEMA_V8:
         return {
-            "analysis_schema": ANALYSIS_SCHEMA,
+            "analysis_schema": ANALYSIS_SCHEMA_V5,
             "build_configuration_attestation_schema":
                 BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13,
             "build_configuration_file_schema":
@@ -1642,7 +1683,7 @@ def authoritative_commands_for_schema(manifest_schema):
     outer_schema_contract(manifest_schema)
     if manifest_schema == SCHEMA_V7:
         return AUTHORITATIVE_COMMANDS_V7
-    if manifest_schema in (SCHEMA_V8, SCHEMA):
+    if manifest_schema in (SCHEMA_V8, SCHEMA_V9, SCHEMA):
         return AUTHORITATIVE_COMMANDS_V9
     return (PRODUCTION_AUTO_MODE,)
 
@@ -1651,7 +1692,7 @@ def run_commands_for_schema(manifest_schema):
     outer_schema_contract(manifest_schema)
     if manifest_schema == SCHEMA_V7:
         return RUN_COMMANDS_V7
-    if manifest_schema in (SCHEMA_V8, SCHEMA):
+    if manifest_schema in (SCHEMA_V8, SCHEMA_V9, SCHEMA):
         return RUN_COMMANDS_V9
     return (PRODUCTION_AUTO_MODE,)
 
@@ -1716,7 +1757,7 @@ def controlled_executable_mode(manifest_schema):
 def configuration_selector_overrides_for_mode(mode, manifest_schema=SCHEMA):
     if mode not in run_commands_for_schema(manifest_schema):
         raise CrossoverError("runner mode has no build-selector contract")
-    if (manifest_schema in (SCHEMA_V8, SCHEMA) and
+    if (manifest_schema in (SCHEMA_V8, SCHEMA_V9, SCHEMA) and
             mode == SPARSE_HIGH_MODE):
         return {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"}
     if (is_production_auto_schema(manifest_schema) and
@@ -1780,7 +1821,8 @@ def evidence_contract(
             ]
         ),
     }
-    if manifest_schema in (SCHEMA_V8, SCHEMA) + PRODUCTION_AUTO_SCHEMAS:
+    if manifest_schema in (
+            SCHEMA_V8, SCHEMA_V9, SCHEMA) + PRODUCTION_AUTO_SCHEMAS:
         if mode not in run_commands_for_schema(manifest_schema):
             raise CrossoverError("current evidence runner mode is invalid")
         if (not isinstance(selector_overrides, dict) or
@@ -1805,6 +1847,9 @@ def evidence_contract(
                 "production_default_flip_authorized": False,
                 "test_hooks_permitted": False,
             })
+        if manifest_schema in (SCHEMA, PRODUCTION_AUTO_SCHEMA):
+            result["source_identity_schema"] = \
+                schemas["source_identity_schema"]
     else:
         if mode not in RUN_COMMANDS_V7:
             raise CrossoverError("historical evidence runner mode is invalid")
@@ -3436,7 +3481,7 @@ def git_source_identity(source, require_clean, git_tool=None):
     }
 
 
-def source_identity(source, require_clean):
+def legacy_source_identity(source, require_clean):
     """Capture one cross-bound Git/index/worktree state with one Git image.
 
     The process lock serializes this runner's own capture threads, and exact
@@ -3465,14 +3510,14 @@ def source_identity(source, require_clean):
                 )
             result["git"] = git_before
             result["git_tool"] = canonical_git_identity(git_tool)
-            return validate_source_state(
+            return validate_legacy_source_state(
                 result, "captured source identity", require_clean
             )
         finally:
             close_canonical_git_snapshot(git_tool)
 
 
-def validate_source_state(
+def validate_legacy_source_state(
         value, description, require_clean, require_current_git_tool=True):
     if (not isinstance(value, dict) or
             set(value) != {
@@ -3641,6 +3686,340 @@ def validate_source_state(
             "{} used a different canonical Git executable".format(description)
         )
     return value
+
+
+def open_direct_git_capture_support():
+    """Load the guarded capture engine from exact sealed source bytes."""
+    repository = Path(__file__).resolve().parents[1]
+    paths = {
+        "build_provenance":
+            repository / "tools" / "leopard2_build_provenance.py",
+        "git_capture":
+            repository / "experiments" / "leopard2" /
+            "main_compare" / "git_capture.py",
+    }
+    snapshots = {}
+    try:
+        with SOURCE_IDENTITY_LOCK:
+            # The first provenance image is bootstrap-only: it supplies the
+            # guard implementation but is never part of the authoritative
+            # pair.  Both authoritative images are opened and rechecked only
+            # after that two-path guard is live.
+            snapshots["bootstrap"] = open_exact_executable_snapshot(
+                paths["build_provenance"],
+                "bootstrap direct source build_provenance support",
+                require_executable=False, allow_writable=True,
+            )
+            bootstrap_module = load_sealed_python_module(
+                snapshots["bootstrap"],
+                "leopard2_direct_bootstrap_provenance",
+                "bootstrap direct source build-provenance module",
+                publish=False,
+            )
+            guard_type = getattr(
+                bootstrap_module, "_InotifyMutationGuard", None)
+            if not callable(guard_type):
+                raise CrossoverError(
+                    "bootstrap build-provenance module omits its mutation "
+                    "guard")
+            snapshots["_support_guard"] = None
+            support_guard = guard_type(
+                "direct source support module pair",
+                publish=lambda guard: snapshots.__setitem__(
+                    "_support_guard", guard),
+            )
+            if snapshots.get("_support_guard") is not support_guard:
+                raise CrossoverError(
+                    "direct source support mutation guard was not published"
+                )
+            for path in paths.values():
+                support_guard.add_file_path(path)
+
+            for name in ("build_provenance", "git_capture"):
+                snapshots[name] = open_exact_executable_snapshot(
+                    paths[name], "authoritative direct source {} support".
+                        format(name),
+                    require_executable=False, allow_writable=True,
+                )
+            if sealed_snapshot_identity(snapshots["bootstrap"]) != \
+                    sealed_snapshot_identity(snapshots["build_provenance"]):
+                raise CrossoverError(
+                    "bootstrap direct source build-provenance support "
+                    "differs from its authoritative snapshot"
+                )
+            provenance_module = load_sealed_python_module(
+                snapshots["build_provenance"],
+                "leopard2_build_provenance",
+                "sealed direct source build-provenance module",
+                publish=False,
+            )
+
+            prior_provenance = (
+                "leopard2_build_provenance" in sys.modules,
+                sys.modules.get("leopard2_build_provenance"),
+            )
+            try:
+                sys.modules["leopard2_build_provenance"] = \
+                    provenance_module
+                module = load_sealed_python_module(
+                    snapshots["git_capture"],
+                    "leopard2_direct_git_capture",
+                    "sealed direct source Git-capture module",
+                    publish=False,
+                )
+            finally:
+                if prior_provenance[0]:
+                    sys.modules["leopard2_build_provenance"] = \
+                        prior_provenance[1]
+                else:
+                    sys.modules.pop("leopard2_build_provenance", None)
+
+            for name in (
+                    "capture_direct_git_identity",
+                    "direct_source_projection",
+                    "validate_direct_git_capture"):
+                if not callable(getattr(module, name, None)):
+                    raise CrossoverError(
+                        "sealed Git-capture module omits {}".format(name)
+                    )
+            if getattr(module, "_build_provenance", None) is not \
+                    provenance_module:
+                raise CrossoverError(
+                    "sealed Git-capture module imported a different "
+                    "build-provenance module"
+                )
+
+            for name in ("build_provenance", "git_capture"):
+                confirmation = None
+                try:
+                    confirmation = open_exact_executable_snapshot(
+                        paths[name],
+                        "confirmed authoritative direct source {} support".
+                            format(name),
+                        require_executable=False, allow_writable=True,
+                    )
+                    if sealed_snapshot_identity(confirmation) != \
+                            sealed_snapshot_identity(snapshots[name]):
+                        raise CrossoverError(
+                            "direct source {} support changed after its "
+                            "authoritative snapshot".format(name)
+                        )
+                finally:
+                    if confirmation is not None:
+                        close_sealed_snapshot(confirmation)
+            support_guard.verify()
+        return module, snapshots
+    except BaseException as primary:
+        try:
+            close_direct_git_capture_support(snapshots)
+        except BaseException as cleanup_error:
+            raise CrossoverError(
+                "direct Git-capture support failed: {}; cleanup also failed: "
+                "{}: {}".format(
+                    primary, type(cleanup_error).__name__, cleanup_error)
+            ) from primary
+        raise
+
+
+def close_direct_git_capture_support(snapshots):
+    errors = []
+    if snapshots is None:
+        return
+    try:
+        support_guard = snapshots.get("_support_guard")
+        if support_guard is not None:
+            if getattr(support_guard, "descriptor", -1) >= 0:
+                try:
+                    support_guard.verify()
+                except BaseException as error:
+                    errors.append(("support module guard", error))
+            try:
+                support_guard.close()
+            except BaseException as error:
+                errors.append(("support module guard close", error))
+            snapshots["_support_guard"] = None
+        for name in ("git_capture", "build_provenance", "bootstrap"):
+            if name not in snapshots:
+                continue
+            try:
+                close_sealed_snapshot(snapshots[name])
+            except BaseException as error:
+                errors.append((name, error))
+    except BaseException as error:
+        errors.append(("support cleanup", error))
+    if errors:
+        raise CrossoverError(
+            "cannot close direct Git-capture support: {}".format(
+                "; ".join(
+                    "{} {}: {}".format(name, type(error).__name__, error)
+                    for name, error in errors
+                )
+            )
+        )
+
+
+def source_identity(source, require_clean):
+    """Capture one versioned, guarded Git/index/worktree source proof."""
+    if type(require_clean) is not bool:
+        raise CrossoverError("source cleanliness requirement is invalid")
+    source = Path(source).resolve()
+    repository = Path(__file__).resolve().parents[1]
+    inline_paths = (
+        tuple(sorted(set(RUNTIME_LAUNCHER_SOURCE_PATHS.values())))
+        if source == repository else ()
+    )
+    with SOURCE_IDENTITY_LOCK:
+        module = None
+        snapshots = None
+        try:
+            module, snapshots = open_direct_git_capture_support()
+            capture = module.capture_direct_git_identity(
+                source, require_clean=require_clean,
+                inline_paths=inline_paths,
+            )
+            projection = module.direct_source_projection(capture)
+            if source == repository:
+                rich_records = {
+                    record["path"]: record
+                    for record in capture["paths"]
+                }
+                for name, relative in (
+                        ("build_provenance",
+                         RUNTIME_LAUNCHER_SOURCE_PATHS["build_provenance"]),
+                        ("git_capture",
+                         RUNTIME_LAUNCHER_SOURCE_PATHS["git_capture"])):
+                    record = rich_records.get(relative)
+                    worktree = (
+                        record.get("worktree")
+                        if isinstance(record, dict) else None
+                    )
+                    if (not isinstance(record, dict) or
+                            record.get("index_mode") not in
+                                ("100644", "100755") or
+                            not isinstance(worktree, dict) or
+                            worktree.get("kind") != "regular" or
+                            not isinstance(worktree.get("payload"), dict) or
+                            worktree["payload"].get("sha256") !=
+                                snapshots[name]["sha256"]):
+                        raise CrossoverError(
+                            "guarded source capture differs from its sealed "
+                            "{} implementation".format(name)
+                        )
+            result = {
+                "schema": DIRECT_SOURCE_IDENTITY_SCHEMA,
+                "capture": capture,
+                "files": projection["files"],
+                "git": projection["git"],
+                "git_tool": projection["git_tool"],
+                "projection_digest": projection["digest"],
+                "repository_controls":
+                    projection["repository_controls"],
+            }
+            result["digest"] = digest_value(result)
+            return validate_current_source_state(
+                result, "captured guarded source identity", require_clean,
+                _capture_module=module,
+            )
+        except CrossoverError:
+            raise
+        except BaseException as error:
+            error_type = getattr(module, "GitCaptureError", ()) \
+                if module is not None else ()
+            if error_type and isinstance(error, error_type):
+                raise CrossoverError(
+                    "cannot capture guarded source identity: {}".format(error)
+                ) from error
+            raise
+        finally:
+            if snapshots is not None:
+                close_direct_git_capture_support(snapshots)
+
+
+def validate_current_source_state(
+        value, description, require_clean, require_current_git_tool=True,
+        _capture_module=None):
+    if type(require_clean) is not bool:
+        raise CrossoverError("{} clean policy is invalid".format(description))
+    expected_keys = {
+        "schema", "capture", "digest", "files", "git", "git_tool",
+        "projection_digest", "repository_controls",
+    }
+    if (not isinstance(value, dict) or set(value) != expected_keys or
+            value.get("schema") != DIRECT_SOURCE_IDENTITY_SCHEMA or
+            not isinstance(value.get("capture"), dict) or
+            value.get("digest") != digest_value({
+                key: item for key, item in value.items() if key != "digest"
+            })):
+        raise CrossoverError(
+            "{} has an invalid guarded source identity".format(description)
+        )
+    with SOURCE_IDENTITY_LOCK:
+        module = _capture_module
+        snapshots = None
+        try:
+            if module is None:
+                module, snapshots = open_direct_git_capture_support()
+            capture = value["capture"]
+            module.validate_direct_git_capture(
+                capture, capture.get("path", ""), require_clean=require_clean
+            )
+            projection = module.direct_source_projection(capture)
+        except CrossoverError:
+            raise
+        except BaseException as error:
+            error_type = getattr(module, "GitCaptureError", ()) \
+                if module is not None else ()
+            if error_type and isinstance(error, error_type):
+                raise CrossoverError(
+                    "{} guarded Git proof is invalid: {}".format(
+                        description, error)
+                ) from error
+            raise
+        finally:
+            if snapshots is not None:
+                close_direct_git_capture_support(snapshots)
+    if (value.get("projection_digest") != projection.get("digest") or
+            any(canonical_bytes(value.get(name)) !=
+                canonical_bytes(projection.get(name))
+                for name in (
+                    "files", "git", "git_tool", "repository_controls"))):
+        raise CrossoverError(
+            "{} compatibility projection differs from its guarded proof".format(
+                description
+            )
+        )
+    current_git_tool = (
+        canonical_git_identity() if require_current_git_tool is True else None
+    )
+    if (type(require_current_git_tool) is not bool or
+            (require_current_git_tool and
+             (not isinstance(value.get("git_tool"), dict) or
+              value["git_tool"].get("path") != current_git_tool["path"] or
+              value["git_tool"].get("sha256") !=
+                  current_git_tool["sha256"]))):
+        raise CrossoverError(
+            "{} used a different canonical Git executable".format(
+                description
+            )
+        )
+    return value
+
+
+def validate_source_state(
+        value, description, require_clean, require_current_git_tool=True,
+        manifest_schema=SCHEMA):
+    """Dispatch source validation from the owning immutable outer schema."""
+    contract = outer_schema_contract(manifest_schema)
+    if contract.get("source_identity_schema") == \
+            DIRECT_SOURCE_IDENTITY_SCHEMA:
+        return validate_current_source_state(
+            value, description, require_clean,
+            require_current_git_tool=require_current_git_tool,
+        )
+    return validate_legacy_source_state(
+        value, description, require_clean,
+        require_current_git_tool=require_current_git_tool,
+    )
 
 
 def parse_backends(text):
@@ -5954,7 +6333,8 @@ def production_auto_grid(manifest_schema=PRODUCTION_AUTO_SCHEMA):
         values = _production_auto_grid_values_v10()
         expected_digest = PRODUCTION_AUTO_CELLS_SHA256_V1
         generation = "v1"
-    elif manifest_schema == PRODUCTION_AUTO_SCHEMA:
+    elif manifest_schema in (
+            PRODUCTION_AUTO_SCHEMA_V11, PRODUCTION_AUTO_SCHEMA):
         values = _production_auto_grid_values()
         expected_digest = PRODUCTION_AUTO_CELLS_SHA256
         generation = "v2"
@@ -5981,7 +6361,8 @@ def production_auto_campaign_contract(
         candidate_cell_count = 74
         control_cell_count = 14
         campaign_name = PRODUCTION_AUTO_CAMPAIGN_NAME_V1
-    elif manifest_schema == PRODUCTION_AUTO_SCHEMA:
+    elif manifest_schema in (
+            PRODUCTION_AUTO_SCHEMA_V11, PRODUCTION_AUTO_SCHEMA):
         cells_sha256 = PRODUCTION_AUTO_CELLS_SHA256
         cell_schema = CELL_SCHEMA_V4
         candidate_cell_count = 56
@@ -6044,7 +6425,8 @@ def production_auto_campaign_contract(
             "metrics.binding_setup.median_us",
         ],
     }
-    if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+    if manifest_schema in (
+            PRODUCTION_AUTO_SCHEMA_V11, PRODUCTION_AUTO_SCHEMA):
         result["decision_gate"]["structural_controls_retained"] = True
         result["structural_control_cell_count"] = 18
     return result
@@ -11316,7 +11698,8 @@ def production_auto_qualification_threshold(
         "control_material_regression_percent",
         "control_regressions_retained",
     }
-    if manifest_schema == PRODUCTION_AUTO_SCHEMA:
+    if manifest_schema in (
+            PRODUCTION_AUTO_SCHEMA_V11, PRODUCTION_AUTO_SCHEMA):
         gate_keys.add("structural_controls_retained")
     elif manifest_schema != PRODUCTION_AUTO_SCHEMA_V10:
         raise CrossoverError(
@@ -11327,7 +11710,8 @@ def production_auto_qualification_threshold(
         "production-AUTO qualification decision gate",
     )
     if (gate.get("control_regressions_retained") is not True or
-            (manifest_schema == PRODUCTION_AUTO_SCHEMA and
+            (manifest_schema in (
+                PRODUCTION_AUTO_SCHEMA_V11, PRODUCTION_AUTO_SCHEMA) and
              gate.get("structural_controls_retained") is not True)):
         raise CrossoverError(
             "production-AUTO retained-control policy differs"
@@ -11360,7 +11744,7 @@ def decision_threshold_summary(summary):
 def analysis_threshold_percent(analysis):
     if is_production_auto_analysis_schema(analysis.get("schema")):
         key = "qualification_threshold_percent"
-    elif analysis.get("schema") == ANALYSIS_SCHEMA:
+    elif analysis.get("schema") in (ANALYSIS_SCHEMA_V5, ANALYSIS_SCHEMA):
         key = "decision_threshold_percent"
     elif analysis.get("schema") == ANALYSIS_SCHEMA_V4:
         key = "promotion_percent"
@@ -11377,9 +11761,11 @@ def analysis_candidate_gate_passed(analysis):
     candidate = required_mapping(analysis.get("candidate"), "analysis.candidate")
     if analysis.get("schema") == PRODUCTION_AUTO_ANALYSIS_SCHEMA_V6:
         key = "all_candidates_qualified_and_controls_within_limit"
-    elif analysis.get("schema") == PRODUCTION_AUTO_ANALYSIS_SCHEMA:
+    elif analysis.get("schema") in (
+            PRODUCTION_AUTO_ANALYSIS_SCHEMA_V7,
+            PRODUCTION_AUTO_ANALYSIS_SCHEMA):
         key = "all_candidates_qualified_and_controls_valid"
-    elif analysis.get("schema") == ANALYSIS_SCHEMA:
+    elif analysis.get("schema") in (ANALYSIS_SCHEMA_V5, ANALYSIS_SCHEMA):
         key = "all_cells_confidently_meet_decision_threshold"
     elif analysis.get("schema") == ANALYSIS_SCHEMA_V4:
         key = "all_cells_confidently_meet_promotion_threshold"
@@ -11546,7 +11932,9 @@ def analyze_production_auto_results(
                 values, qualification_percent, control_limit
             ) for region, values in sorted(regions.items())
         }
-    elif analysis_schema == PRODUCTION_AUTO_ANALYSIS_SCHEMA:
+    elif analysis_schema in (
+            PRODUCTION_AUTO_ANALYSIS_SCHEMA_V7,
+            PRODUCTION_AUTO_ANALYSIS_SCHEMA):
         candidate_summary = summarize_production_auto_region(
             candidates, qualification_percent, control_limit, "candidate"
         )
@@ -11622,7 +12010,9 @@ def analyze_production_auto_results(
         "schema": analysis_schema,
         "source_changed_during_run": source_changed_during_run,
     }
-    if analysis_schema == PRODUCTION_AUTO_ANALYSIS_SCHEMA:
+    if analysis_schema in (
+            PRODUCTION_AUTO_ANALYSIS_SCHEMA_V7,
+            PRODUCTION_AUTO_ANALYSIS_SCHEMA):
         result["structural_controls"] = structural_summary
     return result
 
@@ -11679,7 +12069,7 @@ def analyze_results(
         candidate_summary["confidence_promotion_count"] ==
         candidate_summary["cell_count"]
     )
-    if analysis_schema == ANALYSIS_SCHEMA:
+    if analysis_schema in (ANALYSIS_SCHEMA_V5, ANALYSIS_SCHEMA):
         candidate_summary = decision_threshold_summary(candidate_summary)
         excluded_summary = decision_threshold_summary(excluded_summary)
         region_summaries = {
@@ -11705,7 +12095,7 @@ def analyze_results(
         "schema": analysis_schema,
         "source_changed_during_run": source_changed_during_run,
     }
-    if analysis_schema == ANALYSIS_SCHEMA:
+    if analysis_schema in (ANALYSIS_SCHEMA_V5, ANALYSIS_SCHEMA):
         analysis["decision_contract"] = analysis_decision_contract(mode)
         analysis["candidate"][
             "all_cells_meet_decision_threshold"] = all_cells_meet
@@ -12288,7 +12678,8 @@ def validate_manifest(manifest, path, result_root=None):
     }
     if (not isinstance(manifest, dict) or set(manifest) != expected_keys or
             manifest.get("schema") not in (
-                SCHEMA_V7, SCHEMA_V8, SCHEMA) + PRODUCTION_AUTO_SCHEMAS):
+                SCHEMA_V7, SCHEMA_V8, SCHEMA_V9, SCHEMA) +
+                PRODUCTION_AUTO_SCHEMAS):
         raise CrossoverError(
             "{} has an unknown, legacy, or incomplete schema".format(path)
         )
@@ -12324,6 +12715,7 @@ def validate_manifest(manifest, path, result_root=None):
         settings.get("mode") in authoritative_commands_for_schema(
             manifest_schema),
         require_current_git_tool=False,
+        manifest_schema=manifest_schema,
     )
     if manifest.get("configuration_id") != digest_value(manifest_identity(manifest)):
         raise CrossoverError("{} configuration ID does not match its content".format(path))
@@ -12635,8 +13027,9 @@ def invalidate_authoritative_result_dir_held(result_root, reason):
         )
         if (not isinstance(value, dict) or
                 value.get("schema") not in (
-                    JOB_SCHEMA_V7, JOB_SCHEMA_V8, JOB_SCHEMA,
+                    JOB_SCHEMA_V7, JOB_SCHEMA_V8, JOB_SCHEMA_V9, JOB_SCHEMA,
                     PRODUCTION_AUTO_JOB_SCHEMA_V10,
+                    PRODUCTION_AUTO_JOB_SCHEMA_V11,
                     PRODUCTION_AUTO_JOB_SCHEMA)):
             continue
         if value.get("status") == "passed":
@@ -12753,7 +13146,9 @@ def print_analysis(analysis):
                 else "not passed",
             )
         )
-        if analysis.get("schema") == PRODUCTION_AUTO_ANALYSIS_SCHEMA:
+        if analysis.get("schema") in (
+                PRODUCTION_AUTO_ANALYSIS_SCHEMA_V7,
+                PRODUCTION_AUTO_ANALYSIS_SCHEMA):
             structural = required_mapping(
                 analysis.get("structural_controls"),
                 "analysis.structural_controls",
@@ -12775,7 +13170,8 @@ def print_analysis(analysis):
         return
     candidate = analysis["candidate"]
     decision = analysis.get("decision_contract")
-    current_analysis = analysis.get("schema") == ANALYSIS_SCHEMA
+    current_analysis = analysis.get("schema") in (
+        ANALYSIS_SCHEMA_V5, ANALYSIS_SCHEMA)
     threshold_percent = analysis_threshold_percent(analysis)
     threshold_count = candidate[
         "decision_threshold_count" if current_analysis else "promotion_count"]
@@ -13383,6 +13779,7 @@ def analyze_command_held(arguments, result_root):
         matrix.get("source_fingerprint_after"),
         str(matrix_path) + " source_fingerprint_after", False,
         require_current_git_tool=False,
+        manifest_schema=manifest["schema"],
     )
     matrix_jobs_value = matrix.get("jobs")
     if (not isinstance(matrix_jobs_value, list) or
@@ -13523,9 +13920,10 @@ def self_test():
         outer_schema_contract(SCHEMA)["controlled_build_schema"] ==
             "leopard2-direct-controlled-build/v9" and
         controlled_executable_mode(SCHEMA) == 0o700 and
+        controlled_executable_mode(SCHEMA_V9) == 0o700 and
         controlled_executable_mode(SCHEMA_V8) == 0o700 and
         controlled_executable_mode(SCHEMA_V7) == 0o700,
-        "current, v8, and v7 controlled-build mode contracts are exact",
+        "current, v9, v8, and v7 controlled-build mode contracts are exact",
     )
     check(
         outer_schema_contract(SCHEMA) == {
@@ -13536,15 +13934,31 @@ def self_test():
                 BUILD_CONFIGURATION_FILE_SCHEMA_V16,
             "controlled_build_schema": CONTROLLED_BUILD_SCHEMA,
             "job_schema": JOB_SCHEMA,
+            "source_identity_schema": DIRECT_SOURCE_IDENTITY_SCHEMA,
         } and
         authoritative_commands_for_schema(SCHEMA) ==
             AUTHORITATIVE_COMMANDS_V9 and
         run_commands_for_schema(SCHEMA) == RUN_COMMANDS_V9,
-        "current v9 outer schema binds its exact configuration dialect"
+        "current v12 outer schema binds its guarded source dialect"
+    )
+    check(
+        outer_schema_contract(SCHEMA_V9) == {
+            "analysis_schema": ANALYSIS_SCHEMA_V5,
+            "build_configuration_attestation_schema":
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V14,
+            "build_configuration_file_schema":
+                BUILD_CONFIGURATION_FILE_SCHEMA_V16,
+            "controlled_build_schema": CONTROLLED_BUILD_SCHEMA,
+            "job_schema": JOB_SCHEMA_V9,
+        } and
+        authoritative_commands_for_schema(SCHEMA_V9) ==
+            AUTHORITATIVE_COMMANDS_V9 and
+        run_commands_for_schema(SCHEMA_V9) == RUN_COMMANDS_V9,
+        "v9 outer schema retains its exact historical dialect"
     )
     check(
         outer_schema_contract(SCHEMA_V8) == {
-            "analysis_schema": ANALYSIS_SCHEMA,
+            "analysis_schema": ANALYSIS_SCHEMA_V5,
             "build_configuration_attestation_schema":
                 BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V13,
             "build_configuration_file_schema":
@@ -13604,6 +14018,29 @@ def self_test():
         "v10 production schema retains its exact historical dialect",
     )
     check(
+        outer_schema_contract(PRODUCTION_AUTO_SCHEMA_V11) == {
+            "analysis_schema": PRODUCTION_AUTO_ANALYSIS_SCHEMA_V7,
+            "build_configuration_attestation_schema":
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+            "build_configuration_file_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
+            "controlled_build_schema":
+                PRODUCTION_AUTO_CONTROLLED_BUILD_SCHEMA,
+            "job_schema": PRODUCTION_AUTO_JOB_SCHEMA_V11,
+        } and
+        authoritative_commands_for_schema(PRODUCTION_AUTO_SCHEMA_V11) ==
+            (PRODUCTION_AUTO_MODE,) and
+        run_commands_for_schema(PRODUCTION_AUTO_SCHEMA_V11) ==
+            (PRODUCTION_AUTO_MODE,) and
+        retained_runtime_launcher_contract(PRODUCTION_AUTO_SCHEMA_V11) == (
+            RUNTIME_LAUNCHER_NAMES,
+            RUNTIME_LAUNCHER_SOURCE_PATHS,
+        ) and
+        retained_environment_contract(PRODUCTION_AUTO_SCHEMA_V11) == (
+            BENCHMARK_ENVIRONMENT, GIT_ENVIRONMENT,
+        ),
+        "v11 production schema retains its exact historical dialect",
+    )
+    check(
         outer_schema_contract(PRODUCTION_AUTO_SCHEMA) == {
             "analysis_schema": PRODUCTION_AUTO_ANALYSIS_SCHEMA,
             "build_configuration_attestation_schema":
@@ -13612,6 +14049,7 @@ def self_test():
             "controlled_build_schema":
                 PRODUCTION_AUTO_CONTROLLED_BUILD_SCHEMA,
             "job_schema": PRODUCTION_AUTO_JOB_SCHEMA,
+            "source_identity_schema": DIRECT_SOURCE_IDENTITY_SCHEMA,
         } and
         authoritative_commands_for_schema(PRODUCTION_AUTO_SCHEMA) ==
             (PRODUCTION_AUTO_MODE,) and
@@ -13629,7 +14067,7 @@ def self_test():
         retained_environment_contract(PRODUCTION_AUTO_SCHEMA) == (
             BENCHMARK_ENVIRONMENT, GIT_ENVIRONMENT,
         ),
-        "v11 outer schema is isolated from v7-v10 replay",
+        "v13 outer schema is isolated from v7-v11 replay",
     )
     production_evidence = evidence_contract(
         True, PRODUCTION_AUTO_SCHEMA,
@@ -13646,6 +14084,8 @@ def self_test():
         production_evidence["production_auto_route_evaluated"] is True and
         production_evidence["production_default_flip_authorized"] is False and
         production_evidence["production_promotion_authorized"] is False and
+        production_evidence["source_identity_schema"] ==
+            DIRECT_SOURCE_IDENTITY_SCHEMA and
         production_evidence["parity_identity_fields"] == [
             "algorithm", "digest", "hashed_bytes", "input_digest",
             "input_hashed_bytes", "parity_index",
@@ -13657,7 +14097,18 @@ def self_test():
             "contrasts",
             "input immutability and unrequested-output canaries",
         ],
-        "v11 evidence names ordinary production telemetry without promotion",
+        "v13 evidence names guarded ordinary production telemetry",
+    )
+    retained_v11_evidence = evidence_contract(
+        True, PRODUCTION_AUTO_SCHEMA_V11,
+        {"LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "ON"},
+        PRODUCTION_AUTO_MODE,
+    )
+    check(
+        retained_v11_evidence["benchmark_schema"] ==
+            PRODUCTION_AUTO_BENCHMARK_SCHEMA and
+        "source_identity_schema" not in retained_v11_evidence,
+        "v11 evidence retains its source-identity dialect",
     )
     retained_production_evidence = evidence_contract(
         True, PRODUCTION_AUTO_SCHEMA_V10,
@@ -13666,7 +14117,8 @@ def self_test():
     )
     check(
         retained_production_evidence["benchmark_schema"] ==
-            PRODUCTION_AUTO_BENCHMARK_SCHEMA_V1,
+            PRODUCTION_AUTO_BENCHMARK_SCHEMA_V1 and
+        "source_identity_schema" not in retained_production_evidence,
         "v10 evidence retains raw benchmark schema v1",
     )
     v7_evidence = evidence_contract(
@@ -13692,7 +14144,13 @@ def self_test():
             )
     historical_launcher = json.loads(json.dumps(
         current_runtime_launcher_identity()))
-    historical_source_state = json.loads(json.dumps(repository_state))
+    historical_source_state = json.loads(json.dumps({
+        "digest": repository_state["projection_digest"],
+        "files": repository_state["files"],
+        "git": repository_state["git"],
+        "git_tool": repository_state["git_tool"],
+        "repository_controls": repository_state["repository_controls"],
+    }))
     historical_script_hash = "0" * 64
     historical_source_state["files"][
         RUNTIME_LAUNCHER_SOURCE_PATHS_V7["script"]
@@ -14139,7 +14597,7 @@ def self_test():
             "control_requested_avx2": 7,
         } and
         len(qualified_sparse_high_tuples()) == 24,
-        "v11 production-AUTO grid count, digest, tuples, and controls are exact",
+        "v13 production-AUTO grid count, digest, tuples, and controls are exact",
     )
     for item in production_cells:
         validate_cell_value(
@@ -14540,7 +14998,7 @@ def self_test():
     ]
     validate_manifest_settings(
         retained_production_settings, production_manifest_jobs,
-        Path("/self-test/v11/manifest.json"), PRODUCTION_AUTO_SCHEMA,
+        Path("/self-test/v13/manifest.json"), PRODUCTION_AUTO_SCHEMA,
     )
     retained_v10_production_settings = json.loads(json.dumps(
         retained_production_settings
@@ -14570,7 +15028,7 @@ def self_test():
         try:
             validate_manifest_settings(
                 changed_settings, production_manifest_jobs,
-                Path("/self-test/v11/manifest.json"),
+                Path("/self-test/v13/manifest.json"),
                 PRODUCTION_AUTO_SCHEMA,
             )
         except CrossoverError:
@@ -16981,7 +17439,7 @@ def self_test():
             "production_default_flip_authorized"] is False and
         production_analysis["decision_contract"][
             "production_promotion_authorized"] is False,
-        "v11 production-AUTO analysis separates candidates and control roles",
+        "v13 production-AUTO analysis separates candidates and control roles",
     )
     retained_production_results = [
         {
@@ -17015,7 +17473,8 @@ def self_test():
             [], 0.0, "self-test", "passed", False, None,
             ANALYSIS_SCHEMA, "screen",
         )["decision_threshold_percent"] == 0.0,
-        "v11 freezes qualification while legacy reanalysis stays configurable",
+        "current production schema freezes qualification while legacy "
+        "reanalysis stays configurable",
     )
     try:
         analyze_results(
@@ -17035,7 +17494,7 @@ def self_test():
     }
     try:
         write_merged(
-            Path("/self-test/v11"), production_threshold_manifest,
+            Path("/self-test/v13"), production_threshold_manifest,
             [], None, 0.0,
         )
     except CrossoverError as error:
@@ -17059,7 +17518,7 @@ def self_test():
         try:
             analyze_command_held(
                 argparse.Namespace(promotion_percent=0.0),
-                {"path": Path("/self-test/v11")},
+                {"path": Path("/self-test/v13")},
             )
         except CrossoverError as error:
             check(
@@ -17136,7 +17595,7 @@ def self_test():
             "all_structural_controls_retained"] is False and
         failed_structural_analysis["candidate"][
             "all_candidates_qualified_and_controls_valid"] is False,
-        "missing padded-side2 structural evidence fails the v11 gate",
+        "missing padded-side2 structural evidence fails the v13 gate",
     )
     with tempfile.TemporaryDirectory(
             prefix="leo2-production-bundle-self-test-") as bundle_directory:
@@ -18437,7 +18896,7 @@ def self_test():
             controlled_mode_fixture = write_retained_fixture(
                 controlled_mode_name, controlled_mode_value)
             controlled_mode_fixture.chmod(CONTROLLED_EXECUTABLE_MODE)
-            for schema in (SCHEMA, SCHEMA_V8, SCHEMA_V7):
+            for schema in (SCHEMA, SCHEMA_V9, SCHEMA_V8, SCHEMA_V7):
                 check(
                     read_result_regular(
                         retained_root, controlled_mode_name, 64,
@@ -18450,7 +18909,7 @@ def self_test():
             permissive_mode_fixture = write_retained_fixture(
                 permissive_mode_name, b"overly-permissive-controlled")
             permissive_mode_fixture.chmod(0o755)
-            for schema in (SCHEMA, SCHEMA_V8, SCHEMA_V7):
+            for schema in (SCHEMA, SCHEMA_V9, SCHEMA_V8, SCHEMA_V7):
                 try:
                     read_result_regular(
                         retained_root, permissive_mode_name, 64,
@@ -20404,6 +20863,18 @@ def self_test():
             os.waitpid(inherited_child_pid, 0)
         except ChildProcessError:
             pass
+        # The coordinator fixture can orphan more than the recorded leaf
+        # while exercising subreaper restoration.  Reap every completed
+        # direct child before the guarded Git helper asserts that it owns the
+        # complete child-process set for each bounded Git command.
+        while True:
+            try:
+                reaped_pid, unused_status = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                break
+            del unused_status
+            if reaped_pid == 0:
+                break
 
         result_root = root / "results"
         manifest_path = result_root / "manifest.json"
@@ -20482,6 +20953,21 @@ def self_test():
             "clean current\n", encoding="utf-8"
         )
         fixture_git(submodule, ("commit", "-q", "-am", "current"))
+        nested = root / "nested-submodule"
+        nested.mkdir()
+        fixture_git(nested, ("init", "-q"))
+        fixture_git(nested, ("config", "user.name", "Self Test"))
+        fixture_git(nested, ("config", "user.email", "self@test.invalid"))
+        (nested / "tracked.txt").write_text(
+            "nested clean\n", encoding="utf-8"
+        )
+        fixture_git(nested, ("add", "tracked.txt"))
+        fixture_git(nested, ("commit", "-q", "-m", "nested initial"))
+        fixture_git(submodule, (
+            "-c", "protocol.file.allow=always", "submodule", "add", "-q",
+            str(nested.resolve()), "nested",
+        ))
+        fixture_git(submodule, ("commit", "-q", "-am", "nested gitlink"))
         superproject.mkdir()
         fixture_git(superproject, ("init", "-q"))
         fixture_git(superproject, ("config", "user.name", "Self Test"))
@@ -20489,6 +20975,10 @@ def self_test():
         fixture_git(superproject, (
             "-c", "protocol.file.allow=always", "submodule", "add", "-q",
             str(submodule.resolve()), "module",
+        ))
+        fixture_git(superproject, (
+            "-c", "protocol.file.allow=always", "submodule", "update",
+            "--init", "--recursive", "-q",
         ))
         fixture_git(superproject, ("commit", "-q", "-am", "gitlink"))
         (superproject / "module" / "tracked.txt").write_text(
@@ -20509,6 +20999,835 @@ def self_test():
         clean_fixture = source_identity(
             superproject, require_clean=True
         )
+        top_level_submodule_fixture = source_identity(
+            module, require_clean=True
+        )
+        check(
+            top_level_submodule_fixture["capture"][
+                "superproject_worktree"] is None,
+            "top-level submodule source omits its containing superproject",
+        )
+        nested_worktree = module / "nested"
+        (nested_worktree / "tracked.txt").write_text(
+            "nested dirty\n", encoding="utf-8"
+        )
+        nested_dirty_fixture = source_identity(
+            superproject, require_clean=False
+        )
+        module_record = next(
+            record for record in nested_dirty_fixture["capture"]["paths"]
+            if record["path"] == "module"
+        )
+        module_identity = module_record["worktree"]["identity"]
+        nested_record = next(
+            record for record in module_identity["paths"]
+            if record["path"] == "nested"
+        )
+        nested_identity = nested_record["worktree"]["identity"]
+        check(
+            nested_dirty_fixture["capture"]["clean"] is False and
+            module_identity["clean"] is False and
+            nested_identity["clean"] is False and
+            nested_identity["superproject_worktree"] == str(module),
+            "depth-two submodule dirtiness and parent bindings propagate",
+        )
+        (nested_worktree / "tracked.txt").write_text(
+            "nested clean\n", encoding="utf-8"
+        )
+
+        (module / "untracked.txt").write_text(
+            "untracked\n", encoding="utf-8"
+        )
+        untracked_fixture = source_identity(module, require_clean=False)
+        check(
+            untracked_fixture["git"]["status"] == ["?? untracked.txt"],
+            "untracked source path is independently retained",
+        )
+        (module / "untracked.txt").unlink()
+
+        fixture_git(module, ("rm", "--cached", "-q", "--", "tracked.txt"))
+        cached_deletion_fixture = source_identity(
+            module, require_clean=False
+        )
+        check(
+            set(cached_deletion_fixture["git"]["status"]) == {
+                "D  tracked.txt", "?? tracked.txt",
+            },
+            "cached deletion retains paired staged and untracked status",
+        )
+        fixture_git(module, ("reset", "--hard", "-q", "HEAD"))
+
+        (module / "tracked.txt").write_text(
+            "staged change\n", encoding="utf-8"
+        )
+        fixture_git(module, ("add", "tracked.txt"))
+        (module / "tracked.txt").write_text(
+            "staged and worktree change\n", encoding="utf-8"
+        )
+        staged_dirty_fixture = source_identity(
+            module, require_clean=False
+        )
+        check(
+            staged_dirty_fixture["git"]["status"] == ["MM tracked.txt"],
+            "staged and worktree changes remain cross-bound",
+        )
+        fixture_git(module, ("reset", "--hard", "-q", "HEAD"))
+
+        fixture_git(module, ("mv", "tracked.txt", "renamed.txt"))
+        staged_rename_fixture = source_identity(
+            module, require_clean=False
+        )
+        check(
+            set(staged_rename_fixture["git"]["status"]) == {
+                "A  renamed.txt", "D  tracked.txt",
+            },
+            "no-renames status retains a staged rename as add/delete",
+        )
+        fixture_git(module, ("reset", "--hard", "-q", "HEAD"))
+
+        legacy_clean_fixture = legacy_source_identity(
+            superproject, require_clean=True
+        )
+        for legacy_schema in (
+                SCHEMA_V7, SCHEMA_V8, SCHEMA_V9,
+                PRODUCTION_AUTO_SCHEMA_V10,
+                PRODUCTION_AUTO_SCHEMA_V11):
+            validate_source_state(
+                legacy_clean_fixture,
+                "literal retained legacy source fixture", True,
+                manifest_schema=legacy_schema,
+            )
+            try:
+                validate_source_state(
+                    clean_fixture,
+                    "current source relabeled as legacy", True,
+                    manifest_schema=legacy_schema,
+                )
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: current source proof was accepted "
+                    "under {}".format(legacy_schema)
+                )
+        for current_schema in (SCHEMA, PRODUCTION_AUTO_SCHEMA):
+            try:
+                validate_source_state(
+                    legacy_clean_fixture,
+                    "legacy source relabeled as current", True,
+                    manifest_schema=current_schema,
+                )
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: legacy source proof was accepted "
+                    "under {}".format(current_schema)
+                )
+
+        retained_v9_settings = json.loads(json.dumps(
+            retained_v7_settings))
+        retained_v9_settings.update({
+            "benchmark": {
+                "iterations": 15, "reuse": 64, "warmups": 4,
+            },
+            "campaign": sparse_high_campaign_contract(sparse_grid),
+            "controlled_build": {
+                "path": "controlled-build.json",
+                "schema": CONTROLLED_BUILD_SCHEMA,
+                "sha256": "a" * 64,
+            },
+            "mode": SPARSE_HIGH_MODE,
+        })
+        retained_v9_settings["isolation"]["child_environment"] = \
+            dict(BENCHMARK_ENVIRONMENT)
+        retained_v11_cells = production_auto_grid(
+            PRODUCTION_AUTO_SCHEMA_V11)
+        retained_v11_settings = json.loads(json.dumps(
+            retained_production_settings))
+        retained_v11_settings["campaign"] = \
+            production_auto_campaign_contract(
+                retained_v11_cells, PRODUCTION_AUTO_SCHEMA_V11)
+        retained_v11_settings["isolation"]["child_environment"] = \
+            production_auto_child_environment_contract(
+                PRODUCTION_AUTO_SCHEMA_V11)
+
+        original_replay_validators = {
+            name: globals()[name]
+            for name in (
+                "validate_controlled_build",
+                "validate_frozen_executable",
+                "validate_frozen_production_bundle",
+            )
+        }
+
+        def accept_retained_fixture_artifact(*unused_args, **unused_kwargs):
+            return None
+
+        for validator_name in original_replay_validators:
+            globals()[validator_name] = accept_retained_fixture_artifact
+        try:
+            replay_specs = (
+                (
+                    "v9", SCHEMA_V9, JOB_SCHEMA_V9,
+                    ANALYSIS_SCHEMA_V5, sparse_grid,
+                    retained_v9_settings, FROZEN_EXECUTABLE_SCHEMA, SCHEMA,
+                    legacy_clean_fixture,
+                ),
+                (
+                    "v11", PRODUCTION_AUTO_SCHEMA_V11,
+                    PRODUCTION_AUTO_JOB_SCHEMA_V11,
+                    PRODUCTION_AUTO_ANALYSIS_SCHEMA_V7,
+                    retained_v11_cells, retained_v11_settings,
+                    FROZEN_PRODUCTION_BUNDLE_SCHEMA,
+                    PRODUCTION_AUTO_SCHEMA,
+                    legacy_clean_fixture,
+                ),
+                (
+                    "v12", SCHEMA, JOB_SCHEMA,
+                    ANALYSIS_SCHEMA, sparse_grid,
+                    retained_v9_settings, FROZEN_EXECUTABLE_SCHEMA,
+                    SCHEMA_V9, clean_fixture,
+                ),
+                (
+                    "v13", PRODUCTION_AUTO_SCHEMA,
+                    PRODUCTION_AUTO_JOB_SCHEMA,
+                    PRODUCTION_AUTO_ANALYSIS_SCHEMA,
+                    production_cells, retained_production_settings,
+                    FROZEN_PRODUCTION_BUNDLE_SCHEMA,
+                    PRODUCTION_AUTO_SCHEMA_V11, clean_fixture,
+                ),
+            )
+            for (replay_label, replay_schema, replay_job_schema,
+                 replay_analysis_schema, replay_cells, replay_settings,
+                 replay_artifact_schema, relabeled_outer_schema,
+                 replay_source_fixture) in \
+                    replay_specs:
+                replay_path = root / ("retained-replay-" + replay_label)
+                replay_root = owned_canonical_directory(
+                    replay_path, "retained {} replay root".format(
+                        replay_label))
+                try:
+                    executable_path = str(
+                        replay_path / "frozen" / "benchmark")
+                    executable_sha256 = "c" * 64
+                    build_metadata = {
+                        "executable": {
+                            "path": str(
+                                replay_path / "origin" / "benchmark"),
+                            "sha256": "d" * 64,
+                        },
+                    }
+                    artifact = {
+                        "executable": executable_path,
+                        "executable_sha256": executable_sha256,
+                        "schema": replay_artifact_schema,
+                    }
+                    replay_machine = {
+                        "fixture": "retained-{}-replay".format(
+                            replay_label),
+                    }
+                    replay_jobs = []
+                    replay_results = []
+                    for cell_value in replay_cells:
+                        identity = job_identity(
+                            cell_value, executable_path, artifact,
+                            executable_sha256, build_metadata,
+                            replay_source_fixture, replay_machine,
+                            replay_settings,
+                        )
+                        configuration_id = digest_value(identity)
+                        job_id = configuration_id[:24]
+                        job = {
+                            "build_metadata": build_metadata,
+                            "cell": cell_value,
+                            "configuration_id": configuration_id,
+                            "executable": executable_path,
+                            "executable_artifact": artifact,
+                            "executable_sha256": executable_sha256,
+                            "invocation_order": list(invocation_order(
+                                replay_settings["mode"], job_id,
+                                replay_settings["abba_rounds"],
+                                replay_schema,
+                            )),
+                            "job_id": job_id,
+                            "seed": stable_seed(cell_value),
+                            "source_identity": replay_source_fixture,
+                        }
+                        replay_jobs.append(job)
+                        replay_results.append({
+                            "build_metadata": build_metadata,
+                            "cell": cell_value,
+                            "commands": [],
+                            "configuration_id": configuration_id,
+                            "executable": executable_path,
+                            "executable_artifact": artifact,
+                            "executable_sha256": executable_sha256,
+                            "isolation": None,
+                            "job_id": job_id,
+                            "measurements": [],
+                            "reason": "retained replay failure fixture",
+                            "resumed": False,
+                            "schema": replay_job_schema,
+                            "seed": stable_seed(cell_value),
+                            "source_identity": replay_source_fixture,
+                            "status": "failed",
+                        })
+                    executable_manifest = {
+                        "avx2": {
+                            "build_metadata": build_metadata,
+                            "execution_artifact": artifact,
+                            "origin_path":
+                                build_metadata["executable"]["path"],
+                            "origin_sha256":
+                                build_metadata["executable"]["sha256"],
+                        },
+                    }
+                    replay_manifest = {
+                        "configuration_id": None,
+                        "evidence_contract": evidence_contract(
+                            True, replay_schema,
+                            configuration_selector_overrides_for_mode(
+                                replay_settings["mode"], replay_schema),
+                            replay_settings["mode"],
+                        ),
+                        "executables": executable_manifest,
+                        "jobs": replay_jobs,
+                        "machine": replay_machine,
+                        "schema": replay_schema,
+                        "settings": replay_settings,
+                        "source_fingerprint": replay_source_fixture,
+                    }
+                    replay_manifest["configuration_id"] = digest_value(
+                        manifest_identity(replay_manifest))
+                    write_result_json(
+                        replay_root, "manifest.json", replay_manifest,
+                        "retained {} manifest".format(replay_label),
+                    )
+                    replay_job_directory = open_result_directory(
+                        replay_root, "jobs",
+                        "retained {} job directory".format(replay_label),
+                        True,
+                    )
+                    close_owned_directory(replay_job_directory)
+                    for result in replay_results:
+                        write_result_json(
+                            replay_root,
+                            Path("jobs") /
+                                (result["job_id"] + ".json"),
+                            result,
+                            "retained {} failed job".format(replay_label),
+                        )
+
+                    loaded_manifest = load_manifest(
+                        replay_path, replay_root)
+                    loaded_results = load_job_results(
+                        replay_path, loaded_manifest, replay_root)
+                    matrix = write_merged(
+                        replay_path, loaded_manifest, loaded_results,
+                        replay_source_fixture, 5.0,
+                        result_root=replay_root,
+                    )
+                    analysis_result = analyze_command_held(
+                        argparse.Namespace(
+                            promotion_percent=5.0, output=None),
+                        replay_root,
+                    )
+                    retained_analysis = decode_json_bytes(
+                        read_result_regular(
+                            replay_root, "analysis.json",
+                            MAX_RAW_JSON_BYTES,
+                            "retained {} analysis".format(replay_label),
+                        ),
+                        str(replay_path / "analysis.json"),
+                    )
+                    check(
+                        loaded_manifest["schema"] == replay_schema and
+                        len(loaded_results) == len(replay_cells) and
+                        all(result["schema"] == replay_job_schema
+                            for result in loaded_results) and
+                        matrix["schema"] == replay_schema and
+                        matrix["source_changed_during_run"] is False and
+                        matrix["status"] == "failed" and
+                        matrix["analysis"]["schema"] ==
+                            replay_analysis_schema and
+                        matrix["analysis"]["jobs_total"] ==
+                            len(replay_cells) and
+                        matrix["analysis"]["jobs_failed"] ==
+                            len(replay_cells) and
+                        canonical_bytes(retained_analysis) ==
+                            canonical_bytes(matrix["analysis"]) and
+                        analysis_result == 1,
+                        "retained {} manifest/job/matrix replay is exact".
+                            format(replay_label),
+                    )
+
+                    relabeled_job = json.loads(json.dumps(
+                        loaded_results[0]))
+                    relabeled_job["schema"] = (
+                        (PRODUCTION_AUTO_JOB_SCHEMA_V11
+                         if replay_job_schema ==
+                            PRODUCTION_AUTO_JOB_SCHEMA else
+                         PRODUCTION_AUTO_JOB_SCHEMA)
+                        if is_production_auto_schema(replay_schema) else
+                        (JOB_SCHEMA_V9
+                         if replay_job_schema == JOB_SCHEMA else JOB_SCHEMA)
+                    )
+                    write_result_json(
+                        replay_root,
+                        Path("jobs") /
+                            (relabeled_job["job_id"] + ".json"),
+                        relabeled_job,
+                        "relabeled retained {} job".format(replay_label),
+                        replace=True,
+                    )
+                    try:
+                        load_job_results(
+                            replay_path, loaded_manifest, replay_root)
+                    except CrossoverError:
+                        pass
+                    else:
+                        raise CrossoverError(
+                            "self-test failed: retained {} job relabel was "
+                            "accepted".format(replay_label)
+                        )
+                    finally:
+                        write_result_json(
+                            replay_root,
+                            Path("jobs") /
+                                (loaded_results[0]["job_id"] + ".json"),
+                            loaded_results[0],
+                            "restored retained {} job".format(replay_label),
+                            replace=True,
+                        )
+
+                    relabeled_matrix = json.loads(json.dumps(matrix))
+                    relabeled_matrix["schema"] = relabeled_outer_schema
+                    write_result_json(
+                        replay_root, "matrix.json", relabeled_matrix,
+                        "relabeled retained {} matrix".format(replay_label),
+                        replace=True,
+                    )
+                    try:
+                        analyze_command_held(
+                            argparse.Namespace(
+                                promotion_percent=5.0, output=None),
+                            replay_root,
+                        )
+                    except CrossoverError:
+                        pass
+                    else:
+                        raise CrossoverError(
+                            "self-test failed: retained {} matrix relabel "
+                            "was accepted".format(replay_label)
+                        )
+                    finally:
+                        write_result_json(
+                            replay_root, "matrix.json", matrix,
+                            "restored retained {} matrix".format(
+                                replay_label),
+                            replace=True,
+                        )
+                finally:
+                    close_owned_directory(replay_root)
+        finally:
+            for validator_name, validator in \
+                    original_replay_validators.items():
+                globals()[validator_name] = validator
+
+        prior_module_slots = {
+            name: (name in sys.modules, sys.modules.get(name))
+            for name in (
+                "leopard2_build_provenance",
+                "leopard2_direct_git_capture",
+            )
+        }
+        capture_module = None
+        capture_snapshots = None
+        try:
+            capture_module, capture_snapshots = \
+                open_direct_git_capture_support()
+
+            published_guards = []
+            original_cdll = capture_module._build_provenance.ctypes.CDLL
+
+            def interrupt_guard_initialization(*_arguments, **_keywords):
+                raise KeyboardInterrupt(
+                    "injected post-publication guard interruption")
+
+            capture_module._build_provenance.ctypes.CDLL = \
+                interrupt_guard_initialization
+            try:
+                capture_module._InotifyMutationGuard(
+                    "self-test published guard",
+                    publish=published_guards.append,
+                )
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: published guard interruption was "
+                    "not propagated"
+                )
+            finally:
+                capture_module._build_provenance.ctypes.CDLL = original_cdll
+            check(
+                len(published_guards) == 1 and
+                published_guards[0].descriptor == -1,
+                "support guard publishes a close-safe owner before fd "
+                "allocation",
+            )
+
+            def rehash_capture(proof):
+                proof["identity_sha256"] = capture_module._digest({
+                    key: item for key, item in proof.items()
+                    if key != "identity_sha256"
+                })
+                return proof
+
+            def reject_offline_capture(
+                    proof, label, require_clean=True):
+                try:
+                    capture_module.validate_direct_git_capture(
+                        proof, proof.get("path", ""),
+                        require_clean=require_clean)
+                except capture_module.GitCaptureError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: rehashed {} proof was accepted "
+                        "offline".format(label)
+                    )
+
+            relabeled_layout = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            relabeled_layout["git_metadata"]["layout"] = (
+                "linked-worktree"
+                if relabeled_layout["git_metadata"]["layout"] == "ordinary"
+                else "ordinary"
+            )
+            reject_offline_capture(
+                rehash_capture(relabeled_layout), "Git metadata layout")
+
+            relabeled_top_superproject = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            relabeled_top_superproject["superproject_worktree"] = \
+                "/unrelated"
+            reject_offline_capture(
+                rehash_capture(relabeled_top_superproject),
+                "top-level superproject",
+            )
+
+            edited_metadata_inventory = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            edited_metadata_inventory["git_metadata"][
+                "guarded_file_count"] = 0
+            reject_offline_capture(
+                rehash_capture(edited_metadata_inventory),
+                "metadata guard inventory summary",
+            )
+
+            malformed_status = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            malformed_status["status"] = capture_module._byte_payload(b"\0")
+            malformed_status["clean"] = False
+            reject_offline_capture(
+                rehash_capture(malformed_status),
+                "malformed empty Git status record",
+                require_clean=False,
+            )
+
+            tracked_status_path = next(
+                record["path"]
+                for record in clean_fixture["capture"]["paths"]
+                if record["worktree"]["kind"] == "regular"
+            )
+            contradictory_tracked_status = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            contradictory_tracked_status["status"] = \
+                capture_module._byte_payload(
+                    b" M " + tracked_status_path.encode("utf-8") + b"\0")
+            contradictory_tracked_status["clean"] = False
+            reject_offline_capture(
+                rehash_capture(contradictory_tracked_status),
+                "tracked Git status claim",
+                require_clean=False,
+            )
+
+            contradictory_untracked_status = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            contradictory_untracked_status["status"] = \
+                capture_module._byte_payload(
+                    b"?? " + tracked_status_path.encode("utf-8") + b"\0")
+            contradictory_untracked_status["clean"] = False
+            reject_offline_capture(
+                rehash_capture(contradictory_untracked_status),
+                "untracked Git status overlap",
+                require_clean=False,
+            )
+
+            contradictory_untracked_inventory = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            contradictory_untracked_inventory["untracked_paths"] = \
+                capture_module._byte_payload(
+                    tracked_status_path.encode("utf-8") + b"\0")
+            contradictory_untracked_inventory["status"] = \
+                capture_module._byte_payload(
+                    b"?? " + tracked_status_path.encode("utf-8") + b"\0")
+            contradictory_untracked_inventory["clean"] = False
+            reject_offline_capture(
+                rehash_capture(contradictory_untracked_inventory),
+                "untracked inventory overlap",
+                require_clean=False,
+            )
+
+            omitted_tracked_status = json.loads(json.dumps(
+                fixture_state["capture"]))
+            omitted_tracked_status["status"] = \
+                capture_module._byte_payload(b"")
+            reject_offline_capture(
+                rehash_capture(omitted_tracked_status),
+                "omitted tracked worktree status",
+                require_clean=False,
+            )
+
+            stale_staged_worktree_column = json.loads(json.dumps(
+                staged_dirty_fixture["capture"]))
+            stale_staged_worktree_column["status"] = \
+                capture_module._byte_payload(b"M  tracked.txt\0")
+            reject_offline_capture(
+                rehash_capture(stale_staged_worktree_column),
+                "stale staged/worktree status column",
+                require_clean=False,
+            )
+
+            omitted_untracked_status = json.loads(json.dumps(
+                untracked_fixture["capture"]))
+            omitted_untracked_status["status"] = \
+                capture_module._byte_payload(b"")
+            reject_offline_capture(
+                rehash_capture(omitted_untracked_status),
+                "omitted untracked status",
+                require_clean=False,
+            )
+
+            omitted_untracked_inventory = json.loads(json.dumps(
+                untracked_fixture["capture"]))
+            omitted_untracked_inventory["untracked_paths"] = \
+                capture_module._byte_payload(b"")
+            reject_offline_capture(
+                rehash_capture(omitted_untracked_inventory),
+                "omitted independent untracked inventory",
+                require_clean=False,
+            )
+
+            invalid_inline_declaration = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            invalid_inline_declaration["inline_paths"] = ["module"]
+            reject_offline_capture(
+                rehash_capture(invalid_inline_declaration),
+                "non-regular inline source declaration",
+            )
+
+            mismatched_sealed_mode = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            mismatched_sealed_mode["git_executable"]["sealed"]["mode"] ^= \
+                0o100
+            reject_offline_capture(
+                rehash_capture(mismatched_sealed_mode),
+                "sealed Git executable mode",
+            )
+
+            mandatory_index_extension = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            retained_index = capture_module._validate_byte_payload(
+                mandatory_index_extension["index"]["raw"],
+                "self-test retained raw direct Git index",
+            )
+            extended_index_payload = (
+                retained_index[:-20] + b"link" +
+                (0).to_bytes(4, "big")
+            )
+            extended_index = extended_index_payload + hashlib.sha1(
+                extended_index_payload, usedforsecurity=False).digest()
+            mandatory_index_extension["index"]["raw"] = \
+                capture_module._byte_payload(extended_index)
+            extended_sha256 = hashlib.sha256(extended_index).hexdigest()
+            for identity_part in ("source", "sealed"):
+                mandatory_index_extension["index"][identity_part][
+                    "size"] = len(extended_index)
+                mandatory_index_extension["index"][identity_part][
+                    "sha256"] = extended_sha256
+            mandatory_index_extension["index"]["sealed"][
+                "source_sha256"] = extended_sha256
+            reject_offline_capture(
+                rehash_capture(mandatory_index_extension),
+                "mandatory raw-index extension",
+            )
+
+            incompatible_object_format = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            retained_config = capture_module._validate_byte_payload(
+                incompatible_object_format["config"],
+                "self-test retained direct Git configuration",
+            )
+            incompatible_object_format["config"] = \
+                capture_module._byte_payload(
+                    retained_config +
+                    b"extensions.objectformat\nsha256\0")
+            reject_offline_capture(
+                rehash_capture(incompatible_object_format),
+                "non-SHA-1 Git configuration",
+            )
+
+            mismatched_parent = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            nested_record = next(
+                record for record in mismatched_parent["paths"]
+                if record["path"] == "module"
+            )
+            nested_identity = nested_record["worktree"]["identity"]
+            nested_identity["superproject_worktree"] = "/unrelated"
+            rehash_capture(nested_identity)
+            nested_record["worktree"]["identity_sha256"] = \
+                capture_module._digest(nested_identity)
+            mismatched_parent["paths_sha256"] = capture_module._digest(
+                mismatched_parent["paths"])
+            reject_offline_capture(
+                rehash_capture(mismatched_parent),
+                "nested superproject binding",
+            )
+
+            mismatched_depth_two_parent = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            depth_one_record = next(
+                record for record in mismatched_depth_two_parent["paths"]
+                if record["path"] == "module"
+            )
+            depth_one_identity = depth_one_record["worktree"]["identity"]
+            depth_two_record = next(
+                record for record in depth_one_identity["paths"]
+                if record["path"] == "nested"
+            )
+            depth_two_identity = depth_two_record["worktree"]["identity"]
+            depth_two_identity["superproject_worktree"] = "/unrelated"
+            rehash_capture(depth_two_identity)
+            depth_two_record["worktree"]["identity_sha256"] = \
+                capture_module._digest(depth_two_identity)
+            depth_one_identity["paths_sha256"] = capture_module._digest(
+                depth_one_identity["paths"])
+            rehash_capture(depth_one_identity)
+            depth_one_record["worktree"]["identity_sha256"] = \
+                capture_module._digest(depth_one_identity)
+            mismatched_depth_two_parent["paths_sha256"] = \
+                capture_module._digest(
+                    mismatched_depth_two_parent["paths"])
+            reject_offline_capture(
+                rehash_capture(mismatched_depth_two_parent),
+                "depth-two superproject binding",
+            )
+
+            nested_inline = json.loads(json.dumps(
+                clean_fixture["capture"]))
+            nested_inline_record = next(
+                record for record in nested_inline["paths"]
+                if record["path"] == "module"
+            )
+            nested_inline_identity = \
+                nested_inline_record["worktree"]["identity"]
+            nested_inline_identity["inline_paths"] = ["tracked.txt"]
+            rehash_capture(nested_inline_identity)
+            nested_inline_record["worktree"]["identity_sha256"] = \
+                capture_module._digest(nested_inline_identity)
+            nested_inline["paths_sha256"] = capture_module._digest(
+                nested_inline["paths"])
+            reject_offline_capture(
+                rehash_capture(nested_inline),
+                "nested inline source declaration",
+            )
+
+            stale_tool_state = json.loads(json.dumps(clean_fixture))
+            stale_capture = stale_tool_state["capture"]
+            stale_sha256 = "0" * 64
+            if stale_capture["git_executable"]["source"]["sha256"] == \
+                    stale_sha256:
+                stale_sha256 = "1" * 64
+
+            def replace_capture_git_tool(proof):
+                proof["git_executable"]["source"]["sha256"] = stale_sha256
+                proof["git_executable"]["sealed"]["sha256"] = stale_sha256
+                proof["git_executable"]["sealed"]["source_sha256"] = \
+                    stale_sha256
+                for record in proof["paths"]:
+                    worktree = record["worktree"]
+                    if worktree["kind"] != "submodule":
+                        continue
+                    replace_capture_git_tool(worktree["identity"])
+                    worktree["identity_sha256"] = capture_module._digest(
+                        worktree["identity"])
+                proof["paths_sha256"] = capture_module._digest(
+                    proof["paths"])
+                rehash_capture(proof)
+
+            replace_capture_git_tool(stale_capture)
+            stale_projection = capture_module.direct_source_projection(
+                stale_capture)
+            for name in (
+                    "files", "git", "git_tool", "repository_controls"):
+                stale_tool_state[name] = stale_projection[name]
+            stale_tool_state["projection_digest"] = \
+                stale_projection["digest"]
+            stale_tool_state["digest"] = digest_value({
+                key: item for key, item in stale_tool_state.items()
+                if key != "digest"
+            })
+            validate_current_source_state(
+                stale_tool_state, "retained stale Git-tool fixture", True,
+                require_current_git_tool=False,
+                _capture_module=capture_module,
+            )
+            try:
+                validate_current_source_state(
+                    stale_tool_state, "current stale Git-tool fixture", True,
+                    require_current_git_tool=True,
+                    _capture_module=capture_module,
+                )
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: current source accepted a stale Git "
+                    "executable"
+                )
+        finally:
+            if capture_snapshots is not None:
+                close_direct_git_capture_support(capture_snapshots)
+        check(
+            all(
+                (name in sys.modules, sys.modules.get(name)) == slot
+                for name, slot in prior_module_slots.items()
+            ),
+            "sealed direct source modules restore their sys.modules slots",
+        )
+        edited_projection = json.loads(json.dumps(clean_fixture))
+        edited_projection["git"]["worktree_clean"] = False
+        edited_projection["digest"] = digest_value({
+            key: item for key, item in edited_projection.items()
+            if key != "digest"
+        })
+        try:
+            validate_source_state(
+                edited_projection,
+                "rehashed current projection splice", False,
+                manifest_schema=SCHEMA,
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: rehashed current projection splice "
+                "was accepted"
+            )
 
         def reject_hidden_source(label):
             try:
@@ -20546,15 +21865,62 @@ def self_test():
             "clean current\n", encoding="utf-8"
         )
 
+        fixture_git(module, ("update-index", "--split-index"))
+        try:
+            reject_hidden_source("split Git index")
+        finally:
+            fixture_git(module, ("update-index", "--no-split-index"))
+
         fixture_git(module, ("config", "core.filemode", "false"))
         (module / "tracked.txt").chmod(0o755)
+        hidden_mode_fixture = source_identity(
+            superproject, require_clean=False
+        )
+        check(
+            hidden_mode_fixture["capture"]["clean"] is False and
+            hidden_mode_fixture["git"]["worktree_clean"] is False,
+            "status-hidden mode mutation remains dirty in projection",
+        )
         reject_hidden_source("status-hidden executable-bit mutation")
         (module / "tracked.txt").chmod(0o644)
+
+        external_excludes = root / "external-excludes"
+        external_excludes.write_text("tracked.txt\n", encoding="utf-8")
+        fixture_git(module, (
+            "config", "core.excludesFile", str(external_excludes),
+        ))
+        try:
+            reject_hidden_source("external core.excludesFile")
+        finally:
+            fixture_git(module, ("config", "--unset", "core.excludesFile"))
 
         fixture_git(module, ("replace", "HEAD", "HEAD^"))
         reject_hidden_source("Git replacement ref")
         fixture_git(module, ("replace", "-d", "HEAD"))
 
+        graft_path_text = fixture_git(
+            module, ("rev-parse", "--git-path", "info/grafts")
+        ).decode("utf-8").strip()
+        graft_path = Path(graft_path_text)
+        if not graft_path.is_absolute():
+            graft_path = module / graft_path
+        graft_path.parent.mkdir(parents=True, exist_ok=True)
+        graft_path.write_text(
+            fixture_git(module, ("rev-parse", "HEAD")).decode("ascii"),
+            encoding="ascii",
+        )
+        try:
+            reject_hidden_source("legacy Git graft")
+        finally:
+            graft_path.unlink()
+
+        # The guarded dialect deliberately retains local configuration.
+        # Rebase the comparison after the filemode fixture changed that
+        # authenticated repository state; only inherited environment changes
+        # are meant to be invisible below.
+        clean_fixture = source_identity(
+            superproject, require_clean=True
+        )
         hostile_config = root / "hostile.gitconfig"
         hostile_config.write_text(
             "[core]\n\tbare = true\n", encoding="utf-8"
@@ -20595,7 +21961,14 @@ def self_test():
         (race_repository / "tracked.txt").write_text(
             "snapshot a\n", encoding="utf-8"
         )
-        fixture_git(race_repository, ("add", "tracked.txt"))
+        (race_repository / "nested").mkdir()
+        (race_repository / "nested" / "tracked.txt").write_text(
+            "nested stable\n", encoding="utf-8"
+        )
+        fixture_git(
+            race_repository,
+            ("add", "tracked.txt", "nested/tracked.txt"),
+        )
         fixture_git(
             race_repository, ("commit", "-q", "-m", "snapshot a")
         )
@@ -20619,50 +21992,165 @@ def self_test():
             "worktree", "add", "-q", "-b", "snapshot-race-worktree",
             str(race_worktree), race_commit_a,
         ))
+        linked_clean = source_identity(
+            race_worktree, require_clean=True
+        )
+        check(
+            linked_clean["capture"]["git_metadata"]["layout"] ==
+                "linked-worktree" and
+            linked_clean["capture"]["clean"] is True,
+            "clean linked worktree retains its metadata layout",
+        )
+        linked_metadata = linked_clean["capture"]["git_metadata"]
+        check(
+            linked_metadata["git_entry"] is not None and
+            linked_metadata["commondir_file"] is not None and
+            linked_metadata["commondir"] != linked_metadata["gitdir"],
+            "linked worktree retains gitfile and commondir bytes",
+        )
+        for label, mutate_linked_metadata in (
+                ("linked gitfile target", lambda metadata:
+                    metadata.__setitem__(
+                        "git_entry", capture_module._byte_payload(
+                            b"gitdir: /unrelated\n"))),
+                ("linked gitfile prefix", lambda metadata:
+                    metadata.__setitem__(
+                        "git_entry", capture_module._byte_payload(
+                            b"/unrelated\n"))),
+                ("linked commondir target", lambda metadata:
+                    metadata.__setitem__(
+                        "commondir_file", capture_module._byte_payload(
+                            b"../../unrelated\n"))),
+                ("missing linked commondir file", lambda metadata:
+                    metadata.__setitem__("commondir_file", None))):
+            edited_linked = json.loads(json.dumps(linked_clean["capture"]))
+            mutate_linked_metadata(edited_linked["git_metadata"])
+            reject_offline_capture(
+                rehash_capture(edited_linked), label,
+            )
+        (race_worktree / "nested" / "tracked.txt").write_text(
+            "linked dirty\n", encoding="utf-8"
+        )
+        linked_dirty = source_identity(
+            race_worktree, require_clean=False
+        )
+        check(
+            linked_dirty["capture"]["git_metadata"]["layout"] ==
+                "linked-worktree" and
+            linked_dirty["capture"]["clean"] is False and
+            linked_dirty["git"]["worktree_clean"] is False,
+            "dirty linked worktree remains dirty in its projection",
+        )
+        fixture_git(
+            race_worktree, ("reset", "--hard", "-q", race_commit_a)
+        )
 
         def reject_cross_bound_snapshot(
                 capture_root, mutation_root, trigger_root,
-                baseline_commit, raced_commit, label):
-            original_git_command = globals()["git_command_bytes"]
+                baseline_commit, raced_commit, label,
+                trigger_occurrence=2):
+            capture_module = None
+            capture_snapshots = None
             triggered = [False]
-
-            def racing_git_command(
-                    source_value, arguments, description, git_tool=None):
-                if (not triggered[0] and
-                        Path(source_value).resolve() ==
-                        Path(trigger_root).resolve() and
-                        tuple(arguments) ==
-                        ("ls-files", "-s", "-z")):
-                    triggered[0] = True
-                    fixture_git(
-                        mutation_root,
-                        ("reset", "--hard", "-q", raced_commit),
-                    )
-                return original_git_command(
-                    source_value, arguments, description, git_tool
-                )
-
+            occurrences = [0]
             try:
-                globals()["git_command_bytes"] = racing_git_command
+                capture_module, capture_snapshots = \
+                    open_direct_git_capture_support()
+                original_invoke = capture_module._invoke_git
+
+                def racing_invoke(
+                        git_snapshot, metadata, root_descriptor, arguments,
+                        description, **kwargs):
+                    if (Path(metadata.source).resolve() ==
+                            Path(trigger_root).resolve() and
+                            tuple(arguments) ==
+                            ("rev-parse", "--show-toplevel")):
+                        occurrences[0] += 1
+                    if (not triggered[0] and
+                            occurrences[0] == trigger_occurrence):
+                        triggered[0] = True
+                        fixture_git(
+                            mutation_root,
+                            ("reset", "--hard", "-q", raced_commit),
+                        )
+                        fixture_git(
+                            mutation_root,
+                            ("reset", "--hard", "-q", baseline_commit),
+                        )
+                    return original_invoke(
+                        git_snapshot, metadata, root_descriptor, arguments,
+                        description, **kwargs)
+
+                capture_module._invoke_git = racing_invoke
                 try:
-                    source_identity(capture_root, require_clean=False)
-                except CrossoverError:
+                    capture_module.capture_direct_git_identity(
+                        capture_root, require_clean=False)
+                except capture_module.GitCaptureError:
                     pass
                 else:
                     raise CrossoverError(
-                        "self-test failed: {} source-snapshot race was "
+                        "self-test failed: {} source A-B-A race was "
                         "accepted".format(label)
                     )
                 check(
                     triggered[0],
-                    "{} source-snapshot race fixture executed".format(label),
+                    "{} source A-B-A fixture executed".format(label),
                 )
             finally:
-                globals()["git_command_bytes"] = original_git_command
+                if capture_module is not None and \
+                        "original_invoke" in locals():
+                    capture_module._invoke_git = original_invoke
+                if capture_snapshots is not None:
+                    close_direct_git_capture_support(capture_snapshots)
                 fixture_git(
                     mutation_root,
                     ("reset", "--hard", "-q", baseline_commit),
                 )
+
+        def reject_isolated_source_aba(mutation, label):
+            capture_module = None
+            capture_snapshots = None
+            original_invoke = None
+            occurrence = [0]
+            try:
+                capture_module, capture_snapshots = \
+                    open_direct_git_capture_support()
+                original_invoke = capture_module._invoke_git
+
+                def isolated_racing_invoke(
+                        git_snapshot, metadata, root_descriptor, arguments,
+                        description, **kwargs):
+                    if (Path(metadata.source).resolve() ==
+                            race_repository.resolve() and
+                            tuple(arguments) ==
+                            ("rev-parse", "--show-toplevel")):
+                        occurrence[0] += 1
+                        if occurrence[0] == 2:
+                            mutation()
+                    return original_invoke(
+                        git_snapshot, metadata, root_descriptor, arguments,
+                        description, **kwargs)
+
+                capture_module._invoke_git = isolated_racing_invoke
+                try:
+                    capture_module.capture_direct_git_identity(
+                        race_repository, require_clean=True)
+                except capture_module.GitCaptureError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: isolated {} A-B-A mutation was "
+                        "accepted".format(label)
+                    )
+                check(
+                    occurrence[0] >= 2,
+                    "isolated {} A-B-A fixture executed".format(label),
+                )
+            finally:
+                if capture_module is not None and original_invoke is not None:
+                    capture_module._invoke_git = original_invoke
+                if capture_snapshots is not None:
+                    close_direct_git_capture_support(capture_snapshots)
 
         reject_cross_bound_snapshot(
             race_repository, race_repository, race_repository,
@@ -20672,6 +22160,451 @@ def self_test():
             race_worktree, race_worktree, race_worktree,
             race_commit_a, race_commit_b, "linked worktree",
         )
+        race_ref = fixture_git(
+            race_repository, ("symbolic-ref", "HEAD")
+        ).decode("ascii").strip()
+
+        def metadata_only_aba():
+            fixture_git(race_repository, (
+                "update-ref", race_ref, race_commit_b, race_commit_a,
+            ))
+            fixture_git(race_repository, (
+                "update-ref", race_ref, race_commit_a, race_commit_b,
+            ))
+
+        reject_isolated_source_aba(metadata_only_aba, "metadata-only ref")
+
+        def tracked_file_only_aba():
+            tracked = race_repository / "tracked.txt"
+            tracked.write_text("transient worktree bytes\n", encoding="utf-8")
+            tracked.write_text("snapshot a\n", encoding="utf-8")
+
+        reject_isolated_source_aba(
+            tracked_file_only_aba, "tracked-file-only")
+
+        def reject_untracked_topology_aba():
+            capture_module = None
+            capture_snapshots = None
+            original_invoke = None
+            occurrence = [0]
+            ephemeral = race_repository / "nested" / "ephemeral.txt"
+            try:
+                capture_module, capture_snapshots = \
+                    open_direct_git_capture_support()
+                original_invoke = capture_module._invoke_git
+
+                def topology_racing_invoke(
+                        git_snapshot, metadata, root_descriptor, arguments,
+                        description, **kwargs):
+                    if (Path(metadata.source).resolve() ==
+                            race_repository.resolve() and
+                            tuple(arguments) ==
+                            ("rev-parse", "--show-toplevel")):
+                        occurrence[0] += 1
+                        if occurrence[0] == 2:
+                            ephemeral.write_text(
+                                "transient untracked bytes\n",
+                                encoding="utf-8",
+                            )
+                            ephemeral.unlink()
+                    return original_invoke(
+                        git_snapshot, metadata, root_descriptor, arguments,
+                        description, **kwargs)
+
+                capture_module._invoke_git = topology_racing_invoke
+                try:
+                    capture_module.capture_direct_git_identity(
+                        race_repository, require_clean=True)
+                except capture_module.GitCaptureError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: recursive untracked A-B-A "
+                        "topology mutation was accepted"
+                    )
+                check(
+                    occurrence[0] >= 2,
+                    "recursive untracked A-B-A fixture executed",
+                )
+            finally:
+                if capture_module is not None and original_invoke is not None:
+                    capture_module._invoke_git = original_invoke
+                if capture_snapshots is not None:
+                    close_direct_git_capture_support(capture_snapshots)
+                if ephemeral.exists() or ephemeral.is_symlink():
+                    ephemeral.unlink()
+
+        reject_untracked_topology_aba()
+
+        def reject_injected_walk_failure(
+                target, target_occurrence, label):
+            capture_module = None
+            capture_snapshots = None
+            original_walk = None
+            occurrences = [0]
+            injected = [False]
+            target = Path(target).resolve()
+            try:
+                capture_module, capture_snapshots = \
+                    open_direct_git_capture_support()
+                original_walk = capture_module._build_provenance.os.walk
+
+                def failing_walk(top, *arguments, **keywords):
+                    if Path(top).resolve() == target:
+                        occurrences[0] += 1
+                        if occurrences[0] == target_occurrence:
+                            injected[0] = True
+                            callback = keywords.get("onerror")
+                            if callback is None:
+                                return iter(())
+                            callback(PermissionError(
+                                errno.EACCES,
+                                "injected recursive enumeration failure",
+                                str(target),
+                            ))
+                            return iter(())
+                    return original_walk(
+                        top, *arguments, **keywords)
+
+                capture_module._build_provenance.os.walk = failing_walk
+                try:
+                    capture_module.capture_direct_git_identity(
+                        race_repository, require_clean=True)
+                except capture_module.GitCaptureError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: {} recursive enumeration failure "
+                        "was accepted".format(label)
+                    )
+                check(
+                    injected[0],
+                    "{} recursive enumeration fixture executed".format(
+                        label),
+                )
+            finally:
+                if capture_module is not None and original_walk is not None:
+                    capture_module._build_provenance.os.walk = original_walk
+                if capture_snapshots is not None:
+                    close_direct_git_capture_support(capture_snapshots)
+
+        reject_injected_walk_failure(
+            race_repository, 1, "worktree topology")
+        reject_injected_walk_failure(
+            race_repository / ".git", 1, "metadata topology")
+        reject_injected_walk_failure(
+            race_repository / ".git", 2, "metadata file inventory")
+
+        def reject_file_watch_arming_mutation(target, mutation, label):
+            capture_module = None
+            capture_snapshots = None
+            original_add_file = None
+            triggered = [False]
+            target = Path(target).resolve()
+            try:
+                capture_module, capture_snapshots = \
+                    open_direct_git_capture_support()
+                guard_type = capture_module._InotifyMutationGuard
+                original_add_file = guard_type.add_file_path
+
+                def racing_add_file(guard, path):
+                    if not triggered[0] and Path(path).resolve() == target:
+                        triggered[0] = True
+                        mutation()
+                    return original_add_file(guard, path)
+
+                guard_type.add_file_path = racing_add_file
+                try:
+                    capture_module.capture_direct_git_identity(
+                        race_repository, require_clean=True)
+                except capture_module.GitCaptureError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: {} watch-arming mutation was "
+                        "accepted".format(label)
+                    )
+                check(
+                    triggered[0],
+                    "{} watch-arming fixture executed".format(label),
+                )
+            finally:
+                if capture_module is not None and \
+                        original_add_file is not None:
+                    capture_module._InotifyMutationGuard.add_file_path = \
+                        original_add_file
+                if capture_snapshots is not None:
+                    close_direct_git_capture_support(capture_snapshots)
+
+        def reject_directory_watch_arming_mutation(
+                target, mutation, label):
+            capture_module = None
+            capture_snapshots = None
+            original_add_watch = None
+            triggered = [False]
+            target = Path(target).resolve()
+            try:
+                capture_module, capture_snapshots = \
+                    open_direct_git_capture_support()
+                guard_type = capture_module._InotifyMutationGuard
+                original_add_watch = guard_type._add_watch
+
+                def racing_add_watch(guard, path, mask, names):
+                    if not triggered[0] and Path(path).resolve() == target:
+                        triggered[0] = True
+                        mutation()
+                    return original_add_watch(guard, path, mask, names)
+
+                guard_type._add_watch = racing_add_watch
+                try:
+                    capture_module.capture_direct_git_identity(
+                        race_repository, require_clean=True)
+                except capture_module.GitCaptureError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: {} watch-arming mutation was "
+                        "accepted".format(label)
+                    )
+                check(
+                    triggered[0],
+                    "{} watch-arming fixture executed".format(label),
+                )
+            finally:
+                if capture_module is not None and \
+                        original_add_watch is not None:
+                    capture_module._InotifyMutationGuard._add_watch = \
+                        original_add_watch
+                if capture_snapshots is not None:
+                    close_direct_git_capture_support(capture_snapshots)
+
+        tracked_arming_path = race_repository / "tracked.txt"
+
+        def mutate_tracked_during_arming():
+            tracked_arming_path.write_text(
+                "transient arming bytes\n", encoding="utf-8")
+            tracked_arming_path.write_text(
+                "snapshot a\n", encoding="utf-8")
+
+        reject_file_watch_arming_mutation(
+            tracked_arming_path, mutate_tracked_during_arming,
+            "tracked file inode")
+
+        topology_ephemeral = race_repository / "nested" / \
+            "arming-ephemeral.txt"
+
+        def mutate_topology_child_during_arming():
+            topology_ephemeral.write_text(
+                "transient topology\n", encoding="utf-8")
+            topology_ephemeral.unlink()
+
+        reject_directory_watch_arming_mutation(
+            race_repository / "nested",
+            mutate_topology_child_during_arming,
+            "worktree topology child")
+
+        metadata_ephemeral = race_repository / ".git" / "objects" / \
+            "arming-ephemeral"
+
+        def mutate_metadata_child_during_arming():
+            metadata_ephemeral.write_text(
+                "transient metadata topology\n", encoding="utf-8")
+            metadata_ephemeral.unlink()
+
+        reject_directory_watch_arming_mutation(
+            race_repository / ".git" / "objects",
+            mutate_metadata_child_during_arming,
+            "metadata topology child")
+
+        ignored_path = race_repository / "nested" / ".gitignore"
+        ignore_hardlink = root / "snapshot-race-ignore-hardlink"
+        ignore_bytes = b"ephemeral.txt\n.gitignore\n"
+        ignored_path.write_bytes(ignore_bytes)
+        os.link(ignored_path, ignore_hardlink)
+
+        def ignored_file_arming_aba():
+            ignore_hardlink.write_bytes(b"other.txt\n.gitignore\n")
+            ignore_hardlink.write_bytes(ignore_bytes)
+
+        reject_file_watch_arming_mutation(
+            ignored_path, ignored_file_arming_aba,
+            "ignored .gitignore inode")
+
+        def ignored_file_inode_aba():
+            ignore_hardlink.write_bytes(b"other.txt\n.gitignore\n")
+            ignore_hardlink.write_bytes(ignore_bytes)
+
+        try:
+            reject_isolated_source_aba(
+                ignored_file_inode_aba, "ignored .gitignore inode")
+        finally:
+            ignore_hardlink.unlink()
+            ignored_path.unlink()
+
+        def reject_mixed_index_stream():
+            capture_module = None
+            capture_snapshots = None
+            original_invoke = None
+            try:
+                capture_module, capture_snapshots = \
+                    open_direct_git_capture_support()
+                fixture_git(
+                    race_repository,
+                    ("reset", "--hard", "-q", race_commit_b),
+                )
+                proof_b = capture_module.capture_direct_git_identity(
+                    race_repository, require_clean=True,
+                    inline_paths=("tracked.txt",))
+                fixture_git(
+                    race_repository,
+                    ("reset", "--hard", "-q", race_commit_a),
+                )
+                proof_a = capture_module.capture_direct_git_identity(
+                    race_repository, require_clean=True,
+                    inline_paths=("tracked.txt",))
+
+                forged_replace = json.loads(json.dumps(proof_a))
+                ref_records = capture_module._parse_direct_refs(
+                    capture_module._validate_byte_payload(
+                        forged_replace["refs"],
+                        "offline replacement-ref fixture",
+                    )
+                )
+                ref_records.append({
+                    "name": "refs/replace/{}".format(proof_a["head"]),
+                    "object_id": proof_b["head"],
+                })
+                ref_records.sort(key=lambda record: record["name"])
+                forged_replace["refs"] = capture_module._byte_payload(
+                    b"".join(
+                        "{} {}\n".format(
+                            record["name"], record["object_id"]
+                        ).encode("utf-8")
+                        for record in ref_records
+                    )
+                )
+                forged_replace["identity_sha256"] = capture_module._digest({
+                    key: item for key, item in forged_replace.items()
+                    if key != "identity_sha256"
+                })
+                try:
+                    capture_module.validate_direct_git_capture(
+                        forged_replace, str(race_repository.resolve()),
+                        require_clean=True,
+                    )
+                except capture_module.GitCaptureError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: rehashed replacement-ref proof "
+                        "was accepted offline"
+                    )
+
+                spliced = json.loads(json.dumps(proof_a))
+                for name in ("source", "sealed", "raw"):
+                    spliced["index"][name] = proof_b["index"][name]
+                spliced["identity_sha256"] = capture_module._digest({
+                    key: item for key, item in spliced.items()
+                    if key != "identity_sha256"
+                })
+                try:
+                    capture_module.validate_direct_git_capture(
+                        spliced, str(race_repository.resolve()),
+                        require_clean=True,
+                    )
+                except capture_module.GitCaptureError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: rehashed raw-index/transcript "
+                        "splice was accepted offline"
+                    )
+
+                spliced_regular = json.loads(json.dumps(proof_a))
+                regular_a = next(
+                    record for record in spliced_regular["paths"]
+                    if record["path"] == "tracked.txt")
+                regular_b = next(
+                    record for record in proof_b["paths"]
+                    if record["path"] == "tracked.txt")
+                regular_a["worktree"]["payload"] = \
+                    regular_b["worktree"]["payload"]
+                spliced_regular["paths_sha256"] = capture_module._digest(
+                    spliced_regular["paths"])
+                spliced_regular["identity_sha256"] = capture_module._digest({
+                    key: item for key, item in spliced_regular.items()
+                    if key != "identity_sha256"
+                })
+                try:
+                    capture_module.validate_direct_git_capture(
+                        spliced_regular, str(race_repository.resolve()),
+                        require_clean=True,
+                    )
+                except capture_module.GitCaptureError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: rehashed regular-file payload "
+                        "splice was accepted offline"
+                    )
+
+                replacements = {
+                    ("ls-files", "--stage", "-z"):
+                        capture_module._validate_byte_payload(
+                            proof_b["index"]["stage"],
+                            "mixed staged-index fixture",
+                        ),
+                    ("ls-files", "-v", "-z"):
+                        capture_module._validate_byte_payload(
+                            proof_b["index"]["flags_v"],
+                            "mixed -v index fixture",
+                        ),
+                    ("ls-files", "-f", "-z"):
+                        capture_module._validate_byte_payload(
+                            proof_b["index"]["flags_f"],
+                            "mixed -f index fixture",
+                        ),
+                }
+                original_invoke = capture_module._invoke_git
+                substitutions = [0]
+
+                def mixed_index_invoke(
+                        git_snapshot, metadata, root_descriptor, arguments,
+                        description, **kwargs):
+                    replacement = replacements.get(tuple(arguments))
+                    if replacement is not None:
+                        substitutions[0] += 1
+                        return replacement
+                    return original_invoke(
+                        git_snapshot, metadata, root_descriptor, arguments,
+                        description, **kwargs)
+
+                capture_module._invoke_git = mixed_index_invoke
+                try:
+                    capture_module.capture_direct_git_identity(
+                        race_repository, require_clean=False)
+                except capture_module.GitCaptureError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: mixed Git index command stream "
+                        "was accepted"
+                    )
+                check(
+                    substitutions[0] >= 3,
+                    "mixed Git index command-stream fixture executed",
+                )
+            finally:
+                if capture_module is not None and original_invoke is not None:
+                    capture_module._invoke_git = original_invoke
+                if capture_snapshots is not None:
+                    close_direct_git_capture_support(capture_snapshots)
+                fixture_git(
+                    race_repository,
+                    ("reset", "--hard", "-q", race_commit_a),
+                )
+
+        reject_mixed_index_stream()
         module_baseline = fixture_git(
             module, ("rev-parse", "HEAD")
         ).decode("ascii").strip()
@@ -20681,6 +22614,7 @@ def self_test():
         reject_cross_bound_snapshot(
             superproject, module, module,
             module_baseline, module_prior, "submodule",
+            trigger_occurrence=3,
         )
 
         fixture_git(module, ("config", "user.name", "Self Test"))
@@ -20689,13 +22623,21 @@ def self_test():
             "different submodule commit\n", encoding="utf-8"
         )
         fixture_git(module, ("commit", "-q", "-am", "different head"))
+        mismatched_gitlink = source_identity(
+            superproject, require_clean=False)
+        check(
+            mismatched_gitlink["capture"]["clean"] is False and
+            mismatched_gitlink["files"]["module"]["submodule"]["head"] !=
+                mismatched_gitlink["files"]["module"]["index_object"],
+            "dirty source retains distinct gitlink and submodule HEAD",
+        )
         try:
-            source_identity(superproject, require_clean=False)
+            source_identity(superproject, require_clean=True)
         except CrossoverError:
             pass
         else:
             raise CrossoverError(
-                "self-test failed: mismatched gitlink HEAD was accepted"
+                "self-test failed: mismatched gitlink was accepted as clean"
             )
 
         fixture_git(superproject, (
