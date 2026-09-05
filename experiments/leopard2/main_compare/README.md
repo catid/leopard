@@ -461,6 +461,45 @@ does not complete source/runtime ownership. A caller must hold and revalidate
 the host/lock owner around
 this context and preserve the historical evidence while staging fresh builds.
 
+`v19_streamed_sources.py` adds a staged-file lifetime owner for the fixed
+`candidate-source` and `leopard1-source` children of a private workspace. It
+retains no-follow directory/file descriptors for their complete inventories,
+including ordinary `.git` trees, and checks mutation history, metadata,
+pathnames and current content at boundaries. Hash reads are limited to 64 KiB;
+file contents are not retained. Limits are 4,096 files, 1,024 directories,
+64 MiB per file, 256 MiB total, and 32 path components. Links, shared file
+inodes, special files, world-writable entries and filesystem crossings fail
+closed. Failed owners cannot be reused even if the changed bytes are restored.
+
+Optional cache eviction flushes and advises only the exact held nlink=1 file
+descriptors, after hashing; it never reopens a pathname for eviction or uses
+global cache controls. It avoids rehashing file contents after eviction,
+which would repopulate the cache before compilation. These are sequential
+observations, not an atomic snapshot or a cache-residency guarantee. The
+normal/optimized `leopard2_v19_streamed_sources_*self_test` CTests include
+mutation, mmap, fd-cleanup, eviction and a 32 MiB bounded-buffer fixture.
+
+This owner proves neither initial Git commit/tree authenticity nor independent
+source creation, and its records say so. Those gates must run while the owner
+is held. It does not invoke Git or compilers, authorize the mapped recipe,
+verify runtime closure, or arm acquisition. Its preflight/host/ownership
+dependencies share one module chain to avoid duplicating the large provenance
+module inside the narrow build memory budget.
+
+The 2026-09-05 native ripper diagnostic held this owner across fresh candidate
+and baseline builds: all four complete output hashes matched the original
+preflight, and the 1,341-file source records and owner exit checks passed.
+Peak cgroup memory was 433,385,472 bytes within 512 MiB, with every memory-event
+counter and swap usage zero. Focused CTest passed 8/8 (including the 16-case
+source suite in both Python modes); the project-graph suite passed 172/172
+normally and with assertions disabled. The sealed 106-entry diagnostic bundle
+is on ripper at
+`.research/leopard-79h/v19-streamed-sources.vCqsXe`, with outer `SHA256SUMS` hash
+`0f0489cc57bbf84303a99f78e3ea29b1119439dd16295fad0f5acdc39c2c53c5`.
+This is build/lifetime evidence only, not a codec timing or authorization of
+the relocated recipe. The initial test-harness allocation failure is retained
+with the corrected test results; no memory limit was relaxed.
+
 These primitives are **not yet connected to acquisition**. Physical
 v18-lineage verification, detached source ownership, one-job builds,
 runtime closure, and wrapper/controller-closure integration remain required.
