@@ -1248,6 +1248,8 @@ class CMakeProductionGraph(object):
         "leopard2_v19_source_identity_optimized_self_test": 1,
         "leopard2_v19_fresh_build_self_test": 1,
         "leopard2_v19_fresh_build_optimized_self_test": 1,
+        "leopard2_v19_retained_lineage_self_test": 1,
+        "leopard2_v19_retained_lineage_optimized_self_test": 1,
         "leopard2_pair_qualification_contract_self_test": 1,
         "leopard2_pair_qualification_contract_optimized_self_test": 1,
         "leopard2_pair_qualification_acquire_self_test": 1,
@@ -1363,6 +1365,8 @@ class CMakeProductionGraph(object):
         "leopard2_v19_source_identity_optimized_self_test",
         "leopard2_v19_fresh_build_self_test",
         "leopard2_v19_fresh_build_optimized_self_test",
+        "leopard2_v19_retained_lineage_self_test",
+        "leopard2_v19_retained_lineage_optimized_self_test",
         "leopard2_pair_qualification_acquire_self_test",
         "leopard2_pair_qualification_acquire_optimized_self_test",
         "leopard2_pair_qualification_bridge_acquire_self_test",
@@ -1423,7 +1427,7 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "e5aa75488ba26415040b2b3579f32bfb6900009ee9f26bc360c337c0c456b462"
+        "cf6fd764351e29e094efb8356c3cfdd2d745b6ef103b5bd11c41453bedd1a4e5"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1556,6 +1560,12 @@ class CMakeProductionGraph(object):
         ("set_tests_properties", (
             "leopard2_v19_source_identity_self_test",
             "leopard2_v19_source_identity_optimized_self_test",
+            "PROPERTIES", "ENVIRONMENT",
+            "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning",
+            "TIMEOUT", "60")): 1,
+        ("set_tests_properties", (
+            "leopard2_v19_retained_lineage_self_test",
+            "leopard2_v19_retained_lineage_optimized_self_test",
             "PROPERTIES", "ENVIRONMENT",
             "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning",
             "TIMEOUT", "60")): 1,

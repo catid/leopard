@@ -91,7 +91,15 @@ class FreshBuildTests(unittest.TestCase):
             def record(self, **kwargs): self.validate_current(**kwargs); return {"fixture": True}
             def __exit__(self, *args): self.validate_current(); test.events.append("release-source")
 
-        self.Lease, self.Retained, self.Authenticated = Lease, Retained, Authenticated
+        class Lineage:
+            def __init__(self, data, parent): test.assertEqual(data, test.preregistration)
+            def __enter__(self): test.events.append("lineage"); self.validate_current(); return self
+            def validate_current(self): module.require(test.lineage_live, "fixture lineage failed")
+            def record(self): self.validate_current(); return {"fixture": True, "physical_archives_verified": True}
+            def __exit__(self, *args): self.validate_current(); test.events.append("release-lineage")
+
+        self.lineage_live = True
+        self.Lease, self.Retained, self.Authenticated, self.Lineage = Lease, Retained, Authenticated, Lineage
 
     def cache(self, build, values):
         lines = []
@@ -160,7 +168,8 @@ class FreshBuildTests(unittest.TestCase):
         with mock.patch.object(module.provenance, "_run", new=self.child), \
              mock.patch.object(module.identity, "PinnedSourceIdentity", self.Authenticated):
             owner = module.FreshBuildOwner(self.preregistration, self.parent,
-                                           _lease_factory=self.Lease, _preflight_factory=self.Retained)
+                                           archive_parent=self.root / "archives", _lease_factory=self.Lease,
+                                           _preflight_factory=self.Retained, _lineage_factory=self.Lineage)
             self.owner = owner
             with owner:
                 yield owner
@@ -169,18 +178,19 @@ class FreshBuildTests(unittest.TestCase):
         initial_umask = os.umask(0o077)
         os.umask(initial_umask)
         with self.opened() as owner:
-            self.assertEqual(self.events, ["lock", "preflight"])
+            self.assertEqual(self.events, ["lock", "preflight", "lineage"])
             record = owner.build()
             self.assertEqual(len(record["commands"]), 10)
             self.assertEqual(self.events[-1], "freeze")
             for key in ("live_acquisition_armed", "benchmark_executed", "runtime_closure_verified",
-                        "physical_v18_lineage_verified", "atomic_snapshot"):
+                        "atomic_snapshot"):
                 self.assertIs(record[key], False)
+            self.assertIs(record["physical_v18_lineage_verified"], True)
             self.assertEqual(len(record["metadata"]), 21)
             record["recipe"]["stages"].clear()
             self.assertEqual(len(owner.record()["recipe"]["stages"]), 10)
             with self.assertRaises(FAILURES): owner.build()
-        self.assertEqual(self.events[-3:], ["release-source", "release-preflight", "unlock"])
+        self.assertEqual(self.events[-4:], ["release-source", "release-lineage", "release-preflight", "unlock"])
         with self.assertRaises(FAILURES): owner.record()
         self.assertTrue(owner.root.exists())
         observed = os.umask(initial_umask)
@@ -336,6 +346,31 @@ class FreshBuildTests(unittest.TestCase):
         with self.assertRaises(FAILURES), self.opened(): pass
         self.assertEqual(list(self.parent.iterdir()), [])
         self.assertNotIn("leopard1-source:clone", self.events)
+
+    def test_lineage_failure_before_creation(self):
+        self.lineage_live = False
+        with self.assertRaises(FAILURES), self.opened(): pass
+        self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_lineage_loss_during_child_prevents_next_stage(self):
+        def change(stage): self.lineage_live = False
+        self.intercept = change
+        with self.assertRaises(FAILURES), self.opened() as owner: owner.build()
+        self.assertIn("leopard1-source:clone", self.events)
+        self.assertNotIn("leopard1-source:checkout", self.events)
+
+    def test_lineage_loss_after_freeze_prevents_handoff(self):
+        with self.assertRaises(FAILURES), self.opened() as owner:
+            owner.build()
+            self.lineage_live = False
+            with self.assertRaisesRegex(module.host.PreflightError, "lineage failed"):
+                owner.record()
+            self.assertEqual(owner._state, "failed")
+
+    def test_lineage_loss_at_owner_exit_is_not_success(self):
+        with self.assertRaisesRegex(module.host.PreflightError, "lineage failed"), self.opened() as owner:
+            owner.build()
+            self.lineage_live = False
 
     def test_historical_metadata_hash_mismatch_stops_before_clone(self):
         self.pinned["compile_commands"]["sha256"] = "0" * 64

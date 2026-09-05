@@ -601,11 +601,59 @@ the superseded pre-directory-guard positive, and the reproduced source-parent
 redirection regression. This establishes a bounded fresh-build path, not a
 codec speedup or permission to acquire timings.
 
-These primitives are **not yet connected to acquisition**. Physical
-v18-lineage verification, runtime closure, lifetime-owned builder handoff,
-and wrapper/controller-closure integration remain required.
-Their records explicitly do not assert source/build history, continuous
-resource authority, or permission to run a workload. The owning context must
+`v19_retained_lineage.py` now holds the three physical v18 failure archives
+before `FreshBuildOwner` creates a workspace. The builder requires an explicit
+`archive_parent` path; it is a storage location, not authority to substitute
+different archive names, manifests or the frozen failure-lineage digest.
+The original disclosure paths and all v1-v18 replay semantics are unchanged.
+The owner opens and retains every file and directory with no-follow descriptors,
+checks sealed ownership/modes, and hashes actual bytes again at every build,
+freeze, handoff-record and exit boundary. Mutation history also rejects
+write/restore, rename/restore and parent-permission changes; preexisting writable
+maps are checked by fresh hashes even when metadata and notifications do not
+change. A caught failure remains latched.
+
+Archive file reads use at most 64 KiB blocks. Only semantic inputs may be
+materialized, bounded to 4 MiB each. File, directory, per-file and total-byte limits are
+6,144, 2,048, 128 MiB and 512 MiB. No archive body is cached as a Python object,
+and the owner does not copy, modify or evict input files. It checks complete
+outer checksum coverage, physical `TREE-METADATA.json`, failure terminals and
+prior-attempt cross-links. The historical core manifest excludes **every** file
+whose basename is `SHA256SUMS`; the outer manifest still includes and hashes
+nested manifests. That old dialect is reproduced without weakening outer
+inventory coverage. Physical custody does not claim historical failure replay,
+an atomic snapshot, runtime ownership or permission to acquire a timing.
+
+The real-fd synthetic lineage suite covers 23 cases, including an 85 MiB
+streaming fixture; fresh-build integration covers 22 cases, including lineage
+loss before workspace creation, during a child, after freeze and at exit.
+Both pass normal and assertion-disabled Python. The final native integration
+on ripper retained all 3,869 files, 927 directories and 469,187,021 archive bytes
+through all ten build stages and reproduced the four original artifact hashes.
+Its 512 MiB/no-swap scope peaked at 438,497,280 bytes with all memory-event
+counters zero; owner exit passed. This is build/custody evidence, not a codec
+performance result. Original archives remain untouched; full sealed input
+copies are retained on ripper at
+`.research/leopard-79h/v19-lineage-inputs.Bm5539`.
+
+The sealed 104-entry evidence bundle on ripper is
+`.research/leopard-79h/v19-retained-lineage.K4N8Yk`, outer `SHA256SUMS`
+`db8b999031e2768221d1ecab82c7cdf685b6ee06e5f01e5deb8e4be11edef911`.
+It retains the final build, source code, compile metadata, four frozen outputs,
+test logs, two rejected physical probes, the superseded physical positive and
+the original failing test log. All 14 registered ownership CTests and all 172
+project-graph cases in each Python mode passed. The final native result hash is
+`49cd6bc143e45760d171016ae99540fe5234e739ce41b7cd52da3eaef37697ea`.
+A separate standard-library replay passed in both Python modes, without
+importing the production owners or executing historical programs. It rehashed
+all bundle and physical archive files and checked tree metadata, source
+commit/tree transcripts, compile recipes, artifact pins and resource counters.
+
+These primitives are **not yet connected to acquisition**. Full compiler,
+loader and runtime-library ownership, lifetime-owned builder handoff, and
+wrapper/controller-closure integration remain required.
+Stored records and completed probes are not continuous resource authority or
+permission to run a workload. The owning context must
 remain alive through later consumers and terminal sealing.
 
 Version 19 is preregistered but deliberately incapable of live acquisition at

@@ -24,12 +24,13 @@ import tempfile
 import threading
 
 HERE = Path(__file__).resolve().parent
-_dependency = HERE / "v19_source_identity.py"
+_dependency = HERE / "v19_retained_lineage.py"
 if _dependency.resolve(strict=True) != _dependency:
     raise RuntimeError("fresh build dependency is not canonical")
-_spec = importlib.util.spec_from_file_location("v19_build_identity", _dependency)
-identity = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(identity)
+_spec = importlib.util.spec_from_file_location("v19_build_lineage", _dependency)
+lineage = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(lineage)
+identity = lineage.identity
 streamed, preflight, owners = identity.streamed, identity.preflight, identity.owners
 host, provenance, require = identity.host, identity.provenance, identity.require
 
@@ -226,13 +227,15 @@ class FreshBuildOwner:
     The caller must keep this context open through later handoff and sealing.
     Test injections are private; there is no CLI or armed wrapper integration.
     """
-    def __init__(self, preregistration_bytes: bytes, parent: Path, *, _lease_factory=None,
-                 _preflight_factory=None):
+    def __init__(self, preregistration_bytes: bytes, parent: Path, *, archive_parent: Path,
+                 _lease_factory=None, _preflight_factory=None, _lineage_factory=None):
         self.preregistration_bytes = preregistration_bytes
         self.contract = host.load_preregistration(preregistration_bytes)["build_preflight"]
         self.parent = canonical_root(parent)
+        self.archive_parent = canonical_root(archive_parent)
         self._lease_factory = owners.BuildArtifactLease if _lease_factory is None else _lease_factory
         self._preflight_factory = preflight.PinnedPreflight if _preflight_factory is None else _preflight_factory
+        self._lineage_factory = lineage.PinnedV18Lineage if _lineage_factory is None else _lineage_factory
         self._stack = ExitStack()
         self._state = "new"
         self._pid = os.getpid()
@@ -266,6 +269,8 @@ class FreshBuildOwner:
             self.retained = self._stack.enter_context(self._preflight_factory(self.preregistration_bytes))
             self.lease.validate_current()
             self.retained.validate_current()
+            self.lineage = self._stack.enter_context(self._lineage_factory(
+                self.preregistration_bytes, self.archive_parent))
             self._guard = self._stack.enter_context(provenance._InotifyMutationGuard("v19 build directories"))
             self._directory(self.parent)
             historical = self.retained.record()
@@ -316,6 +321,7 @@ class FreshBuildOwner:
             require(threading.active_count() == 1, "fresh build requires a single-threaded owner")
             self.lease.validate_current()
             self.retained.validate_current()
+            self.lineage.validate_current()
             self._guard.verify()
             for path, (descriptor, fields) in self._directories.items():
                 require(streamed._directory_identity(os.fstat(descriptor)) == fields ==
@@ -438,13 +444,14 @@ class FreshBuildOwner:
         self.validate_current()
         return copy.deepcopy({"schema": "leopard2-v19-fresh-build-owner/v1", "status": "frozen",
             "recipe": self._profile, "commands": self._commands,
+            "physical_v18_lineage": self.lineage.record(),
             "source_identity": self.authenticated.record(evict_cache=True), "artifacts": self.lease.record(),
             "metadata": {str(path): snapshot.identity for path, snapshot in self._metadata.items()},
             "launchers": {path: tool.sha256 for path, tool in self._tools.items()},
             "fresh_staging_completed": True, "generated_compile_and_link_argv_verified": True,
             "all_four_pinned_outputs_verified": True, "live_acquisition_armed": False,
             "benchmark_executed": False, "runtime_closure_verified": False,
-            "physical_v18_lineage_verified": False, "atomic_snapshot": False})
+            "physical_v18_lineage_verified": True, "atomic_snapshot": False})
 
     def failure_record(self):
         require(self._state == "failed", "fresh build has not failed")
