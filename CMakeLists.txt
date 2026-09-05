@@ -3659,6 +3659,20 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_v19_wrapper_replay_optimized_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_wrapper_replay.py)
+            add_test(
+                NAME leopard2_v19_host_preflight_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_host_preflight.py)
+            add_test(
+                NAME leopard2_v19_host_preflight_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_host_preflight.py)
+            set_tests_properties(
+                leopard2_v19_host_preflight_self_test
+                leopard2_v19_host_preflight_optimized_self_test
+                PROPERTIES
+                    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
+                    TIMEOUT 60)
             set_tests_properties(
                 leopard2_v19_end_to_end_self_test
                 leopard2_v19_end_to_end_optimized_self_test

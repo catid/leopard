@@ -395,6 +395,29 @@ verification reopens the complete failed-attempt chain.
 
 ### Version 19 conditioned-passive pair-qualified screen (dormant, NOT ARMED)
 
+The standalone `v19_host_preflight.py` now implements the read-only pre-lane
+host/resource gate. It consumes the exact NOT ARMED preregistration bytes,
+requires ripper's full 128-thread / 64-core topology, one NUMA node and eight
+L3 domains, and checks the process's actual unified cgroup membership. The leaf
+must have a 512 MiB memory limit, zero swap limit and usage, and clean memory
+events; visible ancestors cannot tighten that memory cap. Host swap must be
+disabled and the soft open-file limit must be at least 65,536.
+
+The collector makes two matching normalized observations, including namespace,
+scope-directory and kernel-file identity checks. Its reads are bounded and
+reject symlink traversal and observed file/parent replacement. These checks
+follow the [kernel's cgroup v2 memory semantics](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files).
+They are **not** an atomic snapshot, continuous resource authority, or proof of
+host exclusivity. Replay checks internal consistency, not authenticity of a
+claimed host. The file-identity digest is only a capture fingerprint.
+
+This gate does not create a campaign lane, execute another program, build,
+qualify a pair, change affinity, or run a benchmark. The normal and optimized
+`leopard2_v19_host_preflight_*self_test` CTests use synthetic observations and
+temporary filesystem fixtures only. Integration into the still-dormant host /
+build / artifact orchestrator and its sealed controller closure remains
+required; later stages must revalidate the relevant live identities and limits.
+
 Version 19 is preregistered but deliberately incapable of live acquisition at
 this revision. Its canonical preregistration record has
 `live_acquisition_armed:false` and SHA-256
