@@ -549,9 +549,61 @@ Normal and assertion-disabled local replay verified the retained commit/tree,
 index, candidate-manifest, artifact, source and diagnostic-disposition records.
 No benchmark executable was run.
 
+`v19_fresh_build.py` now composes the held preflight, host/lock, authenticated
+sources and frozen outputs into a dormant fresh-build owner. It creates an
+exclusive private container with sibling work and artifact lanes, runs the
+fixed independent clone/detached-checkout sequence, and retains source owners
+through both one-job builds and artifact freeze. Each cloned directory is held
+before checkout or a later nested clone can use it as a writable parent; a
+replacement is rejected before that later child can write elsewhere.
+Failure directories are kept;
+neither the historical build tree nor the caller's parent is overwritten or
+removed. This module has no CLI or acquisition dispatch.
+
+Its explicit `leopard2-v19-relocated-build-recipe/v1` binds every stage, argv,
+environment override and umask. Only the baseline receives the exact physical
+workspace-to-original-root file-prefix map. The candidate recipe is unchanged.
+All 32 candidate compile entries are compared against the held, hash-pinned
+original compile database after physical-path relocation; all five baseline
+entries have explicit expected arguments. Effective cache values and archive/
+executable link arguments are checked too. The baseline adapter's Boolean
+compile-export cache entry has a separate parser: no candidate or historical
+validator is relaxed. Generated make/flag files and metadata remain guarded
+and are rehashed after the contained child returns. Metadata is bounded to
+128 files, 1 MiB each and 4 MiB total.
+
+Clone children use umask `0002` to preserve the pinned tracked-file modes;
+configure/build children use `0022` to produce safe artifact permissions. The
+parent's umask is restored on failure as well as success. Each build performs
+the previously validated process-local free-heap preparation. Launcher files
+use retained descriptors and bounded streaming hashes; the Git executable must
+match its pinned hash. Root-owned packaged launchers may have hard links, whose
+count remains checked; independently staged source files still require one
+link. This is observed launcher-byte identity, **not immutable tool execution
+or complete compiler/loader/runtime ownership**.
+
+The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
+host/compiler responses with real filesystem descriptors and mutation guards.
+They cover stage ordering, exact mapping and cache dialects, link changes,
+source/makefile mmap drift, write/restore history, resource loss, redirected
+clone destinations, retained failures, cleanup, and false acquisition claims.
+
+The final owner passed 18 cases in both Python modes, the existing ownership
+suites, and the unchanged 172-case project-graph checks in both modes. A native
+fresh build on ripper completed all ten stages, retained 59 metadata files and
+froze four outputs matching the original full-file hashes. Its 512 MiB/no-swap
+cgroup peaked at 427,016,192 bytes, with every memory-event counter zero.
+The sealed 135-entry evidence bundle is
+`.research/leopard-79h/v19-fresh-build.LdVxE3` on ripper; its outer `SHA256SUMS`
+hash is `d82634a6b77b9bf08364a3dabbeb15be88ca68d4f19b727bc7d69767cdabdb0e`.
+It retains the failed descriptor-limit, launcher and cache-dialect attempts,
+the superseded pre-directory-guard positive, and the reproduced source-parent
+redirection regression. This establishes a bounded fresh-build path, not a
+codec speedup or permission to acquire timings.
+
 These primitives are **not yet connected to acquisition**. Physical
-v18-lineage verification, detached source ownership, one-job builds,
-runtime closure, and wrapper/controller-closure integration remain required.
+v18-lineage verification, runtime closure, lifetime-owned builder handoff,
+and wrapper/controller-closure integration remain required.
 Their records explicitly do not assert source/build history, continuous
 resource authority, or permission to run a workload. The owning context must
 remain alive through later consumers and terminal sealing.
