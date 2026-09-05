@@ -437,8 +437,27 @@ copies remain for diagnosis and cannot be reused by the failed owner. The
 normal/optimized `leopard2_v19_owned_artifacts_*self_test` CTests exercise real
 temporary files, locks and kernel seals with synthetic host/build inputs.
 
-These primitives are **not yet connected to acquisition**. Retained
-preflight/v18-lineage verification, detached source ownership, one-job builds,
+`v19_retained_preflight.py` now supplies a read-only owner for the historical
+build preflight. It verifies the preregistered outer checksum manifest, exact
+bounded inventory, source/build identities, successful terminal/resource
+records, candidate provenance, and all first/replay artifact hashes. It holds
+guarded descriptors and rehashes current bytes at every boundary, including
+empty diagnostic files. Limits are 64 manifest-listed files, 16 MiB per file,
+32 MiB total, and 1 MiB per JSON document. Files must be unaliased and mode
+0444; directories must be owner-only. The normal/optimized
+`leopard2_v19_retained_preflight_*self_test` CTests use synthetic filesystem
+fixtures, including coherently resealed contradictions, pathname replacement
+and writable-mapping mutations. No retained script or executable is run.
+
+The returned source pins and canonical build path describe historical inputs,
+not a new build or a live execution authority. The actual preflight remains on
+ripper under `.research/leopard-79h/cf7a705-v19-build-preflight-ripper-a3`.
+Its canonical build tree must not be overwritten: the baseline output is
+path-sensitive. A caller must hold and revalidate the host/lock owner around
+this context and preserve the historical evidence while staging fresh builds.
+
+These primitives are **not yet connected to acquisition**. Physical
+v18-lineage verification, detached source ownership, one-job builds,
 runtime closure, and wrapper/controller-closure integration remain required.
 Their records explicitly do not assert source/build history, continuous
 resource authority, or permission to run a workload. The owning context must
