@@ -643,6 +643,12 @@ class V19EndToEndTests(unittest.TestCase):
         for label, mutate in (
             ("campaign pair", lambda values:
              values["campaign"].__setitem__("benchmark_cpu", 2)),
+            ("boolean primary", lambda values:
+             values["campaign"].__setitem__("benchmark_cpu", True)),
+            ("float primary", lambda values:
+             values["campaign"].__setitem__("benchmark_cpu", 1.0)),
+            ("float sibling", lambda values:
+             values["campaign"].__setitem__("reserved_sibling", 65.0)),
             ("launch affinity", lambda values:
              values["campaign"]["allowed_cpu_set_at_launch"].pop()),
             ("bridge", lambda values:
@@ -658,6 +664,11 @@ class V19EndToEndTests(unittest.TestCase):
             ("controller generation", lambda values:
              values["controller"].__setitem__(
                  "acquisition_generation", "passive-v2")),
+            ("missing census wrapper", lambda values:
+             values["controller"].__setitem__("wrapper_pid", 123456)),
+            ("census wrapper affinity", lambda values:
+             values["census"]["same_uid_processes"]["entries"][0]
+                 .__setitem__("cpus_allowed", [0])),
             ("pre census", lambda values:
              values["census"]["reserved_cpus"].append(66)),
         ):
@@ -676,6 +687,7 @@ class V19EndToEndTests(unittest.TestCase):
                 "census": passive_fixtures.v19_snapshot(raw, "pre"),
             }
             mutate(values)
+            passive_fixtures.reseal_snapshot(values["census"])
             with self.subTest(splice=label), self.assertRaises(
                     runner.EvidenceError):
                 runner.prepare_v19_live_run_authority(
@@ -733,6 +745,57 @@ class V19EndToEndTests(unittest.TestCase):
              runner.FAILURE_SCHEMA),
             (runner.RAW_SCHEMA_V18, runner.MANIFEST_SCHEMA_V18,
              runner.FAILURE_SCHEMA_V18))
+
+    def test_dormant_live_authority_rechecks_handoff_census(self) -> None:
+        raw = canonical_raw()
+        launch = handed_off_authority(raw)
+        arguments = {
+            "campaign": raw["campaign"],
+            "host_identity_value": raw["host_initial"],
+        }
+        completed = runner.complete_v19_live_run_authority(launch, **arguments)
+        failed = runner.fail_v19_live_campaign_authority(launch, **arguments)
+        first = launch["qualification"]["first_window_handoff"]
+        tail = launch["qualification"]["bridge"]["campaign_presample_before"]
+        cpu = raw["campaign"]["benchmark_cpu"]
+
+        for authority in (launch, completed, failed):
+            for splice in ("late census", "before bridge", "after window"):
+                changed = copy.deepcopy(authority)
+                pre = changed["environment_census_pre"]
+                if splice == "late census":
+                    started = first["first_window_before_read_started_monotonic_ns"]
+                    pre["scan_started_monotonic_ns"] = started + 1
+                    pre["scan_finished_monotonic_ns"] = started + 2
+                    pre["activity_boundary_monotonic_ns"] = started + 3
+                else:
+                    counter = pre["proc_stat"][str(cpu)]
+                    if splice == "before bridge":
+                        idle = tail["cpus"][str(cpu)]["fields"]["idle"] - 1
+                    else:
+                        idle = first["first_window_before"]["benchmark_cpu"] \
+                            ["fields"]["idle"] + 1
+                    counter["fields"]["idle"] = idle
+                    counter["total_jiffies"] = sum(
+                        counter["fields"][name]
+                        for name in runner.CPU_STAT_FIELDS)
+                passive_fixtures.reseal_snapshot(pre)
+                changed["environment_census_pre_sha256"] = \
+                    runner.sha256_bytes(runner.canonical_bytes(pre))
+                changed.pop("digest")
+                changed = runner.signed(changed)
+                # The census and all hashes are individually valid; only
+                # their relationship with the retained handoff is false.
+                census.validate_snapshot(
+                    pre, "pre", cpu_pair=(cpu, raw["campaign"]["reserved_sibling"]))
+                with self.subTest(
+                        stage=authority["qualification"]["stage"], splice=splice
+                ), self.assertRaisesRegex(runner.EvidenceError, "pre-census"):
+                    if authority is launch:
+                        runner.require_v19_live_launch_authority(changed, **arguments)
+                    else:
+                        runner._validate_v19_live_run_authority(
+                            changed, **arguments)
 
     def test_isolated_consumer_self_test_stdout_is_exact(self) -> None:
         cases = (

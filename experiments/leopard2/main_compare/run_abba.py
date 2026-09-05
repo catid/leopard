@@ -10778,6 +10778,8 @@ def _validate_v19_live_campaign_authority(
     cpu = selected.get("benchmark_cpu")
     sibling = selected.get("reserved_sibling")
     require(type(cpu) is int and type(sibling) is int and
+            type(campaign.get("benchmark_cpu")) is int and
+            type(campaign.get("reserved_sibling")) is int and
             campaign.get("benchmark_cpu") == cpu and
             campaign.get("reserved_sibling") == sibling,
             "v19 live campaign differs from its dynamically selected pair")
@@ -10897,6 +10899,36 @@ def _validate_v19_live_run_authority(
                 controller["affinity_narrowing_finished_monotonic_ns"] <=
                 census_pre["scan_started_monotonic_ns"],
             "v19 live-run controller/census sequence differs")
+    wrapper_pid = controller["wrapper_pid"]
+    wrapper_entries = [
+        entry for entry in census_pre["same_uid_processes"]["entries"]
+        if entry["pid"] == wrapper_pid and entry["tid"] == wrapper_pid
+    ]
+    require(len(wrapper_entries) == 1 and exact_json_equal(
+                wrapper_entries[0]["cpus_allowed"],
+                controller["after_allowed_cpus"]),
+            "v19 live-run pre-census wrapper identity/affinity differs")
+    # A digest proves internal byte consistency, not that bind_first_window
+    # previously checked this record.  Recheck cross-record continuity on
+    # every acceptance, including launch and terminal record construction.
+    handoff = qualification["first_window_handoff"]
+    if handoff is not None:
+        require(census_pre["activity_boundary_monotonic_ns"] <=
+                    handoff["first_window_before_read_started_monotonic_ns"],
+                "v19 live-run pre-census escapes the first-window handoff")
+    bridge_tail = bridge["campaign_presample_before"]
+    for role in ("benchmark_cpu", "reserved_sibling"):
+        cpu = selected[role]
+        tail_fields = bridge_tail["cpus"][str(cpu)]["fields"]
+        census_fields = census_pre["proc_stat"][str(cpu)]["fields"]
+        require(all(tail_fields[name] <= census_fields[name]
+                    for name in CPU_STAT_FIELDS),
+                f"v19 live-run pre-census CPU {cpu} predates the bridge tail")
+        if handoff is not None:
+            first_fields = handoff["first_window_before"][role]["fields"]
+            require(all(census_fields[name] <= first_fields[name]
+                        for name in CPU_STAT_FIELDS),
+                    f"v19 live-run pre-census CPU {cpu} counter chain differs")
     return copy.deepcopy(authority)
 
 
@@ -11013,9 +11045,6 @@ def bind_v19_live_first_window(
         authority_value, campaign, host_identity_value,
         required_stage="bridged", required_record_status="in-progress")
     qualification = authority["qualification"]
-    pre = authority["environment_census_pre"]
-    selected = qualification["selected_pair"]
-    bridge_tail = qualification["bridge"]["campaign_presample_before"]
     try:
         handoff = pair_v19.first_window_handoff_record(
             qualification["bridge"], qualification["selected_pair"],
@@ -11024,20 +11053,6 @@ def bind_v19_live_first_window(
         raise EvidenceError(
             f"v19 live-run first-window handoff is invalid: {error}") \
             from error
-    require(pre["scan_finished_monotonic_ns"] <=
-                pre["activity_boundary_monotonic_ns"] <=
-                handoff["first_window_before_read_started_monotonic_ns"],
-            "v19 live-run pre-census escapes the first-window handoff")
-    for role in ("benchmark_cpu", "reserved_sibling"):
-        cpu = selected[role]
-        tail_fields = bridge_tail["cpus"][str(cpu)]["fields"]
-        census_fields = pre["proc_stat"][str(cpu)]["fields"]
-        first_fields = handoff["first_window_before"][role]["fields"]
-        require(all(
-                    tail_fields[name] <= census_fields[name] <=
-                        first_fields[name]
-                    for name in CPU_STAT_FIELDS),
-                f"v19 live-run pre-census CPU {cpu} counter chain differs")
     if handoff["accepted"]:
         status = "in-progress"
         terminal = None
