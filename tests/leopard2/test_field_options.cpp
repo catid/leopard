@@ -47,29 +47,31 @@ struct Scratch
     }
 };
 
-void exercise_field(leo2_context* context, leo2_field field, size_t bytes)
+std::vector<uint8_t> exercise_field(
+    leo2_context* context, leo2_field field, size_t bytes,
+    unsigned original_count = 3, unsigned recovery_count = 2)
 {
     leo2_codec* codec = NULL;
-    require(leo2_codec_create(context, 3, 2,
+    require(leo2_codec_create(context, original_count, recovery_count,
         LEO2_PROFILE_LEGACY_HIGH_V1, field, NULL, &codec) == LEO2_SUCCESS,
         "enabled field codec creation");
     require(codec != NULL && leo2_codec_field(codec) == field,
         "enabled field identity");
 
-    std::vector<std::vector<uint8_t> > originals(
-        3, std::vector<uint8_t>(bytes));
-    std::vector<std::vector<uint8_t> > recovery(
-        2, std::vector<uint8_t>(bytes));
-    std::vector<const void*> original_pointers(3);
-    std::vector<void*> recovery_pointers(2);
-    for (size_t i = 0; i < originals.size(); ++i)
+    // Contiguous shards also exercise the packed-tail encode layout.
+    std::vector<uint8_t> originals(original_count * bytes);
+    std::vector<uint8_t> recovery(recovery_count * bytes);
+    std::vector<const void*> original_pointers(original_count);
+    std::vector<void*> recovery_pointers(recovery_count);
+    for (size_t i = 0; i < original_count; ++i)
     {
         for (size_t j = 0; j < bytes; ++j)
-            originals[i][j] = static_cast<uint8_t>(i * 71U + j * 29U + 3U);
-        original_pointers[i] = originals[i].data();
+            originals[i * bytes + j] =
+                static_cast<uint8_t>(i * 71U + j * 29U + 3U);
+        original_pointers[i] = originals.data() + i * bytes;
     }
-    for (size_t i = 0; i < recovery.size(); ++i)
-        recovery_pointers[i] = recovery[i].data();
+    for (size_t i = 0; i < recovery_count; ++i)
+        recovery_pointers[i] = recovery.data() + i * bytes;
 
     size_t encode_scratch_bytes = 0;
     require(leo2_encode_scratch_size(codec, bytes, &encode_scratch_bytes) ==
@@ -79,28 +81,75 @@ void exercise_field(leo2_context* context, leo2_field field, size_t bytes)
         recovery_pointers.data(), encode_scratch.pointer,
         encode_scratch_bytes) == LEO2_SUCCESS, "enabled field encode");
 
-    const uint8_t original_present[3] = { 1, 0, 1 };
-    const uint8_t recovery_present[2] = { 1, 1 };
+    std::vector<uint8_t> original_present(original_count, 1);
+    std::vector<uint8_t> recovery_present(recovery_count, 1);
+    original_present[1] = 0;
     leo2_decode_plan* plan = NULL;
-    require(leo2_decode_plan_create(codec, original_present, recovery_present,
-        &plan) == LEO2_SUCCESS, "enabled field decode plan");
+    require(leo2_decode_plan_create(codec, original_present.data(),
+        recovery_present.data(), &plan) == LEO2_SUCCESS,
+        "enabled field decode plan");
     size_t decode_scratch_bytes = 0;
     require(leo2_decode_plan_scratch_size(plan, bytes,
         &decode_scratch_bytes) == LEO2_SUCCESS, "decode scratch query");
     Scratch decode_scratch(decode_scratch_bytes);
     std::vector<uint8_t> restored(bytes, 0);
     original_pointers[1] = NULL;
-    std::vector<const void*> recovery_inputs(2);
-    recovery_inputs[0] = recovery[0].data();
-    recovery_inputs[1] = recovery[1].data();
-    void* restored_pointers[3] = { NULL, restored.data(), NULL };
+    std::vector<const void*> recovery_inputs(recovery_count);
+    for (size_t i = 0; i < recovery_count; ++i)
+        recovery_inputs[i] = recovery.data() + i * bytes;
+    std::vector<void*> restored_pointers(original_count, NULL);
+    restored_pointers[1] = restored.data();
     require(leo2_decode_plan_execute(plan, bytes, original_pointers.data(),
-        recovery_inputs.data(), restored_pointers, decode_scratch.pointer,
+        recovery_inputs.data(), restored_pointers.data(), decode_scratch.pointer,
         decode_scratch_bytes) == LEO2_SUCCESS, "enabled field decode");
-    require(restored == originals[1], "enabled field recovery bytes");
+    require(std::memcmp(restored.data(), originals.data() + bytes, bytes) == 0,
+        "enabled field recovery bytes");
 
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
+    return recovery;
+}
+
+void check_packed_tail_backends(leo2_context* auto_context)
+{
+#if LEO2_EXPECT_GF8
+    leo2_context_options options = {};
+    options.struct_size = sizeof(options);
+    options.thread_count = 1;
+    options.backend = LEO2_BACKEND_SCALAR;
+    leo2_context* scalar = NULL;
+    require(leo2_context_create(&options, &scalar) == LEO2_SUCCESS,
+        "scalar context creation");
+
+    options.backend = LEO2_BACKEND_AVX2;
+    leo2_context* avx2 = NULL;
+    const leo2_result result = leo2_context_create(&options, &avx2);
+    require((result == LEO2_SUCCESS && avx2 != NULL) ||
+            (result == LEO2_UNSUPPORTED && avx2 == NULL),
+        "AVX2 context creation or unavailable backend");
+    for (unsigned original_count = 10; original_count <= 11; ++original_count)
+    {
+        for (unsigned recovery_count = 5; recovery_count <= 8; ++recovery_count)
+        {
+            const std::vector<uint8_t> reference = exercise_field(
+                scalar, LEO2_FIELD_GF8, 256, original_count, recovery_count);
+            require(exercise_field(auto_context, LEO2_FIELD_GF8, 256,
+                original_count, recovery_count) == reference,
+                "AUTO packed-tail parity matches scalar");
+            if (avx2 != NULL)
+                require(exercise_field(avx2, LEO2_FIELD_GF8, 256,
+                    original_count, recovery_count) == reference,
+                    "AVX2 packed-tail parity matches scalar");
+        }
+    }
+    std::printf("Packed-tail parity/recovery passed: 8 shapes, AVX2=%s\n",
+        avx2 != NULL ? "tested" : "unavailable");
+    if (avx2 != NULL)
+        leo2_context_destroy(avx2);
+    leo2_context_destroy(scalar);
+#else
+    (void)auto_context;
+#endif
 }
 
 void check_codec_selection(leo2_context* context)
@@ -272,6 +321,7 @@ int main()
         require(leo2_context_field_mask(context) == expected_mask(),
             "context field mask");
         check_codec_selection(context);
+        check_packed_tail_backends(context);
         check_legacy_selection();
         leo2_context_destroy(context);
         std::printf("Leopard field options passed: mask=%u\n", expected_mask());

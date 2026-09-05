@@ -3599,7 +3599,8 @@ bool ReedSolomonEncodeT8TailB256(
     TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
     TestHighTailColumnCalls.fetch_add(1, std::memory_order_relaxed);
 #endif
-#if !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+#if defined(LEO2_HAVE_AVX2_BACKEND) && \
+    !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
     return backend::TryAVX2FF8HighEncodeT8TailB256Packed(
         data, work, original_count, recovery_count);
 #else
