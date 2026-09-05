@@ -2,7 +2,30 @@
   "schema": "leopard2-k65-gen3-candidate-authority-refresh/v1",
   "date_utc": "2026-09-05",
   "bead": "leopard-79h.38.5.12.1.9.5.2",
-  "status": "build_authority_verified_independent_review_pending",
+  "status": "build_authority_verified_codex_self_review_complete",
+  "review": {
+    "date_utc": "2026-09-05",
+    "method": "Codex source/evidence self-review and fresh native verifier replay",
+    "user_instruction": "Ignore claude and work on it on your own",
+    "claude_review_waived_by_user": true,
+    "independent_model_review_performed": false,
+    "fresh_native_replay": {
+      "host": "ripper.lan",
+      "verdict_path": "/tmp/leopard-k65-selfreview.tpXDaI/verdict.json",
+      "resources_log_path": "/tmp/leopard-k65-selfreview.tpXDaI/resources.log",
+      "verdict_sha256": "bb3ff86d6bf257b1ed4204ffe3a25aa466d59a798dbd5bc5f89ad953859e2841",
+      "byte_identical_to_retained_successful_verdicts": true,
+      "exit_code": 0,
+      "memory_limit_bytes": 268435456,
+      "swap_allowance_bytes": 0,
+      "maximum_process_rss_kib": 259812,
+      "swaps": 0,
+      "source_recapture_required": true,
+      "detached_source_required": true,
+      "canonical_locks_held": true
+    },
+    "note": "Only the build-authority review is complete. The verifier's promoted_authority outcome is not performance promotion; prior failed replay evidence and the policy/host ratification gate remain unchanged."
+  },
   "scope": {
     "host": "ripper.lan",
     "build_provenance_only": true,
@@ -98,5 +121,5 @@
     "failed_empty_export_directory": "/home/catid/leopard-k65-gen3-authority-rss16-20260905-failed-export-1",
     "export_note": "Direct docker-cp extraction could not populate a mode-0500 directory. Streamed tar extraction with deferred directory-mode restoration preserved the sealed mode/ownership contract; native verification followed publication."
   },
-  "next_gate": "Independent review and K65 Gen3 policy/host ratification. No qualification or performance acquisition is authorized by this build-only record."
+  "next_gate": "K65 Gen3 policy/host ratification. The user waived Claude review; no qualification or performance acquisition is authorized by this build-only record."
 }
