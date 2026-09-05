@@ -1503,6 +1503,14 @@ if(LEO2_BUILD_TESTS)
     set_tests_properties(leopard2_field_options PROPERTIES
         ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
 
+    # Field-neutral, production-linked compiler coverage without transform
+    # execution or the exhaustive API suite's memory footprint.
+    add_executable(leopard2_pruned_plan_compiler_test
+        tests/leopard2/test_pruned_plan_compiler.cpp)
+    target_link_libraries(leopard2_pruned_plan_compiler_test leopard)
+    add_test(NAME leopard2_pruned_plan_compiler
+        COMMAND leopard2_pruned_plan_compiler_test)
+
     # The comprehensive backend suite below intentionally requires both
     # fields, but the production AUTO GF16/GFNI route is also compiled into a
     # supported GF16-only archive.  Reuse the focused hook executable here so
