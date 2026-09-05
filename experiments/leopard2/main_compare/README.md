@@ -418,6 +418,32 @@ temporary filesystem fixtures only. Integration into the still-dormant host /
 build / artifact orchestrator and its sealed controller closure remains
 required; later stages must revalidate the relevant live identities and limits.
 
+`v19_owned_artifacts.py` supplies the next dormant ownership primitives. Its
+context captures the host before acquiring the canonical lock, verifies the
+actual descriptor's exclusive lock record, and refreshes host/resource facts
+at boundaries. Lock path mutation history is retained; a harmless competing
+open/close does not invalidate it. Unlocks, downgrades, changed identities, and
+observed pathname replacement do. This is cooperative serialization, not a
+defense against arbitrary same-process unlock/relock between observations.
+
+The artifact owner copies the four fixed build outputs into a fresh
+`v19-artifacts` subtree of an existing private lane, requires the pinned
+preflight hashes, seals the file/directory modes, and retains guarded files
+plus sealed executable memfds. Each boundary rehashes the held files, not
+cached copies: [inotify does not report mmap-based writes](https://man7.org/linux/man-pages/man7/inotify.7.html).
+It never lends the lock descriptor or executes
+anything. Each artifact is bounded to 16 MiB and the total to 32 MiB. Partial
+copies remain for diagnosis and cannot be reused by the failed owner. The
+normal/optimized `leopard2_v19_owned_artifacts_*self_test` CTests exercise real
+temporary files, locks and kernel seals with synthetic host/build inputs.
+
+These primitives are **not yet connected to acquisition**. Retained
+preflight/v18-lineage verification, detached source ownership, one-job builds,
+runtime closure, and wrapper/controller-closure integration remain required.
+Their records explicitly do not assert source/build history, continuous
+resource authority, or permission to run a workload. The owning context must
+remain alive through later consumers and terminal sealing.
+
 Version 19 is preregistered but deliberately incapable of live acquisition at
 this revision. Its canonical preregistration record has
 `live_acquisition_armed:false` and SHA-256
