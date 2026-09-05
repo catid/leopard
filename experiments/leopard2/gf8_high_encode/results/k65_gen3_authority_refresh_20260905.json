@@ -1,0 +1,102 @@
+{
+  "schema": "leopard2-k65-gen3-candidate-authority-refresh/v1",
+  "date_utc": "2026-09-05",
+  "bead": "leopard-79h.38.5.12.1.9.5.2",
+  "status": "build_authority_verified_independent_review_pending",
+  "scope": {
+    "host": "ripper.lan",
+    "build_provenance_only": true,
+    "qualification_scan_executed": false,
+    "benchmark_executed": false,
+    "performance_claim": false,
+    "preregistration_changed": false,
+    "candidate_source_changed": false,
+    "compiler_arguments_changed": false,
+    "note": "This authority binds the frozen eb187e6 candidate, not performance of the current topic-branch HEAD."
+  },
+  "source": {
+    "root": "/home/catid/leopard-k65-gen3",
+    "commit": "eb187e658a327a08e223fcca72f1e7b2dd2494ea",
+    "tree": "e191a257c4b24fe5c77f71d482fd12ca6099eea8",
+    "controller_bindings_sha256": "c57152d7f2fc09dd8908f15c651eec724c116bf69eaff2816e97e2b6fbcbf134"
+  },
+  "candidate": {
+    "sha256": "4b0bde10f044a0709e78403d92cf87687f0ca83de517b45a7d81c3fcb1c13d92",
+    "size": 1638016,
+    "byte_identical_to_previous_authority": true
+  },
+  "authority": {
+    "lane_root": "/home/catid/leopard-k65-gen3-authority-rss16-20260905/lane",
+    "record_sha256": "8a5edac52cda053f098a57f258e36bf6acd16c9c7986b2a89c2916b0aab10764",
+    "ledger_sha256": "3705be83f8184fe3e558c20c9eb9dc60895576e93ab2f12d7b3d6b6653675c5c",
+    "build_provenance_sha256": "172c7c0b1894c95978ffd014b59462b9f177427b30a4ee3c17a6f36f985803ce",
+    "reproducible_build_proof_sha256": "45e902d9072ebb2153c1b0ab6fabe175592bbf2900fca3b280a4c4ca1d3bee70",
+    "reproducible_build_core_sha256": "e5614fe5f8c91d86db9f70668ac4b342fab655bd69a695ef82353bb11b96d55a",
+    "runtime_closure_sha256": "07718d3a581d7350bef7c98c19f2f8864c70e9d49a216ea3c9ba25d8c271d000",
+    "verification_program_sha256": "91b3726eff9376d2cbb20307dc7671b26e62870170d27d2aabe1fee97553b4ce",
+    "runtime_prlimit_sha256": "17064f67e650d6152a6902b013aab496b54c87587c8eea6f5023aafee6154069",
+    "runtime_taskset_sha256": "a431738fadddc2e2326c8ab81843e72f4011658379381aef1502a6ddb1c1115b"
+  },
+  "producer": {
+    "container_id": "8a059da88cdcf00bf6fea36096889a4241b36caec0140bb472b4b0d82bee3ee9",
+    "image_sha256": "8957d5b79e6a6b94f13c6d4470b5515aeb5c9688b442795ef4d3887b834360e4",
+    "memory_limit_bytes": 536870912,
+    "swap_allowance_bytes": 0,
+    "jobs": 1,
+    "pids_limit": 256,
+    "network": "none",
+    "nofile_soft": 65536,
+    "rlimit_as_bytes": 335544320,
+    "advisory_rlimit_rss_bytes": 16777216,
+    "observed_ggc_min_heapsize_kib": 16384,
+    "previous_ggc_min_heapsize_kib": 131072,
+    "observed_ggc_min_expand": 51,
+    "host_canonical_lock_held_by_container": true,
+    "exit_code": 0,
+    "oom_killed": false,
+    "maximum_process_rss_kib": 257864,
+    "observed_live_cgroup_peak_bytes": 467521536,
+    "final_cgroup_peak_available": false,
+    "resource_note": "The live cgroup observation is not a final peak. RLIMIT_RSS is advisory here; the 512 MiB cgroup limit and zero-swap allowance remain the hard bounds.",
+    "receipt_sha256": "dbb11c5812ef11c977b91ff40d66be7742df4b4cb1c11d2eef84aa481d3864d5",
+    "resources_log_sha256": "39295097bcc7edfb840fdb0401ab8b8c8d5f17260508240619e50756e422c475",
+    "container_record_sha256": "0ccf0a8887389c9d434ab44defc6fc0a3616ff0f04de825722bc79c386b0d6ab"
+  },
+  "native_replays": {
+    "memory_limit_bytes": 268435456,
+    "swap_allowance_bytes": 0,
+    "source_recapture_required": true,
+    "detached_source_required": true,
+    "matching_successful_verdict_sha256": "bb3ff86d6bf257b1ed4204ffe3a25aa466d59a798dbd5bc5f89ad953859e2841",
+    "runs": [
+      {
+        "file": "native-verdict-1.json",
+        "entry": "CLI",
+        "exit_code": 0,
+        "maximum_process_rss_kib": 258252
+      },
+      {
+        "file": "native-verdict-2.json",
+        "entry": "CLI",
+        "exit_code": 2,
+        "maximum_process_rss_kib": 214204,
+        "error": "current candidate source could not be recaptured",
+        "cause": "Unproven. A concurrent Git status check may have triggered the guarded source capture. The failed empty output is retained."
+      },
+      {
+        "file": "native-verdict-3.json",
+        "entry": "Same verifier API with chained exceptions exposed and no overlapping source inspection",
+        "exit_code": 0,
+        "maximum_process_rss_kib": 253580
+      }
+    ]
+  },
+  "retention": {
+    "host_directory": "/home/catid/leopard-k65-gen3-authority-rss16-20260905",
+    "producer_files": ["producer-receipt.json", "producer-resources.log", "producer-container.json"],
+    "previous_failed_containers_preserved": true,
+    "failed_empty_export_directory": "/home/catid/leopard-k65-gen3-authority-rss16-20260905-failed-export-1",
+    "export_note": "Direct docker-cp extraction could not populate a mode-0500 directory. Streamed tar extraction with deferred directory-mode restoration preserved the sealed mode/ownership contract; native verification followed publication."
+  },
+  "next_gate": "Independent review and K65 Gen3 policy/host ratification. No qualification or performance acquisition is authorized by this build-only record."
+}
