@@ -500,6 +500,55 @@ This is build/lifetime evidence only, not a codec timing or authorization of
 the relocated recipe. The initial test-harness allocation failure is retained
 with the corrected test results; no memory limit was relaxed.
 
+`v19_source_identity.py` authenticates initial content while borrowing the live
+streamed-source and retained-preflight owners. It independently reconstructs
+Git blob/tree IDs from held file bytes using 64 KiB buffers, checks the complete
+candidate SHA-256/mode/size manifest against the pinned preflight, and binds the
+candidate, baseline and initialized `sse2neon` content trees to authenticated
+raw commit objects. Read-only commit/index queries use one retained, sealed
+`/usr/bin/git` executable and held root/gitdir descriptors; index entries and
+default flags must exactly match the independently reconstructed worktrees.
+Executable modes use Git's owner-execute bit, not group/other execute bits.
+Git status or an index flag cannot excuse different source bytes or Git modes.
+
+This is the exact ordinary detached-clone dialect used by the native diagnostic:
+known local origin paths and config bytes, no active hooks, linked metadata,
+alternate object stores, grafts, replacement refs or additional Git roots.
+Unknown nested `.git` files are not silently excluded. The baseline's committed
+`sse2neon` gitlink is bound in its exact uninitialized (empty-directory) state;
+the candidate's matching gitlink is initialized and its content authenticated.
+Other untracked files and empty worktree directories are rejected. Commit/query
+output and individual tree objects are bounded to 1 MiB, as is the sum of
+reconstructed path bytes.
+The record retains raw commit payloads and reconstructed entries for audit;
+later boundaries revalidate source, preflight and Git-tool bytes, and failures
+latch. The normal/optimized `leopard2_v19_source_identity_*self_test` CTests use
+real miniature Git repositories with a synthetic retained-preflight input.
+
+Authentication does not establish independent source creation, executable
+runtime-library closure, atomic observations, mapped-recipe authorization or
+permission to run a workload. Those remain separate gates; the borrowed owners
+must remain alive, and no historical version's validators are relaxed.
+
+The exact final authentication module passed 21 real-Git cases in both Python
+modes, all 10 focused ownership CTests, and a native fresh-build diagnostic
+reproducing all four pinned artifacts. The unchanged project-graph files passed
+172/172 tests in both modes. Final native peak memory was 518,365,184 bytes,
+with all memory-event counters and swap usage zero. That diagnostic released
+unused controller heap with process-local `gc.collect()`/`malloc_trim(0)` before
+each build; compiler flags and artifact hashes were unchanged. An earlier
+untrimmed run reached the limit (`max=3`, no OOM) and was rejected, not reused.
+This is one bounded build observation, not a universal memory guarantee.
+
+The 189-entry sealed bundle on ripper at
+`.research/leopard-79h/v19-source-identity.uTtcjw` retains the final proof,
+both rejected runs, the superseded positive, the heap diagnostic and the
+executable-mode regression reproduction. Its outer `SHA256SUMS` hash is
+`876bf2ed47f1fadf27f83797c2a9b98b26f3d1cc3489da1acd948329fe2fe688`.
+Normal and assertion-disabled local replay verified the retained commit/tree,
+index, candidate-manifest, artifact, source and diagnostic-disposition records.
+No benchmark executable was run.
+
 These primitives are **not yet connected to acquisition**. Physical
 v18-lineage verification, detached source ownership, one-job builds,
 runtime closure, and wrapper/controller-closure integration remain required.
