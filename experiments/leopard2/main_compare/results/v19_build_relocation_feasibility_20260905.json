@@ -1,0 +1,122 @@
+{
+  "schema": "leopard2-v19-build-relocation-feasibility-checkpoint/v1",
+  "tracker": "leopard-79h.38.5.4.8.2.2.2",
+  "host": "ripper.lan",
+  "source": {
+    "candidate_commit": "cf7a7056e0bd7f54b8da436a39cae857beab10c1",
+    "candidate_tree": "499697b4ee71ce7b2a12831f7d72d0e423cd0806",
+    "baseline_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "baseline_tree": "b7c8830d96a978f6ec14fe747095f066e351ae72",
+    "sse2neon_commit": "cad518a93b326f0f644b7972d488d04eaa2b0475"
+  },
+  "original_preregistration_sha256": "27c1b7d76a0ecdbe194d6e6b62c01e48b1c7d10fc8ef99ebad4d76238669f0c1",
+  "original_preflight_sha256sums_sha256": "1df9404c4424628e63492ade557d6f61ac06884b9a36932dd69b884aec1c02d7",
+  "original_run_root": "/home/catid/leopard-v19-build-preflight.QSq8egne",
+  "baseline_added_flag_template": "-ffile-prefix-map=${physical_workspace}=${original_run_root}",
+  "candidate_added_flags": [],
+  "resource_limits": {
+    "memory_max_bytes": 536870912,
+    "memory_swap_max_bytes": 0,
+    "nofile_soft": 65536,
+    "build_parallelism": 1
+  },
+  "evidence": {
+    "root": "/home/catid/leopard/.research/leopard-79h/v19-build-relocation-feasibility.NS1qbI",
+    "sha256sums_sha256": "16edea6a9fcc5c66c5afdc401c1c38cf961186ae4ff69cf2426b05c051ab85b1",
+    "manifest_file_count": 80,
+    "final_probe_sha256": "19ac22f58e02ad3a943318abe3c689b35bf0f69f1b4608cdddd345e9f21d1942"
+  },
+  "experiments": [
+    {
+      "name": "first-mapped",
+      "source_scope": "fresh baseline and two hash-verified candidate adapter files",
+      "result_sha256": "3a62e792a8df5bb9fdef1cf1431fce8e46cc2d693d961f32b83373ac43aefd93",
+      "outcome": "both baseline files match pinned whole-file hashes",
+      "probe_exit_status": 0,
+      "build_experiment_wall_seconds": 5.24,
+      "maximum_child_rss_kib": 184368,
+      "swaps": 0
+    },
+    {
+      "name": "unmapped",
+      "source_scope": "fresh baseline and two hash-verified candidate adapter files",
+      "result_sha256": "fce0d3944e91dd24b99f57c9c1b81347c7aa43c8cc8a4f87297725d1acb8f162",
+      "outcome": "expected mismatch for both baseline files without the mapping flag",
+      "probe_exit_status": 0,
+      "build_experiment_wall_seconds": 5.32,
+      "maximum_child_rss_kib": 184416,
+      "swaps": 0,
+      "binary_sha256": "dd3462f741db52ce60a55d964f8d76004b9405c2f4677a4d944dcda3c5c23b4d",
+      "archive_sha256": "e613998a405b22da0c7f656c0ec9b98043bb21e82e195933c45e10aa624a482b"
+    },
+    {
+      "name": "first-full-rejected",
+      "source_scope": "fresh detached candidate, baseline and submodule",
+      "result_sha256": "54529cb10180a914073e60d9243d88b670d7ff494644b8577032ed3c2b27dd2d",
+      "outcome": "candidate build completed but post-build memory-event gate rejected; baseline build not started",
+      "probe_exit_status": 1,
+      "build_experiment_wall_seconds": 26.73,
+      "maximum_child_rss_kib": 388484,
+      "swaps": 0,
+      "exact_rejected_memory_counters_retained": false
+    },
+    {
+      "name": "full-mapped",
+      "source_scope": "fresh detached candidate, baseline and submodule",
+      "result_sha256": "9a7e71fd6181dfddc375554fcfc97981fee08b9c75174a09408fca785ffd7058",
+      "outcome": "all four files match pinned whole-file hashes; native host, lock, retained-preflight and resource checks passed",
+      "probe_exit_status": 0,
+      "build_experiment_wall_seconds": 32.61,
+      "maximum_child_rss_kib": 387120,
+      "swaps": 0,
+      "cgroup_peak_bytes": 521965568,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      },
+      "owned_source_cache_eviction": {
+        "method": "fsync then POSIX_FADV_DONTNEED on independently cloned regular files with nlink=1",
+        "files": 1341,
+        "bytes": 114767874,
+        "cgroup_current_before_bytes": 175935488,
+        "cgroup_current_after_bytes": 52125696,
+        "global_cache_drop_performed": false
+      }
+    }
+  ],
+  "full_mapped_artifacts": {
+    "bench_leopard2": {
+      "size": 1638016,
+      "sha256": "85556059be75f98665464084a192db4f6284b0e90ec285d2791eee785f9458ab"
+    },
+    "libleopard.a": {
+      "size": 1759628,
+      "sha256": "0c013cee36866f1b64e75cb8b1124732be699720f68d5e7011750c939c54d881"
+    },
+    "leopard_main_benchmark": {
+      "size": 1165752,
+      "sha256": "bb011abbabe74e1a581b77593916be1d9f0a1b1bf586eed6ef927a473cc9edf8"
+    },
+    "libleopard_main_exact.a": {
+      "size": 938622,
+      "sha256": "9e006068fbdd72e318ba854688d614183e949c3fd36ff1192b1f490e7ca47260"
+    }
+  },
+  "scope": {
+    "feasibility_only": true,
+    "codec_source_changed": false,
+    "benchmark_executed": false,
+    "performance_claim_eligible": false,
+    "historical_tree_overwritten": false,
+    "host_security_changed": false,
+    "preregistration_changed": false,
+    "recipe_authorized_for_v19": false,
+    "full_source_runtime_ownership_proved": false,
+    "live_acquisition_armed": false,
+    "v19_attempt_consumed": false
+  }
+}

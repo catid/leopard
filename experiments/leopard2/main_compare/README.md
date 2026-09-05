@@ -453,7 +453,12 @@ The returned source pins and canonical build path describe historical inputs,
 not a new build or a live execution authority. The actual preflight remains on
 ripper under `.research/leopard-79h/cf7a705-v19-build-preflight-ripper-a3`.
 Its canonical build tree must not be overwritten: the baseline output is
-path-sensitive. A caller must hold and revalidate the host/lock owner around
+path-sensitive. A [bounded relocation experiment](v19_build_relocation.md)
+reproduced all four pinned outputs from fresh scratch sources using an explicit
+baseline-only compiler path map and task-owned source-cache eviction. That
+changed recipe is not yet authorized by the frozen acquisition contract and
+does not complete source/runtime ownership. A caller must hold and revalidate
+the host/lock owner around
 this context and preserve the historical evidence while staging fresh builds.
 
 These primitives are **not yet connected to acquisition**. Physical
