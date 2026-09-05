@@ -34,12 +34,7 @@
 
 namespace {
 
-struct RawPrunedOperation
-{
-    uint32_t x;
-    uint32_t y;
-    uint16_t multiplier_log;
-};
+using leopard2_internal::PrunedTransformOperation;
 
 static bool IsPowerOfTwo(uint32_t value)
 {
@@ -53,7 +48,7 @@ static void BuildRawPrunedOperations(
     bool inverse,
     leopard2_internal::PrunedMultiplierLogProvider multiplier_log,
     const void* multiplier_context,
-    std::vector<RawPrunedOperation>& operations)
+    std::vector<PrunedTransformOperation>& operations)
 {
     if (size == 1)
         return;
@@ -63,10 +58,11 @@ static void BuildRawPrunedOperations(
     {
         const uint16_t log_m = multiplier_log(
             multiplier_context, coset + half);
-        const RawPrunedOperation operation = {
+        const PrunedTransformOperation operation = {
             start,
             start + 1,
-            log_m
+            log_m,
+            0
         };
         operations.push_back(operation);
         return;
@@ -108,21 +104,21 @@ static void BuildRawPrunedOperations(
         const uint32_t value3 = value2 + quarter;
         if (inverse)
         {
-            const RawPrunedOperation grouped[] = {
-                { value0, value1, log_m01 },
-                { value2, value3, log_m23 },
-                { value0, value2, log_m02 },
-                { value1, value3, log_m02 }
+            const PrunedTransformOperation grouped[] = {
+                { value0, value1, log_m01, 0 },
+                { value2, value3, log_m23, 0 },
+                { value0, value2, log_m02, 0 },
+                { value1, value3, log_m02, 0 }
             };
             operations.insert(operations.end(), grouped, grouped + 4);
         }
         else
         {
-            const RawPrunedOperation grouped[] = {
-                { value0, value2, log_m02 },
-                { value1, value3, log_m02 },
-                { value0, value1, log_m01 },
-                { value2, value3, log_m23 }
+            const PrunedTransformOperation grouped[] = {
+                { value0, value2, log_m02, 0 },
+                { value1, value3, log_m02, 0 },
+                { value0, value1, log_m01, 0 },
+                { value2, value3, log_m23, 0 }
             };
             operations.insert(operations.end(), grouped, grouped + 4);
         }
@@ -1171,35 +1167,37 @@ bool CompilePrunedTransformPlan(
         candidate.input_mask.assign(input_mask, input_mask + size);
         candidate.output_mask.assign(output_mask, output_mask + size);
 
-        std::vector<RawPrunedOperation> raw;
+        // Coordinates and multipliers never change. Reuse each operation's
+        // flags byte for forward liveness, then reverse dependency/write
+        // flags, avoiding a second full DAG and a separate liveness snapshot.
+        std::vector<PrunedTransformOperation> planned;
         const uint8_t log2_size = Log2PowerOfTwo(size);
         candidate.full_butterfly_count =
             static_cast<size_t>(size >> 1) * log2_size;
-        raw.reserve(candidate.full_butterfly_count);
+        planned.reserve(candidate.full_butterfly_count);
         BuildRawPrunedOperations(
             0, size, shift, inverse,
-            multiplier_log, multiplier_context, raw);
-        if (raw.size() != candidate.full_butterfly_count)
+            multiplier_log, multiplier_context, planned);
+        if (planned.size() != candidate.full_butterfly_count)
             return false;
-        if (raw.empty())
+        if (planned.empty())
             return false;
         candidate.first_layer_multiplier_log = multiplier_log(
             multiplier_context, shift + (size >> 1));
         if (candidate.first_layer_multiplier_log > zero_multiplier_log)
             return false;
-        for (size_t i = 0; i < raw.size(); ++i)
-            if (raw[i].multiplier_log > zero_multiplier_log)
+        for (size_t i = 0; i < planned.size(); ++i)
+            if (planned[i].multiplier_log > zero_multiplier_log)
                 return false;
 
         std::vector<uint8_t> live(candidate.input_mask);
-        std::vector<uint8_t> live_before(raw.size() * 2U, 0);
-        for (size_t i = 0; i < raw.size(); ++i)
+        for (size_t i = 0; i < planned.size(); ++i)
         {
-            const RawPrunedOperation& operation = raw[i];
+            PrunedTransformOperation& operation = planned[i];
             const bool live_x = live[operation.x] != 0;
             const bool live_y = live[operation.y] != 0;
-            live_before[i * 2] = static_cast<uint8_t>(live_x);
-            live_before[i * 2 + 1] = static_cast<uint8_t>(live_y);
+            operation.flags = static_cast<uint8_t>(
+                (live_x ? PrunedLiveX : 0) | (live_y ? PrunedLiveY : 0));
             const bool multiplier_zero =
                 operation.multiplier_log == zero_multiplier_log;
             const bool multiplier_one = operation.multiplier_log == 0;
@@ -1228,12 +1226,11 @@ bool CompilePrunedTransformPlan(
                 candidate.zero_outputs.push_back(i);
         }
 
-        std::vector<PrunedTransformOperation> planned(raw.size());
-        for (size_t reverse = raw.size(); reverse-- > 0;)
+        for (size_t reverse = planned.size(); reverse-- > 0;)
         {
-            const RawPrunedOperation& operation = raw[reverse];
-            const bool live_x = live_before[reverse * 2] != 0;
-            const bool live_y = live_before[reverse * 2 + 1] != 0;
+            PrunedTransformOperation& operation = planned[reverse];
+            const bool live_x = (operation.flags & PrunedLiveX) != 0;
+            const bool live_y = (operation.flags & PrunedLiveY) != 0;
             const bool need_x = needed[operation.x] != 0;
             const bool need_y = needed[operation.y] != 0;
             const bool multiplier_zero =
@@ -1264,13 +1261,7 @@ bool CompilePrunedTransformPlan(
             if (need_y) flags |= PrunedNeedY;
             if (write_x) flags |= PrunedWriteX;
             if (write_y) flags |= PrunedWriteY;
-            const PrunedTransformOperation result = {
-                operation.x,
-                operation.y,
-                operation.multiplier_log,
-                flags
-            };
-            planned[reverse] = result;
+            operation.flags = flags;
 
             needed[operation.x] = static_cast<uint8_t>(live_x && (
                 (need_x && a_nonzero) || need_y));
@@ -1285,16 +1276,16 @@ bool CompilePrunedTransformPlan(
             candidate.inverse_accumulation_flags.assign(root_distance, 0);
             std::vector<uint8_t> seen(root_distance, 0);
             uint32_t root_operation_count = 0;
-            for (size_t i = 0; i < raw.size(); ++i)
+            for (size_t i = 0; i < planned.size(); ++i)
             {
-                if (raw[i].y > raw[i].x &&
-                    raw[i].y - raw[i].x == root_distance)
+                if (planned[i].y > planned[i].x &&
+                    planned[i].y - planned[i].x == root_distance)
                 {
-                    if (raw[i].x >= root_distance || seen[raw[i].x] != 0)
+                    if (planned[i].x >= root_distance || seen[planned[i].x] != 0)
                         return false;
-                    candidate.inverse_accumulation_flags[raw[i].x] =
+                    candidate.inverse_accumulation_flags[planned[i].x] =
                         planned[i].flags;
-                    seen[raw[i].x] = 1;
+                    seen[planned[i].x] = 1;
                     ++root_operation_count;
                 }
             }

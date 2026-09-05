@@ -339,6 +339,14 @@ void maximum_allocation()
         const allocation_audit::Measurement measured = allocation_audit::end();
         require(result && measured.calls > 0 && measured.peak >= measured.live,
             "maximum compiler allocation audit failed");
+        // One full mutable operation array plus bounded liveness and vector
+        // growth overhead. The old raw+snapshot+planned representation exceeds
+        // this budget by almost 7 MiB at the maximum GF16 side.
+        const size_t transient_budget =
+            (sizeof(leopard2_internal::PrunedTransformOperation) + 2U) *
+            plan.full_butterfly_count;
+        require(measured.peak - measured.live <= transient_budget,
+            "compiler retained duplicate full transient representations");
         std::printf("N65536 inverse=%u calls=%zu peak=%zu retained=%zu transient=%zu\n",
             inverse, measured.calls, measured.peak, measured.live,
             measured.peak - measured.live);
