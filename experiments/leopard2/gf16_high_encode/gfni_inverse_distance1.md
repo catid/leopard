@@ -1,7 +1,9 @@
 # GFNI inverse distance-one forwarding experiment
 
 Bead: `leopard-79h.38.5.4.13`. Date: 2026-09-06.
-Status: initial correctness/structural milestone passed; timing not performed.
+Status: initial correctness/structural milestone passed. The later timing
+screen measured a directional 1.033262x OFF/ON ratio, below the 5% gate;
+see `gfni_inverse_distance1_screen.md`. No production promotion.
 
 The preceding callback observer identified 2,000 first-stage two-way calls
 which bypass the existing fused GFNI range kernel. This experiment changes
@@ -112,9 +114,9 @@ Run its frozen `replay/verify_gfni_inverse_distance1.py` with the experiment
 bundle path and baseline bundle's `preflight` directory, inside the established
 256-MiB/no-swap scope. Normal and optimized replay execute no codec or collector.
 
-## Next gate
+## Next gate at the initial correctness milestone
 
-The task remains open. A separate driver without per-callback instrumentation,
+At that milestone the task remained open. A separate driver without per-callback instrumentation,
 qualified trace capacity for the full warmup/measurement loop, and a newly
 preregistered frozen-binary candidate/control screen are still required.
 OFF/ON layout controls must pass before any speed interpretation. Production
@@ -125,3 +127,12 @@ milestone. The old exhausted Leopard1 timing attempt has not been rerun.
 Review uses Codex self-review and deterministic/adversarial validation under
 the user's Claude opt-out, not independent-model `CONVERGED`. No Claude/API,
 kernel setting, unrelated workload or affinity was used or changed.
+
+## Subsequent timing decision
+
+Preregistration `b6a22c1` led to a completed clean 144-invocation screen.
+All aggregate controls passed, but the 1.033262x target ratio was below the
+required 1.05. The `.13` evaluation is closed as a completed below-threshold
+experiment, not a production optimization or a Leopard1 gap closure. Its
+complete evidence and limitations are in `gfni_inverse_distance1_screen.md`.
+Follow-up `.14` investigates GFNI-only final inverse accumulation separately.
