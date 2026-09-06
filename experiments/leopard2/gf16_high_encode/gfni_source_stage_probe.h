@@ -5,6 +5,12 @@
 #include <cstdint>
 
 namespace gfni_source_stage_probe {
+#ifndef LEO_GFNI_SOURCE_STAGE_CAPACITY
+#define LEO_GFNI_SOURCE_STAGE_CAPACITY 16
+#endif
+static_assert(LEO_GFNI_SOURCE_STAGE_CAPACITY == 16 ||
+              LEO_GFNI_SOURCE_STAGE_CAPACITY == 64, "unsupported trace capacity");
+constexpr unsigned kCapacity = LEO_GFNI_SOURCE_STAGE_CAPACITY;
 struct Call
 {
     unsigned kind, k, r, requested, side, sparse_blocks;
@@ -14,7 +20,7 @@ struct State
 {
     bool enabled;
     unsigned calls, matches, changed;
-    Call records[16];
+    Call records[kCapacity];
 };
 bool Matches(const Call& call);
 void Reset(bool enabled);

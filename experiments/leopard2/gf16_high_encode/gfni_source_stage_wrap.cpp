@@ -36,7 +36,7 @@ extern "C" void WrappedSourceStage(LEO_STAGE_ARGS) asm("__wrap_" LEO_STAGE_SYMBO
 extern "C" void WrappedSourceStage(LEO_STAGE_ARGS)
 {
     using namespace gfni_source_stage_probe;
-    if (state.calls == 16)
+    if (state.calls >= kCapacity)
         throw std::runtime_error("source-stage probe record limit");
     Call call = {static_cast<unsigned>(ops.kind), k, r, requested, side,
         sparse ? sparse->block_count : 0U, bytes, policy, policy};

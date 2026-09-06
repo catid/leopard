@@ -1,0 +1,58 @@
+{
+  "schema": "gfni-source-stage-screen-plan/v1",
+  "bead": "leopard-79h.38.5.4.11",
+  "scope": "One new GFNI source-staging candidate-versus-current diagnostic. Not the exhausted .10 current-versus-Leopard1 experiment, not v19 qualification, and not production promotion.",
+  "codec_commit": "36dc0c8f66604b8d974468e687c51e6183ecb61d",
+  "correctness_milestone": "0d0ac30",
+  "build_policy": "Reuse the unchanged pinned full dual-field production Release archive from gf16-current-route-failed.STc10h. Compile only the new front end and source-policy wrapper with GCC13.3, C++11, -O3 -DNDEBUG -Wall -Wextra -Werror -fopenmp -pthread, LEO_GFNI_SOURCE_STAGE_CAPACITY=64 and exact codec-commit definition; GNU ld wraps only ReedSolomonEncodeWithSourcePolicy. No libc/public-encode/main wrappers, sanitizer or fno-builtin flags in the timing executable. One executable handles both modes, so code layout is identical. Both modes still record the same pass-sized trace; validation and printing are outside measured intervals. This is a diagnostic wrapper, not an uninstrumented production benchmark.",
+  "artifact_sha256": {
+    "timing": "eae13155dfce040a1703ed95991a4b2b261882b3dcab63543096d0b57da8bdb9",
+    "current.a": "259c2c9aa3f51b1f941eac84270ad37c39c2a5b3cc06b1676a414f8088ad88e6",
+    "expected.json": "92c4a9e7ab49663c83c6b074d39180e1058fbfcbb4e7ff1989131d673a7b2bb8",
+    "gfni_source_stage_timing.cpp": "25bc08c92f6efd910b94b8c6d72bdb54c0773745f2a4e88bc7897c2b56b8c70f",
+    "gfni_source_stage_probe.h": "b559a055e564b230305df61e4a0c30e13d867e6b8340b7e0284a69dd3179a7cc",
+    "gfni_source_stage_wrap.cpp": "cd536a612e15589ee44ebdb6ac6d19e386c2caa896fca0dcf08f8502d62af164",
+    "current_route_screen.cpp": "d2ba6c99caa97603ec7091a4a6e4fe805c1be56640e769e88d6aedebf79ccaa7",
+    "run_gfni_source_stage_screen.py": "3a8ba09bf77f9f4f8701958073e7e1c6dd3130bdef5b633aa745b284a5c28174",
+    "run_current_route_screen.py": "cad9767bda653e9580841fdca16ef4fcfe1e3095d7169ee95b5fd9ae182d5593",
+    "run_split_cache_screen.py": "e060014b597b1510736e5cdffee3bc8220c7d66ca70f98dcb374112ca8764629"
+  },
+  "host": {
+    "hostname": "foureyes",
+    "kernel": "6.8.0-138-generic",
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper PRO 9985WX 64-Cores"
+  },
+  "host_selection": "Use the existing foureyes physical pair22/86; topology and host identity rechecked before preregistration. No scan for faster CPUs, no affinity intervention and no stopping other workloads. The old .10 one-attempt plan remains exhausted and its zero-timing failure is not reused as performance data.",
+  "cpu": 22,
+  "sibling": 86,
+  "controller_cpu": 0,
+  "passive_seconds": 10,
+  "attempt_budget": 1,
+  "seed": 20260906,
+  "initial_untimed_encodes": 1,
+  "additional_warmups": 4,
+  "samples_per_process": 21,
+  "rounds": 3,
+  "orders": {
+    "current_vs_staged": ["off", "on", "on", "off"],
+    "same_current": ["off_a", "off_b", "off_b", "off_a"]
+  },
+  "cells": [
+    {"id": 0, "k": 1000, "r": 200, "bytes": 65536, "requested": "auto", "current_route": "gfni", "role": "target"},
+    {"id": 1, "k": 1000, "r": 200, "bytes": 65536, "requested": "avx2", "current_route": "avx2", "role": "unchanged"},
+    {"id": 2, "k": 1000, "r": 200, "bytes": 65536, "requested": "avx512", "current_route": "avx512", "role": "unchanged"},
+    {"id": 3, "k": 1000, "r": 200, "bytes": 32768, "requested": "auto", "current_route": "avx2", "role": "unchanged"},
+    {"id": 4, "k": 1000, "r": 199, "bytes": 65536, "requested": "auto", "current_route": "avx2", "role": "unchanged"},
+    {"id": 5, "k": 4096, "r": 512, "bytes": 4096, "requested": "auto", "current_route": "avx2", "role": "unchanged"}
+  ],
+  "sequence": "Cells0..5, rounds0..2, current_vs_staged then same_current, four processes in each comparison. Total144 timed invocations. OFF and both same-current labels use exactly the same executable path/inode and --stage=0 arguments; ON changes only that argument to --stage=1. No absolute cross-cell comparisons or multiplication with historical ratios.",
+  "workload": "Same existing six public GF16 legacy-high/native full-output workloads. One public encode per sample, initial1+warmup4+timed21; no initialization, allocation, source fill, parity hash or setup inside the clock. Single-thread setting enforced process-locally. New front end delegates the unchanged existing measurement loop once. Separate --exercise runs26 independent --check workloads without any clock; it tests pass-count capacity, not timed-loop allocation behavior.",
+  "validation": "Before timing:24 Release/sanitizer OFF/ON workload records and12 full parity files equal the original independent Leopard1 records/bytes; four clock-free target exercises each26 encodes pass; default16 and timing64 trace overflow-before-delegation/reset/neighbor checks pass in Release and sanitizer builds. Six default copy probes retain old counts/parity. Sixteen malformed/invalid-timing requests refuse before work. Collector pure tests pass normal/-O. All artifacts frozen and source/codec identities retained. Remote12 untimed checks must match the same expected workload and exact pass counts before passive observation.",
+  "validity": "Preregistration must be committed and pushed before launching the sole collector attempt. Canonical campaign lock and physical-pair lease cover the run. Lane-owned read-only executable/archive/source/dependencies are SHA-checked before and after every child. Ten-second passive sibling gate immediately precedes timing; every timed invocation must have zero sibling nonidle jiffies. Any mismatch, failed child or contamination stops the one attempt. Starting the collector consumes the attempt even if it fails before clocks. No retry, CPU substitution, partial analysis, pooling, or threshold relaxation; no unrelated affinity changes.",
+  "analysis": "Per-process median21; per-round sqrt(slot0*slot3/(slot1*slot2)); geometric mean3 round ratios. Require all144 invocations in exact order with expected trace counts and zero sibling work before any analysis. No confidence intervals, trimming or statistical retry.",
+  "decision": "All six same-current aggregate ratios AND all five unchanged OFF/ON aggregate ratios must be inside[1/1.02,1.02]; otherwise inconclusive_controls and no performance conclusion. With valid controls, target OFF/ON must be at least1.05 and all three target rounds above1 to continue_to_future_qualification; otherwise reject_for_this_screen. Neither result authorizes production promotion or establishes an exact-Leopard1 comparison.",
+  "resources": "One substantial process at a time, builds512MiB-j1, tests/timing256MiB, swap0. Each timed child CPU30s/file1MiB, wall timeout60s. Untimed parity tests use separate256MiB scopes/file16MiB. No broad controller, Claude/subagents, privileged settings or changes to other workloads. Existing v19 and authoritative Leopard1 gap-closure gates remain incomplete and unchanged. Review is Codex self-review plus deterministic/sanitizer checks, not independent-model CONVERGED."
+}
