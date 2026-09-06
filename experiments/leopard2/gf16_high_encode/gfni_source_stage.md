@@ -1,7 +1,12 @@
 # GFNI-only source-staging contrast
 
 Bead: `leopard-79h.38.5.4.11`. Date: 2026-09-06.
-Status: **correctness-validated driver-only candidate; no timings**.
+Status: **correctness validated; subsequent timing filter rejected promotion**.
+
+The untimed evidence below remains valid. The later separately preregistered
+filter completed 144 clean timed invocations and found an essentially flat
+0.998812x current/staged ratio, with passing aggregate controls. No production
+change was promoted. See `gfni_source_stage_screen.md` for that distinct result.
 
 ## Why this is a distinct experiment
 
@@ -113,11 +118,14 @@ It retains initial failures, final sources/binaries, recipes and every raw
 record/log. Its two unchanged reference bundles are stored alongside it:
 `gf16-current-route-failed.STc10h` and `gf16-copy-probe.zE4w1M`.
 
-Next is a separately preregistered candidate-versus-current timing filter,
+At this correctness milestone, the next gate was a separately preregistered
+candidate-versus-current timing filter,
 using fresh immutable binaries without the libc-copy wrappers. This would
 test this new implementation, not rerun the exhausted current-versus-Leopard1
 plan. Retain a fixed attempt budget, same-binary controls and passive sibling
 gate; stop on contamination without changing other workloads. Any affinity
 intervention still requires user approval. Existing v19 qualification and
 authoritative exact-Leopard1 gap-closure gates remain open and unchanged.
-The candidate stays experimental until performance evidence justifies it.
+That subsequent filter is now complete and negative. The candidate remains
+experiment-only; the next investigation is callback-cost attribution, not a
+retry of this rejected policy replacement.
