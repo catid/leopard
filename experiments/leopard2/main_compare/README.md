@@ -671,6 +671,57 @@ compiler headers/data, C-phase native proof, nested CMake/Make/Git/shell routes,
 full build integration and later handoff remain open. All corresponding runtime,
 atomic-snapshot, integration, acquisition and benchmark flags remain false.
 
+`v19_runtime_inventory.py` now provides the next separate component: bounded
+startup-dependency inventory and sealed-loader **inspection**, not compiler
+dispatch. It borrows one live compiler phase, retains its observed GCC link
+plugin and loader, and traverses ELF `DT_NEEDED` dependencies under the qualified
+`/usr/lib/x86_64-linux-gnu` profile. The parser reads program/dynamic headers and
+at most 256 bytes per dependency name, never an entire executable or dynamic
+string table. GCC's >1 MiB string tables are supported without materialization.
+Unsupported interpreters, search paths, filters and audit/configuration tags,
+missing files, wrong SONAMEs, escaped paths and inode aliases fail closed.
+
+New runtime inputs are limited to 64 files/64 MiB and root-owned regular files
+with modes 0644 or 0755; the original launcher default still requires 0755.
+Every input has a streamed sealed copy, retained source descriptor, mutation
+history and current-byte checks. A private descriptor-relative library prefix
+retains exact SONAME-to-memfd mappings. The absence of `/etc/ld.so.preload` is
+also guarded, including create/remove history. Queries explicitly execute the
+sealed loader with cache and hardware-capability searches disabled. Each
+`--list` result must exactly match the transitive ELF dependency set and sealed
+prefix paths; the loader's own display label is bound to its explicit sealed
+execution descriptor. A root can be inspected once per inventory lifetime.
+
+The final native ripper check inspected six roots in each of C and C++ phases:
+driver, frontend, assembler, collect2, linker and link plugin. Both phases have
+the same 14 runtime files, 13 dependency names and 9,344,320 input bytes. All
+12 loader listings matched; the retained exec/mmap trace also allows verification
+of the actual sealed file mappings. Native peak memory was 95,174,656 bytes under
+512 MiB, with all six memory-event counters and swap zero. No compiler job,
+benchmark, qualification or timing ran. The 19 runtime tests and existing
+18 compiler/29 builder cases pass normal and optimized Python through six
+serialized CTests with resource warnings treated as errors.
+
+The sealed 77-entry, 77 MiB evidence bundle on ripper is
+`.research/leopard-79h/v19-runtime-inventory.hSnahm`, outer `SHA256SUMS`
+`f1591106fd78c8d0fa79c67c8b87034d92fe1abefd8ef9b0a56a52fd3818768c`.
+Final native result SHA-256:
+`0f6ce6ee5f7fb0b15ac488e4c626324a9062cad845a6ea3f21457f21ac3e6496`.
+It retains full bytes for all 21 distinct compiler/runtime ELF inputs, code,
+tests, trace and listings, plus the rejected initial string-table bound and
+superseded observation-only positive. Its separate stdlib-only verifier derives
+ELF dependencies from those copied bytes and checks listings and child mmap
+backing files without importing production code or executing retained programs.
+Normal and optimized replay both passed all 77 entries, 21 ELF projections and
+12 loader-query children; every file-backed child mapping was a sealed memfd.
+
+These are newly observed and retained library identities, **not** additional
+historical preflight pins. Compiler jobs and nested helpers do not yet use this
+explicit sealed-loader route. Full build/consumer integration, startup objects,
+headers/data, later dynamic loads and non-GCC build tools remain open; Python
+bootstrap mappings are not assigned the child loader's sealed-mapping guarantee.
+`full_runtime_execution_owned` and all integration/acquisition flags stay false.
+
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
 They cover stage ordering, exact mapping and cache dialects, link changes,
