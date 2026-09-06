@@ -1,7 +1,7 @@
 #!/usr/bin/python3
-"""Retain declared absent GCC search inputs; leopard-79h.38.5.4.8.2.2.2.3.
+"""Retain declared GCC search inputs; leopard-79h.38.5.4.8.2.2.2.3.
 
-This is a bounded negative-input owner, not a sandbox or complete search trace.
+This is a bounded search-input owner, not a sandbox or complete search trace.
 It detects changes before accepting a child result; it cannot prevent a child
 from observing a transient file. Callers must discard failed jobs and outputs.
 """
@@ -36,6 +36,8 @@ GCC13_ABSENT_PATHS = tuple(sorted(
        "bin/x86_64-linux-gnu/13/.", "lib/.", "lib/../lib/.", "lib/x86_64-linux-gnu/.",
        "lib/x86_64-linux-gnu/13/.", "lib/specs", "lib/x86_64-linux-gnu/13/specs")]))
 MAX_PATHS, MAX_DIRECTORIES, MAX_LINKS, MAX_STEPS = 128, 256, 64, 128
+PRESENT_PATHS = ("/usr/bin/nm", "/usr/bin/strip", "/usr/libexec/gcc/x86_64-linux-gnu/13/lto-wrapper")
+MAX_PRESENT_FILES, MAX_PRESENT_FILE_BYTES, MAX_PRESENT_BYTES = 8, 2 << 20, 4 << 20
 
 
 def components(value, *, absolute):
@@ -48,12 +50,12 @@ def components(value, *, absolute):
 
 
 class CompilerSearch:
-    """Borrow the same live runtime as the dispatcher; hold absence history.
+    """Borrow the dispatcher's runtime; hold absent and present search inputs.
 
     Production uses the fixed observed GCC13 path set. The private paths seam
     permits small real-filesystem mutation tests, not arbitrary build recipes.
     """
-    def __init__(self, inventory, *, _paths=None):
+    def __init__(self, inventory, present_pins, *, _paths=None, _file_factory=None):
         require(type(inventory) is runtime.RuntimeInventory or _paths is not None,
                 "compiler search requires a live runtime inventory")
         self.inventory = inventory
@@ -62,13 +64,33 @@ class CompilerSearch:
                 all(type(path) is str for path in self.paths) and len(set(self.paths)) == len(self.paths),
                 "compiler search path inventory differs")
         for path in self.paths: components(path, absolute=True)
+        require(type(present_pins) is list and len(present_pins) <= MAX_PRESENT_FILES,
+                "present compiler search inventory exceeds bound")
+        names, targets, total = set(), set(), 0
+        for pin in present_pins:
+            require(type(pin) is dict and set(pin) == {"path", "resolved_path", "size", "sha256"} and
+                    type(pin["path"]) is str and type(pin["resolved_path"]) is str and
+                    type(pin["size"]) is int and 0 < pin["size"] <= MAX_PRESENT_FILE_BYTES and
+                    type(pin["sha256"]) is str and builder.re.fullmatch(r"[0-9a-f]{64}", pin["sha256"]),
+                    "present compiler search pin differs")
+            for key in ("path", "resolved_path"): builder.host.canonical_path(pin[key], nonroot=True)
+            require(pin["path"] not in names and pin["resolved_path"] not in targets,
+                    "present compiler searches duplicate a name or target")
+            names.add(pin["path"]); targets.add(pin["resolved_path"])
+            total += pin["size"]
+        require(total <= MAX_PRESENT_BYTES and not (names | targets).intersection(self.paths),
+                "present compiler search bytes or absence overlap differ")
+        self._present_pins = copy.deepcopy(present_pins)
+        self._factory = builder._StreamedTool if _file_factory is None else _file_factory
         if _paths is None:
             phase = inventory.phase
             require(phase.language in ("c", "c++") and
                     str(phase._tools["collect2"].path) == "/usr/libexec/gcc/x86_64-linux-gnu/13/collect2",
                     "compiler search requires the qualified GCC13 profile")
+            require(names == set(PRESENT_PATHS), "qualified present compiler search coverage differs")
         self._stack, self._state = ExitStack(), "new"
         self._directories, self._links, self._missing = {}, {}, []
+        self._files, self._file_aliases = {}, {}
 
     def _directory(self, path):
         if path not in self._directories:
@@ -120,8 +142,20 @@ class CompilerSearch:
         self._state = "entering"
         try:
             self.inventory.validate_current()
-            self._guard = self._stack.enter_context(provenance._InotifyMutationGuard("v19 absent compiler searches"))
+            self._guard = self._stack.enter_context(provenance._InotifyMutationGuard("v19 compiler search inputs"))
             for path in self.paths: self._capture(path)
+            inodes = set()
+            for pin in self._present_pins:
+                tool = self._factory(Path(pin["resolved_path"]), maximum_bytes=MAX_PRESENT_FILE_BYTES, _guard=self._guard)
+                self._stack.callback(tool.close)
+                value = os.fstat(tool.fd)
+                require(tool.sha256 == pin["sha256"] and value.st_size == pin["size"],
+                        "present compiler search bytes differ from pin")
+                require((value.st_dev, value.st_ino) not in inodes, "present compiler search files alias one inode")
+                inodes.add((value.st_dev, value.st_ino))
+                aliases = self._stack.enter_context(runtime.compiler._retain_driver_aliases(pin["path"], tool))
+                self._files[pin["path"]] = tool
+                self._file_aliases[pin["path"]] = aliases
             self._state = "held"
             self.validate_current()
             return self
@@ -152,6 +186,7 @@ class CompilerSearch:
             for row in self._missing:
                 self._require_absent(row["name"], dir_fd=self._directories[Path(row["parent"])][0], follow_symlinks=False)
                 self._require_absent(row["path"])
+            for aliases in self._file_aliases.values(): aliases.validate_current()
             self._guard.verify()
         except BaseException:
             self._state = "failed"
@@ -159,10 +194,16 @@ class CompilerSearch:
 
     def record(self):
         self.validate_current()
-        return copy.deepcopy({"schema": "leopard2-v19-compiler-search/v1", "missing": self._missing,
+        return copy.deepcopy({"schema": "leopard2-v19-compiler-search/v2", "missing": self._missing,
             "directories": {str(path): list(identity) for path, (_, identity) in self._directories.items()},
             "aliases": {str(path): {"stable_fields": list(fields), "target": target}
                         for path, (fields, target) in self._links.items()},
+            "present_files": {path: {"resolved_path": str(tool.path), "sha256": tool.sha256,
+                "size": os.fstat(tool.fd).st_size, "stable_fields": list(tool.fields),
+                "aliases": self._file_aliases[path].record()} for path, tool in self._files.items()},
+            "present_file_bytes": sum(pin["size"] for pin in self._present_pins),
+            "declared_present_searches_retained": bool(self._present_pins),
+            "present_files_pinned_by_original_preflight": False, "queried_file_execution_owned": False,
             "declared_absence_history_owned": True, "negative_search_closure_owned": False,
             "compiler_data_owned": False, "full_runtime_execution_owned": False,
             "fresh_build_recipe_integrated": False, "live_acquisition_armed": False, "benchmark_executed": False})

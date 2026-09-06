@@ -346,10 +346,20 @@ class OwnerTests(unittest.TestCase):
 
     def search_owner(self):
         path = self.root / "optional-specs"
-        owner = module.search_module.CompilerSearch(self.inventory, _paths=(str(path),)).__enter__()
+        query = self.root / "queried-tool"
+        query.write_bytes(b"queried input bytes")
+        query.chmod(0o755)
+        pin = {"path": str(query), "resolved_path": str(query), "size": query.stat().st_size,
+               "sha256": module.builder.hashlib.sha256(query.read_bytes()).hexdigest()}
+        def factory(path, **kwargs):
+            return module.builder._StreamedTool(path, _trusted_owner=(os.getuid(), os.getgid()), **kwargs)
+        owner = module.search_module.CompilerSearch(self.inventory, [pin], _paths=(str(path),), _file_factory=factory).__enter__()
         def cleanup():
             owner._guard._close_without_verification()
-            owner._stack.close()
+            for aliases in owner._file_aliases.values():
+                aliases._guard._close_without_verification()
+                aliases._state = "failed"
+            owner._stack.__exit__(RuntimeError, RuntimeError("checked fixture cleanup"), None)
         self.stack.callback(cleanup)
         return owner, path
 
@@ -363,6 +373,8 @@ class OwnerTests(unittest.TestCase):
             inherited = self.calls[-1][1]["inherited_descriptors"]
             self.assertNotIn(searches._guard.descriptor, inherited)
             for fd, _ in searches._directories.values(): self.assertNotIn(fd, inherited)
+            for file in searches._files.values(): self.assertNotIn(file.fd, inherited)
+            self.assertTrue(owner.record()["searches"]["declared_present_searches_retained"])
 
     def test_optional_input_create_delete_during_driver_is_rejected_and_latched(self):
         searches, path = self.search_owner()
@@ -389,6 +401,27 @@ class OwnerTests(unittest.TestCase):
         with self.assertRaises(FAILURES):
             module.RuntimeDispatch(self.inventory, searches=searches, _runner=self.run_child).__enter__()
         self.assertEqual(len(self.calls), calls)
+
+    def test_queried_file_write_restore_during_driver_rejected(self):
+        searches, _ = self.search_owner()
+        query = self.root / "queried-tool"
+        original = query.read_bytes()
+        with self.assertRaises(FAILURES):
+            with module.RuntimeDispatch(self.inventory, searches=searches, _runner=self.run_child) as owner:
+                def mutate(role):
+                    if role == "driver": query.write_bytes(b"changed"); query.write_bytes(original)
+                self.intercept = mutate
+                owner.run(["/usr/bin/c++", "-c", "source.cpp", "-o", "out.o"])
+        self.assertEqual(owner._commands[-1]["status"], "failed")
+
+    def test_queried_file_loss_before_driver_does_not_launch(self):
+        searches, _ = self.search_owner()
+        with self.assertRaises(FAILURES):
+            with module.RuntimeDispatch(self.inventory, searches=searches, _runner=self.run_child) as owner:
+                (self.root / "queried-tool").unlink()
+                calls = len(self.calls)
+                with self.assertRaises(FAILURES): owner.run(["/usr/bin/c++"])
+                self.assertEqual(len(self.calls), calls)
 
     def test_metadata_helper_prefix_and_source_drift(self):
         for target in ("root", "prefix", "source"):

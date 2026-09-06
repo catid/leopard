@@ -1041,6 +1041,55 @@ metadata-only probes (`nm`, `strip`, `lto-wrapper`), other/unobserved inputs,
 actual C compilation, other build tools and full build/consumer integration
 remain open. Full runtime/data/acquisition flags remain false; no codec speedup.
 
+`CompilerSearch` schema v2 additionally requires caller-supplied pins for the
+three observed present query targets: `/usr/bin/nm`, `/usr/bin/strip` and
+`/usr/libexec/gcc/x86_64-linux-gnu/13/lto-wrapper`. Their canonical files total
+1,042,912 bytes. These newly observed pins are not attributed to the original
+preflight. The owner retains original file descriptors, checks actual bytes and
+metadata, and reuses the compiler's complete file-alias/parent-history owner.
+The logical `nm` and `strip` aliases must still resolve to the pinned targets.
+Production requires all three; the private fixture seam allows smaller sets.
+Bounds are eight files, 2 MiB per file and 4 MiB total. These are stat/access
+inputs in the qualified jobs, not executed tools: their descriptors are not
+inherited, no sealed execution copy is claimed, and
+`queried_file_execution_owned` remains false.
+
+Twenty-nine search and twenty-six dispatcher cases bring the focused total to
+155 cases in each Python mode, passing fourteen serialized CTests. Added cases
+cover explicit pin coverage, wrong bytes/mode/size/target, duplicate inodes,
+write/permission/alias restoration, descriptor inheritance and a prefaulted mmap
+change with unchanged metadata and no guard event. The mmap case uses tmpfs and
+asserts that actual-byte rehashing was reached. Final test peak is 44,285,952
+bytes under 256 MiB with all six memory-event counters and swap zero.
+
+The accepted native check on ripper is
+`/tmp/leopard-v19-present-search-owner2.ktvTuQ`. All before/after/dispatcher search
+records agree and all owners exit successfully. The full GF16 object and
+baseline executable again reproduce `e25195f0...`/`bb011abb...`; the link still
+uses the retained original adapter object/archive. Native peak is 420,478,976
+bytes under 512 MiB with zero memory events/swap. No codec executable or timing
+ran. A first invocation used a noncanonical workspace spelling ending in `..`;
+it was rejected before compilation, and its result, command log and source are
+preserved. The accepted invocation uses the exact canonical workspace path.
+
+Separate stdlib-only normal/optimized trace replays verify successful stat and
+execute-permission queries for all three pinned files, with no child reads or
+execution of those files. The same four jobs cover forty absent external paths,
+274 sealed headers, eighteen sealed link inputs and twelve launches in 2,425,211
+trace bytes. The sealed 391-entry, 70 MiB bundle on ripper is
+`.research/leopard-79h/v19-present-searches.uhmWKx`, outer `SHA256SUMS`
+`b6d323a4abeb32bf201eae4d20a3da822313034069adb751ce2ad36c950c5d73`.
+Native result SHA-256 is
+`c7c65f6b5586fa31baf7e9f6f4f80bc2db270b0523ed9e5074e8c31868afda44`;
+trace projection SHA-256 is
+`c522cef90f5d5841e52da921c5df32e3ceb13480f95ac70f57c8b4870a6059f9`.
+Both bundle checks and trace projections pass normal/optimized Python with
+byte-identical projections, at 27,119,616-byte peak under 256 MiB and zero events
+or swap. Review is Codex self-review and deterministic/adversarial checks, not
+independent-model convergence. Actual C configuration probes, other build tools,
+unobserved inputs and full build/consumer integration remain open; this is no
+full runtime/search closure or codec-performance claim.
+
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
 They cover stage ordering, exact mapping and cache dialects, link changes,
