@@ -1,7 +1,7 @@
 # Current-route GF16 encoder diagnostic
 
 Bead: `leopard-79h.38.5.4.10`. Date: 2026-09-06.
-Status: validated and preregistered diagnostic; **no encode timings collected yet**.
+Status: **attempt exhausted at the passive gate; zero encode timings**.
 
 ## Question and scope
 
@@ -87,3 +87,40 @@ The five new pure collector tests pass normally and with Python `-O`.
 Scratch evidence is `/tmp/leopard-gf16-current-routes.BMj72w`. Review uses
 Codex self-review and deterministic checks under the user's Claude opt-out;
 there is no independent-model `CONVERGED` claim.
+
+## Terminal attempt and retained evidence
+
+Preregistration `7887d56` was pushed before the one allowed server attempt.
+All 12 untimed server checks matched the fixed local expectations. During
+the immediately following 10.000058885-second passive window, sibling86's
+non-idle counter rose from191252 to191260. The collector exited with
+`ValueError: passive sibling activity; attempt stopped`, `complete:false`,
+zero timed invocations and no analysis. No ratio, performance direction or
+gap-closure conclusion can be inferred. The budget is exhausted: no retry,
+CPU substitution, pooled partial data or relaxed threshold under this plan.
+
+Scope `run-rda0aad05282d4aa89af2dfd3b7e3cf2e.scope` exited1 after12.87s,
+peaked at132,370,432 bytes under256MiB, and recorded all six memory event
+counters and swap as zero. No other workload was stopped or moved. A request
+to temporarily exclude unrelated user-space threads from CPUs22/86, then
+restore their affinities, remains unapproved; no such intervention occurred.
+
+The separately written `replay_current_route_failure.py` imports no collector
+and executes no codec. Normal and optimized Python runs both verified all13
+frozen file pins, the raw12 server checks, the six sanitizer records, and
+all61,014,016 parity bytes across six local old/new pairs. Peaks were8,445,952
+and11,898,880 bytes under256MiB with all events and swap zero. An initial
+launcher permission error is retained; it executed no replay or codec.
+
+The158-file read-only bundle is retained locally and on ripper at
+`.research/leopard-79h/gf16-current-route-failed.STc10h`. It includes full
+source dependencies, build recipes and metadata, frozen Release artifacts,
+sanitizer artifacts, raw parity/check files, both failed sanitizer builds'
+logs, the terminal journal, host evidence, and the separate replay/logs.
+
+- Outer `SHA256SUMS`: `e83a217e680a23088e53208d9ba7747742e7918a1377e74efe9c35399b4ba342`
+- Attempt journal: `f2089e56a1e787bc0dd41ce7fd3c6ec6b54bc89d0b1ef759d403f060fbf4af51`
+- Scope log: `78510b95f0b065afc906813e65d3f2e89dcc9b1cd00a14ede5dcc0b69977c3f2`
+
+Existing v19 and K65 campaign gates remain unchanged. The current-route
+comparison and the overall Leopard1 performance-gap objective remain open.
