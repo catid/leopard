@@ -9,6 +9,7 @@ from pathlib import Path
 import statistics
 import subprocess
 import sys
+import time
 
 
 def require(value, message):
@@ -83,15 +84,71 @@ def sibling_ticks(cpu):
     raise ValueError("missing sibling CPU")
 
 
-def run(bundle, output):
+def validate_plan(plan, name):
+    profiles = {"split_cache_screen_plan.json": (4, 68, 0),
+                "split_cache_screen_foureyes_plan.json": (22, 86, 10)}
+    require(name in profiles, "unsupported plan name")
+    cpu, sibling, quiet = profiles[name]
+    require((plan["cpu"], plan["sibling"], plan["controller_cpu"],
+             plan["attempt_budget"], plan.get("passive_seconds", 0)) ==
+            (cpu, sibling, 0, 1, quiet), "unsupported frozen plan")
+    require(plan["rounds"] == 3 and plan["samples_per_process"] == 21 and
+            plan["order"] == ["off", "on", "on", "off"] and
+            plan["cell_order"] == list(range(6)), "changed screen method")
+    require([(cell["id"], cell["k"], cell["r"], cell["bytes"],
+              cell["route"], cell["role"]) for cell in plan["cells"]] == [
+        (0, 1000, 200, 32768, "avx512", "target"),
+        (1, 1000, 200, 65536, "avx512", "target"),
+        (2, 1000, 199, 65536, "avx512", "neighbor"),
+        (3, 4096, 512, 4096, "avx512", "unchanged_control"),
+        (4, 1000, 200, 65536, "avx2", "unchanged_control"),
+        (5, 1000, 200, 65536, "gfni", "unchanged_control")], "changed cells")
+    if quiet:
+        require(plan.get("host") == {
+            "hostname": "foureyes", "kernel": "6.8.0-138-generic",
+            "vendor_id": "AuthenticAMD", "cpu family": "26", "model": "8",
+            "model name": "AMD Ryzen Threadripper PRO 9985WX 64-Cores"},
+            "changed host profile")
+
+
+def host_identity():
+    cpu = dict(line.split(":", 1) for line in
+               Path("/proc/cpuinfo").read_text().split("\n\n")[0].splitlines()
+               if ":" in line)
+    cpu = {key.strip(): value.strip() for key, value in cpu.items()}
+    return dict({key: cpu[key] for key in
+                 ("vendor_id", "cpu family", "model", "model name")},
+                hostname=os.uname().nodename, kernel=os.uname().release)
+
+
+def check_passive(state, plan):
+    if not plan.get("passive_seconds", 0):
+        return
+    before = sibling_ticks(plan["sibling"])
+    start = time.monotonic_ns()
+    time.sleep(plan["passive_seconds"])
+    elapsed = time.monotonic_ns() - start
+    after = sibling_ticks(plan["sibling"])
+    state["passive"] = {"before": before, "after": after,
+                        "elapsed_ns": elapsed}
+    require(elapsed >= plan["passive_seconds"] * 1000000000,
+            "short passive observation")
+    require(after == before, "passive sibling activity; attempt stopped")
+
+
+def run(bundle, output, plan_name="split_cache_screen_plan.json"):
     output.mkdir(mode=0o700)  # Never overwrite an attempt or resume partial data.
-    plan = json.loads((bundle / "split_cache_screen_plan.json").read_text())
+    require(plan_name in ("split_cache_screen_plan.json",
+                         "split_cache_screen_foureyes_plan.json"), "plan name")
+    plan = json.loads((bundle / plan_name).read_text())
     pins = json.loads((bundle / "pins.json").read_text())
-    require(plan["cpu"] == 4 and plan["sibling"] == 68 and
-            plan["controller_cpu"] == 0 and plan["attempt_budget"] == 1,
-            "unsupported frozen plan")
-    require(Path("/sys/devices/system/cpu/cpu4/topology/thread_siblings_list")
-            .read_text().strip() == "4,68", "topology changed")
+    validate_plan(plan, plan_name)
+    for cpu in (plan["cpu"], plan["sibling"]):
+        require(Path(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list")
+                .read_text().strip() == f"{plan['cpu']},{plan['sibling']}",
+                "topology changed")
+    host = host_identity()
+    require("host" not in plan or plan["host"] == host, "wrong host")
     os.sched_setaffinity(0, {plan["controller_cpu"]})
 
     def verify():
@@ -107,7 +164,7 @@ def run(bundle, output):
                     "executable does not match preregistration")
 
     state = {"schema": "leopard2-gf16-split-screen-attempt/v1",
-             "plan_sha256": digest(bundle / "split_cache_screen_plan.json"),
+             "plan_sha256": digest(bundle / plan_name), "host": host,
              "pins": pins, "preflight": [], "invocations": [], "complete": False}
     lock_fds = []
     try:
@@ -115,7 +172,8 @@ def run(bundle, output):
         require(root.is_dir() and not root.is_symlink() and
                 root.stat().st_uid == os.getuid() and
                 root.stat().st_mode & 0o777 == 0o700, "unsafe lease directory")
-        pair = root / f"leopard2-cpu-pair-{os.getuid()}-4-68.lock"
+        pair = root / (f"leopard2-cpu-pair-{os.getuid()}-"
+                       f"{plan['cpu']}-{plan['sibling']}.lock")
         for path in (Path("/tmp/leopard-gf8-authoritative.lock"), pair):
             fd = os.open(path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
             lock_fds.append(fd)
@@ -128,7 +186,7 @@ def run(bundle, output):
         def invoke(variant, cell, label, measured):
             stdout = output / f"{label}.stdout"
             stderr = output / f"{label}.stderr"
-            command = ["/usr/bin/taskset", "-c", "4", "/usr/bin/prlimit",
+            command = ["/usr/bin/taskset", "-c", str(plan["cpu"]), "/usr/bin/prlimit",
                        "--cpu=30:30", "--fsize=1048576:1048576", "--",
                        str(bundle / variant), "--measure" if measured else
                        "--check", str(cell["id"])]
@@ -152,6 +210,7 @@ def run(bundle, output):
                 expected.setdefault(cell["id"], identity(record))
                 validate(record, cell, expected[cell["id"]], False)
                 state["preflight"].append(record)
+        check_passive(state, plan)
         for cell in plan["cells"]:
             for round_id in range(3):
                 for slot, variant in enumerate(plan["order"]):
@@ -176,5 +235,7 @@ def run(bundle, output):
 
 
 if __name__ == "__main__":
-    require(len(sys.argv) == 3, "usage: run_split_cache_screen.py frozen_bundle output")
-    run(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve())
+    require(len(sys.argv) in (3, 4),
+            "usage: run_split_cache_screen.py frozen_bundle output [plan_name]")
+    run(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve(),
+        sys.argv[3] if len(sys.argv) == 4 else "split_cache_screen_plan.json")

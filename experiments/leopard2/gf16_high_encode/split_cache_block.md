@@ -1,8 +1,9 @@
 # Default-off GF16 split-butterfly cache-block candidate
 
 Bead: `leopard-79h.38.5.4.9`. Base commit: `2aca7f5`.
-Date: 2026-09-06. Status: correctness-validated experiment; **not timed or
-promoted**. No claim that the historical exact-Leopard1 deficit is closed.
+Date: 2026-09-06. Status: correctness-validated experiment; **performance
+unknown, not promoted**. The first diagnostic attempt failed its isolation
+gate before timing the candidate. No historical exact-Leopard1 gap is closed.
 
 ## Mechanism and cost hypothesis
 
@@ -116,3 +117,35 @@ Existing v19 preregistration, runtime/build handoff, contamination contracts,
 and exact-main promotion gates remain unchanged and incomplete. No historical
 benchmark executable was run, no timing was analyzed, and no AUTO gate was
 widened by this experiment.
+
+## First diagnostic screen: invalid, attempt budget exhausted
+
+Commit `26e3984` preregistered and pushed a same-source ON/OFF screen before
+measurement: six fixed cells, three OFF/ON/ON/OFF rounds, 21 samples per
+process, one attempt, local CPU4 with sibling68. Only the AVX-512 archive
+member differs between the two production libraries. This is a candidate
+filter, not an exact-Leopard1 comparison or production qualification.
+
+All 12 untimed public-API preflights matched output/input hashes, scratch,
+and selected routes. The first timed invocation, cell0/round0/slot0/OFF,
+observed two non-idle sibling jiffies. The runner stopped **before any ON
+timing**. The journal has `complete:false`, one invocation, and no analysis
+key. No ratios or performance inference are admissible, and the one-attempt
+budget is exhausted; this plan must not be retried or moved to another CPU.
+
+The failed scope peaked at 131,006,464 bytes under 256 MiB; all six memory
+event counters and swap were zero. The 73-file read-only evidence bundle
+includes frozen binaries/libraries/source, all build/check logs, the failed
+journal, and subsequent passive host snapshots:
+`.research/leopard-79h/gf16-split-screen-work-failed.Y3csBw`.
+
+- Outer `SHA256SUMS`: `50d2b2d7cf69270351ae8a0468a1e70ce2c62580a14512162f57e4cf8b0dd674`
+- Failed journal: `688ea3a6d852f8ff0f4a68d2242a5bdd17d4172ca729902253204a08ced75e25`
+- Scope log: `32e9784073646fca3db0107df397f6bebab8e557cb4c1d01b650c7a2bebb5954`
+
+An OBS streaming thread was subsequently observed on sibling68 with affinity
+0-127. This does not identify the source of the exact two ticks. Both SSH
+servers also had active workloads. A passive snapshot window found no idle
+sibling half on ripper, but several on foureyes; those historical snapshots
+do not reserve a core or predict future quietness. No other process was
+stopped or moved. The current candidate stays OFF.
