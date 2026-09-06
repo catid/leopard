@@ -235,7 +235,11 @@ class RuntimeDispatch:
         try:
             require(type(argv) is list and len(argv) <= 511, "dispatcher argument count exceeds bound")
             if self.link_inputs is not None and "-c" not in argv:
-                effective = self.link_inputs.arguments(argv, self.prefix.descriptor)
+                # CMake's C identification probe compiles and links in one
+                # driver call. Keep its implicit header in the sealed view too.
+                selected = (self.headers.arguments(argv, compile_only=False)
+                            if self.headers is not None and self.phase.language == "c" else argv)
+                effective = self.link_inputs.arguments(selected, self.prefix.descriptor)
             else:
                 selected = argv if self.headers is None else self.headers.arguments(argv)
                 effective = compiler.driver_arguments(selected, self.phase.logical_driver, self.prefix.descriptor)

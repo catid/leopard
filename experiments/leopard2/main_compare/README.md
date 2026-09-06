@@ -1090,6 +1090,72 @@ independent-model convergence. Actual C configuration probes, other build tools,
 unobserved inputs and full build/consumer integration remain open; this is no
 full runtime/search closure or codec-performance claim.
 
+The subsequent C configuration milestone extends `CompilerHeaders` and
+`LinkerInputs` records to schema v2 with an explicit language. C uses the four
+non-C++ include roots, omits `-nostdinc++`, and permits the combined compile/link
+invocation used by CMake's compiler-ID probe. The same eighteen-file link view
+supplies plain C's default libraries; C OpenMP/OpenACC, pthread and profiling
+options remain outside this profile and are rejected. The dispatcher composes
+both input views for the single C invocation, while its C++ compile/separate-link
+route is unchanged.
+
+The initial C run reproduced the saved executable but failed trace replay:
+`-nostdinc` also suppressed GCC's implicit `/usr/include/stdc-predef.h`. A bounded
+preprocessor diagnostic showed six lost definitions (the header guard and five
+feature macros). Explicit preinclusion restored the entire sorted default macro
+dump byte-for-byte. The C owner now requires this header's pin and explicitly
+preincludes its sealed-view path. This is a concrete example of output equality
+being insufficient to prove preservation of compiler inputs. The byte-equivalent
+but incomplete first run, its source/trace rejection, and the macro diagnostic
+are retained, not accepted as C input-ownership evidence.
+
+The final native run on ripper is `/tmp/leopard-v19-c-owner2.yAlPBu`. It compiles
+the saved generated `CMakeCCompilerId.c` (27,030 bytes, SHA-256
+`9a95913d134b6c5dca36f23acb80765b86313bcfd8da754e5ceb2e259e954074`)
+from its retained original directory into a new output location. The entire
+16,088-byte executable matches the saved `a.out`, SHA-256
+`88aa2744b35746a2f6464f0d7f31c3991c8fdb255d08727ecfbf676478e051b8`.
+Neither executable was run or overwritten. These are newly observed generated
+CMake inputs/outputs, not Git-tracked source or the original four preflight
+artifact pins. The saved recipe has no flags; an explicit `-o` only redirects its
+default output, with the sealed-route injections recorded separately.
+
+C++ and C phases run sequentially under the same source/preflight/host/lock
+lifetime. The C++ GF16 object and separate baseline link still reproduce
+`e25195f0...`/`bb011abb...`, with the original adapter object/archive reused.
+All owners exit successfully; native peak is 422,420,480 bytes under 512 MiB,
+with all six memory-event counters and swap zero. Twenty-two header, fourteen
+link and twenty-eight dispatcher cases bring the focused total to 165 cases in
+each Python mode. Fourteen serialized CTests pass at 44,945,408-byte peak under
+256 MiB, again with zero memory events/swap.
+
+Separate stdlib normal/optimized replays pass with identical projections. The
+C jobs show one sealed header, twelve of the eighteen retained link inputs,
+eleven launches, and 163,790 trace bytes. All thirty-eight observed external
+negative paths are covered by the forty retained guards; C does not query the
+two `/lib` and `/usr/lib` versioned `13/.` directories that C++ queries. The
+explicit C preinclude is opened directly into the sealed memfd without a GCC
+`readlink` call; the replay checks that actual open mapping, not a nonexistent
+userland alias-resolution event. The initial checker assumptions about that
+event and forty observed C paths are preserved with their failures. No
+production guard was relaxed. C++ still covers 274 headers, eighteen link inputs,
+forty negative paths and twelve launches. Neither phase reads ordinary system
+files in these traced jobs; this remains a bounded recipe observation.
+
+The sealed 428-entry, 103 MiB bundle on ripper is
+`.research/leopard-79h/v19-c-compiler.QJsShw`, outer `SHA256SUMS`
+`20f75170e3cc9801862574c488dcd1260ef3653fa005c39c33df6459b1f7a8b2`.
+Native result SHA-256 is
+`e8bd60cea5a1bf8fe5c009afd547461ad53a41a4ade7f1b8c2657a1ac5e250a2`;
+C trace projection SHA-256 is
+`879834fc3d9fed2b92a3b0269753bd1ca3ca624ac3e6293fd5152940e637c18d`.
+Bundle and both-language trace replays pass normal/optimized Python at
+27,152,384-byte peak under 256 MiB, with zero memory events/swap. C ABI and
+OpenMP probes, nested/non-GCC tools, full build integration and live consumer
+handoff remain open. Review is Codex self-review plus deterministic/adversarial
+checks under the user's Claude opt-out, not independent-model convergence.
+No full runtime/search closure, acquisition arming, or codec speedup is claimed.
+
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
 They cover stage ordering, exact mapping and cache dialects, link changes,

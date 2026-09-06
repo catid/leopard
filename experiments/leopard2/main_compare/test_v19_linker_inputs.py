@@ -113,6 +113,26 @@ class LinkerTests(unittest.TestCase):
             owner = self.enter()
             with self.assertRaises(FAILURES): owner.arguments(argv, 123)
 
+    def test_plain_c_link_retains_default_library_view(self):
+        self.inventory.phase.language, self.inventory.phase.logical_driver = "c", "/usr/bin/cc"
+        owner = self.enter()
+        argv = ["/usr/bin/cc", "CMakeCCompilerId.c", "-o", "out"]
+        effective = owner.arguments(argv, 123)
+        self.assertEqual(effective[:4], [argv[0], "-B/proc/self/fd/123/", "-B" + str(owner.root / "gcc-prefix") + "/",
+                                        "--sysroot=" + str(owner.root)])
+        self.assertEqual(effective[4:], argv[1:])
+        self.assertEqual(owner.record()["language"], "c")
+        self.assertEqual(len(owner.record()["files"]), 18)
+
+    def test_c_nondefault_libraries_and_driver_overrides_latch(self):
+        self.inventory.phase.language, self.inventory.phase.logical_driver = "c", "/usr/bin/cc"
+        for extra in (str(self.gcc / "libgomp.so"), str(self.system / "libpthread.a"), "-fopenmp",
+                      "-fopenmp-simd", "-fopenacc", "-pthread", "-pg", "-p", "-B/host", "-lfoo", "-c"):
+            owner = self.enter()
+            with self.subTest(extra=extra), self.assertRaises(FAILURES):
+                owner.arguments(["/usr/bin/cc", "s.c", "-o", "out", extra], 123)
+            with self.assertRaises(FAILURES): owner.record()
+
     def test_invalid_pins_counts_paths_and_byte_bounds(self):
         bad = [[], self.pins[:-1], self.pins + [self.pins[0]]]
         for key, value in (("size", True), ("size", 0), ("size", module.MAX_FILE_BYTES + 1), ("sha256", "bad"),

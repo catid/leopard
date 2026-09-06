@@ -57,7 +57,7 @@ def link_aliases(pins):
 
 
 class LinkerInputs(header_module._PinnedInputView):
-    """Retain the eighteen observed inputs of the qualified GCC13 C++ link.
+    """Retain the GCC13 C++ link inventory, also used by plain C probes.
 
     The original scripts remain byte-for-byte unchanged. The private GCC prefix
     supplies startup files and libraries; its enclosing sysroot supplies the
@@ -65,7 +65,7 @@ class LinkerInputs(header_module._PinnedInputView):
     This inventory is newly observed, not part of the original preflight pins.
     """
     def __init__(self, inventory, pins, *, _file_factory=None):
-        require(inventory.phase.language == "c++", "link input profile requires C++")
+        require(inventory.phase.language in ("c", "c++"), "link input profile requires C or C++")
         selected = link_pins(pins)
         super().__init__(inventory, selected, (), link_aliases(selected),
             limits=(MAX_FILES, MAX_DIRECTORIES, MAX_FILE_BYTES), root_prefix="v19-link-inputs-", _file_factory=_file_factory)
@@ -82,7 +82,12 @@ class LinkerInputs(header_module._PinnedInputView):
                 "-nostdlib", "-nodefaultlibs", "-nostartfiles", "-static", "-shared", "-r", "-T", "-u"))
                 for value in argv[1:]), "link arguments override qualified input routing")
             replacements = {GCC_ROOT + "libgomp.so": "libgomp.so", SYSTEM_ROOT + "libpthread.a": "libpthread.a"}
-            require(all(argv.count(path) == 1 for path in replacements), "qualified explicit link libraries differ")
+            if self.phase.language == "c++":
+                require(all(argv.count(path) == 1 for path in replacements), "qualified explicit link libraries differ")
+            else:
+                require(not any(path in argv for path in replacements) and not any(
+                    value.startswith(("-fopenmp", "-fopenacc", "-pthread", "-pg")) or value == "-p" for value in argv[1:]),
+                    "C link profile requires plain default libraries")
             prefix = self.root / "gcc-prefix"
             effective = [effective[0], effective[1], "-B" + str(prefix) + "/", "--sysroot=" + str(self.root), *effective[2:]]
             return [str(prefix / replacements[value]) if value in replacements else value for value in effective]
@@ -92,7 +97,7 @@ class LinkerInputs(header_module._PinnedInputView):
 
     def record(self):
         self.validate_current()
-        return copy.deepcopy({"schema": "leopard2-v19-linker-inputs/v1", "root": str(self.root),
+        return copy.deepcopy({"schema": "leopard2-v19-linker-inputs/v2", "root": str(self.root), "language": self.phase.language,
             "prefix": str(self.root / "gcc-prefix"), "files": [dict(pin, descriptor=self._files[path].executable_descriptor,
                 seals=self._files[path].executable_record()["seals"]) for path, pin in self._pins.items()],
             "mappings": {str(path): target for path, target in self._mappings.items()},

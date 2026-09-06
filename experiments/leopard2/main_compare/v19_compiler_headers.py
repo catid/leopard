@@ -27,6 +27,8 @@ builder, provenance, require = runtime.builder, runtime.provenance, runtime.requ
 CPP_INCLUDE_ROOTS = ("/usr/include/c++/13", "/usr/include/x86_64-linux-gnu/c++/13",
                      "/usr/include/c++/13/backward", "/usr/lib/gcc/x86_64-linux-gnu/13/include",
                      "/usr/local/include", "/usr/include/x86_64-linux-gnu", "/usr/include")
+C_INCLUDE_ROOTS = CPP_INCLUDE_ROOTS[3:]
+C_PREDEFINITION_HEADER = "/usr/include/stdc-predef.h"
 MAX_FILES, MAX_DIRECTORIES, MAX_FILE_BYTES, MAX_TOTAL_BYTES = 512, 128, 2 << 20, 16 << 20
 
 
@@ -37,9 +39,11 @@ def checked_path(value):
     return Path(value)
 
 
-def header_pins(rows, include_roots):
-    require(type(include_roots) is tuple and include_roots == CPP_INCLUDE_ROOTS,
-            "header include order is not the qualified C++ profile")
+def header_pins(rows, include_roots, language="c++"):
+    require(type(language) is str and language in ("c", "c++"), "unsupported header language")
+    expected = C_INCLUDE_ROOTS if language == "c" else CPP_INCLUDE_ROOTS
+    require(type(include_roots) is tuple and include_roots == expected,
+            "header include order is not the qualified language profile")
     roots = tuple(checked_path(value) for value in include_roots)
     require(type(rows) is list and 0 < len(rows) <= MAX_FILES, "header count exceeds bound")
     pins = {}
@@ -196,30 +200,42 @@ class _PinnedInputView:
 
 
 class CompilerHeaders(_PinnedInputView):
-    """Qualified C++ include policy over a bounded, sealed input view.
+    """Qualified C/C++ include policies over a bounded, sealed input view.
 
     The declared set is sealed; absolute includes, optional specs and complete
     positive/negative search equivalence remain separate obligations.
     """
-    def __init__(self, inventory, pins, include_roots=CPP_INCLUDE_ROOTS, *, _file_factory=None):
-        require(inventory.phase.language == "c++", "header profile requires C++")
-        self.include_roots = include_roots
-        selected = header_pins(pins, self.include_roots)
+    def __init__(self, inventory, pins, include_roots=None, *, _file_factory=None):
+        require(inventory.phase.language in ("c", "c++"), "header profile requires C or C++")
+        self.include_roots = ((C_INCLUDE_ROOTS if inventory.phase.language == "c" else CPP_INCLUDE_ROOTS)
+                              if include_roots is None else include_roots)
+        selected = header_pins(pins, self.include_roots, inventory.phase.language)
+        require(inventory.phase.language != "c" or Path(C_PREDEFINITION_HEADER) in selected,
+                "C profile requires the implicit predefinition header")
         super().__init__(inventory, selected, self.include_roots, {path.relative_to("/"): path for path in selected},
             limits=(MAX_FILES, MAX_DIRECTORIES, MAX_FILE_BYTES), root_prefix="v19-headers-", _file_factory=_file_factory)
 
-    def arguments(self, argv):
+    def arguments(self, argv, *, compile_only=True):
         self.validate_current()
         try:
+            require(type(compile_only) is bool and (compile_only or self.phase.language == "c"),
+                    "combined header compilation is only qualified for C")
             require(type(argv) is list and len(argv) <= 480 and argv and argv[0] == self.phase.logical_driver and
                     all(type(value) is str and "\0" not in value for value in argv) and
-                    argv.count("-c") == argv.count("-o") == 1, "header profile requires one explicit compile")
+                    argv.count("-c") == int(compile_only) and argv.count("-o") == 1 and
+                    "-S" not in argv and "-E" not in argv, "header profile requires one explicit compile")
             require(not any(value.startswith(("-isystem", "-idirafter", "-iquote", "-iprefix", "-iwithprefix",
                 "-isysroot", "--sysroot", "-include", "-imacros", "-nostdinc", "-Wp,", "-Xpreprocessor",
                 "-fno-canonical-system-headers", "-fpreprocessed", "-E")) for value in argv[1:]),
                 "header arguments override qualified include routing")
-            extra = ["-nostdinc", "-nostdinc++", f"-ffile-prefix-map={self.root}="]
+            extra = ["-nostdinc"] + (["-nostdinc++"] if self.phase.language == "c++" else [])
+            extra += [f"-ffile-prefix-map={self.root}="]
             for path in self.include_roots: extra += ["-isystem", str(self.root / path.lstrip("/"))]
+            # -nostdinc also suppresses GCC's implicit predefinition header.
+            # Restore its contents explicitly from the retained view; output
+            # equality alone may miss lost feature macros in a CMake ID probe.
+            if self.phase.language == "c":
+                extra += ["-include", str(self.root / C_PREDEFINITION_HEADER.lstrip("/"))]
             return [argv[0], *extra, *argv[1:]]
         except BaseException:
             self._state = "failed"
@@ -227,7 +243,7 @@ class CompilerHeaders(_PinnedInputView):
 
     def record(self):
         self.validate_current()
-        return copy.deepcopy({"schema": "leopard2-v19-compiler-headers/v1", "root": str(self.root),
+        return copy.deepcopy({"schema": "leopard2-v19-compiler-headers/v2", "root": str(self.root), "language": self.phase.language,
             "include_roots": list(self.include_roots), "files": [dict(pin, descriptor=self._files[path].executable_descriptor,
                 seals=self._files[path].executable_record()["seals"]) for path, pin in self._pins.items()],
             "header_bytes": sum(row["size"] for row in self._pins.values()),

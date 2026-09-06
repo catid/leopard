@@ -155,7 +155,7 @@ class OwnerTests(unittest.TestCase):
         self.libfd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
         self.stack.callback(os.close, self.libfd)
         tools = {}
-        for role in ("driver", "cc1plus", "as", "collect2", "ld", "loader", "plugin"):
+        for role in ("driver", "cc1", "cc1plus", "as", "collect2", "ld", "loader", "plugin"):
             path = self.root / role
             path.write_bytes(b"fixture tool " + role.encode())
             path.chmod(0o755)
@@ -238,7 +238,10 @@ class OwnerTests(unittest.TestCase):
         path.write_bytes(b"#define FIXTURE 1\n")
         path.chmod(0o644)
         roots = (str(headers),)
-        self.stack.enter_context(mock.patch.object(module.header_module, "CPP_INCLUDE_ROOTS", roots))
+        profile = "C_INCLUDE_ROOTS" if self.inventory.phase.language == "c" else "CPP_INCLUDE_ROOTS"
+        self.stack.enter_context(mock.patch.object(module.header_module, profile, roots))
+        if self.inventory.phase.language == "c":
+            self.stack.enter_context(mock.patch.object(module.header_module, "C_PREDEFINITION_HEADER", str(path)))
         pin = {"path": str(path), "sha256": module.builder.hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
         def factory(path, **kwargs):
             return module.builder._StreamedTool(path, _trusted_owner=(os.getuid(), os.getgid()), **kwargs)
@@ -336,6 +339,46 @@ class OwnerTests(unittest.TestCase):
         with self.assertRaises(FAILURES):
             module.RuntimeDispatch(self.inventory, link_inputs=inputs, _runner=self.run_child).__enter__()
         self.assertEqual(len(self.calls), calls)
+
+    def c_phase(self):
+        phase = self.inventory.phase
+        phase.language, phase.logical_driver = "c", "/usr/bin/cc"
+        phase._tools = {role: self.tools[role] for role in ("driver", "cc1", "as", "collect2", "ld")}
+        phase.pins = {role: {"path": str(tool.path)} for role, tool in phase._tools.items()}
+
+    def test_c_combined_compile_link_uses_both_sealed_views(self):
+        self.c_phase()
+        headers, path = self.header_owner()
+        inputs, _ = self.linker_owner()
+        argv = ["/usr/bin/cc", "CMakeCCompilerId.c", "-o", "out"]
+        with module.RuntimeDispatch(self.inventory, headers=headers, link_inputs=inputs, _runner=self.run_child) as owner:
+            owner.run(argv)
+            record = owner.record()
+            command = record["commands"][-1]
+            self.assertEqual(command["logical_argv"], argv)
+            self.assertIn("-nostdinc", command["effective_argv"])
+            self.assertNotIn("-nostdinc++", command["effective_argv"])
+            self.assertEqual(command["effective_argv"][command["effective_argv"].index("-include") + 1],
+                             str(headers.root / str(path).lstrip("/")))
+            self.assertIn("--sysroot=" + str(inputs.root), command["effective_argv"])
+            self.assertEqual(command["effective_argv"][1], f"-B/proc/self/fd/{owner.prefix.descriptor}/")
+            self.assertEqual(set(record["bindings"]["helpers"]), {"cc1", "as", "collect2", "ld"})
+            self.assertEqual(record["headers"]["language"], record["link_inputs"]["language"])
+            inherited = self.calls[-1][1]["inherited_descriptors"]
+            for file in [headers._files[path], *inputs._files.values()]:
+                self.assertIn(file.executable_descriptor, inherited)
+                self.assertNotIn(file.fd, inherited)
+
+    def test_c_compile_only_with_link_owner_does_not_inject_sysroot(self):
+        self.c_phase()
+        headers, _ = self.header_owner()
+        inputs, _ = self.linker_owner()
+        with module.RuntimeDispatch(self.inventory, headers=headers, link_inputs=inputs, _runner=self.run_child) as owner:
+            owner.run(["/usr/bin/cc", "-c", "s.c", "-o", "out.o"])
+            effective = owner.record()["commands"][-1]["effective_argv"]
+            self.assertIn("-nostdinc", effective)
+            self.assertNotIn("-nostdinc++", effective)
+            self.assertFalse(any(arg.startswith("--sysroot") for arg in effective))
 
     def test_borrowed_owner_loss_during_job_fails(self):
         with self.assertRaises(FAILURES):

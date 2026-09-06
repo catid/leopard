@@ -119,6 +119,65 @@ class HeaderTests(unittest.TestCase):
                 owner.arguments(["/usr/bin/c++", "-o", "out", "-c", "source.cpp", value])
             with self.assertRaises(FAILURES): owner.record()
 
+    def c_phase(self):
+        self.inventory.phase.language = "c"
+        self.inventory.phase.logical_driver = "/usr/bin/cc"
+        self.stack.enter_context(mock.patch.object(module, "C_INCLUDE_ROOTS", self.roots))
+        self.stack.enter_context(mock.patch.object(module, "C_PREDEFINITION_HEADER", str(self.first)))
+
+    def test_c_default_roots_and_compile_only_arguments(self):
+        self.c_phase()
+        owner = module.CompilerHeaders(self.inventory, self.pins, _file_factory=self.factory).__enter__()
+        self.stack.callback(self.cleanup_owner, owner)
+        argv = ["/usr/bin/cc", "-c", "source.c", "-o", "out.o"]
+        result = owner.arguments(argv)
+        self.assertEqual(result[-4:], argv[1:])
+        self.assertIn("-nostdinc", result)
+        self.assertNotIn("-nostdinc++", result)
+        self.assertEqual(result[result.index("-include") + 1], str(owner.root / str(self.first).lstrip("/")))
+        self.assertEqual(owner.record()["language"], "c")
+        self.assertEqual(owner.record()["include_roots"], list(self.roots))
+
+    def test_c_combined_compile_link_preserves_arguments(self):
+        self.c_phase()
+        owner = self.enter()
+        argv = ["/usr/bin/cc", "CMakeCCompilerId.c", "-o", "out"]
+        original = list(argv)
+        result = owner.arguments(argv, compile_only=False)
+        self.assertEqual(argv, original)
+        self.assertEqual(result[-3:], argv[1:])
+        self.assertNotIn("-c", result)
+        self.assertNotIn("-nostdinc++", result)
+        self.assertEqual(result.count("-isystem"), len(self.roots))
+
+    def test_c_stage_mismatch_or_nonboolean_mode_latches(self):
+        self.c_phase()
+        for mode, extra in ((True, []), (False, ["-c"]), (False, ["-E"]),
+                            (False, ["-S"]), (0, []), (1, ["-c"]), (None, [])):
+            owner = self.enter()
+            with self.subTest(mode=mode, extra=extra), self.assertRaises(FAILURES):
+                owner.arguments(["/usr/bin/cc", "s.c", "-o", "out", *extra], compile_only=mode)
+            with self.assertRaises(FAILURES): owner.record()
+
+    def test_c_missing_predefinition_pin_is_rejected(self):
+        self.c_phase()
+        with self.assertRaises(FAILURES): self.owner(self.pins[1:])
+
+    def test_cpp_combined_compile_link_is_not_qualified(self):
+        owner = self.enter()
+        with self.assertRaises(FAILURES):
+            owner.arguments(["/usr/bin/c++", "s.cpp", "-o", "out"], compile_only=False)
+        with self.assertRaises(FAILURES): owner.record()
+
+    def test_c_rejects_cpp_roots_and_unknown_language(self):
+        self.inventory.phase.language = "c"
+        with self.assertRaises(FAILURES): self.owner()
+        self.c_phase()
+        with self.assertRaises(FAILURES): module.header_pins(self.pins, self.roots[::-1], "c")
+        for language in ("fortran", None, True):
+            with self.subTest(language=language), self.assertRaises(FAILURES):
+                module.header_pins(self.pins, self.roots, language)
+
     def test_noncompile_or_oversized_argv_rejected(self):
         for argv in (["/usr/bin/c++"], ["/usr/bin/cc", "-o", "out", "-c", "s.c"],
                      ["/usr/bin/c++", "-o", "out", "-c", "x\0.cpp"],
