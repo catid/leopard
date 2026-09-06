@@ -2,6 +2,7 @@
 """Bounded build-owner tests; real files/fds, synthetic host and compiler output."""
 from contextlib import contextmanager
 import copy
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -117,6 +118,9 @@ class FreshBuildTests(unittest.TestCase):
         self.assertEqual(keywords["timeout"], 600)
         self.assertEqual(keywords["maximum_bytes"], 1 << 20)
         self.assertGreaterEqual(keywords["executable_descriptor"], 0)
+        descriptor = keywords["executable_descriptor"]
+        self.assertNotEqual(descriptor, owner._tools[argv[0]].fd)
+        self.assertEqual(fcntl.fcntl(descriptor, getattr(fcntl, "F_GET_SEALS", 1034)) & 15, 15)
         observed = os.umask(0o077)
         os.umask(observed)
         self.assertEqual(observed, owner._commands[-1]["umask"])
@@ -186,6 +190,11 @@ class FreshBuildTests(unittest.TestCase):
                         "atomic_snapshot"):
                 self.assertIs(record[key], False)
             self.assertIs(record["physical_v18_lineage_verified"], True)
+            self.assertIs(record["immutable_top_level_launchers_used"], True)
+            self.assertIs(record["compiler_subtool_execution_owned"], False)
+            self.assertEqual(set(record["immutable_launchers"]), {"/usr/bin/git", "/usr/bin/cmake"})
+            for command in record["commands"]:
+                self.assertEqual(command["immutable_launcher"], record["immutable_launchers"][command["argv"][0]])
             self.assertEqual(len(record["metadata"]), 21)
             record["recipe"]["stages"].clear()
             self.assertEqual(len(owner.record()["recipe"]["stages"]), 10)
@@ -383,6 +392,101 @@ class FreshBuildTests(unittest.TestCase):
         self.parent.symlink_to(actual, target_is_directory=True)
         with self.assertRaises(FAILURES), self.opened(): pass
         self.assertEqual(list(actual.iterdir()), [])
+
+
+class StreamedToolTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="leopard-v19-sealed-tool-test-")
+        self.addCleanup(temporary.cleanup)
+        self.path = Path(temporary.name) / "tool"
+        self.path.write_bytes(Path("/usr/bin/true").read_bytes())
+        self.path.chmod(0o755)
+        self.original = self.path.read_bytes()
+
+    @contextmanager
+    def tool(self):
+        owner = module._StreamedTool(self.path, _trusted_owner=(os.geteuid(), os.getegid()))
+        try: yield owner
+        finally: owner.close()
+
+    def test_executes_exact_sealed_copy_and_closes_all_descriptors(self):
+        before = set(os.listdir("/proc/self/fd"))
+        with self.tool() as owner:
+            descriptor = owner.executable_descriptor
+            self.assertNotEqual(descriptor, owner.fd)
+            self.assertEqual(owner.executable_descriptor, descriptor)
+            self.assertEqual(owner.executable_record(), {"sha256": hashlib.sha256(self.original).hexdigest(),
+                                                        "size": len(self.original), "seals": 15})
+            self.assertEqual(module.provenance._run([str(self.path)], "sealed true fixture",
+                executable_descriptor=descriptor, timeout=10, maximum_bytes=1024), b"")
+            for action in (lambda: os.write(descriptor, b"x"), lambda: os.ftruncate(descriptor, 0),
+                           lambda: os.ftruncate(descriptor, len(self.original) + 1)):
+                with self.assertRaises(OSError): action()
+        self.assertEqual(set(os.listdir("/proc/self/fd")), before)
+        with self.assertRaises(FAILURES): owner.executable_descriptor
+
+    def test_preexisting_mmap_cannot_modify_executed_copy(self):
+        with self.path.open("r+b") as stream, mmap.mmap(stream.fileno(), 0) as mapping:
+            mapping[0] = mapping[0]
+            with self.tool() as owner:
+                descriptor = owner.executable_descriptor
+                before = module.provenance._stable_fields(self.path.stat())
+                mapping[0] ^= 1
+                self.assertEqual(module.provenance._stable_fields(self.path.stat()), before)
+                owner.guard.verify()
+                self.assertNotEqual(os.pread(owner.fd, 1, 0), os.pread(descriptor, 1, 0))
+                self.assertEqual(module.provenance._run([str(self.path)], "immutable true during mmap drift",
+                    executable_descriptor=descriptor, timeout=10, maximum_bytes=1024), b"")
+                with self.assertRaisesRegex(module.host.PreflightError, "launcher changed"): owner.validate_current()
+                mapping[0] ^= 1
+                with self.assertRaisesRegex(module.host.PreflightError, "failed build launcher"):
+                    owner.executable_descriptor
+
+    def test_short_writes_are_completed(self):
+        write = os.write
+        with self.tool() as owner, mock.patch.object(module.os, "write", new=lambda fd, data: write(fd, data[:17])):
+            descriptor = owner.executable_descriptor
+            self.assertEqual(os.pread(descriptor, len(self.original), 0), self.original)
+
+    def test_stalled_or_corrupt_copy_fails_and_latches(self):
+        write = os.write
+        for kind in ("stall", "corrupt"):
+            with self.subTest(kind=kind), self.tool() as owner:
+                def altered(fd, data): return 0 if kind == "stall" else write(fd, b"X" * len(data))
+                with mock.patch.object(module.os, "write", new=altered), self.assertRaises(FAILURES):
+                    owner.executable_descriptor
+                with self.assertRaisesRegex(module.host.PreflightError, "failed build launcher"):
+                    owner.executable_descriptor
+
+    def test_sealing_failure_releases_memfd(self):
+        before = set(os.listdir("/proc/self/fd"))
+        original = fcntl.fcntl
+        def changed(fd, command, *args):
+            if command == getattr(fcntl, "F_ADD_SEALS", 1033): raise OSError("injected sealing failure")
+            return original(fd, command, *args)
+        with self.tool() as owner, mock.patch.object(module.fcntl, "fcntl", new=changed):
+            with self.assertRaisesRegex(OSError, "injected"): owner.executable_descriptor
+        self.assertEqual(set(os.listdir("/proc/self/fd")), before)
+
+    def test_interrupted_file_object_or_callback_handoff_releases_memfd(self):
+        for target in ("file-object", "callback"):
+            with self.subTest(target=target), self.tool() as owner:
+                before = set(os.listdir("/proc/self/fd"))
+                patcher = (mock.patch.object(module.os, "fdopen", side_effect=KeyboardInterrupt("file-object"))
+                           if target == "file-object" else
+                           mock.patch.object(owner.stack, "callback", side_effect=KeyboardInterrupt("callback")))
+                with patcher, self.assertRaises(KeyboardInterrupt): owner.executable_descriptor
+                self.assertEqual(set(os.listdir("/proc/self/fd")), before)
+                with self.assertRaisesRegex(module.host.PreflightError, "failed build launcher"):
+                    owner.executable_descriptor
+
+    def test_sealed_descriptor_inheritance_or_mode_drift_fails(self):
+        for kind in ("inheritance", "mode"):
+            with self.subTest(kind=kind), self.tool() as owner:
+                descriptor = owner.executable_descriptor
+                if kind == "inheritance": os.set_inheritable(descriptor, True)
+                else: os.fchmod(descriptor, 0o700)
+                with self.assertRaisesRegex(module.host.PreflightError, "descriptor or seals"): owner.validate_current()
 
 
 if __name__ == "__main__":

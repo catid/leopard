@@ -579,8 +579,45 @@ the previously validated process-local free-heap preparation. Launcher files
 use retained descriptors and bounded streaming hashes; the Git executable must
 match its pinned hash. Root-owned packaged launchers may have hard links, whose
 count remains checked; independently staged source files still require one
-link. This is observed launcher-byte identity, **not immutable tool execution
-or complete compiler/loader/runtime ownership**.
+link. Top-level Git/CMake launches now use separate, streamed memfd copies with
+write/grow/shrink/seal seals, preserving the logical argv and environment.
+The copied bytes are independently rehashed before use; descriptor identity,
+mode and seals remain checked, and the original source bytes remain guarded.
+This prevents a preexisting writable map from changing the top-level bytes
+executed between source checks. Only 64 KiB copy/hash buffers are retained,
+not full executable bodies in Python. Each stage and final record binds the
+actual immutable launcher hash, size and seals.
+
+**This is not complete compiler/loader/runtime ownership.** Nested make,
+shell, compiler and helper launches and shared-library loads still need their
+own execution bindings. `compiler_subtool_execution_owned` and
+`runtime_closure_verified` deliberately remain false.
+
+The sealed-launcher milestone passed 29 fresh-build/real-fd cases in each
+Python mode, including execution of a sealed test program while a preexisting
+map changes its original file, short/stalled/corrupt copies, sealing failure,
+interrupted ownership handoff, descriptor inheritance and mode changes.
+A fresh native ripper build with launch-only tracing reproduced all four
+artifact hashes and passed owner exit. Peak memory was 456,167,424 bytes under
+512 MiB, with all memory-event counters and swap usage zero. The trace retained
+708 successful launches: 22 inherited-descriptor executions and 686 system-path
+executions across 17 pathname spellings, including the Python bootstrap.
+Nested CMake, Make, shell, Git transport and GCC helpers remain visible gaps;
+post-run identities are observations, not execution ownership. The trace does
+not inventory library loads or arbitrary file reads.
+
+The sealed 100-entry bundle on ripper is
+`.research/leopard-79h/v19-sealed-launchers.kE8RMg`, outer `SHA256SUMS`
+`6a99f6fd457814fa239e6d3c5cbda9b4ffa629778811c275e81d1a28e550c786`.
+It retains the successful build/399,015-byte launch trace and a rejected broad
+path trace that reached its 64 MiB cap and terminated with status 153. That
+first attempt has no completed native result and is not a complete inventory.
+The successful native result SHA-256 is
+`cd2fbd2a84e7d5b8fdf8349c58f640d85bd12e63a9201a5fa749ace835034e49`.
+Separate normal and assertion-disabled replay revalidated all 100 bundle
+entries, physical archive inputs, source/build identities, four output pins,
+per-stage launcher seals, trace bindings and failed-trace disposition.
+This is an execution-integrity milestone, not a codec speedup or campaign arming.
 
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
@@ -588,7 +625,7 @@ They cover stage ordering, exact mapping and cache dialects, link changes,
 source/makefile mmap drift, write/restore history, resource loss, redirected
 clone destinations, retained failures, cleanup, and false acquisition claims.
 
-The final owner passed 18 cases in both Python modes, the existing ownership
+The initial fresh-build milestone passed 18 cases in both Python modes, the existing ownership
 suites, and the unchanged 172-case project-graph checks in both modes. A native
 fresh build on ripper completed all ten stages, retained 59 metadata files and
 froze four outputs matching the original full-file hashes. Its 512 MiB/no-swap
@@ -624,10 +661,10 @@ nested manifests. That old dialect is reproduced without weakening outer
 inventory coverage. Physical custody does not claim historical failure replay,
 an atomic snapshot, runtime ownership or permission to acquire a timing.
 
-The real-fd synthetic lineage suite covers 23 cases, including an 85 MiB
-streaming fixture; fresh-build integration covers 22 cases, including lineage
+The physical-lineage milestone used 23 real-fd cases, including an 85 MiB
+streaming fixture; fresh-build integration used 22 cases, including lineage
 loss before workspace creation, during a child, after freeze and at exit.
-Both pass normal and assertion-disabled Python. The final native integration
+Both passed normal and assertion-disabled Python. That native integration
 on ripper retained all 3,869 files, 927 directories and 469,187,021 archive bytes
 through all ten build stages and reproduced the four original artifact hashes.
 Its 512 MiB/no-swap scope peaked at 438,497,280 bytes with all memory-event

@@ -3,14 +3,15 @@
 
 This composes source authentication and artifact ownership, not acquisition.
 No workload, qualification, arming, or historical-validator dispatch exists.
-Compiler commands are checked against the pinned recipe. Runtime/toolchain
-closure and physical v18 lineage remain separate required parent gates.
+Compiler commands and physical v18 lineage are checked against their pins.
+Full runtime/toolchain execution ownership remains a required parent gate.
 """
 from __future__ import annotations
 
 from contextlib import ExitStack
 import copy
 import ctypes
+import fcntl
 import gc
 import hashlib
 import importlib.util
@@ -171,14 +172,17 @@ def relocated(value, canonical: Path, workspace: Path):
 
 
 class _StreamedTool:
-    """Guard a tool fd without caching another 12 MiB CMake image in Python.
+    """Guard source bytes and seal a streamed copy for top-level execution.
 
-    This is before/after byte observation, not immutable execution or complete
-    loader/subtool ownership. The final orchestrator must establish that gate.
+    This does not own the ELF loader, dynamic libraries or nested subtools.
+    Those independent execution obligations remain with the final orchestrator.
     """
-    def __init__(self, path):
+    def __init__(self, path, *, _trusted_owner=(0, 0)):
         self.path = Path(path)
         self.stack = ExitStack()
+        self._sealed_fd = -1
+        self._sealed_fields = None
+        self._failed = False
         try:
             require(self.path.resolve(strict=True) == self.path, "build launcher is not canonical")
             self.guard = self.stack.enter_context(provenance._InotifyMutationGuard("v19 build tool"))
@@ -186,7 +190,7 @@ class _StreamedTool:
             self.fd = os.open(self.path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
             self.stack.callback(os.close, self.fd)
             value = os.fstat(self.fd)
-            require(stat.S_ISREG(value.st_mode) and value.st_uid == 0 and value.st_gid == 0 and
+            require(stat.S_ISREG(value.st_mode) and (value.st_uid, value.st_gid) == _trusted_owner and
                     value.st_nlink >= 1 and stat.S_IMODE(value.st_mode) == 0o755 and
                     0 < value.st_size <= 16 << 20, "unsafe build launcher")
             # Distribution installations may hardlink packaged launchers.
@@ -199,23 +203,93 @@ class _StreamedTool:
             self.stack.close()
             raise
 
-    def _hash(self, size):
+    def _hash(self, size, descriptor=None):
         digest = hashlib.sha256()
+        descriptor = self.fd if descriptor is None else descriptor
         for offset in range(0, size, streamed.HASH_BLOCK_BYTES):
-            part = os.pread(self.fd, min(streamed.HASH_BLOCK_BYTES, size - offset), offset)
+            part = os.pread(descriptor, min(streamed.HASH_BLOCK_BYTES, size - offset), offset)
             require(len(part) == min(streamed.HASH_BLOCK_BYTES, size - offset), "build launcher truncated")
             digest.update(part)
         return digest.hexdigest()
 
     def validate_current(self):
+        require(not self._failed, "failed build launcher cannot be reused")
+        try:
+            self._validate_current()
+        except BaseException:
+            self._failed = True
+            raise
+
+    def _validate_current(self):
         self.guard.verify()
         value = os.fstat(self.fd)
         require(provenance._stable_fields(value) == self.fields == provenance._stable_fields(self.path.lstat())
                 and not os.get_inheritable(self.fd) and self._hash(value.st_size) == self.sha256,
                 "build launcher changed")
+        if self._sealed_fd >= 0:
+            self._verify_sealed()
         self.guard.verify()
 
+    @staticmethod
+    def _seals():
+        return (getattr(fcntl, "F_SEAL_SEAL", 1) | getattr(fcntl, "F_SEAL_SHRINK", 2) |
+                getattr(fcntl, "F_SEAL_GROW", 4) | getattr(fcntl, "F_SEAL_WRITE", 8))
+
+    def _verify_sealed(self):
+        require(self._sealed_fd >= 0 and not os.get_inheritable(self._sealed_fd) and
+                provenance._stable_fields(os.fstat(self._sealed_fd)) == self._sealed_fields and
+                fcntl.fcntl(self._sealed_fd, getattr(fcntl, "F_GET_SEALS", 1034)) & self._seals() == self._seals(),
+                "immutable build launcher descriptor or seals changed")
+
+    @property
+    def executable_descriptor(self):
+        self.validate_current()
+        if self._sealed_fd < 0:
+            descriptor = provenance._linux_memfd_create("v19-tool-" + self.path.name,
+                getattr(os, "MFD_ALLOW_SEALING", 2) | getattr(os, "MFD_CLOEXEC", 1))
+            executable = None
+            try:
+                # File-object close is idempotent, including interruption after
+                # callback registration but before the descriptor is published.
+                executable = os.fdopen(descriptor, "r+b", buffering=0)
+                self.stack.callback(executable.close)
+                size = os.fstat(self.fd).st_size
+                digest = hashlib.sha256()
+                for offset in range(0, size, streamed.HASH_BLOCK_BYTES):
+                    part = os.pread(self.fd, min(streamed.HASH_BLOCK_BYTES, size - offset), offset)
+                    require(len(part) == min(streamed.HASH_BLOCK_BYTES, size - offset), "build launcher copy truncated")
+                    digest.update(part)
+                    view = memoryview(part)
+                    while view:
+                        written = os.write(descriptor, view)
+                        require(written > 0, "immutable build launcher write stalled")
+                        view = view[written:]
+                require(digest.hexdigest() == self.sha256 and os.fstat(descriptor).st_size == size,
+                        "immutable build launcher copy differs")
+                os.fchmod(descriptor, 0o755)
+                fcntl.fcntl(descriptor, getattr(fcntl, "F_ADD_SEALS", 1033), self._seals())
+                require(fcntl.fcntl(descriptor, getattr(fcntl, "F_GET_SEALS", 1034)) & self._seals() == self._seals(),
+                        "immutable build launcher sealing failed")
+                require(self._hash(size, descriptor) == self.sha256, "immutable build launcher bytes differ")
+                self.validate_current()
+                self._sealed_fields = provenance._stable_fields(os.fstat(descriptor))
+                self._sealed_fd = descriptor
+            except BaseException:
+                self._failed = True
+                if executable is None: os.close(descriptor)
+                else: executable.close()
+                raise
+        self._verify_sealed()
+        return self._sealed_fd
+
+    def executable_record(self):
+        require(self._sealed_fd >= 0, "build launcher has no immutable snapshot")
+        self.validate_current()
+        return {"sha256": self.sha256, "size": os.fstat(self._sealed_fd).st_size,
+                "seals": fcntl.fcntl(self._sealed_fd, getattr(fcntl, "F_GET_SEALS", 1034))}
+
     def close(self):
+        self._failed = True
         self.stack.close()
 
 
@@ -353,11 +427,13 @@ class FreshBuildOwner:
             record["controller_heap_preparation"] = {"collected": gc.collect(), "malloc_trim_result": trim(0)}
         saved_umask = os.umask(stage["umask"])
         try:
+            launcher = self._tools[stage["argv"][0]]
             output = provenance._run(stage["argv"], "v19 " + stage["name"], maximum_bytes=MAX_METADATA_BYTES,
                 timeout=600, environment_overrides=ENVIRONMENT,
-                executable_descriptor=self._tools[stage["argv"][0]].fd)
+                executable_descriptor=launcher.executable_descriptor)
             record.update(status="exit-zero", stdout=output.decode("utf-8", errors="strict"),
-                          stdout_sha256=hashlib.sha256(output).hexdigest())
+                          stdout_sha256=hashlib.sha256(output).hexdigest(),
+                          immutable_launcher=launcher.executable_record())
         except BaseException as error:
             record.update(status="failed", failure=type(error).__name__ + ": " + str(error))
             raise
@@ -448,6 +524,9 @@ class FreshBuildOwner:
             "source_identity": self.authenticated.record(evict_cache=True), "artifacts": self.lease.record(),
             "metadata": {str(path): snapshot.identity for path, snapshot in self._metadata.items()},
             "launchers": {path: tool.sha256 for path, tool in self._tools.items()},
+            "immutable_launchers": {path: tool.executable_record() for path, tool in self._tools.items()},
+            "immutable_top_level_launchers_used": True,
+            "compiler_subtool_execution_owned": False,
             "fresh_staging_completed": True, "generated_compile_and_link_argv_verified": True,
             "all_four_pinned_outputs_verified": True, "live_acquisition_armed": False,
             "benchmark_executed": False, "runtime_closure_verified": False,
