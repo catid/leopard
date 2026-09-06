@@ -166,6 +166,7 @@ class OwnerTests(unittest.TestCase):
         self.live = True
         test = self
         class Phase:
+            language = "c++"
             parent, _parent_fd = test.parent, test.parentfd
             _tools = {role: tools[role] for role in ("driver", "cc1plus", "as", "collect2", "ld")}
             pins = {role: {"path": str(tool.path)} for role, tool in _tools.items()}
@@ -229,6 +230,55 @@ class OwnerTests(unittest.TestCase):
             self.assertEqual(os.umask(0o077), 0o077)
             with self.assertRaises(FAILURES): owner.record()
         finally: os.umask(initial)
+
+    def header_owner(self):
+        headers = self.root / "includes"
+        headers.mkdir()
+        path = headers / "fixture.h"
+        path.write_bytes(b"#define FIXTURE 1\n")
+        path.chmod(0o644)
+        roots = (str(headers),)
+        self.stack.enter_context(mock.patch.object(module.header_module, "CPP_INCLUDE_ROOTS", roots))
+        pin = {"path": str(path), "sha256": module.builder.hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
+        def factory(path, **kwargs):
+            return module.builder._StreamedTool(path, _trusted_owner=(os.getuid(), os.getgid()), **kwargs)
+        owner = module.header_module.CompilerHeaders(self.inventory, [pin], roots, _file_factory=factory)
+        owner.__enter__()
+        def cleanup():
+            owner._view_guard._close_without_verification()
+            owner._source_guard._close_without_verification()
+            owner._stack.close()
+            for directory, _dirs, _files in os.walk(owner.root): os.chmod(directory, 0o700)
+        self.stack.callback(cleanup)
+        return owner, path
+
+    def test_header_route_records_logical_effective_arguments_and_passes_only_sealed_fds(self):
+        headers, path = self.header_owner()
+        argv = ["/usr/bin/c++", "-c", "source.cpp", "-o", "out.o"]
+        with module.RuntimeDispatch(self.inventory, headers=headers, _runner=self.run_child) as owner:
+            owner.run(argv)
+            command = owner.record()["commands"][-1]
+            self.assertEqual(command["logical_argv"], argv)
+            self.assertIn("-nostdinc", command["effective_argv"])
+            self.assertIn("-isystem", command["effective_argv"])
+            inherited = self.calls[-1][1]["inherited_descriptors"]
+            self.assertIn(headers._files[path].executable_descriptor, inherited)
+            self.assertNotIn(headers._files[path].fd, inherited)
+            self.assertTrue(owner.record()["headers"]["declared_headers_sealed"])
+
+    def test_header_loss_before_and_during_driver_launch_is_rejected(self):
+        headers, path = self.header_owner()
+        with self.assertRaises(FAILURES):
+            with module.RuntimeDispatch(self.inventory, headers=headers, _runner=self.run_child) as owner:
+                def mutate(role):
+                    if role == "driver": path.write_bytes(b"changed header")
+                self.intercept = mutate
+                owner.run(["/usr/bin/c++", "-c", "source.cpp", "-o", "out.o"])
+        self.intercept = lambda *_: None
+        calls = len(self.calls)
+        with self.assertRaises(FAILURES):
+            module.RuntimeDispatch(self.inventory, headers=headers, _runner=self.run_child).__enter__()
+        self.assertEqual(len(self.calls), calls)
 
     def test_borrowed_owner_loss_during_job_fails(self):
         with self.assertRaises(FAILURES):

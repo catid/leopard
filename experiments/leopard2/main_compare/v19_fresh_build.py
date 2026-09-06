@@ -177,7 +177,7 @@ class _StreamedTool:
     This does not own the ELF loader, dynamic libraries or nested subtools.
     Those independent execution obligations remain with the final orchestrator.
     """
-    def __init__(self, path, *, maximum_bytes=16 << 20, permitted_modes=(0o755,), _trusted_owner=(0, 0)):
+    def __init__(self, path, *, maximum_bytes=16 << 20, permitted_modes=(0o755,), _trusted_owner=(0, 0), _guard=None):
         require(type(maximum_bytes) is int and 0 < maximum_bytes <= 64 << 20,
                 "build tool byte bound is invalid")
         require(type(permitted_modes) is tuple and permitted_modes in ((0o755,), (0o644, 0o755)) and
@@ -189,7 +189,13 @@ class _StreamedTool:
         self._failed = False
         try:
             require(self.path.resolve(strict=True) == self.path, "build launcher is not canonical")
-            self.guard = self.stack.enter_context(provenance._InotifyMutationGuard("v19 build tool"))
+            require(_guard is None or type(_guard) is provenance._InotifyMutationGuard,
+                    "build tool shared guard differs")
+            # Large data inventories borrow one set guard, avoiding Linux's
+            # per-user inotify-instance limit. The caller owns its lifetime.
+            self.guard = (_guard if _guard is not None else
+                          self.stack.enter_context(provenance._InotifyMutationGuard("v19 build tool")))
+            self.guard.verify()
             self.guard.add_file_path(self.path)
             self.fd = os.open(self.path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
             self.stack.callback(os.close, self.fd)

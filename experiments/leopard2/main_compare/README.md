@@ -864,6 +864,68 @@ established 64 MiB process ceiling, an 8 MiB trace-acceptance bound, and traced
 `--argv0` forwarding. The tracer's own runtime is outside the ownership claim.
 This is a compiler-resource namespace fix, not a codec throughput improvement.
 
+The next bounded component, `v19_compiler_headers.py`, retains caller-pinned
+system headers and supplies an explicit private include view to
+`RuntimeDispatch(headers=...)`. The qualified C++ profile disables standard
+include search, preserves the seven observed include roots and their overlapping
+directory layout, and maps the private prefix back to the original paths.
+GCC's default canonical-header behavior is retained: the native alternative
+with `-fno-canonical-system-headers` produced a different, 460,016-byte object
+and was rejected. Default canonical behavior reproduced the complete original
+459,984-byte GF16 object, including debug information.
+
+Header files borrow one shared mutation guard while retaining separate source
+descriptors and sealed copies. A preliminary one-guard-per-header attempt hit
+the host's 128-instance inotify limit before compiling; no system limit was
+changed. The implemented owner bounds the set to 512 files, 2 MiB per file,
+16 MiB total and 128 source/private directories. It retains canonical source
+parent descriptors, guards permission and replacement history, creates the
+private tree relative to held directory descriptors, and verifies its exact
+directory/symlink inventory. Only sealed header descriptors are passed to child
+jobs. Header and dispatcher owners must borrow the same live runtime inventory;
+original and effective arguments remain separately recorded.
+
+Sixteen header cases and nineteen dispatcher cases, together with the existing
+29 builder, 24 compiler and 19 runtime cases, pass normal and optimized Python:
+107 cases per mode through ten serialized CTests. Coverage includes changed
+pins, source and view replacement/restoration, aliases, pre-faulted writable
+mappings, include-route overrides, borrowed-owner loss before/during a job,
+descriptor inheritance and cleanup. The final 256 MiB/no-swap test scope peaked
+at 43,868,160 bytes with all six memory-event counters and swap zero. Review
+was Codex self-review plus deterministic/adversarial checks under the explicit
+Claude opt-out, not an independent-model convergence result.
+
+The native implemented-owner check on ripper is
+`/tmp/leopard-v19-header-owner.4lS9lg`. It retains 274 headers totaling 4,335,984
+bytes and 27 source/private directories each. Its GF16 object is byte-identical
+to the pinned archive member `e25195f0...`; every owner exit passed. Peak memory
+was 407,625,728 bytes under 512 MiB with all six events and swap zero. The three
+job traces total 2,203,088 bytes and contain seven executable launches. A
+separate stdlib-only replay verifies every declared header's actual private
+path-to-sealed-descriptor read, with no ordinary system read paths in those
+three jobs. No new link, complete fresh build, codec execution or timing ran.
+
+The sealed 360-entry, 62 MiB bundle on ripper is
+`.research/leopard-79h/v19-sealed-headers.RPqaGs`, outer `SHA256SUMS`
+`3b684c8dbc2b198c8c2c8b13dd3f34a00afe35394b980079be222e651b0ce030`.
+Native result SHA-256 is
+`a10f6202cbceea6d18840b3b9203342e098f007cf582920f0d18fb9867295f2a`;
+the trace projection is
+`72d429aab0cf520ac3a232413e32648fa9df387117bb30caa8ffff46284954fe`.
+The bundle preserves all 274 sealed header-byte copies, 19 tool/runtime ELF
+inputs, exact object/archive, dispatcher artifacts, code, tests and failed
+experiments. Separate normal/optimized bundle and trace checks pass, regenerating
+the projection byte-for-byte without importing production owners or executing
+codec/historical programs. Their 256 MiB/no-swap scope peaked at 23,232,512 bytes
+with all six events and swap zero.
+
+This proves the declared header route for one qualified C++ translation unit,
+not arbitrary include closure. Absolute includes, unobserved positive/negative
+searches, optional specs, startup/link data, a real C phase, the complete build
+and later consumer handoff remain separate obligations. Full compiler-data,
+runtime, build-integration and acquisition flags remain false. The existing
+runtime task and its parents remain open; no codec throughput gain is claimed.
+
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
 They cover stage ordering, exact mapping and cache dialects, link changes,
