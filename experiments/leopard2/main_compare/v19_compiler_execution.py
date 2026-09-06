@@ -77,6 +77,105 @@ def driver_arguments(argv, logical_driver, prefix_descriptor):
     return [argv[0], f"-B/proc/self/fd/{prefix_descriptor}/", *argv[1:]]
 
 
+class _DriverAliases:
+    """Hold GCC's argv-zero resource-location chain, not just its endpoint.
+
+    Qualified file-symlink profile only: every parent must already be canonical.
+    This does not own any headers, optional specs or linker search inputs.
+    """
+    def __init__(self, logical, tool):
+        self.logical, self.tool = str(logical), tool
+        self._stack, self._state = ExitStack(), "new"
+        self._nodes, self._directories = [], {}
+
+    def __enter__(self):
+        require(self._state == "new", "driver aliases cannot be reused")
+        self._state = "entering"
+        try:
+            host.canonical_path(self.logical, nonroot=True)
+            self.tool.validate_current()
+            self._guard = self._stack.enter_context(provenance._InotifyMutationGuard("v19 compiler driver aliases"))
+            path, visited = Path(self.logical), set()
+            for _ in range(32):
+                require(len(str(path)) < 4096 and len(path.parts) <= 32 and path not in visited,
+                        "compiler alias chain loops or exceeds profile")
+                visited.add(path)
+                require(path.parent.resolve(strict=True) == path.parent, "compiler alias has a noncanonical parent")
+                self._guard.add_file_path(path)
+                for parent in (path.parent, *path.parent.parents):
+                    if parent in self._directories: continue
+                    require(len(self._directories) < 64, "compiler alias parent inventory exceeds bound")
+                    descriptor = host.LinuxReader.open_directory(str(parent))
+                    self._stack.callback(os.close, descriptor)
+                    self._guard._add_watch(parent, self._guard._DIRECTORY_MASK | provenance.IN_ONLYDIR |
+                                           provenance.IN_ATTRIB, {b""})
+                    self._directories[parent] = descriptor, builder.streamed._directory_identity(os.fstat(descriptor))
+                value = path.lstat()
+                require(stat.S_ISLNK(value.st_mode) or stat.S_ISREG(value.st_mode), "compiler alias node is not a file or symlink")
+                target = os.readlink(path) if stat.S_ISLNK(value.st_mode) else None
+                require(target is None or 0 < len(target) < 4096, "compiler alias target exceeds profile")
+                self._nodes.append((path, provenance._stable_fields(value), target))
+                if target is None:
+                    require(path == self.tool.path and provenance._stable_fields(value) == self.tool.fields,
+                            "logical compiler resolves to a different pinned tool")
+                    break
+                # Do not collapse x/.. before inspecting x: it might be a
+                # directory symlink whose resolution changes the meaning.
+                parts = target.split("/")[1:] if target.startswith("/") else target.split("/")
+                normal_component = target.startswith("/")
+                for part in parts:
+                    require(part not in ("", ".") and (part != ".." or not normal_component),
+                            "compiler alias has an unsupported dot-component target")
+                    normal_component = normal_component or part != ".."
+                path = Path(os.path.abspath(path.parent / target))
+            else:
+                raise host.PreflightError("compiler alias chain exceeds 32 nodes")
+            self._state = "held"
+            self.validate_current()
+            return self
+        except BaseException:
+            self._state = "failed"
+            self._stack.close()
+            raise
+
+    def validate_current(self):
+        require(self._state == "held", "driver aliases are not held")
+        try:
+            self._guard.verify()
+            self.tool.validate_current()
+            for path, (descriptor, identity) in self._directories.items():
+                require(not os.get_inheritable(descriptor) and path.resolve(strict=True) == path and
+                        builder.streamed._directory_identity(os.fstat(descriptor)) == identity ==
+                        builder.streamed._directory_identity(path.lstat()), "compiler alias parent changed")
+            for path, fields, target in self._nodes:
+                require(provenance._stable_fields(path.lstat()) == fields, "compiler alias inode changed")
+                if target is not None: require(os.readlink(path) == target, "compiler alias target changed")
+            require(Path(self.logical).resolve(strict=True) == self.tool.path, "compiler alias resolution changed")
+            self._guard.verify()
+        except BaseException:
+            self._state = "failed"
+            raise
+
+    def record(self):
+        self.validate_current()
+        return {"logical_path": self.logical, "resolved_path": str(self.tool.path),
+                "nodes": [{"path": str(path), "target": target, "stable_fields": list(fields)}
+                          for path, fields, target in self._nodes],
+                "file_alias_chain_retained": True, "compiler_data_owned": False}
+
+    def __exit__(self, kind, value, traceback):
+        try:
+            if self._state == "held": self.validate_current()
+            elif value is None: raise host.PreflightError("failed driver aliases cannot complete")
+        finally:
+            self._state = "closed"
+            self._stack.__exit__(kind, value, traceback)
+
+
+def _retain_driver_aliases(logical, tool):
+    return _DriverAliases(logical, tool)
+
+
 class CompilerExecution:
     """Own exactly one GCC language phase and preserve failed scratch roots.
 
@@ -139,6 +238,9 @@ class CompilerExecution:
                 self._tools[role] = tool
             inodes = [(os.fstat(tool.fd).st_dev, os.fstat(tool.fd).st_ino) for tool in self._tools.values()]
             require(len(set(inodes)) == len(inodes), "compiler phase tool inodes alias")
+            # GCC resolves argv[0] to locate resources even when its executable
+            # bytes were sealed. Guard every intermediate alternatives link.
+            self.aliases = self._stack.enter_context(_retain_driver_aliases(self.logical_driver, self._tools["driver"]))
             mappings = {}
             for role, tool in self._tools.items():
                 descriptor = tool.executable_descriptor
@@ -176,6 +278,7 @@ class CompilerExecution:
             require(os.getpid() == self._pid and threading.active_count() == 1, "compiler owner process changed")
             self.retained.validate_current()
             self._validate_parent()
+            self.aliases.validate_current()
             self.prefix.verify()
             require(not os.get_inheritable(self.prefix.descriptor) and not os.get_inheritable(self._root_fd) and
                     provenance._stable_fields(os.fstat(self._root_fd)) ==
@@ -209,6 +312,7 @@ class CompilerExecution:
     def record(self):
         self.validate_current()
         return copy.deepcopy({"schema": "leopard2-v19-compiler-execution/v1", "language": self.language,
+            "driver_aliases": self.aliases.record(),
             "prefix": str(self.root), "mappings": self._mappings, "commands": self._commands,
             "tools": {role: {"path": self.pins[role]["path"], **tool.executable_record()}
                       for role, tool in self._tools.items()},

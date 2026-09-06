@@ -804,6 +804,66 @@ handoff remain open. Library identities are newly observed, not retroactive
 historical pins. No complete runtime-ownership, atomic-snapshot, acquisition or
 benchmark flag is enabled by the new component.
 
+The subsequent compiler-input trace exposed one additional resource-location
+dependency: GCC follows its logical `/usr/bin/c++` alternatives chain even
+when the driver executable itself comes from a sealed descriptor. Watching
+only the canonical executable does not detect an intermediate link being
+replaced and restored between checks. The regression fixture demonstrated that
+gap while the final resolution and sealed compiler bytes remained unchanged.
+
+`CompilerExecution` now retains the complete file-alias chain before launching
+any compiler job. It watches every link and parent-entry/permission history,
+holds canonical parent directory descriptors, and rechecks link identities,
+targets and the pinned endpoint at each phase boundary. The qualified profile
+allows at most 32 nodes, 32 path components and 64 retained parent directories.
+Directory aliases, cycles, oversized chains and targets that would normalize
+away an uninspected `x/..` component are rejected. Original logical arguments
+are unchanged. The new `driver_aliases` record describes this bounded guarantee;
+it does not claim ownership of compiler headers, optional specs or link inputs.
+
+All 24 compiler cases and the existing 29 builder, 19 runtime and 17 dispatcher
+cases pass normal and optimized Python through eight serialized CTests: 89
+cases per mode. Coverage includes intermediate-link replacement/restoration,
+wrong targets, cycles, directory aliases, cancelled path components, bounds,
+parent permission changes, descriptor inheritance/closure and pre-launch
+rejection. The final test scope peaked at 44,879,872 bytes under 256 MiB, with
+all six memory-event counters and swap zero.
+
+The accepted native check is `/tmp/leopard-v19-alias-native.PnFIaw` on ripper.
+It again reproduces the exact GF16 object/archive-member and baseline executable
+hashes above, with all owner exits passing. Peak memory was 396,914,688 bytes
+under 512 MiB; all six memory-event counters and swap were zero. Its four
+job-only traces total 1,075,662 bytes. They account for 12 executable launches,
+preserved helper arguments and the actual four-link compiler alternatives
+chain. The separate link still uses the retained adapter object and archive;
+no benchmark or complete new source build ran.
+
+The trace observes 319 distinct read paths, including 292 system paths:
+274 headers and 18 startup objects, linker scripts, archives or shared-library
+files. It also records 1,679 distinct negative syscall/base/path/error probes.
+Those are observations for this translation unit and link, not 1,679 owned
+absences or a complete candidate-build input inventory. In particular, the
+linker opens some ordinary on-disk libraries as **link data**, even though its
+own executable mappings use sealed runtime copies. Header/link-data ownership,
+negative-search stability and complete build/consumer integration remain open.
+
+The sealed 72-entry, 115 MiB bundle on ripper is
+`.research/leopard-79h/v19-driver-aliases.4NN7Ko`, outer `SHA256SUMS`
+`d5283cd3442c55e7723425fba9f1e8f155ce8599f4b62c882abb48cdde10a56c`.
+Native result SHA-256 is
+`381f717beb56842bcbd0f3c6893e0caa1091cee45cd74729e6dc9a7ed5e44e6a`;
+the independently regenerated observation hash is
+`3cc1019a28826dc96dabfc171e86c10bab30c1586021cb64faf48ab1a06eff7f`.
+Separate stdlib-only bundle checks and trace projections pass normal and
+optimized Python, without production imports or codec execution. The bundle
+retains all 19 tool/runtime ELF inputs, bootstrap/output artifacts, source,
+tests, the failing alias regression and rejected discovery attempts. The first
+whole-controller trace hit its 64 MiB file limit; a later 16 MiB process limit
+prevented sealing GCC's 33 MiB frontend. The accepted per-job route uses the
+established 64 MiB process ceiling, an 8 MiB trace-acceptance bound, and traced
+`--argv0` forwarding. The tracer's own runtime is outside the ownership claim.
+This is a compiler-resource namespace fix, not a codec throughput improvement.
+
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
 They cover stage ordering, exact mapping and cache dialects, link changes,

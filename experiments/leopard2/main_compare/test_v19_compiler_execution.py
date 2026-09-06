@@ -51,6 +51,19 @@ class CompilerTests(unittest.TestCase):
                 return json.dumps(test.pinned).encode()
 
         self.retained = Retained()
+        self.alias_bin, self.alias_alt = self.root / "aliases", self.root / "alternatives"
+        self.alias_bin.mkdir()
+        self.alias_alt.mkdir()
+        for name in ("cc", "c++"):
+            (self.alias_bin / name).symlink_to("../alternatives/" + name)
+            (self.alias_alt / name).symlink_to("../" + name)
+        retain_aliases = module._retain_driver_aliases
+        def fixture_aliases(logical, tool):
+            path = self.alias_bin / Path(logical).name if logical in ("/usr/bin/cc", "/usr/bin/c++") else logical
+            return retain_aliases(path, tool)
+        aliases_patch = mock.patch.object(module, "_retain_driver_aliases", side_effect=fixture_aliases)
+        aliases_patch.start()
+        self.addCleanup(aliases_patch.stop)
 
     def factory(self, path, **kwargs):
         tool = module.builder._StreamedTool(path, _trusted_owner=(os.geteuid(), os.getegid()), **kwargs)
@@ -264,6 +277,90 @@ class CompilerTests(unittest.TestCase):
             self.assertGreaterEqual(tool.executable_descriptor, 0)
             self.assertEqual(tool.executable_record()["sha256"], self.pins["cc"]["sha256"])
         finally: tool.close()
+
+    def test_intermediate_driver_alias_replacement_and_restore_is_rejected(self):
+        logical, pins = module.phase_inventory(self.pinned, "c++")
+        alias = self.alias_bin / "c++"
+        unchanged = rejected = False
+        with mock.patch.object(module, "phase_inventory", return_value=(str(alias), pins)):
+            with self.assertRaises(FAILURES):
+                with self.opened() as owner:
+                    middle = self.alias_alt / "c++"
+                    target = os.readlink(middle)
+                    middle.unlink()
+                    middle.symlink_to("../cc")
+                    middle.unlink()
+                    middle.symlink_to(target)
+                    self.assertEqual(alias.resolve(), owner._tools["driver"].path)
+                    owner._tools["driver"].validate_current()
+                    unchanged = True
+                    with self.assertRaises(FAILURES): owner.record()
+                    rejected = True
+        self.assertTrue(unchanged)
+        self.assertTrue(rejected)
+
+    def test_alias_target_mismatch_loop_and_directory_alias_are_rejected(self):
+        alias = self.alias_bin / "c++"
+        for target in ("../cc", "c++", "../redirect/c++"):
+            with self.subTest(target=target):
+                alias.unlink()
+                alias.symlink_to(target)
+                if target.startswith("../redirect"):
+                    (self.root / "redirect").symlink_to(self.alias_alt, target_is_directory=True)
+                with self.assertRaises(FAILURES):
+                    with self.opened(): self.fail("unsafe compiler alias accepted")
+
+    def test_alias_cancelled_directory_component_and_long_chain_are_rejected(self):
+        alias = self.alias_bin / "c++"
+        alias.unlink()
+        # normpath would hide the uninspected directory component here.
+        alias.symlink_to("../alternatives/../c++")
+        self.assertEqual(alias.resolve(), Path(self.pins["c++"]["path"]))
+        with self.assertRaises(FAILURES):
+            with self.opened(): self.fail("cancelled directory component accepted")
+        alias.unlink()
+        alias.symlink_to("hop0")
+        for index in range(32):
+            (self.alias_bin / ("hop"+str(index))).symlink_to("hop"+str(index+1) if index < 31 else "../c++")
+        with self.assertRaises(FAILURES):
+            with self.opened(): self.fail("excessive alias chain accepted")
+
+    def test_alias_drift_is_rejected_before_child_launch(self):
+        rejected = False
+        with self.assertRaises(FAILURES):
+            with self.opened() as owner, mock.patch.object(module.provenance, "_run") as run:
+                middle = self.alias_alt / "c++"
+                middle.unlink()
+                middle.symlink_to("../cc")
+                with self.assertRaises(FAILURES): owner.run(["/usr/bin/c++"])
+                run.assert_not_called()
+                rejected = True
+        self.assertTrue(rejected)
+
+    def test_alias_parent_permission_aba_and_inheritable_fd_are_rejected(self):
+        for mutation in ("mode", "fd"):
+            reached = False
+            with self.subTest(mutation=mutation), self.assertRaises(FAILURES):
+                with self.opened() as owner:
+                    if mutation == "mode":
+                        initial = self.alias_alt.stat().st_mode & 0o777
+                        self.alias_alt.chmod(0o700)
+                        self.alias_alt.chmod(initial)
+                    else: os.set_inheritable(owner.aliases._directories[self.alias_alt][0], True)
+                    reached = True
+                    owner.validate_current()
+            self.assertTrue(reached)
+
+    def test_alias_record_is_detached_and_parent_fds_close(self):
+        with self.opened() as owner:
+            record = owner.record()
+            self.assertTrue(record["driver_aliases"]["file_alias_chain_retained"])
+            self.assertEqual(len(record["driver_aliases"]["nodes"]), 3)
+            record["driver_aliases"]["nodes"].clear()
+            self.assertEqual(len(owner.record()["driver_aliases"]["nodes"]), 3)
+            descriptors = [row[0] for row in owner.aliases._directories.values()]
+        for descriptor in descriptors:
+            with self.assertRaises(OSError): os.fstat(descriptor)
 
 
 if __name__ == "__main__":
