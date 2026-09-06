@@ -1,5 +1,5 @@
 // Bounded deterministic coverage for leopard-79h.38.5.4.9.
-// Runs both in the default build and with the cache-block experiment enabled.
+// Retained range/encoder parity coverage after rejecting the cache-block trial.
 #include "Leopard2Backend.h"
 #include "LeopardFF16.h"
 #include "leopard.h"
@@ -196,7 +196,7 @@ int main(int argc, char** argv)
     {
         Require(argc == 2 && (std::strcmp(argv[1], "--ranges") == 0 ||
             std::strcmp(argv[1], "--encoder") == 0),
-            "usage: test_gf16_split_cache_block --ranges|--encoder");
+            "usage: test_gf16_split_range --ranges|--encoder");
         Require(leo_init() == Leopard_Success, "initialization failed");
         const leopard::backend::Ops* candidate =
             leopard::backend::GetQualifiedOps(LEO2_BACKEND_AVX512);

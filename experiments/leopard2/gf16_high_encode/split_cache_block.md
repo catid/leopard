@@ -1,13 +1,14 @@
-# Default-off GF16 split-butterfly cache-block candidate
+# Rejected GF16 split-butterfly cache-block candidate
 
 Bead: `leopard-79h.38.5.4.9`. Base commit: `2aca7f5`.
-Date: 2026-09-06. Status: correctness-validated experiment; **performance
-unknown, not promoted**. The first diagnostic attempt failed its isolation
-gate before timing the candidate. No historical exact-Leopard1 gap is closed.
+Date: 2026-09-06. Status: **rejected by the preregistered server screen**.
+The first workstation attempt was invalid; the separate foureyes attempt
+completed with no target reaching 5%. No historical exact-Leopard1 gap is
+closed. Experimental production code has been removed; parity tests remain.
 
 ## Mechanism and cost hypothesis
 
-`LEO2_EXPERIMENT_GF16_SPLIT_CACHE_BLOCK=ON` changes only the AVX-512VL nibble
+The now-removed `LEO2_EXPERIMENT_GF16_SPLIT_CACHE_BLOCK=ON` changed only the AVX-512VL nibble
 backend's non-fused GF16 radix-four range callbacks above 8192 bytes per row.
 Each independent four-row group completes both existing split layers over
 8-KiB segments before advancing its byte offset. The final compact ALTMAP
@@ -149,3 +150,82 @@ servers also had active workloads. A passive snapshot window found no idle
 sibling half on ripper, but several on foureyes; those historical snapshots
 do not reserve a core or predict future quietness. No other process was
 stopped or moved. The current candidate stays OFF.
+
+## Server diagnostic screen: rejected
+
+The distinct foureyes plan and its runner were committed and pushed at
+`899eb04` before measurement. CPU22/sibling86 was selected using passive
+activity evidence, not benchmark results; both topology files confirm the
+physical pair. The server is a Threadripper PRO 9985WX, family26/model8,
+kernel6.8.0-138-generic. Other jobs remained active and untouched. This does
+not establish performance on the historical 9950X3D host.
+
+The new plan retained all six cells, three ABBA rounds, 21 samples per
+process, one attempt, and the prior decision rules. It added a fixed
+10-second passive sibling check. This observed 190,909 non-idle jiffies
+before and after a 10.000051393-second window. All 12 untimed preflights
+matched; all 72 timed invocations observed zero sibling activity and matched
+the frozen source/archive/executable hashes and workload identities.
+
+Ratios are OFF time / ON time; values above one favor the experiment.
+These are diagnostic point estimates, **not confidence intervals**.
+
+| Cell | Route and workload | Role | OFF / ON |
+| --- | --- | --- | ---: |
+| 0 | AVX-512, K1000/R200, 32 KiB | Target | 1.001299 |
+| 1 | AVX-512, K1000/R200, 64 KiB | Target | 0.995270 |
+| 2 | AVX-512, K1000/R199, 64 KiB | Neighbor | 0.993820 |
+| 3 | AVX-512, K4096/R512, 4 KiB | Unchanged control | 1.001698 |
+| 4 | AVX2, K1000/R200, 64 KiB | Unchanged control | 1.013187 |
+| 5 | AUTO GFNI, K1000/R200, 64 KiB | Unchanged control | 0.996994 |
+
+All control aggregates lie inside `[1/1.02,1.02]`; the neighbor passes its
+floor. Neither target reaches 1.05, so the committed decision is
+`reject_for_this_screen`. The 64-KiB target was below one in all three
+rounds, but this screen does not establish a statistically significant
+slowdown. The result rejects this implementation for further promotion,
+not all possible cache-blocking techniques or other processors. There is no
+exact-Leopard1 comparison, speedup claim, or widening of AUTO routing here.
+
+The scope exited zero after 42.30 seconds, peaked at 131,469,312 bytes under
+256 MiB, and recorded all six memory event counters and swap as zero.
+A separately written stdlib replay, without importing the runner, checked
+every raw stdout/stderr and all pinned inputs and recomputed all 18 round
+ratios and six aggregates. It passed in normal and optimized Python modes.
+This is deterministic replay plus Codex self-review, not independent-model
+review.
+
+- Preregistered plan SHA: `3a0c14b0a20ca68419646b5517bd090a262ff95d7635be2cf7f0c47319448181`
+- Frozen input manifest SHA: `a0b511de5148216b7ec09b32c0630899bb580b05a48b8787db6f54db7b1118f3`
+- Raw journal SHA: `e46f9b0f326e5b6fab8827a7b29ac281c5bdf82c6695141f201fbe7e301bb45e`
+- Scope log SHA: `09f032a981dc67a143e20f226a12ced199c522e5c3b948548dab8d8f9410540a`
+
+The failed workstation samples contribute nothing to this analysis. Both
+attempts and the original candidate source remain recoverable from their
+archives and Git history. The production helper and experiment option are
+removed. The 2,048 range cases and six full-encoder parity cases are retained
+as `tests/leopard2/test_gf16_split_range.cpp`, with CTests
+`leopard2_gf16_split_ranges` and `leopard2_gf16_split_encoder`.
+`Leopard2BackendAVX2.cpp` now exactly matches pre-experiment commit `2aca7f5`
+(SHA `e154659949041d5739b4c85767ac8783d8c65bb5bb95be5cd437cdb9023203ff`).
+
+Fresh cleanup validation passed all three focused CTests in both Release and
+ASan+UBSan+LSan: all retained range/encoder cases plus the hookless production
+AUTO-GFNI route, which ran rather than skipped. Release test peak was
+144,924,672 bytes; sanitizer test peak was 175,357,952 bytes, both under
+256 MiB. The largest fresh build peaked at 326,172,672 bytes under 512 MiB
+with one compile job. All six event counters and swap were zero. The fresh
+Release `libleopard.a` is byte-for-byte identical to the screen's default-OFF
+archive (`24141e430ba35048548b122d26b1e77ed2914d1119e0ea74c1a6b7e30a8f2acf`).
+
+The complete 208-file read-only screen/cleanup evidence bundle is retained
+locally and on ripper at
+`.research/leopard-79h/gf16-split-screen-foureyes.bpRucZ`, outer
+`SHA256SUMS` digest
+`b65f0563e7afc965f28770a0df9c15ce3319a2647c2d0cb95ee9520c57d8cee8`.
+It contains all raw invocations, frozen inputs and plan, host snapshot,
+separate replay source/logs, and fresh cleanup sources/build metadata,
+libraries, test executables, and validation logs. Original v19 artifacts and
+incomplete qualification gates are untouched. Follow-up Bead
+`leopard-79h.38.5.4.10` covers a current-route diagnostic against standalone
+Leopard1; the overall residual-gap task remains open.
