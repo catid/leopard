@@ -42,6 +42,8 @@ option(LEOPARD_ENABLE_GF8 "Include the GF(2^8) codec" ON)
 option(LEOPARD_ENABLE_GF16 "Include the GF(2^16) codec" ON)
 option(LEO2_PORTABLE_ISA_RELEASE_AUDIT
     "Require the strict x86-64 portable-ISA release audit" OFF)
+option(LEO2_EXPERIMENT_GF16_SPLIT_CACHE_BLOCK
+    "Experiment: cache-block large AVX-512VL GF16 split radix-four ranges" OFF)
 option(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN
     "Preformat AVX2 direct-repair source schedules in decode plans" OFF)
 option(LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT
@@ -517,6 +519,10 @@ if(LEO2_X86_TARGET)
                     -falign-functions=64)
             endif()
             set(LEO2_HAVE_AVX512_BACKEND ON)
+            if(LEO2_EXPERIMENT_GF16_SPLIT_CACHE_BLOCK)
+                target_compile_definitions(leopard2_backend_avx512 PRIVATE
+                    LEO2_EXPERIMENT_GF16_SPLIT_CACHE_BLOCK=1)
+            endif()
         endif()
 
         check_cxx_compiler_flag("-mgfni" LEO2_FLAG_MGFNI)
@@ -1157,6 +1163,19 @@ endif()
 if(LEO2_BUILD_TESTS)
     enable_testing()
 
+    if(LEOPARD_ENABLE_GF16 AND LEO2_HAVE_AVX512_BACKEND)
+        add_executable(leopard2_gf16_split_cache_block_test
+            tests/leopard2/test_gf16_split_cache_block.cpp)
+        target_link_libraries(leopard2_gf16_split_cache_block_test leopard)
+        add_test(NAME leopard2_gf16_split_cache_block_ranges
+            COMMAND leopard2_gf16_split_cache_block_test --ranges)
+        add_test(NAME leopard2_gf16_split_cache_block_encoder
+            COMMAND leopard2_gf16_split_cache_block_test --encoder)
+        set_tests_properties(leopard2_gf16_split_cache_block_ranges
+            leopard2_gf16_split_cache_block_encoder PROPERTIES
+            ENVIRONMENT "OMP_NUM_THREADS=1" SKIP_RETURN_CODE 77)
+    endif()
+
     # Production-library public-query probe.  The Python operation model reads
     # its JSONL output and independently reconstructs every byte of range,
     # pointer-map, ragged-input, and path-specific work scratch.
@@ -1347,6 +1366,10 @@ if(LEO2_BUILD_TESTS)
         target_compile_definitions(leopard2_backend_avx512_test_hooks PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1
             LEO2_HAVE_AVX2_BACKEND=1)
+        if(LEO2_EXPERIMENT_GF16_SPLIT_CACHE_BLOCK)
+            target_compile_definitions(leopard2_backend_avx512_test_hooks PRIVATE
+                LEO2_EXPERIMENT_GF16_SPLIT_CACHE_BLOCK=1)
+        endif()
         if(NOT LEOPARD_ENABLE_GF8)
             target_compile_definitions(leopard2_backend_avx512_test_hooks
                 PRIVATE NO_LEO_HAS_FF8=1)

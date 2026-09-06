@@ -4491,6 +4491,42 @@ static void AVX2FF16Butterfly2RangePrepared(
 }
 #endif
 
+#if defined(LEO2_AVX512_VARIANT) && \
+    defined(LEO2_EXPERIMENT_GF16_SPLIT_CACHE_BLOCK)
+template<bool Inverse>
+static void AVX2FF16Butterfly4SplitCacheBlocked(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    // Experimental L1 blocking, not smaller whole-transform tiles or fused
+    // register arithmetic.  Complete both split layers for four 8-KiB row
+    // segments (32 KiB total) before advancing.  The full work layout and
+    // multiplication kernels stay unchanged.  Qualification is still needed:
+    // extra table preparation may outweigh fewer L2/L1 round trips.
+    static const uint64_t kBlockBytes = 8192;
+    uint8_t* values[4] = {
+        static_cast<uint8_t*>(value0), static_cast<uint8_t*>(value1),
+        static_cast<uint8_t*>(value2), static_cast<uint8_t*>(value3)
+    };
+    uint64_t offset = 0;
+    while (byte_count - offset > kBlockBytes)
+    {
+        AVX2FF16Butterfly4Split<Inverse>(
+            values[0] + offset, values[1] + offset,
+            values[2] + offset, values[3] + offset,
+            log01, log23, log02, kBlockBytes);
+        offset += kBlockBytes;
+    }
+    // Every preceding boundary is a complete 64-byte ALTMAP tile.  Leaving
+    // the final compact GF16 tile intact preserves its low/high byte layout.
+    AVX2FF16Butterfly4Split<Inverse>(
+        values[0] + offset, values[1] + offset,
+        values[2] + offset, values[3] + offset,
+        log01, log23, log02, byte_count - offset);
+}
+#endif
+
 template<bool Inverse>
 static void AVX2FF16Butterfly4Range(
     void* const* work, unsigned distance,
@@ -4520,6 +4556,12 @@ static void AVX2FF16Butterfly4Range(
         if (prefer_fused)
             AVX2FF16Butterfly4<Inverse>(value0, value1, value2, value3,
                 log01, log23, log02, byte_count);
+#if defined(LEO2_EXPERIMENT_GF16_SPLIT_CACHE_BLOCK)
+        else if (byte_count > 8192)
+            AVX2FF16Butterfly4SplitCacheBlocked<Inverse>(
+                value0, value1, value2, value3,
+                log01, log23, log02, byte_count);
+#endif
         else
             AVX2FF16Butterfly4Split<Inverse>(
                 value0, value1, value2, value3,
