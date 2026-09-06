@@ -66,6 +66,17 @@ def phase_inventory(pinned, language):
     return logical, copy.deepcopy(result)
 
 
+def driver_arguments(argv, logical_driver, prefix_descriptor):
+    require(type(argv) is list and argv and argv[0] == logical_driver and
+            all(type(item) is str and "\0" not in item for item in argv), "compiler phase argv differs")
+    require(type(prefix_descriptor) is int and prefix_descriptor >= 3, "compiler helper prefix descriptor differs")
+    # The caller still owns the complete recipe and compiler inputs.
+    require(not any(item.startswith(("@", "-B", "-specs", "--specs", "-wrapper", "-fplugin",
+                                     "-fuse-ld", "-flto", "-x")) for item in argv[1:]),
+            "compiler phase argv overrides owned helper selection")
+    return [argv[0], f"-B/proc/self/fd/{prefix_descriptor}/", *argv[1:]]
+
+
 class CompilerExecution:
     """Own exactly one GCC language phase and preserve failed scratch roots.
 
@@ -179,14 +190,7 @@ class CompilerExecution:
         self.validate_current()
         record = None
         try:
-            require(type(argv) is list and argv and argv[0] == self.logical_driver and
-                    all(type(item) is str and "\0" not in item for item in argv), "compiler phase argv differs")
-            # Caller still owns the complete recipe and compiler inputs. Do
-            # not accept response files or known helper-selection overrides.
-            require(not any(item.startswith(("@", "-B", "-specs", "--specs", "-wrapper", "-fplugin",
-                                             "-fuse-ld", "-flto", "-x")) for item in argv[1:]),
-                    "compiler phase argv overrides owned helper selection")
-            effective = [argv[0], f"-B/proc/self/fd/{self.prefix.descriptor}/", *argv[1:]]
+            effective = driver_arguments(argv, self.logical_driver, self.prefix.descriptor)
             record = {"logical_argv": list(argv), "effective_argv": effective, "status": "running"}
             self._commands.append(record)
             output = provenance._run(effective, "v19 sealed GCC phase", maximum_bytes=maximum_bytes, timeout=timeout,

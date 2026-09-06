@@ -716,11 +716,93 @@ Normal and optimized replay both passed all 77 entries, 21 ELF projections and
 12 loader-query children; every file-backed child mapping was a sealed memfd.
 
 These are newly observed and retained library identities, **not** additional
-historical preflight pins. Compiler jobs and nested helpers do not yet use this
-explicit sealed-loader route. Full build/consumer integration, startup objects,
+historical preflight pins. The inventory API alone does not dispatch compiler
+jobs or nested helpers through this explicit sealed-loader route. Full
+build/consumer integration, startup objects,
 headers/data, later dynamic loads and non-GCC build tools remain open; Python
 bootstrap mappings are not assigned the child loader's sealed-mapping guarantee.
 `full_runtime_execution_owned` and all integration/acquisition flags stay false.
+
+`v19_runtime_dispatch.py` adds the separate, still **not build-integrated**
+execution component. It borrows a live `RuntimeInventory`, checks any outstanding
+loader listings, and runs the GCC driver through the sealed loader and library
+prefix. The four helper roles instead enter `v19_runtime_trampoline.S`: a small
+Linux/x86-64 syscall-only executable with no interpreter, dynamic segment or
+executable stack. It is assembled and statically linked by the already sealed
+assembler/linker through that same sealed loader. The pinned tool bytes are
+never patched, and no shell, privileged namespace or additional C runtime is
+needed to bootstrap the helper dispatcher.
+
+Each helper forwards its original argument zero using loader `--argv0`, retains
+its remaining arguments and environment, and substitutes only an exact match
+for the recorded GCC link-plugin pathname with that plugin's sealed descriptor.
+The driver receives the new helper `-B` prefix; original, effective and loader
+argument vectors are recorded separately. Helper argument counts are bounded
+at 512 and argument-zero scans at 4096 bytes. Known compiler-route overrides
+remain rejected; this is not a validator for arbitrary caller-supplied recipes.
+
+Generated source, object, static executable and template remain byte-checked
+under retained descriptors and mutation guards. Root and helper-prefix
+descriptors stay non-inheritable in the owner, while each child inherits only
+the explicitly selected descriptors. Bootstrap umask 0022 is recorded and
+restored on failure. Constructor interruption closes the generated-source fd;
+caught job or validation failures cannot later produce a successful record.
+Static ELF validation requires exactly one non-executable stack declaration,
+not merely the presence of one alongside a conflicting duplicate.
+
+The 17 dispatcher tests include actual syscall-entry execution for C and C++
+helper roles, argument-zero/Unicode/empty-argument/environment forwarding, exact
+plugin replacement, bounds, owner loss, descriptor inheritance drift, source
+construction interruption, permission change/restore, and pre-faulted mmap
+mutation with unchanged metadata and no notification. The mmap test separately
+checks that the intended byte-rehash rejection was reached, so cleanup failure
+cannot mask a broken fixture. Together with 19 runtime, 18 compiler and 29
+builder cases, all 83 cases pass in both normal and optimized Python through
+eight serialized CTests. The 256 MiB/no-swap scope peaked at 45,891,584 bytes
+with all six memory-event counters zero. The initial fixture-umask failure and
+the demonstrated duplicate-stack-declaration rejection gap are retained; both
+are fixed in the final source.
+
+The accepted native ripper probe is
+`/tmp/leopard-v19-dispatch-accepted.HB3plk`. Its C++ compile reproduces the
+459,984-byte GF16 object above exactly; its separate link reproduces the
+1,165,752-byte baseline executable above exactly. That link still reuses the
+retained adapter object and pinned archive, so it is not a complete new build.
+All owner exits passed. Native peak memory was 396,677,120 bytes under 512 MiB,
+with all six memory-event counters and swap zero; no benchmark ran.
+
+The sealed 71-entry, 49 MiB evidence bundle is on ripper at
+`.research/leopard-79h/v19-runtime-dispatch.uQc0pJ`, with outer `SHA256SUMS`
+`5f8a7851bd77bf0887050f8eff220a0cede8c06df22adc51d066cc5ae79028f0`.
+Native result SHA-256 is
+`dea8110a1d4600381c0b55a731704b9aa15ff93e076eb10eb2aa50b71a0a4268`;
+the exec/mmap trace hash is
+`0155052cd090b83ed6f9a58d61a31e241b40c22b4c006a619716e31cf7541584`.
+The bundle retains source, bootstrap source/object/static ELF, baseline outputs,
+the pinned archive, all 19 distinct compiler/runtime ELF inputs, test logs and
+the first native positive. The superseded pre-stack-hardening positive also
+remains sealed at `.research/leopard-79h/v19-runtime-dispatch.lTMv8y`.
+
+A separate stdlib-only verifier passes in normal and optimized Python. It
+rehashes all 71 entries, independently derives ELF dependencies, checks the
+generated binding source and static-ELF profile, verifies original/effective
+recipes and plugin substitution, and confirms object/archive and executable/pin
+equality. All 31 actual launches are accounted for: one Python bootstrap,
+12 preparatory Git jobs, six loader queries, two static-bootstrap jobs, two
+driver jobs, and four helpers each entering the shim and then the loader.
+All file-backed mappings observed in the 14 loader children are sealed memfds;
+the loader itself is executed from its sealed descriptor. Python and Git
+bootstrap mappings are explicitly outside that guarantee. The verifier does
+not import production modules or execute historical programs. This is Codex
+self-review plus separate deterministic replay, not an independent-model
+review or a claimed `CONVERGED` gate.
+
+This remains a compiler-execution milestone, **not a codec performance result**.
+Compiler headers/data, startup/link inputs, real C compilation, nested
+non-GCC build tools, complete fresh-build integration and later consumer
+handoff remain open. Library identities are newly observed, not retroactive
+historical pins. No complete runtime-ownership, atomic-snapshot, acquisition or
+benchmark flag is enabled by the new component.
 
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
