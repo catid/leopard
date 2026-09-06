@@ -23,7 +23,11 @@ FAILURES = (module.host.PreflightError, module.provenance.BuildProvenanceError, 
 
 class CompilerTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="leopard-v19-compiler-test-")
+        # Disk writeback can re-protect a pre-faulted page and make its next
+        # mmap write update timestamps. Use tmpfs for the eventless-byte case;
+        # retain its strict unchanged-metadata and sealed-copy assertions.
+        fixture_parent = "/dev/shm" if self._testMethodName == "test_prefaulted_mmap_source_drift_after_child_fails_closed" else None
+        temporary = tempfile.TemporaryDirectory(prefix="leopard-v19-compiler-test-", dir=fixture_parent)
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.parent = self.root / "new"

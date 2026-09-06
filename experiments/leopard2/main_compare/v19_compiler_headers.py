@@ -56,22 +56,25 @@ def header_pins(rows, include_roots):
     return pins
 
 
-class CompilerHeaders:
-    """Borrow one runtime inventory and retain a private, read-only include view.
+class _PinnedInputView:
+    """Shared descriptor/namespace ownership, with caller-qualified mappings.
 
-    This profile supports C++ compile jobs only. Standard search is disabled;
-    seven private roots preserve the observed search order and overlapping
-    directory structure. File-prefix mapping preserves original path spelling.
-    The declared set is sealed; absolute includes, optional specs, startup/link
-    data and complete negative-search equivalence remain separate obligations.
+    Header and linker policies supply their own pins, limits and arguments;
+    this private primitive does not confer recipe or search-closure authority.
     """
-    def __init__(self, inventory, pins, include_roots=CPP_INCLUDE_ROOTS, *, _file_factory=None):
+    def __init__(self, inventory, pins, source_roots, aliases, *, limits, root_prefix, _file_factory=None):
         require(type(inventory) is runtime.RuntimeInventory or _file_factory is not None,
-                "headers require a live runtime inventory")
-        require(inventory.phase.language == "c++", "header profile requires C++")
+                "input view requires a live runtime inventory")
         self.inventory, self.phase = inventory, inventory.phase
-        self.include_roots = tuple(include_roots) if type(include_roots) is tuple else include_roots
-        self._pins = header_pins(pins, self.include_roots)
+        self._pins, self._source_roots = copy.deepcopy(pins), tuple(source_roots)
+        self._max_files, self._max_directories, self._max_file_bytes = limits
+        self._root_prefix = root_prefix
+        require(type(aliases) is dict and 0 < len(aliases) <= self._max_files * 4 and
+                all(isinstance(path, Path) and not path.is_absolute() and str(path) != "." and
+                    checked_path("/" + str(path)).relative_to("/") == path and target in self._pins
+                    for path, target in aliases.items()) and set(aliases.values()) == set(self._pins),
+                "input view alias inventory differs")
+        self._aliases = copy.deepcopy(aliases)
         self._factory = builder._StreamedTool if _file_factory is None else _file_factory
         self._stack, self._state = ExitStack(), "new"
         self._files, self._source_dirs, self._view_dirs, self._mappings = {}, {}, {}, {}
@@ -83,9 +86,9 @@ class CompilerHeaders:
             self.inventory.validate_current()
             self._source_guard = self._stack.enter_context(provenance._InotifyMutationGuard("v19 header inputs"))
             source_directories = {parent for path in self._pins for parent in path.parents}
-            source_directories.update(Path(value) for value in self.include_roots)
-            source_directories.update(parent for value in self.include_roots for parent in Path(value).parents)
-            require(len(source_directories) <= MAX_DIRECTORIES, "header source directory count exceeds bound")
+            source_directories.update(Path(value) for value in self._source_roots)
+            source_directories.update(parent for value in self._source_roots for parent in Path(value).parents)
+            require(len(source_directories) <= self._max_directories, "input source directory count exceeds bound")
             for path in sorted(source_directories, key=str):
                 require(path.resolve(strict=True) == path, "header directory alias is outside profile")
                 if path != Path("/"): self._source_guard.add_directory_path(path)
@@ -96,7 +99,7 @@ class CompilerHeaders:
                 self._source_dirs[path] = fd, builder.streamed._directory_identity(os.fstat(fd))
             identities = set()
             for path, pin in self._pins.items():
-                file = self._factory(path, maximum_bytes=MAX_FILE_BYTES, permitted_modes=(0o644, 0o755),
+                file = self._factory(path, maximum_bytes=self._max_file_bytes, permitted_modes=(0o644, 0o755),
                                      _guard=self._source_guard)
                 self._stack.callback(file.close)
                 self._files[path] = file
@@ -106,7 +109,7 @@ class CompilerHeaders:
                 require(inode not in identities, "header pins alias one inode")
                 identities.add(inode)
                 require(3 <= file.executable_descriptor < 65536, "header descriptor exceeds profile")
-            name = "v19-headers-" + secrets.token_hex(16)
+            name = self._root_prefix + secrets.token_hex(16)
             os.mkdir(name, mode=0o700, dir_fd=self.phase._parent_fd)
             self.root = self.phase.parent / name
             fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=self.phase._parent_fd)
@@ -116,19 +119,20 @@ class CompilerHeaders:
             require(self.root.resolve(strict=True) == self.root and
                     builder.streamed._directory_identity(os.fstat(fd)) ==
                     builder.streamed._directory_identity(self.root.lstat()), "header root was redirected")
-            directories = {path.relative_to("/") for path in source_directories if path != Path("/")}
+            directories = {parent for relative in self._aliases for parent in relative.parents if parent != Path(".")}
             # Include-root parents are needed even when a root has no headers.
-            directories.update(parent.relative_to("/") for value in self.include_roots
+            directories.update(Path(value).relative_to("/") for value in self._source_roots)
+            directories.update(parent.relative_to("/") for value in self._source_roots
                                for parent in Path(value).parents if parent != Path("/"))
-            require(len(directories) + 1 <= MAX_DIRECTORIES, "header view directory count exceeds bound")
+            require(len(directories) + 1 <= self._max_directories, "input view directory count exceeds bound")
             for relative in sorted(directories, key=lambda value: (len(value.parts), str(value))):
                 parent_fd = self._view_dirs[relative.parent][0]
                 os.mkdir(relative.name, mode=0o700, dir_fd=parent_fd)
                 fd = os.open(relative.name, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=parent_fd)
                 self._stack.callback(os.close, fd)
                 self._view_dirs[relative] = fd, None
-            for path, file in self._files.items():
-                relative = path.relative_to("/")
+            for relative, path in self._aliases.items():
+                file = self._files[path]
                 target = f"/proc/self/fd/{file.executable_descriptor}"
                 os.symlink(target, relative.name, dir_fd=self._view_dirs[relative.parent][0])
                 self._mappings[relative] = target
@@ -168,7 +172,7 @@ class CompilerHeaders:
                 with os.scandir(fd) as entries:
                     observed = {}
                     for entry in entries:
-                        require(len(observed) < MAX_FILES + MAX_DIRECTORIES, "header view entry count exceeds bound")
+                        require(len(observed) < len(self._aliases) + self._max_directories, "input view entry count exceeds bound")
                         observed[entry.name] = (os.readlink(entry.name, dir_fd=fd) if entry.is_symlink() else
                                                "directory" if entry.is_dir(follow_symlinks=False) else "unexpected")
                 require(observed == {**dict.fromkeys(expected_dirs, "directory"), **expected_links}, "header view inventory changed")
@@ -181,6 +185,28 @@ class CompilerHeaders:
     def descriptors(self):
         self.validate_current()
         return tuple(file.executable_descriptor for file in self._files.values())
+
+    def __exit__(self, kind, value, traceback):
+        try:
+            if self._state == "held": self.validate_current()
+            elif value is None: raise builder.host.PreflightError("failed input view cannot complete")
+        finally:
+            self._state = "closed"
+            self._stack.close()
+
+
+class CompilerHeaders(_PinnedInputView):
+    """Qualified C++ include policy over a bounded, sealed input view.
+
+    The declared set is sealed; absolute includes, optional specs and complete
+    positive/negative search equivalence remain separate obligations.
+    """
+    def __init__(self, inventory, pins, include_roots=CPP_INCLUDE_ROOTS, *, _file_factory=None):
+        require(inventory.phase.language == "c++", "header profile requires C++")
+        self.include_roots = include_roots
+        selected = header_pins(pins, self.include_roots)
+        super().__init__(inventory, selected, self.include_roots, {path.relative_to("/"): path for path in selected},
+            limits=(MAX_FILES, MAX_DIRECTORIES, MAX_FILE_BYTES), root_prefix="v19-headers-", _file_factory=_file_factory)
 
     def arguments(self, argv):
         self.validate_current()
@@ -210,11 +236,3 @@ class CompilerHeaders:
             "compiler_data_owned": False, "full_header_read_closure_owned": False,
             "negative_search_closure_owned": False, "fresh_build_recipe_integrated": False,
             "live_acquisition_armed": False, "benchmark_executed": False})
-
-    def __exit__(self, kind, value, traceback):
-        try:
-            if self._state == "held": self.validate_current()
-            elif value is None: raise builder.host.PreflightError("failed header owner cannot complete")
-        finally:
-            self._state = "closed"
-            self._stack.close()

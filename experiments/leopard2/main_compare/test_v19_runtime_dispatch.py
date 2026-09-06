@@ -280,6 +280,63 @@ class OwnerTests(unittest.TestCase):
             module.RuntimeDispatch(self.inventory, headers=headers, _runner=self.run_child).__enter__()
         self.assertEqual(len(self.calls), calls)
 
+    def linker_owner(self):
+        link = module.link_module
+        gcc, system = self.root / "link-gcc", self.root / "link-system"
+        gcc.mkdir(); system.mkdir()
+        rows = []
+        for original in link.LINK_INPUT_PATHS:
+            path = (gcc if original.startswith(link.GCC_ROOT) else system) / Path(original).name
+            path.write_bytes(b"fixture link data " + path.name.encode())
+            path.chmod(0o644)
+            rows.append({"path": str(path), "sha256": module.builder.hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size})
+        for key, value in (("LINK_INPUT_PATHS", tuple(row["path"] for row in rows)), ("GCC_ROOT", str(gcc)+"/"),
+                           ("SYSTEM_ROOT", str(system)+"/")):
+            self.stack.enter_context(mock.patch.object(link, key, value))
+        def factory(path, **kwargs):
+            return module.builder._StreamedTool(path, _trusted_owner=(os.getuid(), os.getgid()), **kwargs)
+        owner = link.LinkerInputs(self.inventory, rows, _file_factory=factory).__enter__()
+        def cleanup():
+            owner._view_guard._close_without_verification()
+            owner._source_guard._close_without_verification()
+            owner._stack.close()
+            for directory, _dirs, _files in os.walk(owner.root): os.chmod(directory, 0o700)
+        self.stack.callback(cleanup)
+        argv = ["/usr/bin/c++", "adapter.o", "-o", "out", "library.a", str(gcc / "libgomp.so"), str(system / "libpthread.a")]
+        return owner, argv
+
+    def test_combined_header_compile_and_link_data_routes(self):
+        headers, _ = self.header_owner()
+        inputs, argv = self.linker_owner()
+        with module.RuntimeDispatch(self.inventory, headers=headers, link_inputs=inputs, _runner=self.run_child) as owner:
+            owner.run(["/usr/bin/c++", "-c", "source.cpp", "-o", "out.o"])
+            owner.run(argv)
+            record = owner.record()
+            self.assertEqual(record["commands"][-1]["logical_argv"], argv)
+            self.assertIn("-nostdinc", record["commands"][-2]["effective_argv"])
+            self.assertNotIn("-nostdinc", record["commands"][-1]["effective_argv"])
+            self.assertIn("--sysroot=" + str(inputs.root), record["commands"][-1]["effective_argv"])
+            self.assertEqual(record["commands"][-1]["effective_argv"][1], f"-B/proc/self/fd/{owner.prefix.descriptor}/")
+            inherited = self.calls[-1][1]["inherited_descriptors"]
+            for file in inputs._files.values():
+                self.assertIn(file.executable_descriptor, inherited)
+                self.assertNotIn(file.fd, inherited)
+            self.assertTrue(record["link_inputs"]["declared_link_inputs_sealed"])
+
+    def test_link_input_loss_during_and_before_job_is_rejected(self):
+        inputs, argv = self.linker_owner()
+        with self.assertRaises(FAILURES):
+            with module.RuntimeDispatch(self.inventory, link_inputs=inputs, _runner=self.run_child) as owner:
+                def mutate(role):
+                    if role == "driver": next(iter(inputs._files)).write_bytes(b"changed input")
+                self.intercept = mutate
+                owner.run(argv)
+        self.intercept = lambda *_: None
+        calls = len(self.calls)
+        with self.assertRaises(FAILURES):
+            module.RuntimeDispatch(self.inventory, link_inputs=inputs, _runner=self.run_child).__enter__()
+        self.assertEqual(len(self.calls), calls)
+
     def test_borrowed_owner_loss_during_job_fails(self):
         with self.assertRaises(FAILURES):
             with self.owner() as owner:

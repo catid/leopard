@@ -926,6 +926,67 @@ and later consumer handoff remain separate obligations. Full compiler-data,
 runtime, build-integration and acquisition flags remain false. The existing
 runtime task and its parents remain open; no codec throughput gain is claimed.
 
+The subsequent `v19_linker_inputs.py` component retains the eighteen observed
+startup/link-data files without changing the linker scripts. A private sysroot
+supplies the absolute paths referenced by the libc/libm scripts; a private GCC
+data prefix supplies startup objects, archives and library names. Its extra
+`-B` follows the existing sealed helper prefix, and the data view contains no
+compiler/helper executable roles. Only the two qualified explicit library
+arguments are replaced. Original and effective driver arguments remain distinct.
+The bounded profile requires the exact GCC13 C++ input path set, at most 8 MiB
+per file, 32 MiB total and 64 source/private directories. It does not accept
+arbitrary link recipes, sysroots or linker-option overrides.
+
+Header and linker owners share the private `_PinnedInputView` implementation
+for source descriptors, streaming seals, parent/permission history and exact
+directory inventories. `RuntimeDispatch` can retain both typed owners from the
+same runtime inventory, selecting the header policy for compile jobs and the
+link-data policy for links. Full data/runtime/acquisition flags remain false.
+The eighteen system-data pins are newly observed and qualified by the native
+check, not retroactively described as original preflight toolchain pins.
+
+Twelve linker cases and two additional dispatcher cases bring the focused total
+to 121 cases in each Python mode, passing twelve serialized CTests. The accepted
+256 MiB/no-swap scope peaked at 44,773,376 bytes with all six memory-event counters
+and swap zero. One preceding full pass exposed an existing mmap fixture's
+assumption that pre-faulting a disk page prevents subsequent timestamp changes.
+That failure is preserved. Only the strict eventless-byte fixtures now use
+per-test tmpfs files; their metadata, rehash and sealed-copy assertions remain.
+All three affected cases additionally passed three repetitions in each Python
+mode. No production validation was relaxed. Review remains Codex self-review
+and deterministic/adversarial checks, not an independent-model convergence gate.
+
+The combined native check is `/tmp/leopard-v19-link-owner.dxYpsA` on ripper.
+It retains 274 headers plus eighteen startup/link inputs totaling 10,567,597
+additional bytes, with 53 link aliases, seven link-source directories and eleven
+private link directories. Both the complete GF16 object (`e25195f0...`) and the
+complete baseline executable (`bb011abb...`) match the original pins; all owner
+exits pass. Peak memory is 420,503,552 bytes under 512 MiB with all six events
+and swap zero. The separate link still uses the retained existing adapter
+object and archive: this is not a complete fresh source build, and no codec
+executable or timing ran.
+
+Independent stdlib-only normal/optimized trace projections verify all 274 header
+reads and all eighteen link-data reads through their declared sealed mappings,
+the 53 aliases, unchanged script bytes, driver/helper argument forwarding and
+twelve executable launches. The four traces total 2,310,912 bytes, with no
+ordinary system read paths in the traced jobs. Optional/negative searches,
+unobserved inputs, actual C compilation, other build tools and the complete
+build/consumer handoff remain open; this bounded observation is not a universal
+link-search closure claim or a codec speedup.
+
+The sealed 388-entry, 79 MiB bundle on ripper is
+`.research/leopard-79h/v19-sealed-link-inputs.0uoHZz`, outer `SHA256SUMS`
+`185ee1517eb0cabcd6e2ceae6a98cd4f4d7f2656063552b233a42af8a4d2bd9c`.
+Native result SHA-256 is
+`cc7d3dbb9fe39c9a54644d81d793779f1dfb711185a5fb4ae3d554aff299c74c`;
+the trace projection is
+`a5d8cba9062d236e418b731f9c27b05b2468aab80a36cd703bdc1c19c18fafaa`.
+It preserves the exact header/link bytes, nineteen tool/runtime ELFs,
+object/archive/executable, bootstrap artifacts, code, tests, prototype and failed
+fixture log. Separate bundle and trace replays use no production imports or
+codec/historical execution and reproduce the projection byte-for-byte.
+
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
 They cover stage ordering, exact mapping and cache dialects, link changes,

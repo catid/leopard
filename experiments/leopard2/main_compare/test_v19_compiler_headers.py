@@ -23,7 +23,9 @@ class HeaderTests(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
-        self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="leopard-v19-header-test-")))
+        # Keep disk writeback from changing the metadata of the rehash fixture.
+        fixture_parent = "/dev/shm" if self._testMethodName == "test_prefaulted_mmap_is_rehashed" else None
+        self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="leopard-v19-header-test-", dir=fixture_parent)))
         self.parent = self.root / "new"
         self.parent.mkdir(mode=0o700)
         self.parentfd = os.open(self.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)

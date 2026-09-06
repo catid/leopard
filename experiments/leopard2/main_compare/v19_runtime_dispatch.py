@@ -15,12 +15,13 @@ import secrets
 import struct
 
 HERE = Path(__file__).resolve().parent
-dependency = HERE / "v19_compiler_headers.py"
+dependency = HERE / "v19_linker_inputs.py"
 if dependency.resolve(strict=True) != dependency:
     raise RuntimeError("runtime dispatch dependency is not canonical")
-spec = importlib.util.spec_from_file_location("v19_dispatch_headers", dependency)
-header_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(header_module)
+spec = importlib.util.spec_from_file_location("v19_dispatch_link_inputs", dependency)
+link_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(link_module)
+header_module = link_module.header_module
 runtime = header_module.runtime
 compiler, builder, provenance, require = runtime.compiler, runtime.builder, runtime.provenance, runtime.require
 TEMPLATE = HERE / "v19_runtime_trampoline.S"
@@ -84,12 +85,15 @@ def validate_static_elf(data):
 
 
 class RuntimeDispatch:
-    def __init__(self, inventory, *, headers=None, _runner=None):
+    def __init__(self, inventory, *, headers=None, link_inputs=None, _runner=None):
         require(type(inventory) is runtime.RuntimeInventory or _runner is not None, "dispatch requires a live runtime inventory")
         self.inventory, self.phase = inventory, inventory.phase
         require(headers is None or (type(headers) is header_module.CompilerHeaders and headers.inventory is inventory),
                 "dispatch header owner differs from inventory")
         self.headers = headers
+        require(link_inputs is None or (type(link_inputs) is link_module.LinkerInputs and link_inputs.inventory is inventory),
+                "dispatch linker-input owner differs from inventory")
+        self.link_inputs = link_inputs
         self._runner = provenance._run if _runner is None else _runner
         self._stack, self._state = ExitStack(), "new"
         self._snapshots, self._commands = {}, []
@@ -104,6 +108,7 @@ class RuntimeDispatch:
     def _validate_inputs(self):
         self.inventory.validate_current()
         if self.headers is not None: self.headers.validate_current()
+        if self.link_inputs is not None: self.link_inputs.validate_current()
         require(live_bindings(self.inventory) == self.bindings, "dispatcher fd bindings changed")
         self._guard.verify()
         require(not os.get_inheritable(self._root_fd) and builder.streamed._directory_identity(os.fstat(self._root_fd)) ==
@@ -133,6 +138,7 @@ class RuntimeDispatch:
                        *(tool.executable_descriptor for tool in self.inventory._files.values())]
         if self.prefix is not None: descriptors += [self.prefix.descriptor, self._shim.executable_descriptor]
         if self.headers is not None: descriptors += list(self.headers.descriptors())
+        if self.link_inputs is not None: descriptors += list(self.link_inputs.descriptors())
         try:
             output = self._runner(effective, "v19 runtime dispatch " + role, maximum_bytes=1 << 20, timeout=600,
                 executable_descriptor=loader.executable_descriptor, inherited_descriptors=tuple(descriptors), environment_overrides=builder.ENVIRONMENT)
@@ -223,8 +229,11 @@ class RuntimeDispatch:
         self.validate_current()
         try:
             require(type(argv) is list and len(argv) <= 511, "dispatcher argument count exceeds bound")
-            selected = argv if self.headers is None else self.headers.arguments(argv)
-            effective = compiler.driver_arguments(selected, self.phase.logical_driver, self.prefix.descriptor)
+            if self.link_inputs is not None and "-c" not in argv:
+                effective = self.link_inputs.arguments(argv, self.prefix.descriptor)
+            else:
+                selected = argv if self.headers is None else self.headers.arguments(argv)
+                effective = compiler.driver_arguments(selected, self.phase.logical_driver, self.prefix.descriptor)
             require(len(effective) <= 512, "effective dispatcher argument count exceeds bound")
             return self._invoke("driver", effective, logical_argv=argv)
         except BaseException:
@@ -238,6 +247,7 @@ class RuntimeDispatch:
             "artifacts": {path: {"sha256": snap.identity["sha256"], "size": len(snap.content)} for path, snap in self._snapshots.items()},
             "sealed_dispatcher": self._shim.executable_record(), "compiler_data_owned": False,
             "headers": None if self.headers is None else self.headers.record(),
+            "link_inputs": None if self.link_inputs is None else self.link_inputs.record(),
             "full_runtime_execution_owned": False, "fresh_build_recipe_integrated": False,
             "atomic_snapshot": False, "live_acquisition_armed": False, "benchmark_executed": False})
 
