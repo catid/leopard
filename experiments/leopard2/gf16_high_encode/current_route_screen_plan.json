@@ -1,0 +1,57 @@
+{
+  "schema": "leopard-gf16-current-route-plan/v1",
+  "bead": "leopard-79h.38.5.4.10",
+  "scope": "Current-route encode diagnostic against separately linked standalone Leopard1; not v19, authoritative gap closure or production promotion",
+  "codec_sources": {
+    "current": "36dc0c8f66604b8d974468e687c51e6183ecb61d",
+    "current_tree": "d6bd7b74de1feabe75b6a2b9045d724f844e9b21",
+    "main": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "main_tree": "b7c8830d96a978f6ec14fe747095f066e351ae72"
+  },
+  "build_policy": "Fresh GCC13.3 current Release with both fields ON, default backend options, tests/hooks/benchmarks/CUDA OFF, -Werror; exact-main native canonical -march=native -Wall -Wextra -fopenmp -g -O0 -O3, no DNDEBUG. Both built locally. Local9980X and server9985WX native compiler -### outputs are byte-identical, SHA35ca2ea962b79f83eca0ffe19383864ee98d841fa385d6323109b57457e0afce. No old benchmark executable or in-process legacy comparator.",
+  "harness_source_sha256": "d2ba6c99caa97603ec7091a4a6e4fe805c1be56640e769e88d6aedebf79ccaa7",
+  "artifact_sha256": {
+    "main": "3ce29f467b84cb0e890cd94bd3b5eff0370a4ed16d657c505c4897d437e7d42d",
+    "current": "8fd8334704583d08f509706d1e63ae9aef2c570c0f104c08b86879ddc071528b",
+    "main.a": "3f83c55599cbfbeea5d15adf3627405bcde1cbed2ddf4a672fbc75b186f5c4c1",
+    "current.a": "259c2c9aa3f51b1f941eac84270ad37c39c2a5b3cc06b1676a414f8088ad88e6",
+    "expected.json": "9a7b2a4708a7abb516bf2610ccab9e2a06da884e66cd48a259c08e5470a6d65d"
+  },
+  "host": {
+    "hostname": "foureyes",
+    "kernel": "6.8.0-138-generic",
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper PRO 9985WX 64-Cores"
+  },
+  "host_selection": "Same physical22/86 pair whose previous distinct cache-block screen completed72invocations without sibling work. Selected for observed isolation, not performance ratios. Fresh snapshot0f662abce996607b3dcbe8588026b6fcdb72c87319c3bbfa84a74ae18ee618c0. Existing workloads remain untouched; neither whole host nor unrelated jobs are controlled.",
+  "cpu": 22,
+  "sibling": 86,
+  "controller_cpu": 0,
+  "passive_seconds": 10,
+  "attempt_budget": 1,
+  "seed": 20260906,
+  "initial_untimed_encodes": 1,
+  "additional_warmups": 4,
+  "samples_per_process": 21,
+  "rounds": 3,
+  "orders": {
+    "main_vs_current": ["main", "current", "current", "main"],
+    "same_current": ["current_a", "current_b", "current_b", "current_a"]
+  },
+  "cells": [
+    {"id": 0, "k": 1000, "r": 200, "bytes": 65536, "requested": "auto", "current_route": "gfni"},
+    {"id": 1, "k": 1000, "r": 200, "bytes": 65536, "requested": "avx2", "current_route": "avx2"},
+    {"id": 2, "k": 1000, "r": 200, "bytes": 65536, "requested": "avx512", "current_route": "avx512"},
+    {"id": 3, "k": 1000, "r": 200, "bytes": 32768, "requested": "auto", "current_route": "avx2"},
+    {"id": 4, "k": 1000, "r": 199, "bytes": 65536, "requested": "auto", "current_route": "avx2"},
+    {"id": 5, "k": 4096, "r": 512, "bytes": 4096, "requested": "auto", "current_route": "avx2"}
+  ],
+  "sequence": "Cells0..5; within each cell rounds0..2; within each round main_vs_current then same_current. Both control labels execute the identical current path/inode with identical arguments. Total144timedprocesses. Do not compare absolute samples between independently measured cells or multiply correlated ratios.",
+  "workload": "One thread, one full-output public encode per sample, legacy-high GF16/native layout, same aligned source. Initialization, codec creation, allocation, source fill and hashes excluded. Leopard1 output remains its firstRworkbuffers: no artificial copy. Leopard2 uses separate output and public scratch. No decode, batch or plan-setup/reuse timings. All6untimed full parity pairs compare byte-for-byte before clocks; local expected JSON binds each API/source/route/scratch/hash. Remote12untimed checks must reproduce it.",
+  "validity": "Canonical and physical-pair locks; lane-owned read-only executables and full archives with source/recipe/artifact hashes, rechecked after every invocation. Fixed10s passive sibling gate immediately before timed sequence. Any nonidle sibling jiffy, input/source/route/scratch mismatch or failed child stops the sole attempt. No partial analysis, retry, CPU swap, pooling or threshold relaxation. Prior cache-block data is excluded.",
+  "analysis": "Perprocess median21; perround sqrt(slot0*slot3/(slot1*slot2)); geometric mean3rounds, separately for exact-source comparison and same-binary control. No confidence interval, trimming, statistical retry or pooling.",
+  "decision": "Every control aggregate must lie inside[1/1.02,1.02], otherwise entire screen inconclusive and no performance inference. With passing controls, investigate_current_deficit only if main/current<1/1.02 and all3rounds<1; current_advantage only if aggregate>1.02 and all3rounds>1; otherwise near_parity_or_uncertain. These are diagnostic classifications, never authoritative historical-gap closure or permission to promote a kernel.",
+  "resources": "One substantial process at a time; builds512MiB-j1, tests/timing256MiB, swap0. Each timed child CPU30s/file1MiB. Untimed parity dumps are separately capped16MiB/file. No broad controller, Claude/subagents, host affinity changes or privileged settings. Existing .8/v19 qualification and failed archives remain incomplete/unchanged. Review is Codex self-review and deterministic checks under explicit Claude opt-out."
+}
