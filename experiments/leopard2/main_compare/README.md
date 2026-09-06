@@ -619,6 +619,58 @@ entries, physical archive inputs, source/build identities, four output pins,
 per-stage launcher seals, trace bindings and failed-trace disposition.
 This is an execution-integrity milestone, not a codec speedup or campaign arming.
 
+`v19_compiler_execution.py` adds a separate, **not integrated** GCC phase API.
+It borrows a live pinned preflight, selects exactly one C or C++ driver and
+its four pinned helpers, and streams each executable into a sealed memfd.
+The per-tool ceiling is 64 MiB and the selected phase ceiling is 48 MiB;
+C and C++ frontends are not simultaneously materialized. The ordinary
+Git/CMake launcher default remains 16 MiB. Parent/prefix creation uses retained
+directory descriptors, and a private, retained `-B/proc/self/fd/.../` directory
+binds helper roles to their sealed descriptors. The logical and effective
+argument vectors are both recorded. Response files and known helper-selection,
+plugin, language and LTO overrides are rejected; the caller must still validate
+the complete recipe and own its sources, resources and other inputs.
+
+The 18 focused compiler cases cover both inventories, malformed/aliased pins,
+actual sealed fixture execution, exact inherited descriptors, child failure,
+preflight loss, permission change/restore, prefix replacement, redirected parent
+creation, interrupted construction, descriptor closure, and pre-faulted mmap
+source drift with stable metadata and no notification. They and the existing
+29 fresh-builder cases pass normal and optimized Python through four serialized
+CTests with resource warnings treated as errors. The first test run exposed
+missing parent/prefix permission-event watches; its two failures are retained.
+
+A native ripper probe of the final component held real host/lock, pinned
+preflight and authenticated source owners. It recompiled `LeopardFF16.cpp`
+and linked the baseline executable into a new private output directory; it
+did **not** run the executable. The 459,984-byte object exactly matches its
+member in the pinned Leopard1 archive (object SHA-256
+`e25195f0a6c6e84f4dc2b8fcbedf34d6c3983f65feb0996e327503377770f28b`).
+The 1,165,752-byte linked executable matches the original pinned full-file hash
+`bb011abbabe74e1a581b77593916be1d9f0a1b1bf586eed6ef927a473cc9edf8`.
+The link reuses the retained baseline adapter object and pinned archive; this
+is not a new full-source build. Launch tracing observed the sealed driver and
+each retained `cc1plus`, `as`, `collect2` and `ld` role. Native peak memory was
+384,851,968 bytes under 512 MiB, with all memory-event counters and swap zero.
+
+The sealed 41-entry, 4.9 MiB evidence bundle is on ripper at
+`.research/leopard-79h/v19-compiler-phase.y13Nd9`; its outer `SHA256SUMS` hash is
+`cf7af8c135a6e91ed7f65964c6325e5f3458f28a38274193de88b464ce48d312`.
+The final native result hash is
+`e05641201a4344d21bc5cc9abea3ec3e1817d1adadd6efecb1dc0953302487cf`.
+It also preserves the earlier positive, initial test failures, source snapshots,
+trace, output bytes, pinned archive and tool inventory. A separate stdlib-only
+verifier checks bundle coverage, source/recipe/tool bindings, archive-member
+equality, executable equality, actual helper launch paths and resource limits.
+Both normal and optimized replay passed all 41 entries and the 19-launch trace.
+
+This establishes the tested C++ compile/link route, **not** full campaign
+execution ownership. The trace also exposes the ordinary `liblto_plugin.so`
+input even without LTO, startup objects, loader and libraries. Those inputs,
+compiler headers/data, C-phase native proof, nested CMake/Make/Git/shell routes,
+full build integration and later handoff remain open. All corresponding runtime,
+atomic-snapshot, integration, acquisition and benchmark flags remain false.
+
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
 They cover stage ordering, exact mapping and cache dialects, link changes,

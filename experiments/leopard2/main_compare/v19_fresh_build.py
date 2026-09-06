@@ -177,7 +177,9 @@ class _StreamedTool:
     This does not own the ELF loader, dynamic libraries or nested subtools.
     Those independent execution obligations remain with the final orchestrator.
     """
-    def __init__(self, path, *, _trusted_owner=(0, 0)):
+    def __init__(self, path, *, maximum_bytes=16 << 20, _trusted_owner=(0, 0)):
+        require(type(maximum_bytes) is int and 0 < maximum_bytes <= 64 << 20,
+                "build tool byte bound is invalid")
         self.path = Path(path)
         self.stack = ExitStack()
         self._sealed_fd = -1
@@ -192,7 +194,7 @@ class _StreamedTool:
             value = os.fstat(self.fd)
             require(stat.S_ISREG(value.st_mode) and (value.st_uid, value.st_gid) == _trusted_owner and
                     value.st_nlink >= 1 and stat.S_IMODE(value.st_mode) == 0o755 and
-                    0 < value.st_size <= 16 << 20, "unsafe build launcher")
+                    0 < value.st_size <= maximum_bytes, "unsafe build launcher")
             # Distribution installations may hardlink packaged launchers.
             # This is not a task-owned source file:
             # retain the actual link count, guard the inode, and rehash bytes.
