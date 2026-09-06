@@ -86,7 +86,7 @@ def validate_static_elf(data):
 
 
 class RuntimeDispatch:
-    def __init__(self, inventory, *, headers=None, link_inputs=None, searches=None, _runner=None):
+    def __init__(self, inventory, *, headers=None, link_inputs=None, searches=None, source_inputs=None, _runner=None):
         require(type(inventory) is runtime.RuntimeInventory or _runner is not None, "dispatch requires a live runtime inventory")
         self.inventory, self.phase = inventory, inventory.phase
         require(headers is None or (type(headers) is header_module.CompilerHeaders and headers.inventory is inventory),
@@ -98,6 +98,9 @@ class RuntimeDispatch:
         require(searches is None or (type(searches) is search_module.CompilerSearch and searches.inventory is inventory),
                 "dispatch compiler-search owner differs from inventory")
         self.searches = searches
+        require(source_inputs is None or (type(source_inputs) is header_module.CompilerSourceInputs and
+                source_inputs.inventory is inventory), "dispatch source-input owner differs from inventory")
+        self.source_inputs = source_inputs
         self._runner = provenance._run if _runner is None else _runner
         self._stack, self._state = ExitStack(), "new"
         self._snapshots, self._commands = {}, []
@@ -114,6 +117,7 @@ class RuntimeDispatch:
         if self.headers is not None: self.headers.validate_current()
         if self.link_inputs is not None: self.link_inputs.validate_current()
         if self.searches is not None: self.searches.validate_current()
+        if self.source_inputs is not None: self.source_inputs.validate_current()
         require(live_bindings(self.inventory) == self.bindings, "dispatcher fd bindings changed")
         self._guard.verify()
         require(not os.get_inheritable(self._root_fd) and builder.streamed._directory_identity(os.fstat(self._root_fd)) ==
@@ -144,6 +148,7 @@ class RuntimeDispatch:
         if self.prefix is not None: descriptors += [self.prefix.descriptor, self._shim.executable_descriptor]
         if self.headers is not None: descriptors += list(self.headers.descriptors())
         if self.link_inputs is not None: descriptors += list(self.link_inputs.descriptors())
+        if self.source_inputs is not None: descriptors += list(self.source_inputs.descriptors())
         try:
             output = self._runner(effective, "v19 runtime dispatch " + role, maximum_bytes=1 << 20, timeout=600,
                 executable_descriptor=loader.executable_descriptor, inherited_descriptors=tuple(descriptors), environment_overrides=builder.ENVIRONMENT)
@@ -234,14 +239,15 @@ class RuntimeDispatch:
         self.validate_current()
         try:
             require(type(argv) is list and len(argv) <= 511, "dispatcher argument count exceeds bound")
+            selected = argv if self.source_inputs is None else self.source_inputs.arguments(argv)
             if self.link_inputs is not None and "-c" not in argv:
                 # CMake's C identification probe compiles and links in one
                 # driver call. Keep its implicit header in the sealed view too.
-                selected = (self.headers.arguments(argv, compile_only=False)
-                            if self.headers is not None and self.phase.language == "c" else argv)
+                selected = (self.headers.arguments(selected, compile_only=False)
+                            if self.headers is not None and self.phase.language == "c" else selected)
                 effective = self.link_inputs.arguments(selected, self.prefix.descriptor)
             else:
-                selected = argv if self.headers is None else self.headers.arguments(argv)
+                selected = selected if self.headers is None else self.headers.arguments(selected)
                 effective = compiler.driver_arguments(selected, self.phase.logical_driver, self.prefix.descriptor)
             require(len(effective) <= 512, "effective dispatcher argument count exceeds bound")
             return self._invoke("driver", effective, logical_argv=argv)
@@ -258,6 +264,7 @@ class RuntimeDispatch:
             "headers": None if self.headers is None else self.headers.record(),
             "link_inputs": None if self.link_inputs is None else self.link_inputs.record(),
             "searches": None if self.searches is None else self.searches.record(),
+            "source_inputs": None if self.source_inputs is None else self.source_inputs.record(),
             "full_runtime_execution_owned": False, "fresh_build_recipe_integrated": False,
             "atomic_snapshot": False, "live_acquisition_armed": False, "benchmark_executed": False})
 

@@ -1156,6 +1156,68 @@ handoff remain open. Review is Codex self-review plus deterministic/adversarial
 checks under the user's Claude opt-out, not independent-model convergence.
 No full runtime/search closure, acquisition arming, or codec speedup is claimed.
 
+The next C ABI milestone adds `CompilerSourceInputs`: one caller-pinned
+translation unit plus its declared quoted headers under the source directory,
+using the same bounded sealed-input view. It accepts at most 128 files, 2 MiB
+per file and 16 MiB total. `system` inputs require root ownership; `generated`
+inputs require the current user's ownership. Both routes retain original bytes,
+directory/permission history and sealed descriptors. Only the exact pinned
+source argument is rewritten, with a file-prefix map back to its original name;
+a separate object-only link leaves the source argument list unchanged. Other
+translation units, duplicate source arguments, stage mismatches and malformed
+pins are rejected. The dispatcher borrows this owner through bootstrap, jobs,
+recording and exit, inheriting only its sealed input descriptors. This does not
+confer Git source identity or complete source/include-read closure.
+
+The native ABI proof uses the installed CMake source pair
+`/usr/share/cmake-3.28/Modules/CMakeCCompilerABI.c` (511 bytes) and
+`CMakeCompilerABI.h` (1,581 bytes). The source and quoted sibling header are both
+read through the sealed view, along with the existing sealed predefinition
+header. Its new 15,968-byte linked executable exactly matches the saved
+`CMakeDetermineCompilerABI_C.bin`, SHA-256
+`ba6646aa78bf3dd0a7997f89bcc1154630fcb86d28103e0bfcd5200b21f54c7c`.
+The original `-v` compile/link recipes come from the retained configure log.
+Their old TryCompile directory has been cleaned away; this proof uses a retained
+existing cwd, absolute source arguments and new output paths. The installed
+source pair and saved ABI output are newly observed pins, not the original
+four preflight artifact pins. Neither old nor new executable is run.
+
+Accepted native evidence on ripper is `/tmp/leopard-v19-c-abi2.5Z5i03`. The ABI
+trace covers two sealed source inputs, one sealed system header, twelve link
+inputs, all forty guarded external negative paths, twelve launches and 179,259
+bytes, with no ordinary system reads. Unlike the non-verbose C identification
+probe, this verbose ABI recipe queries both versioned `13/.` directories. The
+initial replay's assumption of only thirty-eight C paths is preserved with its
+failure; the production guard set was not changed. C identification and C++
+object/link regressions still reproduce their earlier full-file hashes.
+All owners exit cleanly, with peak 421,122,048 bytes under 512 MiB and zero
+memory events/swap. The first native attempt reached the host's inotify limit
+after ABI linking; its evidence is retained. Closing the completed C-ID
+dispatcher before ABI dispatch and avoiding duplicate source snapshots resolved
+that harness problem without increasing system limits or dropping source custody.
+
+Thirty-two header/source and thirty-one dispatcher cases bring the focused
+total to 178 cases in each Python mode, passing fourteen serialized CTests at
+44,343,296-byte peak under 256 MiB with zero memory events/swap. Cases include
+C/C++ source routing, generated/system ownership, quoted-input write/restore and
+mmap changes, wrong inventory, descriptor inheritance and loss around jobs.
+Separate stdlib normal/optimized bundle and all three trace replays pass with
+identical projections at 27,275,264-byte peak under 256 MiB and zero events/swap.
+Driver output bytes are retained and bound to each command, including `-v` output.
+
+The sealed 442-entry, 103 MiB ripper bundle is
+`.research/leopard-79h/v19-c-abi.kNtrd3`, outer `SHA256SUMS`
+`02722e35b72a269062eee9cba83d3b07445535d4de5f08d49b64e39e670f379e`.
+Native result SHA-256 is
+`10d348aebe891287c71f036dfed91bd6e09c2f4974ed36202d77e2afc66bc12c`;
+ABI trace projection SHA-256 is
+`5eb3125feb9665eda1c44575181e16e2b86510b3c04266ebf2a1af31bb086a7b`.
+OpenMP remains separate: the saved log shows `libgomp.spec`,
+`crtoffloadbegin.o` and `crtoffloadend.o` in addition to its headers/libraries.
+Its generated source must also be recovered from the retained CMake template.
+Other build tools, full build/consumer integration and fresh performance
+qualification remain open. No full runtime/source closure or codec speedup.
+
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
 They cover stage ordering, exact mapping and cache dialects, link changes,

@@ -380,6 +380,73 @@ class OwnerTests(unittest.TestCase):
             self.assertNotIn("-nostdinc++", effective)
             self.assertFalse(any(arg.startswith("--sysroot") for arg in effective))
 
+    def source_owner(self):
+        source = self.root / "unit.c"
+        quoted = self.root / "quoted.h"
+        source.write_bytes(b'#include "quoted.h"\nint value = VALUE;\n')
+        quoted.write_bytes(b"#define VALUE 7\n")
+        for path in (source, quoted): path.chmod(0o644)
+        def pin(path):
+            return {"path": str(path), "size": path.stat().st_size,
+                    "sha256": module.builder.hashlib.sha256(path.read_bytes()).hexdigest()}
+        def factory(path, **kwargs):
+            return module.builder._StreamedTool(path, _trusted_owner=(os.getuid(), os.getgid()), **kwargs)
+        owner = module.header_module.CompilerSourceInputs(self.inventory, pin(source), [pin(quoted)], _file_factory=factory).__enter__()
+        def cleanup():
+            owner._view_guard._close_without_verification()
+            owner._source_guard._close_without_verification()
+            owner._stack.close()
+            for directory, _dirs, _files in os.walk(owner.root): os.chmod(directory, 0o700)
+        self.stack.callback(cleanup)
+        return owner, source, quoted
+
+    def test_source_route_preserves_logical_arguments_and_inherits_only_sealed_inputs(self):
+        self.c_phase()
+        source_inputs, source, _ = self.source_owner()
+        headers, _ = self.header_owner()
+        inputs, _ = self.linker_owner()
+        argv = ["/usr/bin/cc", "-c", str(source), "-o", "unit.o"]
+        with module.RuntimeDispatch(self.inventory, headers=headers, link_inputs=inputs,
+                                    source_inputs=source_inputs, _runner=self.run_child) as owner:
+            owner.run(argv)
+            record = owner.record()
+            command = record["commands"][-1]
+            self.assertEqual(command["logical_argv"], argv)
+            self.assertIn(str(source_inputs.root / str(source).lstrip("/")), command["effective_argv"])
+            self.assertNotIn(str(source), command["effective_argv"])
+            self.assertIn("-nostdinc", command["effective_argv"])
+            self.assertEqual(record["source_inputs"], source_inputs.record())
+            inherited = self.calls[-1][1]["inherited_descriptors"]
+            for file in source_inputs._files.values():
+                self.assertIn(file.executable_descriptor, inherited)
+                self.assertNotIn(file.fd, inherited)
+            owner.run(["/usr/bin/cc", "unit.o", "-o", "unit"])
+            self.assertNotIn(str(source_inputs.root / str(source).lstrip("/")), owner.record()["commands"][-1]["effective_argv"])
+
+    def test_source_input_loss_during_and_before_launch_rejected(self):
+        self.c_phase()
+        inputs, source, quoted = self.source_owner()
+        with self.assertRaises(FAILURES):
+            with module.RuntimeDispatch(self.inventory, source_inputs=inputs, _runner=self.run_child) as owner:
+                def mutate(role):
+                    if role == "driver": quoted.write_bytes(b"changed quote input")
+                self.intercept = mutate
+                owner.run(["/usr/bin/cc", "-c", str(source), "-o", "unit.o"])
+        self.intercept = lambda *_: None
+        calls = len(self.calls)
+        with self.assertRaises(FAILURES):
+            module.RuntimeDispatch(self.inventory, source_inputs=inputs, _runner=self.run_child).__enter__()
+        self.assertEqual(len(self.calls), calls)
+
+    def test_source_owner_must_share_inventory(self):
+        self.c_phase()
+        inputs, _, _ = self.source_owner()
+        with self.assertRaises(FAILURES):
+            module.RuntimeDispatch(self.inventory, source_inputs=object(), _runner=self.run_child)
+        other = type("OtherInventory", (), {"phase": self.inventory.phase})()
+        with self.assertRaises(FAILURES):
+            module.RuntimeDispatch(other, source_inputs=inputs, _runner=self.run_child)
+
     def test_borrowed_owner_loss_during_job_fails(self):
         with self.assertRaises(FAILURES):
             with self.owner() as owner:

@@ -24,7 +24,8 @@ class HeaderTests(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         # Keep disk writeback from changing the metadata of the rehash fixture.
-        fixture_parent = "/dev/shm" if self._testMethodName == "test_prefaulted_mmap_is_rehashed" else None
+        fixture_parent = "/dev/shm" if self._testMethodName in (
+            "test_prefaulted_mmap_is_rehashed", "test_source_prefaulted_mmap_rehashes_quoted_input") else None
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="leopard-v19-header-test-", dir=fixture_parent)))
         self.parent = self.root / "new"
         self.parent.mkdir(mode=0o700)
@@ -287,6 +288,125 @@ class HeaderTests(unittest.TestCase):
         with self.assertRaises(FAILURES): dispatch_module.RuntimeDispatch(self.inventory, headers=object(), _runner=lambda *a: b"")
         other = copy.copy(self.inventory)
         with self.assertRaises(FAILURES): dispatch_module.RuntimeDispatch(other, headers=owner, _runner=lambda *a: b"")
+
+    def source_owner(self):
+        self.c_phase()
+        source = self.system / "unit.c"
+        source.write_bytes(b'#include "one.h"\n#include "nested/two.h"\nint value = ONE;\n')
+        source.chmod(0o644)
+        owner = module.CompilerSourceInputs(self.inventory, self.pin(source), self.pins, _file_factory=self.factory).__enter__()
+        self.stack.callback(self.cleanup_owner, owner)
+        return owner, source
+
+    def test_source_unit_and_quoted_headers_are_sealed_together(self):
+        owner, source = self.source_owner()
+        record = owner.record()
+        self.assertEqual(record["source"], str(source))
+        self.assertEqual(record["input_bytes"], sum(row["size"] for row in record["files"]))
+        self.assertEqual(len(record["files"]), 3)
+        self.assertTrue(record["declared_source_inputs_sealed"])
+        self.assertFalse(record["source_identity_owned"])
+        self.assertFalse(record["full_source_read_closure_owned"])
+        for path, file in owner._files.items():
+            self.assertEqual((owner.root / str(path).lstrip("/")).read_bytes(), path.read_bytes())
+            self.assertFalse(os.get_inheritable(file.executable_descriptor))
+            with self.assertRaises(OSError): os.pwrite(file.executable_descriptor, b"!", 0)
+
+    def test_source_argument_mapping_and_separate_link(self):
+        owner, source = self.source_owner()
+        for stage in (["-c"], []):
+            argv = ["/usr/bin/cc", *stage, str(source), "-o", "out"]
+            selected = owner.arguments(argv)
+            self.assertIn(f"-ffile-prefix-map={owner.root}=", selected)
+            self.assertNotIn(str(source), selected)
+            self.assertIn(str(owner.root / str(source).lstrip("/")), selected)
+            self.assertEqual(argv, ["/usr/bin/cc", *stage, str(source), "-o", "out"])
+        link = ["/usr/bin/cc", "out.o", "-o", "out"]
+        self.assertEqual(owner.arguments(link), link)
+        self.assertIsNot(owner.arguments(link), link)
+
+    def test_source_argument_mismatch_latches(self):
+        for extra in (["another.c"], ["-E"], ["-S"], ["-c", "-c"], ["-o", "other"]):
+            owner, source = self.source_owner()
+            with self.subTest(extra=extra), self.assertRaises(FAILURES):
+                owner.arguments(["/usr/bin/cc", str(source), "-o", "out", *extra])
+            with self.assertRaises(FAILURES): owner.record()
+
+    def test_source_absence_duplicate_and_wrong_driver_rejected(self):
+        for case in ("absent", "duplicate", "driver"):
+            owner, source = self.source_owner()
+            argv = ["/usr/bin/cc", "-c", str(source), "-o", "out"]
+            if case == "absent": argv[2] = "different.c"
+            elif case == "duplicate": argv.append(str(source))
+            else: argv[0] = "/usr/bin/c++"
+            with self.subTest(case=case), self.assertRaises(FAILURES): owner.arguments(argv)
+
+    def test_source_pin_scope_and_origin_rejected(self):
+        self.c_phase()
+        source = self.system / "unit.c"
+        source.write_bytes(b"int value;\n"); source.chmod(0o644)
+        pin = self.pin(source)
+        for headers in ([pin], [dict(self.pins[0], path="/outside.h")], self.pins * 128):
+            with self.assertRaises(FAILURES):
+                module.CompilerSourceInputs(self.inventory, pin, headers, _file_factory=self.factory)
+        for origin in (None, True, "untrusted"):
+            with self.assertRaises(FAILURES):
+                module.CompilerSourceInputs(self.inventory, pin, [], origin=origin, _file_factory=self.factory)
+        with self.assertRaises(FAILURES):
+            module.CompilerSourceInputs(self.inventory, self.pins[0], [], _file_factory=self.factory)
+        with mock.patch.object(module, "MAX_TOTAL_BYTES", 1), self.assertRaises(FAILURES):
+            module.CompilerSourceInputs(self.inventory, pin, [], _file_factory=self.factory)
+
+    def test_source_generated_origin_uses_current_owner(self):
+        self.c_phase()
+        source = self.system / "unit.c"
+        source.write_bytes(b"int value;\n"); source.chmod(0o644)
+        with mock.patch.object(module.runtime, "RuntimeInventory", type(self.inventory)):
+            owner = module.CompilerSourceInputs(self.inventory, self.pin(source), [], origin="generated").__enter__()
+        self.stack.callback(self.cleanup_owner, owner)
+        self.assertEqual(owner.record()["origin"], "generated")
+        value = os.fstat(owner._files[source].fd)
+        self.assertEqual((value.st_uid, value.st_gid), (os.getuid(), os.getgid()))
+
+    def test_source_cpp_mapping_and_language_mismatch(self):
+        source = self.system / "unit.cpp"
+        source.write_bytes(b'#include "one.h"\nint value = ONE;\n'); source.chmod(0o644)
+        owner = module.CompilerSourceInputs(self.inventory, self.pin(source), self.pins, _file_factory=self.factory).__enter__()
+        self.stack.callback(self.cleanup_owner, owner)
+        selected = owner.arguments(["/usr/bin/c++", "-c", str(source), "-o", "out.o"])
+        self.assertEqual(owner.record()["language"], "c++")
+        self.assertIn(str(owner.root / str(source).lstrip("/")), selected)
+        self.inventory.phase.language = "c"
+        with self.assertRaises(FAILURES):
+            module.CompilerSourceInputs(self.inventory, self.pin(source), self.pins, _file_factory=self.factory)
+
+    def test_source_system_origin_rejects_user_owned_inputs(self):
+        if os.getuid() == 0 and os.getgid() == 0: self.skipTest("requires a non-root source owner")
+        self.c_phase()
+        source = self.system / "unit.c"
+        source.write_bytes(b"int value;\n"); source.chmod(0o644)
+        with mock.patch.object(module.runtime, "RuntimeInventory", type(self.inventory)), self.assertRaises(FAILURES):
+            module.CompilerSourceInputs(self.inventory, self.pin(source), [], origin="system").__enter__()
+
+    def test_source_and_quoted_header_write_restore_is_latched(self):
+        for target in ("source", "quoted"):
+            owner, source = self.source_owner()
+            path = source if target == "source" else self.first
+            original = path.read_bytes()
+            path.write_bytes(b"!" * len(original)); path.write_bytes(original)
+            with self.subTest(target=target), self.assertRaises(FAILURES): owner.record()
+
+    def test_source_prefaulted_mmap_rehashes_quoted_input(self):
+        with self.first.open("r+b") as stream, mmap.mmap(stream.fileno(), 0) as mapping:
+            mapping[0:1] = mapping[0:1]
+            owner, _ = self.source_owner()
+            file = owner._files[self.first]
+            with mock.patch.object(file, "_hash", wraps=file._hash) as hashed:
+                mapping[0] ^= 1
+                try:
+                    with self.assertRaises(FAILURES): owner.record()
+                    self.assertTrue(hashed.called)
+                finally: mapping[0] ^= 1
 
 
 if __name__ == "__main__": unittest.main()

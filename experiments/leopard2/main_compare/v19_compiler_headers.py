@@ -199,6 +199,74 @@ class _PinnedInputView:
             self._stack.close()
 
 
+class CompilerSourceInputs(_PinnedInputView):
+    """Seal one pinned translation unit and its declared quoted includes.
+
+    Quoted includes must be under the source's directory. Rewriting that one
+    source argument lets its relative includes resolve inside the same view.
+    Absolute includes and complete source/read closure are not claimed.
+    """
+    def __init__(self, inventory, source, quoted_headers, *, origin="system", _file_factory=None):
+        require(type(inventory) is runtime.RuntimeInventory or _file_factory is not None,
+                "source inputs require a live runtime inventory")
+        require(type(origin) is str and origin in ("system", "generated"), "source input origin differs")
+        require(inventory.phase.language in ("c", "c++"), "source input language differs")
+        require(type(quoted_headers) is list and len(quoted_headers) < 128, "quoted header count exceeds bound")
+        pins = {}
+        for row in [source, *quoted_headers]:
+            require(type(row) is dict and set(row) == {"path", "sha256", "size"} and
+                    type(row["size"]) is int and 0 < row["size"] <= MAX_FILE_BYTES and
+                    type(row["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", row["sha256"]), "source input pin differs")
+            path = checked_path(row["path"])
+            require(path not in pins, "duplicate source input")
+            pins[path] = copy.deepcopy(row)
+        self.source = checked_path(source["path"])
+        suffixes = (".c",) if inventory.phase.language == "c" else (".cpp", ".cxx", ".cc", ".C")
+        require(self.source.suffix in suffixes and all(path.is_relative_to(self.source.parent) for path in pins),
+                "source suffix or quoted header location differs")
+        require(sum(row["size"] for row in pins.values()) <= MAX_TOTAL_BYTES, "source input bytes exceed bound")
+        self.origin = origin
+        trusted_owner = (0, 0) if origin == "system" else (os.getuid(), os.getgid())
+        def factory(path, **kwargs):
+            return builder._StreamedTool(path, _trusted_owner=trusted_owner, **kwargs)
+        super().__init__(inventory, pins, (str(self.source.parent),),
+            {path.relative_to("/"): path for path in pins},
+            limits=(128, MAX_DIRECTORIES, MAX_FILE_BYTES), root_prefix="v19-source-inputs-",
+            _file_factory=factory if _file_factory is None else _file_factory)
+
+    def arguments(self, argv):
+        self.validate_current()
+        try:
+            require(type(argv) is list and 0 < len(argv) <= 480 and argv[0] == self.phase.logical_driver and
+                    all(type(value) is str and "\0" not in value for value in argv), "source arguments differ")
+            count = argv.count(str(self.source))
+            require(count <= 1, "source argument is duplicated")
+            source_suffixes = (".c", ".cpp", ".cxx", ".cc", ".C")
+            if not count:
+                require("-c" not in argv and not any(value.endswith(source_suffixes) for value in argv[1:]),
+                        "compile request does not use the pinned source")
+                return list(argv)  # A separate object-only link still borrows this owner.
+            require(argv.count("-c") <= 1 and argv.count("-o") == 1 and "-S" not in argv and "-E" not in argv and
+                    not any(value != str(self.source) and value.endswith(source_suffixes) for value in argv[1:]),
+                    "source profile requires one explicit translation unit")
+            selected = str(self.root / str(self.source).lstrip("/"))
+            return [argv[0], f"-ffile-prefix-map={self.root}=",
+                    *[selected if value == str(self.source) else value for value in argv[1:]]]
+        except BaseException:
+            self._state = "failed"
+            raise
+
+    def record(self):
+        self.validate_current()
+        return copy.deepcopy({"schema": "leopard2-v19-compiler-source-inputs/v1", "root": str(self.root),
+            "source": str(self.source), "origin": self.origin, "language": self.phase.language,
+            "files": [dict(pin, descriptor=self._files[path].executable_descriptor,
+                seals=self._files[path].executable_record()["seals"]) for path, pin in self._pins.items()],
+            "input_bytes": sum(row["size"] for row in self._pins.values()),
+            "declared_source_inputs_sealed": True, "full_source_read_closure_owned": False,
+            "source_identity_owned": False, "fresh_build_recipe_integrated": False, "benchmark_executed": False})
+
+
 class CompilerHeaders(_PinnedInputView):
     """Qualified C/C++ include policies over a bounded, sealed input view.
 
