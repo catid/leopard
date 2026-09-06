@@ -15,12 +15,13 @@ import secrets
 import struct
 
 HERE = Path(__file__).resolve().parent
-dependency = HERE / "v19_linker_inputs.py"
+dependency = HERE / "v19_compiler_search.py"
 if dependency.resolve(strict=True) != dependency:
     raise RuntimeError("runtime dispatch dependency is not canonical")
-spec = importlib.util.spec_from_file_location("v19_dispatch_link_inputs", dependency)
-link_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(link_module)
+spec = importlib.util.spec_from_file_location("v19_dispatch_compiler_search", dependency)
+search_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(search_module)
+link_module = search_module.link_module
 header_module = link_module.header_module
 runtime = header_module.runtime
 compiler, builder, provenance, require = runtime.compiler, runtime.builder, runtime.provenance, runtime.require
@@ -85,7 +86,7 @@ def validate_static_elf(data):
 
 
 class RuntimeDispatch:
-    def __init__(self, inventory, *, headers=None, link_inputs=None, _runner=None):
+    def __init__(self, inventory, *, headers=None, link_inputs=None, searches=None, _runner=None):
         require(type(inventory) is runtime.RuntimeInventory or _runner is not None, "dispatch requires a live runtime inventory")
         self.inventory, self.phase = inventory, inventory.phase
         require(headers is None or (type(headers) is header_module.CompilerHeaders and headers.inventory is inventory),
@@ -94,6 +95,9 @@ class RuntimeDispatch:
         require(link_inputs is None or (type(link_inputs) is link_module.LinkerInputs and link_inputs.inventory is inventory),
                 "dispatch linker-input owner differs from inventory")
         self.link_inputs = link_inputs
+        require(searches is None or (type(searches) is search_module.CompilerSearch and searches.inventory is inventory),
+                "dispatch compiler-search owner differs from inventory")
+        self.searches = searches
         self._runner = provenance._run if _runner is None else _runner
         self._stack, self._state = ExitStack(), "new"
         self._snapshots, self._commands = {}, []
@@ -109,6 +113,7 @@ class RuntimeDispatch:
         self.inventory.validate_current()
         if self.headers is not None: self.headers.validate_current()
         if self.link_inputs is not None: self.link_inputs.validate_current()
+        if self.searches is not None: self.searches.validate_current()
         require(live_bindings(self.inventory) == self.bindings, "dispatcher fd bindings changed")
         self._guard.verify()
         require(not os.get_inheritable(self._root_fd) and builder.streamed._directory_identity(os.fstat(self._root_fd)) ==
@@ -248,6 +253,7 @@ class RuntimeDispatch:
             "sealed_dispatcher": self._shim.executable_record(), "compiler_data_owned": False,
             "headers": None if self.headers is None else self.headers.record(),
             "link_inputs": None if self.link_inputs is None else self.link_inputs.record(),
+            "searches": None if self.searches is None else self.searches.record(),
             "full_runtime_execution_owned": False, "fresh_build_recipe_integrated": False,
             "atomic_snapshot": False, "live_acquisition_armed": False, "benchmark_executed": False})
 

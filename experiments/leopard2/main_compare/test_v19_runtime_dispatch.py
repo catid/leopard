@@ -344,6 +344,52 @@ class OwnerTests(unittest.TestCase):
                 self.intercept = lose
                 owner.run(["/usr/bin/c++"])
 
+    def search_owner(self):
+        path = self.root / "optional-specs"
+        owner = module.search_module.CompilerSearch(self.inventory, _paths=(str(path),)).__enter__()
+        def cleanup():
+            owner._guard._close_without_verification()
+            owner._stack.close()
+        self.stack.callback(cleanup)
+        return owner, path
+
+    def test_search_owner_records_absence_without_inheriting_guard_or_directory_fds(self):
+        searches, _ = self.search_owner()
+        with module.RuntimeDispatch(self.inventory, searches=searches, _runner=self.run_child) as owner:
+            argv = ["/usr/bin/c++", "-c", "source.cpp", "-o", "out.o"]
+            owner.run(argv)
+            self.assertEqual(owner.record()["commands"][-1]["logical_argv"], argv)
+            self.assertTrue(owner.record()["searches"]["declared_absence_history_owned"])
+            inherited = self.calls[-1][1]["inherited_descriptors"]
+            self.assertNotIn(searches._guard.descriptor, inherited)
+            for fd, _ in searches._directories.values(): self.assertNotIn(fd, inherited)
+
+    def test_optional_input_create_delete_during_driver_is_rejected_and_latched(self):
+        searches, path = self.search_owner()
+        with self.assertRaises(FAILURES):
+            with module.RuntimeDispatch(self.inventory, searches=searches, _runner=self.run_child) as owner:
+                def mutate(role):
+                    if role == "driver":
+                        path.write_bytes(b"temporary specs"); path.unlink()
+                self.intercept = mutate
+                owner.run(["/usr/bin/c++", "-c", "source.cpp", "-o", "out.o"])
+        self.assertFalse(path.exists())
+        self.assertEqual(owner._commands[-1]["status"], "failed")
+        calls = len(self.calls)
+        with self.assertRaises(FAILURES): owner.run(["/usr/bin/c++"])
+        self.assertEqual(len(self.calls), calls)
+
+    def test_search_loss_before_bootstrap_and_wrong_inventory_do_not_launch(self):
+        searches, path = self.search_owner()
+        other = copy.copy(self.inventory)
+        with self.assertRaises(FAILURES):
+            module.RuntimeDispatch(other, searches=searches, _runner=self.run_child)
+        path.write_bytes(b"appeared")
+        calls = len(self.calls)
+        with self.assertRaises(FAILURES):
+            module.RuntimeDispatch(self.inventory, searches=searches, _runner=self.run_child).__enter__()
+        self.assertEqual(len(self.calls), calls)
+
     def test_metadata_helper_prefix_and_source_drift(self):
         for target in ("root", "prefix", "source"):
             with self.subTest(target=target), self.assertRaises(FAILURES):

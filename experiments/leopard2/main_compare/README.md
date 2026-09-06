@@ -987,6 +987,60 @@ object/archive/executable, bootstrap artifacts, code, tests, prototype and faile
 fixture log. Separate bundle and trace replays use no production imports or
 codec/historical execution and reproduce the projection byte-for-byte.
 
+The subsequent `v19_compiler_search.py` component retains the forty observed
+external GCC13 negative-search spellings, including optional `specs` and
+fallback linker/helper names. `RuntimeDispatch(searches=...)` borrows this owner
+from the same runtime inventory and checks it at job, record and exit boundaries.
+The first missing component is watched before absence is accepted; existing
+directory descriptors, permission history and traversed symlink identities stay
+held. Component-wise resolution preserves both symlink-before-`..` and
+missing-before-`..` semantics instead of lexically simplifying the request.
+The bounded owner permits at most 128 requests, 256 directories, 64 aliases and
+128 traversal steps per request. It is not a sandbox: a transient input can be
+observed by the child, but a failed owner prevents accepting that job's result.
+
+Twenty search cases plus three additional dispatcher cases bring the focused
+total to 144 cases in each Python mode, passing fourteen serialized CTests.
+Tests cover create/delete history, parent replacement and permission restoration,
+alias redirects, missing subtrees, captured races, rejected permission errors,
+descriptor inheritance/loss, bounds and cleanup. Unrelated sibling writes remain
+allowed. Final test peak is 45,301,760 bytes under 256 MiB, all six memory-event
+counters and swap zero. Codex self-review and deterministic/adversarial checks
+are not an independent-model convergence gate; Claude remains explicitly waived.
+
+The accepted native compile/link check on ripper is
+`/tmp/leopard-v19-search-owner2.VZxl11`. Forty requests, twelve directories and
+the `/lib -> usr/lib` alias remain identical before/after both jobs. All owner
+exits pass; the full GF16 object (`e25195f0...`, 459,984 bytes) and baseline
+executable (`bb011abb...`, 1,165,752 bytes) match the original pins. Peak memory
+is 419,282,944 bytes under 512 MiB with all six events and swap zero. The link
+still reuses the original adapter object/archive; no codec executable or timing
+ran. A first native attempt rejected the incorrect assumption that the pinned
+`collect2` lives in `/usr/lib/gcc`; the qualified path is under `/usr/libexec/gcc`.
+That failure and its source are retained, with a new default-profile regression.
+
+Separate stdlib-only normal/optimized replays verify all forty raw external
+negative requests, 274 sealed-header reads, eighteen sealed-link-input reads and
+twelve launches in 2,342,075 trace bytes, with zero ordinary system read paths.
+Alias custody comes from the tested live owner's equal before/after records;
+the kernel resolves `/lib` during stat/access, without an explicit userland
+`readlink("/lib")` event. A rejected first replay incorrectly required that event;
+its checker and failure log are preserved, and no production check was relaxed.
+
+The sealed 391-entry, 69 MiB bundle on ripper is
+`.research/leopard-79h/v19-compiler-searches.grV2ys`, outer `SHA256SUMS`
+`c2ddee2c1320f61ce3a571c0c7c6165dd587742b663608f3bbdf1ff838d1cec8`.
+Native result SHA-256 is
+`4ef6139f6f67eff7cce948bcbcd8ecbe5d60b5b4cc5cec9dab2e479e3d75f881`;
+trace projection SHA-256 is
+`0335b55e738be5befe868cace2752f42cfbfa86a2c9b1dc3b9163a912c625d69`.
+Bundle checks and trace projections pass normal/optimized Python with identical
+projections, at 25,890,816-byte peak under 256 MiB and zero events/swap. This is
+declared absence-history ownership, not full negative-search closure. Positive
+metadata-only probes (`nm`, `strip`, `lto-wrapper`), other/unobserved inputs,
+actual C compilation, other build tools and full build/consumer integration
+remain open. Full runtime/data/acquisition flags remain false; no codec speedup.
+
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
 They cover stage ordering, exact mapping and cache dialects, link changes,
