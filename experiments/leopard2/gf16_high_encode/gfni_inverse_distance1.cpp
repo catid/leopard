@@ -36,7 +36,7 @@ extern "C" bool LeoGFNIInverseDistance1Experiment(
     const leopard2_internal::SparseForwardPlanBatchView* sparse)
 {
     using namespace gfni_inverse_distance1;
-    if (state.calls >= 16) throw std::runtime_error("distance-one pass limit");
+    if (state.calls >= kCapacity) throw std::runtime_error("distance-one pass limit");
     const Call call = {static_cast<unsigned>(ops.kind),k,r,requested,side,
         sparse ? sparse->block_count : 0U,bytes,policy,sparse != NULL};
     const bool matched = Matches(call);

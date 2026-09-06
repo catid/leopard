@@ -5,6 +5,12 @@
 #include <cstdint>
 
 namespace gfni_inverse_distance1 {
+#ifndef LEO_GFNI_DISTANCE1_CAPACITY
+#define LEO_GFNI_DISTANCE1_CAPACITY 16
+#endif
+static_assert(LEO_GFNI_DISTANCE1_CAPACITY == 16 || LEO_GFNI_DISTANCE1_CAPACITY == 64,
+    "unsupported experiment trace capacity");
+constexpr unsigned kCapacity = LEO_GFNI_DISTANCE1_CAPACITY;
 struct Call {
     unsigned kind, k, r, requested, side, sparse_blocks;
     uint64_t bytes, source_policy;
@@ -13,7 +19,7 @@ struct Call {
 struct State {
     bool enabled;
     unsigned calls, matches, changed;
-    Call records[16];
+    Call records[kCapacity];
 };
 bool Matches(const Call& call);
 void Reset(bool enabled);
