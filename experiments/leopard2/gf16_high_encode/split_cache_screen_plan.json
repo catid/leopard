@@ -1,0 +1,38 @@
+{
+  "schema": "leopard2-gf16-split-screen-plan/v1",
+  "bead": "leopard-79h.38.5.4.9",
+  "scope": "same-source diagnostic candidate filter only; not v19 or exact-Leopard1 authority",
+  "implementation_commit": "3075eb8",
+  "archive_on_sha256": "06da6d7630165289258966a2c10934d2956b510c9281fc828ef270b73299bebb",
+  "archive_off_sha256": "24141e430ba35048548b122d26b1e77ed2914d1119e0ea74c1a6b7e30a8f2acf",
+  "changed_archive_members": ["Leopard2BackendAVX512.cpp.o"],
+  "executables": {
+    "on": "cfa78fa5cc243413b8d550de26860b5ee4eb1698f633041e0d1e44581b82ee5b",
+    "off": "27d08f61fe5c78bb51e48884fb8f1b0af4081fb153a64848a6476bdcc26c3add"
+  },
+  "harness_source_sha256": "6bd7d5222789dc888aa8481df78f1ee24fc5b871a75b5543e3364c491735ef7e",
+  "cpu": 4,
+  "sibling": 68,
+  "controller_cpu": 0,
+  "seed": 20260906,
+  "initial_untimed_encode": 1,
+  "additional_warmups": 4,
+  "samples_per_process": 21,
+  "rounds": 3,
+  "order": ["off", "on", "on", "off"],
+  "cell_order": [0, 1, 2, 3, 4, 5],
+  "cells": [
+    {"id": 0, "k": 1000, "r": 200, "bytes": 32768, "route": "avx512", "role": "target"},
+    {"id": 1, "k": 1000, "r": 200, "bytes": 65536, "route": "avx512", "role": "target"},
+    {"id": 2, "k": 1000, "r": 199, "bytes": 65536, "route": "avx512", "role": "neighbor"},
+    {"id": 3, "k": 4096, "r": 512, "bytes": 4096, "route": "avx512", "role": "unchanged_control"},
+    {"id": 4, "k": 1000, "r": 200, "bytes": 65536, "route": "avx2", "role": "unchanged_control"},
+    {"id": 5, "k": 1000, "r": 200, "bytes": 65536, "route": "gfni", "role": "unchanged_control"}
+  ],
+  "attempt_budget": 1,
+  "contamination": "Stop and retain failure on any non-idle sibling jiffy across an invocation; do not analyze a partial attempt or change CPUs/retry based on timings.",
+  "integrity": "Canonical lock and physical pair lease; freeze newly linked executables and full archives with SHA256 before first measurement and recheck after every invocation; all input/output hashes, route and scratch must match untimed preflight. No build while measuring.",
+  "resources": "One process at a time; builds512MiB-j1; checks/timing256MiB; swap0; prlimit CPU30seconds per child and output1MiB; controller pinnedCPU0, childrenCPU4.",
+  "analysis": "Process median of21 samples; round ratio sqrt(off0*off3/(on1*on2)); geometric mean of3round ratios. Keep raw samples. No confidence interval, trimming, pooling, or statistical retry.",
+  "decision": "Only if every unchanged control aggregate is inside[1/1.02,1.02] may candidate filtering proceed. Continue to future qualification only if a target aggregate reaches1.05 with all its rounds>1 and every neighbor aggregate>=1/1.02. Otherwise reject for this screen, or mark inconclusive when controls fail. No result authorizes production promotion or an exact-Leopard1 claim."
+}
