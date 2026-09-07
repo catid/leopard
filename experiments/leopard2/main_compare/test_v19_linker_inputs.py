@@ -24,7 +24,7 @@ class LinkerTests(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         # Keep disk writeback from changing the metadata of the rehash fixture.
-        fixture_parent = "/dev/shm" if self._testMethodName == "test_preexisting_mmap_is_rehashed" else None
+        fixture_parent = "/dev/shm" if "mmap" in self._testMethodName else None
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="leopard-v19-link-test-", dir=fixture_parent)))
         self.parent, self.gcc, self.system = (self.root / name for name in ("new", "gcc", "system"))
         for path in (self.parent, self.gcc, self.system): path.mkdir(mode=0o700)
@@ -39,6 +39,14 @@ class LinkerTests(unittest.TestCase):
         self.stack.enter_context(mock.patch.object(module, "LINK_INPUT_PATHS", tuple(row["path"] for row in self.pins)))
         self.stack.enter_context(mock.patch.object(module, "GCC_ROOT", str(self.gcc) + "/"))
         self.stack.enter_context(mock.patch.object(module, "SYSTEM_ROOT", str(self.system) + "/"))
+        self.openmp_pins = []
+        for original in module.OPENMP_LINK_INPUT_PATHS:
+            path = self.gcc / Path(original).name
+            path.write_bytes(b"fixture OpenMP input: " + path.name.encode() + b"\n")
+            path.chmod(0o644)
+            self.openmp_pins.append(self.pin(path))
+        self.stack.enter_context(mock.patch.object(module, "OPENMP_LINK_INPUT_PATHS",
+            tuple(row["path"] for row in self.openmp_pins)))
         self.live = True
         test = self
         class Phase:
@@ -57,11 +65,12 @@ class LinkerTests(unittest.TestCase):
     def factory(self, path, **kwargs):
         return module.builder._StreamedTool(path, _trusted_owner=(os.getuid(), os.getgid()), **kwargs)
 
-    def owner(self, pins=None):
-        return module.LinkerInputs(self.inventory, self.pins if pins is None else pins, _file_factory=self.factory)
+    def owner(self, pins=None, *, openmp=False):
+        return module.LinkerInputs(self.inventory, self.pins if pins is None else pins,
+            openmp=openmp, _file_factory=self.factory)
 
-    def enter(self):
-        owner = self.owner().__enter__()
+    def enter(self, *, openmp=False):
+        owner = self.owner(self.pins + self.openmp_pins if openmp else None, openmp=openmp).__enter__()
         def cleanup():
             owner._view_guard._close_without_verification()
             owner._source_guard._close_without_verification()
@@ -132,6 +141,70 @@ class LinkerTests(unittest.TestCase):
             with self.subTest(extra=extra), self.assertRaises(FAILURES):
                 owner.arguments(["/usr/bin/cc", "s.c", "-o", "out", extra], 123)
             with self.assertRaises(FAILURES): owner.record()
+
+    def test_openmp_c_retains_specs_and_startup_objects(self):
+        self.inventory.phase.language, self.inventory.phase.logical_driver = "c", "/usr/bin/cc"
+        owner = self.enter(openmp=True)
+        argv = ["/usr/bin/cc", "-fopenmp", "-v", "probe.o", "-o", "out", "-v"]
+        effective = owner.arguments(argv, 123)
+        self.assertEqual(effective[4:], argv[1:])
+        self.assertEqual(effective[1:4], ["-B/proc/self/fd/123/", "-B" + str(owner.root / "gcc-prefix") + "/",
+                                        "--sysroot=" + str(owner.root)])
+        record = owner.record()
+        self.assertEqual(record["schema"], "leopard2-v19-linker-inputs/v3")
+        self.assertTrue(record["openmp_link_enabled"])
+        self.assertEqual(len(record["files"]), 21)
+        self.assertEqual(len(record["mappings"]), 59)
+        for pin in self.openmp_pins:
+            path = Path(pin["path"])
+            self.assertEqual((owner.root / "gcc-prefix" / path.name).read_bytes(), path.read_bytes())
+            with self.assertRaises(OSError): os.pwrite(owner._files[path].executable_descriptor, b"!", 0)
+        default = self.enter()
+        self.assertEqual(default.record()["schema"], "leopard2-v19-linker-inputs/v2")
+        self.assertNotIn("openmp_link_enabled", default.record())
+
+    def test_openmp_selection_and_inventory_are_explicit(self):
+        with self.assertRaises(FAILURES): self.owner(self.pins + self.openmp_pins, openmp=True)
+        self.inventory.phase.language, self.inventory.phase.logical_driver = "c", "/usr/bin/cc"
+        for selection in (None, 0, 1, "yes"):
+            with self.subTest(selection=selection), self.assertRaises(FAILURES):
+                self.owner(self.pins + self.openmp_pins, openmp=selection)
+        for rows, selection in ((self.pins, True), (self.pins + self.openmp_pins, False),
+                (self.pins + self.openmp_pins[:-1], True),
+                (self.pins + self.openmp_pins + [self.openmp_pins[0]], True)):
+            with self.assertRaises(FAILURES): self.owner(rows, openmp=selection)
+
+    def test_openmp_flag_overrides_latch(self):
+        self.inventory.phase.language, self.inventory.phase.logical_driver = "c", "/usr/bin/cc"
+        for extra in ("-fopenmp", "-fno-openmp", "-fopenmp-simd", "-fopenmp=bad", "-foffload=disable",
+                      "-fno-offload", "-pthread", "-fopenacc", "-pg", "-specs=bad", "-Wl,-T,bad"):
+            owner = self.enter(openmp=True)
+            with self.subTest(extra=extra), self.assertRaises(FAILURES):
+                owner.arguments(["/usr/bin/cc", "-fopenmp", "probe.o", "-o", "out", extra], 123)
+            with self.assertRaises(FAILURES): owner.record()
+        owner = self.enter(openmp=True)
+        with self.assertRaises(FAILURES): owner.arguments(["/usr/bin/cc", "probe.o", "-o", "out"], 123)
+
+    def test_openmp_specs_mutation_is_latched(self):
+        self.inventory.phase.language, self.inventory.phase.logical_driver = "c", "/usr/bin/cc"
+        owner = self.enter(openmp=True)
+        path = Path(self.openmp_pins[0]["path"])
+        original = path.read_bytes()
+        path.write_bytes(b"!" * len(original)); path.write_bytes(original)
+        with self.assertRaises(FAILURES): owner.validate_current()
+
+    def test_openmp_startup_preexisting_mmap_is_rehashed(self):
+        self.inventory.phase.language, self.inventory.phase.logical_driver = "c", "/usr/bin/cc"
+        path = Path(self.openmp_pins[1]["path"])
+        with path.open("r+b") as stream, mmap.mmap(stream.fileno(), 0) as mapping:
+            mapping[0:1] = mapping[0:1]
+            owner = self.enter(openmp=True)
+            with mock.patch.object(owner._files[path], "_hash", wraps=owner._files[path]._hash) as hashed:
+                mapping[0] ^= 1
+                try:
+                    with self.assertRaises(FAILURES): owner.validate_current()
+                    self.assertTrue(hashed.called)
+                finally: mapping[0] ^= 1
 
     def test_invalid_pins_counts_paths_and_byte_bounds(self):
         bad = [[], self.pins[:-1], self.pins + [self.pins[0]]]

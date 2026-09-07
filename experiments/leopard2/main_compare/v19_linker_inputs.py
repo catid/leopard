@@ -24,20 +24,24 @@ LINK_INPUT_PATHS = tuple(GCC_ROOT + name for name in ("crtbeginS.o", "crtendS.o"
     SYSTEM_ROOT + name for name in ("Scrt1.o", "crti.o", "crtn.o", "ld-linux-x86-64.so.2", "libc.so", "libc.so.6",
         "libc_nonshared.a", "libgcc_s.so.1", "libgomp.so.1.0.0", "libm.so", "libm.so.6", "libmvec.so.1",
         "libpthread.a", "libstdc++.so.6.0.33"))
+OPENMP_LINK_INPUT_PATHS = tuple(GCC_ROOT + name for name in
+    ("libgomp.spec", "crtoffloadbegin.o", "crtoffloadend.o"))
 MAX_FILES, MAX_DIRECTORIES, MAX_FILE_BYTES, MAX_TOTAL_BYTES = 64, 64, 8 << 20, 32 << 20
 
 
-def link_pins(rows):
-    require(type(rows) is list and len(rows) == len(LINK_INPUT_PATHS) <= MAX_FILES, "link input count differs")
+def link_pins(rows, *, openmp=False):
+    require(type(openmp) is bool, "OpenMP link selection is not boolean")
+    expected = LINK_INPUT_PATHS + (OPENMP_LINK_INPUT_PATHS if openmp else ())
+    require(type(rows) is list and len(rows) == len(expected) <= MAX_FILES, "link input count differs")
     pins = {}
     for row in rows:
         require(type(row) is dict and set(row) == {"path", "sha256", "size"} and
                 type(row["size"]) is int and 0 < row["size"] <= MAX_FILE_BYTES and
                 type(row["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", row["sha256"]), "link data pin differs")
         path = header_module.checked_path(row["path"])
-        require(path not in pins and str(path) in LINK_INPUT_PATHS, "duplicate or unqualified link input")
+        require(path not in pins and str(path) in expected, "duplicate or unqualified link input")
         pins[path] = copy.deepcopy(row)
-    require(set(map(str, pins)) == set(LINK_INPUT_PATHS) and sum(row["size"] for row in pins.values()) <= MAX_TOTAL_BYTES,
+    require(set(map(str, pins)) == set(expected) and sum(row["size"] for row in pins.values()) <= MAX_TOTAL_BYTES,
             "link input coverage or byte total differs")
     return pins
 
@@ -64,9 +68,12 @@ class LinkerInputs(header_module._PinnedInputView):
     absolute paths inside those scripts. The helper prefix always comes first.
     This inventory is newly observed, not part of the original preflight pins.
     """
-    def __init__(self, inventory, pins, *, _file_factory=None):
+    def __init__(self, inventory, pins, *, openmp=False, _file_factory=None):
         require(inventory.phase.language in ("c", "c++"), "link input profile requires C or C++")
-        selected = link_pins(pins)
+        require(type(openmp) is bool and (not openmp or inventory.phase.language == "c"),
+                "OpenMP link profile requires an explicit C selection")
+        self.openmp = openmp
+        selected = link_pins(pins, openmp=openmp)
         super().__init__(inventory, selected, (), link_aliases(selected),
             limits=(MAX_FILES, MAX_DIRECTORIES, MAX_FILE_BYTES), root_prefix="v19-link-inputs-", _file_factory=_file_factory)
 
@@ -85,9 +92,14 @@ class LinkerInputs(header_module._PinnedInputView):
             if self.phase.language == "c++":
                 require(all(argv.count(path) == 1 for path in replacements), "qualified explicit link libraries differ")
             else:
+                options = argv[1:]
+                if self.openmp:
+                    require(argv.count("-fopenmp") == 1, "OpenMP link profile requires exactly one -fopenmp")
+                    options = [value for value in options if value != "-fopenmp"]
                 require(not any(path in argv for path in replacements) and not any(
-                    value.startswith(("-fopenmp", "-fopenacc", "-pthread", "-pg")) or value == "-p" for value in argv[1:]),
-                    "C link profile requires plain default libraries")
+                    value.startswith(("-fopenmp", "-fno-openmp", "-foffload", "-fno-offload",
+                        "-fopenacc", "-pthread", "-pg")) or value == "-p" for value in options),
+                    "C link flags differ from selected default or OpenMP profile")
             prefix = self.root / "gcc-prefix"
             effective = [effective[0], effective[1], "-B" + str(prefix) + "/", "--sysroot=" + str(self.root), *effective[2:]]
             return [str(prefix / replacements[value]) if value in replacements else value for value in effective]
@@ -97,7 +109,8 @@ class LinkerInputs(header_module._PinnedInputView):
 
     def record(self):
         self.validate_current()
-        return copy.deepcopy({"schema": "leopard2-v19-linker-inputs/v2", "root": str(self.root), "language": self.phase.language,
+        return copy.deepcopy({"schema": "leopard2-v19-linker-inputs/v3" if self.openmp else "leopard2-v19-linker-inputs/v2",
+            **({"openmp_link_enabled": True} if self.openmp else {}), "root": str(self.root), "language": self.phase.language,
             "prefix": str(self.root / "gcc-prefix"), "files": [dict(pin, descriptor=self._files[path].executable_descriptor,
                 seals=self._files[path].executable_record()["seals"]) for path, pin in self._pins.items()],
             "mappings": {str(path): target for path, target in self._mappings.items()},

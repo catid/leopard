@@ -1218,6 +1218,61 @@ Its generated source must also be recovered from the retained CMake template.
 Other build tools, full build/consumer integration and fresh performance
 qualification remain open. No full runtime/source closure or codec speedup.
 
+The 2026-09-07 C OpenMP milestone adds an explicit
+`LinkerInputs(..., openmp=True)` profile. It seals `libgomp.spec`,
+`crtoffloadbegin.o` and `crtoffloadend.o` alongside the existing eighteen
+link inputs, using the same private GCC prefix/sysroot and unchanged script
+bytes. It requires exactly one `-fopenmp`; missing/duplicate flags, conflicting
+OpenMP/offload options and caller-supplied specs or linker routing are refused.
+The default profile retains its v2 records and eighteen-file inventory. Only
+the explicit C OpenMP profile emits v3, with 21 files and 59 mappings. This does
+not qualify C++ OpenMP or arbitrary offload configurations.
+
+The native proof reconstructs `OpenMPTryFlag.c` and `OpenMPCheckVersion.c`
+from the retained CMake 3.28 `FindOpenMP.cmake` template and checks their original
+compile/link recipes against the saved configure log. Their deleted TryCompile
+directories are not recreated: sources and outputs use new private paths.
+Both probes compile and link through the sealed source/header/link views.
+The new 16,240-byte version executable matches the saved `ompver_C.bin` exactly,
+SHA-256 `99fea6f8df550fdccd37e8c8aaa3c4daed812ce1928b9f3ba5c031ccc4ec1281`.
+Neither generated nor historical executable is run. These are newly observed
+configuration-output pins, not the original four benchmark artifact pins.
+
+The earlier C++ dependency inventory did not contain `stdio.h`; its absence
+correctly stopped the version compile. A separate bounded dependency-only C
+preprocessor observation supplied 27 header pins (160,798 bytes). That discovery
+does not claim runtime ownership. The subsequent sealed version compilation
+reads all 27 headers; the flag probe reads only `stdc-predef.h` and `omp.h`.
+Each probe reads 17 of the 21 sealed link inputs, including all three additions,
+and uses twelve verified loader/helper launches. Retained-only standard-library
+replay in normal and optimized Python verifies 632,639 trace bytes with zero
+ordinary system input reads; verbose driver writes are also retained in the
+trace. This is not a full negative-search or full-build execution proof.
+
+Native evidence is `/tmp/leopard-v19-openmp.1GuYkm` on ripper, with
+249,511,936-byte peak under 512 MiB and zero memory events/swap. Four preceding
+harness/input failures are retained: inherited NOFILE below the frozen minimum,
+querying a tracer record before its lazy seal, missing C headers, and duplicate
+discovery/header watchers exhausting inotify instances. The child soft NOFILE
+limit was set to the existing 65,536 requirement; no host-wide or inotify limit
+was raised. Header discovery snapshots now close after pinning; the shared
+sealed owner revalidates those pins and retains inputs through the actual jobs.
+
+Seven ownership suites pass 177 cases in each Python mode, including five new
+OpenMP inventory/argument/mutation cases, at 116,015,104-byte peak under 256 MiB
+with zero memory events/swap. Native trace replay peaks at 15,736,832 bytes.
+The 147-file evidence bundle is `v19-c-openmp.pPuxVe`, outer `SHA256SUMS`
+`717352eeb81bc1c628cd89940ffafa38d39427560dcfbdb51242f44cbc94c5af`.
+It is retained read-only locally and on ripper; both hosts reproduce the trace
+projection. All fifteen native runtime/template source files match the current
+tree. The reused snapshot also includes unused historical CMake/test files;
+the new tested source is separately under `review/`. The initial overbroad
+current-tree check and the corrected runtime-source check are retained in
+`v19-c-openmp-handoff.UuujtF`, together with transfer/finalization logs.
+The runtime issue stays open for C++ configuration, other build tools and full
+fresh-build/consumer integration. No timing, arming, production-code promotion,
+or Claude review occurred; review is Codex self-review plus deterministic checks.
+
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
 They cover stage ordering, exact mapping and cache dialects, link changes,
