@@ -1,0 +1,149 @@
+{
+  "schema": "gfni-combined-screen-plan/v1",
+  "bead": "leopard-79h.38.5.4.16",
+  "scope": "One new four-mode first-inverse/terminal GFNI fusion diagnostic. Not a retry of .10/.13/.14, not v19 qualification or production promotion. All modes include the experimental field branch and once-per-pass hook; OFF is not pristine production. No pooling or multiplication of historical speed ratios.",
+  "codec_commit": "36dc0c8f66604b8d974468e687c51e6183ecb61d",
+  "correctness_milestone": "b46721b",
+  "build_policy": "Reuse full dual-field qualified Release archive aa3621ca from gfni-combined.7FNBT8; no field/backend rebuild. Only front end and hook compiled with GCC13.3/C++11/O3/DNDEBUG/Wall/Wextra/Werror/fopenmp/pthread, LEO_GFNI_COMBINED_CAPACITY=64 and exact base-commit definition. No linker/libc/public-encode/individual-callback wrappers, sanitizers or fno-builtin flags in timing executable. One immutable executable handles modes0(neither),1(first only),2(terminal only),3(both); arguments alone select mode. Trace checks/printing outside timing.",
+  "artifact_sha256": {
+    "Leopard2BackendAVX2.cpp": "e154659949041d5739b4c85767ac8783d8c65bb5bb95be5cd437cdb9023203ff",
+    "Leopard2BackendGFNI.cpp": "00c6f88be29548c5f876ee10b4f8147b91df7d300809b808845977f267b149b1",
+    "LeopardFF16.cpp": "3afded7216c315a306a76513b70ac0f4bd8e5e1189df713e985e0c7f66b95093",
+    "candidate.a": "aa3621ca58da46f22bba976f89f258ddc1317f72e74cc2a90602e909856d2c8c",
+    "current_route_screen.cpp": "d2ba6c99caa97603ec7091a4a6e4fe805c1be56640e769e88d6aedebf79ccaa7",
+    "expected.json": "92c4a9e7ab49663c83c6b074d39180e1058fbfcbb4e7ff1989131d673a7b2bb8",
+    "gfni_combined.cpp": "c18aa865aa0c8f4aaba66e08c2299a8dd9f8f06759e9ed6d9ba1320fcba168b5",
+    "gfni_combined.h": "95867aa3dd2e9cef83f2a97c384d788f8077c112695bc379fdc5ab85ab69aaa2",
+    "gfni_combined.patch": "c94ac12d22b0d83643efbe69604f9b1b74472f5c44d676ad390b0eedb4b26cca",
+    "gfni_combined_timing.cpp": "31aaa29103b4d22adeea53f7e200b3cdd300db0b513a44cb50d0bb828bee8b4f",
+    "gfni_terminal_backend.cpp": "e53fffd31283cd96b73f832bb070a8bbb0fbbcbee41259db7bca1bd1753a0596",
+    "run_current_route_screen.py": "cad9767bda653e9580841fdca16ef4fcfe1e3095d7169ee95b5fd9ae182d5593",
+    "run_gfni_combined_screen.py": "651a17e26602f1e7bc0d21eef3373041a430d4cb108b1c39e5bdef452b600dd9",
+    "run_split_cache_screen.py": "e060014b597b1510736e5cdffee3bc8220c7d66ca70f98dcb374112ca8764629",
+    "timing": "959cb7b3bbce599e9d489e5b8b1d3e25dcf1185775f5a56289733084a59392e1"
+  },
+  "host": {
+    "hostname": "foureyes",
+    "kernel": "6.8.0-138-generic",
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper PRO 9985WX 64-Cores"
+  },
+  "host_selection": "Existing foureyes22/86 physical pair; identity, kernel and topology rechecked before registration. No speed-based host/CPU selection, unrelated affinity intervention, workload stopping or kernel changes.",
+  "cpu": 22,
+  "sibling": 86,
+  "controller_cpu": 0,
+  "passive_seconds": 10,
+  "attempt_budget": 1,
+  "seed": 20260906,
+  "initial_untimed_encodes": 1,
+  "additional_warmups": 4,
+  "samples_per_process": 21,
+  "rounds": 3,
+  "timed_invocations": 288,
+  "round_orders": [
+    [
+      0,
+      1,
+      2,
+      3,
+      3,
+      2,
+      1,
+      0
+    ],
+    [
+      1,
+      2,
+      3,
+      0,
+      0,
+      3,
+      2,
+      1
+    ],
+    [
+      2,
+      3,
+      0,
+      1,
+      1,
+      0,
+      3,
+      2
+    ]
+  ],
+  "comparisons": [
+    "factorial",
+    "same_off"
+  ],
+  "thresholds": {
+    "target_ratio": 1.05,
+    "control_factor": 1.02,
+    "positive_target_rounds": 3
+  },
+  "cells": [
+    {
+      "id": 0,
+      "k": 1000,
+      "r": 200,
+      "bytes": 65536,
+      "requested": "auto",
+      "current_route": "gfni",
+      "role": "target"
+    },
+    {
+      "id": 1,
+      "k": 1000,
+      "r": 200,
+      "bytes": 65536,
+      "requested": "avx2",
+      "current_route": "avx2",
+      "role": "unchanged"
+    },
+    {
+      "id": 2,
+      "k": 1000,
+      "r": 200,
+      "bytes": 65536,
+      "requested": "avx512",
+      "current_route": "avx512",
+      "role": "unchanged"
+    },
+    {
+      "id": 3,
+      "k": 1000,
+      "r": 200,
+      "bytes": 32768,
+      "requested": "auto",
+      "current_route": "avx2",
+      "role": "unchanged"
+    },
+    {
+      "id": 4,
+      "k": 1000,
+      "r": 199,
+      "bytes": 65536,
+      "requested": "auto",
+      "current_route": "avx2",
+      "role": "unchanged"
+    },
+    {
+      "id": 5,
+      "k": 4096,
+      "r": 512,
+      "bytes": 4096,
+      "requested": "auto",
+      "current_route": "avx2",
+      "role": "unchanged"
+    }
+  ],
+  "sequence": "Cells0..5, rounds0..2; eight factorial slots followed by eight matched allOFF slots per round. Each round order is four rotated mode labels followed by its reverse; each mode has two observations with slot-index sum7. Factorial arguments use the labeled mode; same_off retains identical labels/positions but every process uses mode0. 288 timed invocations, after24 fixed untimed checks and the passive gate.",
+  "workload": "Unchanged six public GF16 legacy-high/native full-output workloads. One encode/sample, initial1+warmup4+timed21; no initialization, allocation, source filling, parity hash or setup inside clock. Front end delegates existing loop once and enforces process-local single threading. Separate --exercise executes26 independent --check workloads without clocks, proving52-pass capacity at target; not an allocation/warmup equivalence claim.",
+  "validation": "48 Release/sanitizer records and24 full parityfiles244056064bytes equal exact independently linked Leopard1 references; eight clock-free26-check target exercises produce52 passes each,208 check records. Both16/64 capacities pass four masks, overflow, exact records, reset and neighbor in both builds. Default16 Release observer byte-identical to b46721b (46c9b86c).16 malformed/invalid-timing requests refuse before workload.11 pure protocol/independent replay agreement tests pass normal/-O; retained-only front-end replay agrees.61 native scopes peak141209600/256MiB; build114200576/512MiB; all6events0/swap0. Two pre-compiler scratch-directory setup failures retained; original archive untouched. Release archive ISA and full focused sanitizer correctness from b46721b remain valid. No collector launched during qualification.",
+  "validity": "Commit and push this registration before launching the single collector attempt. Canonical campaign lock plus physical-pair lease cover the run. Lane-owned readonly executable/archive/source/dependencies rehashed before and after every child; device/inode/size/mode stable. Ten-second passive sibling gate immediately precedes timing; every timed child must observe zero nonidle sibling jiffies. Any mismatch/failure/contamination stops the attempt. Launch consumes the sole attempt even before clocks. No retry, CPU substitution, partial analysis, pooling, threshold relaxation or unrelated affinity changes.",
+  "analysis": "Per-process median21. Per-mode/per-round geometric mean of its two mirrored process medians. Divide mode0 time by each of modes1/2/3; aggregate each contrast with geometric mean3 rounds. Primary mode0/mode3. Fresh within-round interaction factor t1*t2/(t0*t3), aggregated geometrically; >1 means combined benefit exceeds multiplication of individual benefits within that same fresh round. Interaction is attribution only, not a selection gate or historical-ratio calculation. Require all288 invocations/expected traces/exact order/zero sibling work before analysis. No confidence intervals, trimming or statistical retry.",
+  "decision": "All18 matched allOFF aggregate ratios (three labels per six cells) and all15 mechanically unchanged neighbor ratios (three modes per five neighbors) must lie inside[1/1.02,1.02]; otherwise inconclusive_controls and no performance conclusion. With33 valid controls, target mode0/mode3>=1.05 and allthree target round ratios>1 select continue_to_future_qualification; otherwise reject_for_this_screen. No per-control-round equivalence gate. No production promotion, pristine-current or exact-Leopard1 speed claim.",
+  "resources": "Single substantial job, builds512MiB-j1, native checks/timing256MiB, swap0. Timed child CPU30s/file1MiB/wall60s; untimed parity file16MiB. No broad controllers, Claude/subagents, privileged settings or unrelated workload/affinity changes. Existing v19 and exact-Leopard1 qualification remain incomplete. Codex self-review plus deterministic/sanitizer checks, not independent-model CONVERGED."
+}
