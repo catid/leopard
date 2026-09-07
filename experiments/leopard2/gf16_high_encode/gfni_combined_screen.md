@@ -1,7 +1,7 @@
 # Combined GFNI four-mode timing screen
 
 Bead: `leopard-79h.38.5.4.16`. Date: 2026-09-07.
-Status: front end qualified and protocol frozen; collector not yet launched.
+Status: sole attempt exhausted at the passive gate; **zero timed encodes**.
 
 Correctness milestone `b46721b` validates the combination without changing
 production. This new screen measures neither fusion, first-stage only,
@@ -93,3 +93,40 @@ Initial kernel/public correctness and Release ISA evidence remain in
 Review is Codex self-review plus deterministic/adversarial/sanitizer checks
 under the Claude opt-out, not independent-model `CONVERGED`.
 Production integration and broader v19/exact-Leopard1 qualification remain open.
+
+## Completed attempt, no performance conclusion
+
+Preregistration `14c12fa` was pushed before launch. All 24 untimed server
+checks passed with the expected mode traces. The passive sibling counter
+then increased from 194551 to 194560 over 10.000070824 seconds. The collector
+stopped as specified, with `complete:false`, no analysis and zero timed
+invocations. Neither the combined gain nor its interaction has been measured.
+This does not reject the candidate or establish a Leopard1 comparison.
+
+Independent standard-library replay in normal and optimized Python verifies
+all sixteen frozen pins, raw preflight records, exact failure and absence of
+timings/analysis. The server scope peaked at 132,927,488 bytes under 256 MiB;
+result replay peaked at 12,242,944 bytes. All six memory-event counters and
+swap are zero. The sole attempt is consumed; no retries or host changes were made.
+
+- Attempt journal: `571fcbeb1a29da2bfcdec57e52de454670fbda8e8cea93bff7c59fb318b3d9d9`.
+- Server scope: `416be8bebcc1c8881f806f43a09e1d94eaa8a8094d9af25b6f24176332f6d9a3`.
+
+The evidence bundle is `.research/leopard-79h/gfni-combined-screen-failed.ZYQvWW`.
+The read-only snapshot contains complete byte copies; a hard-link attempt
+was refused across the temporary/workspace filesystem boundary and retained
+as a setup failure. The second-host copy is separately hash-verified.
+Build setup failures, qualification, frozen artifacts, raw server output and
+independent replay are all retained. The original correctness bundles remain.
+
+Post-copy clarification: copying the evidence reached the separate 256-MiB
+artifact-copy cap, recording 2,832 `memory.max` events with zero OOM/kill/swap.
+The copied bytes and manifest verified; this is not an all-zero resource
+result. It does not alter the native build/check/attempt results above. The
+bundled report predates this clarification; the copy log is retained separately.
+
+Follow-up `leopard-79h.38.5.4.16.1` requires explicit user approval and a new
+preregistration for any controlled-core successor. The user has been asked
+whether unrelated user-space threads may temporarily be excluded from the
+fixed CPU pair and restored afterward; no approval is assumed. The combined
+task and overall performance objective remain open.

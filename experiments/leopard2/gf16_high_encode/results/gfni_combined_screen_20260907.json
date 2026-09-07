@@ -1,0 +1,21 @@
+{
+  "schema": "gfni-combined-screen-result/v1",
+  "bead": "leopard-79h.38.5.4.16",
+  "preregistration": "14c12fa",
+  "complete": false,
+  "failure": "ValueError: passive sibling activity; attempt stopped",
+  "peak_bytes": 132927488,
+  "performance_inference": false,
+  "timed_invocations": 0,
+  "preflights": 24,
+  "passive": {
+    "before": 194551,
+    "after": 194560,
+    "elapsed_ns": 10000070824
+  },
+  "attempts_used": 1,
+  "attempt_budget": 1,
+  "retry_authorized": false,
+  "production_promotion": false,
+  "followup": "leopard-79h.38.5.4.16.1"
+}
