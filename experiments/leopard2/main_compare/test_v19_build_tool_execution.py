@@ -79,6 +79,16 @@ class BuildToolTests(unittest.TestCase):
         self.calls.append((argv, kwargs))
         return b"fixture output\n"
 
+    def policy(self, phase):
+        path = self.root / "gnutls-config"
+        if not path.exists():
+            path.write_bytes(b"[overrides]\ndisabled-version = tls1.0\n"); path.chmod(0o644)
+        self.stack.enter_context(mock.patch.object(module, "PRIORITY_PATH", str(path)))
+        pin = {"path": str(path), "size": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        owner = module.CMakePriorityConfiguration(phase, pin, _file_factory=self.factory).__enter__()
+        self.stack.callback(self.cleanup_owner, owner)
+        return owner
+
     def test_exact_roots_origin_aliases_and_seals(self):
         phase = self.phase()
         record = phase.record()
@@ -220,5 +230,110 @@ class BuildToolTests(unittest.TestCase):
         for fd in fds:
             with self.assertRaises(OSError): os.fstat(fd)
         with self.assertRaises(FAILURES): phase.__enter__()
+
+    def test_policy_preserves_bytes_and_records_new_pin_authority(self):
+        phase = self.phase(); policy = self.policy(phase)
+        record = policy.record()
+        self.assertEqual(os.pread(policy.descriptor(), record["size"], 0), Path(record["path"]).read_bytes())
+        self.assertEqual(record["seals"], 15)
+        self.assertEqual(record["source_mode"], 0o100644)
+        self.assertTrue(record["declared_policy_bytes_sealed"])
+        for name in ("original_preflight_pin", "nested_configuration_dependencies_owned", "full_runtime_execution_owned"):
+            self.assertFalse(record[name])
+        record["environment"].clear()
+        self.assertNotEqual(record, policy.record())
+        with self.assertRaises(OSError): os.pwrite(policy.descriptor(), b"!", 0)
+
+    def test_policy_requires_exact_pin_and_build_phase(self):
+        phase = self.phase(); policy = self.policy(phase)
+        for name, value in (("path", "/another/config"), ("size", True), ("size", 0),
+                            ("size", module.MAX_PRIORITY_BYTES + 1), ("sha256", "bad")):
+            pin = dict(policy.pin); pin[name] = value
+            with self.subTest(name=name), self.assertRaises(FAILURES): module.CMakePriorityConfiguration(phase, pin)
+        with self.assertRaises(FAILURES): module.CMakePriorityConfiguration(object(), policy.pin)
+        with self.assertRaises(FAILURES): module.CMakePriorityConfiguration(phase, dict(policy.pin, extra=1))
+
+    def test_policy_wrong_hash_and_symlink_refuse(self):
+        phase = self.phase(); policy = self.policy(phase)
+        pin = dict(policy.pin, sha256="0" * 64)
+        with self.assertRaises(FAILURES):
+            module.CMakePriorityConfiguration(phase, pin, _file_factory=self.factory).__enter__()
+        path = Path(policy.pin["path"]); data = path.read_bytes()
+        target = self.root / "other-config"; target.write_bytes(data)
+        path.unlink(); path.symlink_to(target.name)
+        with self.assertRaises(FAILURES):
+            module.CMakePriorityConfiguration(phase, policy.pin, _file_factory=self.factory).__enter__()
+
+    def test_policy_mmap_mutation_is_rehashed_and_failure_latched(self):
+        phase = self.phase()
+        path = self.root / "gnutls-config"
+        path.write_bytes(b"[overrides]\ndisabled-version = tls1.0\n"); path.chmod(0o644)
+        with path.open("r+b") as stream, mmap.mmap(stream.fileno(), 0) as mapping:
+            mapping[0:1] = mapping[0:1]
+            policy = self.policy(phase)
+            with mock.patch.object(policy._file, "_hash", wraps=policy._file._hash) as hashed:
+                mapping[0] ^= 1
+                try:
+                    with self.assertRaises(FAILURES): policy.validate_current()
+                    self.assertTrue(hashed.called)
+                finally: mapping[0] ^= 1
+            with self.assertRaises(FAILURES): policy.record()
+
+    def test_policy_role_phase_and_lifetime_refuse_before_execution(self):
+        inventory = self.inventory(); policy = self.policy(inventory.phase)
+        other = self.inventory()
+        cases = [(other, "cmake", policy), (inventory, "ar", policy), (self.inventory(), "cmake", object())]
+        for owner, role, selected in cases:
+            with self.subTest(role=role), self.assertRaises(FAILURES):
+                owner.run_tool(role, [owner.phase.logical_paths[role]], configuration=selected, _runner=self.run_child)
+        self.assertEqual(self.calls, [])
+
+    def test_policy_routes_sealed_descriptor_only_and_keeps_default_environment(self):
+        inventory = self.inventory(); policy = self.policy(inventory.phase)
+        argv = [inventory.phase.logical_paths["cmake"], "--version"]
+        baseline = dict(module.builder.ENVIRONMENT)
+        inventory.run_tool("cmake", argv, configuration=policy, _runner=self.run_child)
+        _, kwargs = self.calls[-1]
+        self.assertEqual(kwargs["environment_overrides"], dict(baseline, **policy.record()["environment"]))
+        self.assertEqual(module.builder.ENVIRONMENT, baseline)
+        self.assertIn(policy.descriptor(), kwargs["inherited_descriptors"])
+        self.assertNotIn(policy._file.fd, kwargs["inherited_descriptors"])
+        self.assertEqual(inventory.record()["commands"][-1]["configuration"], policy.record())
+        inventory.run_tool("cmake", argv, _runner=self.run_child)
+        self.assertNotIn("configuration", inventory.record()["commands"][-1])
+        self.assertEqual(self.calls[-1][1]["environment_overrides"], baseline)
+
+    def test_policy_mutation_during_job_records_failure(self):
+        inventory = self.inventory(); policy = self.policy(inventory.phase)
+        def mutate(*args, **kwargs):
+            path = Path(policy.pin["path"])
+            path.chmod(0o755); path.chmod(0o644)
+            return b""
+        with self.assertRaises(FAILURES):
+            inventory.run_tool("cmake", [inventory.phase.logical_paths["cmake"]], configuration=policy, _runner=mutate)
+        self.assertEqual(inventory._commands[-1]["status"], "failed")
+        with self.assertRaises(FAILURES): inventory.record()
+
+    def test_policy_descriptor_and_phase_loss_latch(self):
+        phase = self.phase(); policy = self.policy(phase)
+        fd = policy.descriptor()
+        os.set_inheritable(fd, True)
+        try:
+            with self.assertRaises(FAILURES): policy.validate_current()
+        finally: os.set_inheritable(fd, False)
+        with self.assertRaises(FAILURES): policy.record()
+        policy = self.policy(phase); self.live = False
+        with self.assertRaises(FAILURES): policy.record()
+
+    def test_policy_close_releases_descriptors_and_refuses_job(self):
+        inventory = self.inventory(); policy = self.policy(inventory.phase)
+        fds = (policy._file.fd, policy.descriptor())
+        policy.__exit__(None, None, None)
+        for fd in fds:
+            with self.assertRaises(OSError): os.fstat(fd)
+        with self.assertRaises(FAILURES): policy.__enter__()
+        with self.assertRaises(FAILURES):
+            inventory.run_tool("cmake", [inventory.phase.logical_paths["cmake"]], configuration=policy, _runner=self.run_child)
+        self.assertEqual(self.calls, [])
 
 if __name__ == "__main__": unittest.main()

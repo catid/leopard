@@ -3,8 +3,8 @@
 
 Linux ELF64/x86-64 system-library profile only. This API inventories and seals
 ELF startup inputs, lists resolutions and runs explicit build-root jobs. It does
-not own dlopen plugins/configuration, dispatch compiler jobs, integrate the full
-build recipe or claim complete runtime ownership.
+can borrow an explicit CMake priority-policy owner. Other configuration, dlopen
+plugins, compiler dispatch and full build integration remain separate obligations.
 """
 from __future__ import annotations
 
@@ -289,11 +289,12 @@ class RuntimeInventory:
             self._state = "failed"
             raise
 
-    def run_tool(self, role, argv, *, input_descriptors=(), _runner=None):
+    def run_tool(self, role, argv, *, input_descriptors=(), configuration=None, _runner=None):
         """Run one declared build root through the sealed loader/startup runtime.
 
         The caller still owns the exact recipe and inputs. Extra input fds must
         already be fully sealed; this is not dlopen, nested-tool or complete data routing.
+        A same-phase configuration owner redirects CMake's GnuTLS policy only.
         Compiler jobs must use RuntimeDispatch instead.
         """
         self.validate_current()
@@ -301,6 +302,14 @@ class RuntimeInventory:
         try:
             require(self._build_tools, "direct runtime jobs require the build-tool profile")
             logical = self.phase.arguments(role, argv)
+            require(configuration is None or (type(configuration) is build_tools.CMakePriorityConfiguration and
+                    configuration.phase is self.phase and role == "cmake"), "build job configuration owner differs")
+            environment = dict(builder.ENVIRONMENT)
+            configuration_fds = ()
+            if configuration is not None:
+                configuration_before = configuration.record()
+                environment.update(configuration_before["environment"])
+                configuration_fds = (configuration.descriptor(),)
             require(type(input_descriptors) is tuple and all(type(fd) is int and 3 <= fd < 65536 for fd in input_descriptors) and
                     len(input_descriptors) <= 64 and len(set(input_descriptors)) == len(input_descriptors),
                     "build input descriptors differ")
@@ -320,15 +329,18 @@ class RuntimeInventory:
             require(len(loader_argv) <= 512, "effective build tool arguments exceed bound")
             record = {"role": role, "logical_argv": logical, "loader_argv": loader_argv,
                       "input_descriptors": list(input_descriptors), "status": "running"}
+            if configuration is not None: record["configuration"] = configuration_before
             self._commands.append(record)
             inherited = (self.prefix.descriptor, *(tool.executable_descriptor for tool in self.phase._tools.values()),
-                         *(tool.executable_descriptor for tool in self._files.values()), *input_descriptors)
+                         *(tool.executable_descriptor for tool in self._files.values()), *input_descriptors, *configuration_fds)
             output = (provenance._run if _runner is None else _runner)(loader_argv, "v19 sealed build tool " + role,
                 maximum_bytes=1 << 20, timeout=600, executable_descriptor=loader.executable_descriptor,
-                inherited_descriptors=tuple(dict.fromkeys(inherited)), environment_overrides=builder.ENVIRONMENT)
+                inherited_descriptors=tuple(dict.fromkeys(inherited)), environment_overrides=environment)
             require(type(output) is bytes and len(output) <= 1 << 20, "build tool output exceeds bound")
             self.validate_current()
             require(input_fields() == inputs, "build input descriptor identity changed")
+            if configuration is not None:
+                require(configuration.record() == configuration_before, "CMake policy ownership changed during job")
             record.update(status="exit-zero", stdout_sha256=builder.hashlib.sha256(output).hexdigest())
             return output
         except BaseException as error:

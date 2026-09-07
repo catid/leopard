@@ -1426,6 +1426,61 @@ See `results/v19_build_tools_20260907.json`. Runtime/build qualification and the
 performance objective stay open. No new timings, production promotion, Claude,
 affinity change or independent-model `CONVERGED` claim accompanies this result.
 
+### CMake priority-policy routing (2026-09-07)
+
+`CMakePriorityConfiguration` closes the observed ordinary GnuTLS-policy read for
+an explicitly selected CMake job. It retains a new caller pin, original bytes,
+file/parent history and a sealed descriptor for `/etc/gnutls/config`.
+`RuntimeInventory.run_tool(configuration=...)` requires the exact same build
+phase and CMake role, inherits only the sealed policy descriptor, and validates
+ownership before and after execution. The optional command record identifies
+the policy and its environment mapping; default GCC/build-root records and
+environment remain unchanged. GnuTLS documents
+[`GNUTLS_SYSTEM_PRIORITY_FILE`](https://www.gnutls.org/manual/html_node/System_002dwide-configuration-of-the-library.html)
+as a runtime file-path override. The implementation preserves the entire file,
+including its four disabled legacy TLS/DTLS versions; it does not replace the
+policy with an empty file or alter system configuration.
+
+Final native evidence is `/tmp/leopard-v19-cmake-policy.rDyEzQ` on ripper.
+The 119-byte policy has hash
+`1992812cf806f83c68a425ac832aa1198e2b9114ec3353e6ae3f0d8951a7cbc4`.
+The 99,689-byte trace proves one CMake launch and two complete 119-byte reads
+from its sealed policy descriptor, with no ordinary `/etc/gnutls/config` access.
+Output exactly matches the prior unredirected CMake version job; all six roots
+and 49 startup dependencies retain the prior byte pins. This is not a complete
+CMake configure/build or descendant-execution proof.
+
+Standard-library replay verifies all 55 retained ELFs through the referenced
+`v19-build-tools.nVDzif` bundle and observes the same 46 CMake file mappings.
+Four kernel ring mappings and one 36-byte `/proc/version_signature` read remain
+explicitly separate; the kernel read is **not claimed as an owned input**.
+The initial replayer's overly broad file-open check failed on that pseudo-file;
+both that verifier and its failed log are retained. The corrected projection
+reports the unowned input, without making a full-runtime claim. Four replay
+tests cover a positive partial result and twelve rejection variants per mode.
+
+All 214 focused cases per normal/optimized Python mode and all 16 associated
+CTests pass. Native peak is 263,049,216 bytes under 512 MiB, suite peak
+113,938,432 and CTest peak 114,081,792 under 256 MiB; native/local replay peaks
+are 58,875,904/58,015,744. All six memory-event counters and swap are zero.
+The read-only 72-entry bundle `v19-cmake-policy.oHxfNz` is verified on both hosts,
+outer `SHA256SUMS`
+`33f3a0b163018a3dd39be65963258db1168707689ac39326eca47383d0c3dad9`.
+It requires the separately retained, pinned `v19-build-tools.nVDzif` reference
+bundle; that reference is fully checksum- and semantically replayed, not copied
+again. All sixteen runtime/template sources and the changed test match this
+milestone. The first native/source snapshot is retained by checksum only.
+Local transfer/replay logs are in `v19-cmake-policy-handoff.b79H2X`, outer
+`36448f0e7e81e7dfea5a127988754616ded18b4bdf4c3efd9b1bcfab8c88c8e0`.
+
+See `results/v19_cmake_policy_20260907.json`. The dynamic-input child remains
+in progress for BFD plugins and further build integration: read-only inspection
+now confirms that LLVM's file is 123,215,144 bytes and both LLVMgold and LLVM
+carry `$ORIGIN/../lib` RUNPATHs, beyond the current runtime profile. Its 64-MiB
+limits/search rules are unchanged; no plugin is disabled or substituted.
+No codec speedup, new benchmark, affinity change, Claude review or independent
+model `CONVERGED` is claimed. The overall performance objective remains open.
+
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
 They cover stage ordering, exact mapping and cache dialects, link changes,

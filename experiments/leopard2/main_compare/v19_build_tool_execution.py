@@ -2,7 +2,7 @@
 """Retain non-GCC build roots; leopard-79h.38.5.4.8.2.2.2.3.
 
 The caller owns host/resources, source/recipe inputs and later consumers.
-This component does not route nested tools, scripts, plugins or build data.
+Nested tools, scripts, plugins and complete build-data routing remain unowned.
 """
 from __future__ import annotations
 from contextlib import ExitStack
@@ -26,6 +26,8 @@ ROLES = {"git": ("benchmark_git", "/usr/bin/git"), "cmake": (None, "/usr/bin/cma
          "ar": ("archiver", "/usr/bin/ar"), "ranlib": ("ranlib", "/usr/bin/ranlib")}
 OBSERVED_PATHS = {"cmake": "/usr/bin/cmake", "shell": "/usr/bin/dash"}
 MAX_TOOL_BYTES, MAX_PHASE_BYTES = 16 << 20, 24 << 20
+PRIORITY_PATH = "/etc/gnutls/config"
+MAX_PRIORITY_BYTES = 64 << 10
 
 
 def tool_inventory(pinned, observed):
@@ -149,6 +151,76 @@ class BuildToolExecution:
         try:
             if self._state == "held": self.validate_current()
             elif value is None: raise builder.host.PreflightError("failed build tools cannot complete")
+        finally:
+            self._state = "closed"
+            self._stack.__exit__(kind, value, traceback)
+
+
+class CMakePriorityConfiguration:
+    """Retain the observed GnuTLS policy bytes without changing their contents.
+
+    GnuTLS documents GNUTLS_SYSTEM_PRIORITY_FILE as a runtime path override.
+    This owner supplies that path via a sealed descriptor for an explicit
+    CMake job, not its descendants or arbitrary configuration dependencies.
+    The caller pin is new evidence, not an original build-preflight pin.
+    """
+    def __init__(self, phase, pin, *, _file_factory=None):
+        require(type(phase) is BuildToolExecution, "CMake policy requires build-tool roots")
+        require(type(pin) is dict and set(pin) == {"path", "size", "sha256"} and
+                type(pin["path"]) is str and pin["path"] == PRIORITY_PATH and type(pin["size"]) is int and
+                0 < pin["size"] <= MAX_PRIORITY_BYTES and type(pin["sha256"]) is str and
+                builder.re.fullmatch(r"[0-9a-f]{64}", pin["sha256"]), "CMake priority pin differs")
+        self.phase, self.pin = phase, copy.deepcopy(pin)
+        self._factory = builder._StreamedTool if _file_factory is None else _file_factory
+        self._stack, self._state = ExitStack(), "new"
+
+    def __enter__(self):
+        require(self._state == "new", "CMake policy cannot be reused")
+        self._state = "entering"
+        try:
+            self.phase.validate_current()
+            self._file = self._factory(self.pin["path"], maximum_bytes=MAX_PRIORITY_BYTES,
+                                       permitted_modes=(0o644, 0o755))
+            self._stack.callback(self._file.close)
+            require((self._file.sha256, os.fstat(self._file.fd).st_size) ==
+                    (self.pin["sha256"], self.pin["size"]), "CMake priority file differs from pin")
+            self._aliases = self._stack.enter_context(compiler._retain_driver_aliases(self.pin["path"], self._file))
+            require(3 <= self._file.executable_descriptor < 65536, "CMake policy descriptor exceeds bound")
+            self._state = "held"
+            self.validate_current()
+            return self
+        except BaseException:
+            self._state = "failed"
+            self._stack.close()
+            raise
+
+    def validate_current(self):
+        require(self._state == "held", "CMake policy is not held")
+        try:
+            self.phase.validate_current()
+            self._aliases.validate_current()
+        except BaseException:
+            self._state = "failed"
+            raise
+
+    def descriptor(self):
+        self.validate_current()
+        return self._file.executable_descriptor
+
+    def record(self):
+        self.validate_current()
+        return copy.deepcopy({"schema": "leopard2-v19-cmake-priority-configuration/v1",
+            "path": self.pin["path"], **self._file.executable_record(),
+            "descriptor": self.descriptor(), "source_mode": os.fstat(self._file.fd).st_mode,
+            "path_ownership": self._aliases.record(),
+            "environment": {"GNUTLS_SYSTEM_PRIORITY_FILE": f"/proc/self/fd/{self.descriptor()}"},
+            "original_preflight_pin": False, "declared_policy_bytes_sealed": True,
+            "nested_configuration_dependencies_owned": False, "full_runtime_execution_owned": False})
+
+    def __exit__(self, kind, value, traceback):
+        try:
+            if self._state == "held": self.validate_current()
+            elif value is None: raise builder.host.PreflightError("failed CMake policy cannot complete")
         finally:
             self._state = "closed"
             self._stack.__exit__(kind, value, traceback)
