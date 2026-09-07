@@ -282,7 +282,7 @@ class OwnerTests(unittest.TestCase):
             module.RuntimeDispatch(self.inventory, headers=headers, _runner=self.run_child).__enter__()
         self.assertEqual(len(self.calls), calls)
 
-    def linker_owner(self):
+    def linker_owner(self, *, cpp_configuration=False):
         link = module.link_module
         gcc, system = self.root / "link-gcc", self.root / "link-system"
         gcc.mkdir(); system.mkdir()
@@ -297,7 +297,8 @@ class OwnerTests(unittest.TestCase):
             self.stack.enter_context(mock.patch.object(link, key, value))
         def factory(path, **kwargs):
             return module.builder._StreamedTool(path, _trusted_owner=(os.getuid(), os.getgid()), **kwargs)
-        owner = link.LinkerInputs(self.inventory, rows, _file_factory=factory).__enter__()
+        owner = link.LinkerInputs(self.inventory, rows, cpp_configuration=cpp_configuration,
+                                 _file_factory=factory).__enter__()
         def cleanup():
             owner._view_guard._close_without_verification()
             owner._source_guard._close_without_verification()
@@ -380,7 +381,7 @@ class OwnerTests(unittest.TestCase):
             self.assertFalse(any(arg.startswith("--sysroot") for arg in effective))
 
     def source_owner(self):
-        source = self.root / "unit.c"
+        source = self.root / ("unit.c" if self.inventory.phase.language == "c" else "unit.cpp")
         quoted = self.root / "quoted.h"
         source.write_bytes(b'#include "quoted.h"\nint value = VALUE;\n')
         quoted.write_bytes(b"#define VALUE 7\n")
@@ -398,6 +399,62 @@ class OwnerTests(unittest.TestCase):
             for directory, _dirs, _files in os.walk(owner.root): os.chmod(directory, 0o700)
         self.stack.callback(cleanup)
         return owner, source, quoted
+
+    def test_cpp_configuration_requires_source_and_header_owners_before_bootstrap(self):
+        inputs, _ = self.linker_owner(cpp_configuration=True)
+        headers, _ = self.header_owner()
+        source_inputs, _, _ = self.source_owner()
+        for options in ({}, {"headers": headers}, {"source_inputs": source_inputs}):
+            with self.subTest(options=list(options)), self.assertRaises(FAILURES):
+                module.RuntimeDispatch(self.inventory, link_inputs=inputs, _runner=self.run_child, **options)
+        self.assertEqual(self.calls, [])
+
+    def test_cpp_configuration_combined_and_separate_jobs_use_retained_inputs(self):
+        source_inputs, source, _ = self.source_owner()
+        headers, _ = self.header_owner()
+        inputs, _ = self.linker_owner(cpp_configuration=True)
+        jobs = [["/usr/bin/c++", str(source), "-o", "id"],
+                ["/usr/bin/c++", "-v", "-o", "abi.o", "-c", str(source)],
+                ["/usr/bin/c++", "-v", "abi.o", "-o", "abi"]]
+        with module.RuntimeDispatch(self.inventory, headers=headers, link_inputs=inputs,
+                                    source_inputs=source_inputs, _runner=self.run_child) as owner:
+            for argv in jobs:
+                owner.run(argv)
+                record = owner.record()
+                command = record["commands"][-1]
+                effective = command["effective_argv"]
+                self.assertEqual(command["logical_argv"], argv)
+                self.assertIn("-nostdinc++", effective)
+                self.assertIn("-include", effective)
+                self.assertEqual(any(arg.startswith("--sysroot=") for arg in effective), "-c" not in argv)
+                routed = str(source_inputs.root / str(source).lstrip("/"))
+                self.assertEqual(routed in effective, str(source) in argv)
+                self.assertNotIn(str(source), effective)
+                self.assertEqual(effective[1], f"-B/proc/self/fd/{owner.prefix.descriptor}/")
+                self.assertEqual(record["source_inputs"], source_inputs.record())
+                self.assertEqual(record["link_inputs"]["schema"], "leopard2-v19-linker-inputs/v4")
+                inherited = self.calls[-1][1]["inherited_descriptors"]
+                for file in [*source_inputs._files.values(), *headers._files.values(), *inputs._files.values()]:
+                    self.assertIn(file.executable_descriptor, inherited)
+                    self.assertNotIn(file.fd, inherited)
+
+    def test_cpp_configuration_source_loss_during_combined_job_latches(self):
+        source_inputs, source, quoted = self.source_owner()
+        headers, _ = self.header_owner()
+        inputs, _ = self.linker_owner(cpp_configuration=True)
+        with self.assertRaises(FAILURES):
+            with module.RuntimeDispatch(self.inventory, headers=headers, link_inputs=inputs,
+                                        source_inputs=source_inputs, _runner=self.run_child) as owner:
+                def mutate(role):
+                    if role == "driver": quoted.write_bytes(b"changed C++ quoted input")
+                self.intercept = mutate
+                owner.run(["/usr/bin/c++", str(source), "-o", "id"])
+        self.intercept = lambda *_: None
+        calls = len(self.calls)
+        with self.assertRaises(FAILURES):
+            module.RuntimeDispatch(self.inventory, headers=headers, link_inputs=inputs,
+                source_inputs=source_inputs, _runner=self.run_child).__enter__()
+        self.assertEqual(len(self.calls), calls)
 
     def test_source_route_preserves_logical_arguments_and_inherits_only_sealed_inputs(self):
         self.c_phase()

@@ -1317,12 +1317,55 @@ The 431-entry evidence bundle is `v19-cpp-openmp.VPyo8O`, outer `SHA256SUMS`
 `97bfb90763e68b70d7bb37fd330503f1f9c66ce91feb73d62d6ab0102b659575`.
 It is read-only locally and on ripper; both hosts reproduce the projection.
 All fifteen runtime/template source hashes and the three changed test sources
-match the current tree. Transfer and local replay logs are retained separately
+matched `78d64a5`. Transfer and local replay logs are retained separately
 in `v19-cpp-openmp-handoff.BpfYMC`.
-Remaining work includes C++ identification/ABI configuration, other build tools,
+At that milestone, remaining work included C++ identification/ABI configuration, other build tools,
 full fresh-build integration and live consumer handoff. This is Codex self-review
 and deterministic validation under the Claude opt-out, not independent-model
 `CONVERGED` or completion of the performance objective.
+
+The next C++ configuration milestone qualifies the retained CMake identification
+and ABI recipes. `LinkerInputs(cpp_configuration=True)` explicitly selects plain
+C++ implicit libraries over the existing eighteen-file, fifty-three-alias view.
+Its v4 record includes `cpp_configuration_link_enabled:true`; default v2 and
+OpenMP v3 records retain their previous shapes. The selection must be boolean,
+C++ only, and mutually exclusive with OpenMP. Explicit benchmark libraries,
+OpenMP/offload and linker-routing overrides remain refused. `RuntimeDispatch`
+requires both same-inventory source and header owners before bootstrapping this
+profile. The combined identification call now uses their sealed source and
+include views; separate ABI compile/link calls use the same retained inputs.
+
+On ripper, `/tmp/leopard-v19-cpp-config.iCmj3r` reproduces the entire saved
+16,096-byte identification executable, hash
+`a3d366f5f634a9cc0d9340115704a2d978e930f75ce0aceac02d7177849a8a1a`,
+and 15,992-byte ABI executable, hash
+`879b5d31eac14d7b0ca6cd3b96320041ad8d87b538fea24a17e8707f0656bc96`.
+The generated identification source and system ABI source/quoted header are
+newly observed pins, not retroactive additions to the original preflight.
+The old ABI scratch was absent, so the recorded flags and absolute source are
+used with new output paths in the retained identification cwd. Exact output
+equality is checked, not inferred from the missing scratch or lack of debug flags.
+Original sources/outputs are untouched; neither new executable is run.
+
+Standard-library normal/optimized replay verifies 479,938 raw trace bytes,
+23 loader/helper launches, one sealed predefinition header and sixteen link
+input reads per probe, with zero ordinary system input reads in the traced jobs.
+The ABI source's quoted header is also read from its sealed source view. This
+does not cover the Python controller or loader-list query runtime. Seven
+ownership suites pass 189 cases in each mode; five replay tests additionally
+check a positive result and sixteen rejection variants in each mode. Native
+peak is 251,625,472 bytes under 512 MiB; final suite peak is 114,417,664 under
+256 MiB. All six memory-event counters and swap are zero.
+
+The read-only 81-entry evidence bundle is `v19-cpp-config.gMKSsd`, outer
+`SHA256SUMS` hash `3ebae867b374554c2d16848ae2bdaafb25dd1d53390f649768b9d6c3dd27421d`.
+Local and ripper copies pass checksum, trace and adversarial replay, with all
+fifteen runtime/template files and three changed tests matching this milestone.
+Transfer and local replay logs are retained in `v19-cpp-config-handoff.1zV8cQ`.
+See `results/v19_cpp_configuration_20260907.json`. The runtime Bead stays open
+for remaining build tools, full fresh-build integration and live consumer
+handoff. No production codec change, benchmark retry, affinity change, arming,
+throughput gain or independent-model convergence is claimed.
 
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.

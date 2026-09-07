@@ -61,17 +61,21 @@ def link_aliases(pins):
 
 
 class LinkerInputs(header_module._PinnedInputView):
-    """Retain GCC13 link data with an explicit C/C++ OpenMP probe profile.
+    """Retain GCC13 link data with explicit OpenMP and C++ configuration profiles.
 
     The original scripts remain byte-for-byte unchanged. The private GCC prefix
     supplies startup files and libraries; its enclosing sysroot supplies the
     absolute paths inside those scripts. The helper prefix always comes first.
     This inventory is newly observed, not part of the original preflight pins.
     """
-    def __init__(self, inventory, pins, *, openmp=False, _file_factory=None):
+    def __init__(self, inventory, pins, *, openmp=False, cpp_configuration=False, _file_factory=None):
         require(inventory.phase.language in ("c", "c++"), "link input profile requires C or C++")
         require(type(openmp) is bool, "OpenMP link profile requires an explicit boolean selection")
+        require(type(cpp_configuration) is bool, "C++ configuration link profile requires an explicit boolean selection")
+        require(not cpp_configuration or (inventory.phase.language == "c++" and not openmp),
+                "C++ configuration link profile requires plain C++ without OpenMP")
         self.openmp = openmp
+        self.cpp_configuration = cpp_configuration
         selected = link_pins(pins, openmp=openmp)
         super().__init__(inventory, selected, (), link_aliases(selected),
             limits=(MAX_FILES, MAX_DIRECTORIES, MAX_FILE_BYTES), root_prefix="v19-link-inputs-", _file_factory=_file_factory)
@@ -95,7 +99,7 @@ class LinkerInputs(header_module._PinnedInputView):
             require(not any(value.startswith(("-fopenmp", "-fno-openmp", "-foffload", "-fno-offload",
                         "-fopenacc", "-pthread", "-pg")) or value == "-p" for value in options),
                     "link flags differ from selected default or OpenMP profile")
-            if self.phase.language == "c++" and not self.openmp:
+            if self.phase.language == "c++" and not self.openmp and not self.cpp_configuration:
                 require(all(argv.count(path) == 1 for path in replacements), "qualified explicit link libraries differ")
             else:
                 require(not any(path in argv for path in replacements), "probe profile uses implicit libraries only")
@@ -108,8 +112,11 @@ class LinkerInputs(header_module._PinnedInputView):
 
     def record(self):
         self.validate_current()
-        return copy.deepcopy({"schema": "leopard2-v19-linker-inputs/v3" if self.openmp else "leopard2-v19-linker-inputs/v2",
-            **({"openmp_link_enabled": True} if self.openmp else {}), "root": str(self.root), "language": self.phase.language,
+        return copy.deepcopy({"schema": ("leopard2-v19-linker-inputs/v4" if self.cpp_configuration else
+                "leopard2-v19-linker-inputs/v3" if self.openmp else "leopard2-v19-linker-inputs/v2"),
+            **({"openmp_link_enabled": True} if self.openmp else {}),
+            **({"cpp_configuration_link_enabled": True} if self.cpp_configuration else {}),
+            "root": str(self.root), "language": self.phase.language,
             "prefix": str(self.root / "gcc-prefix"), "files": [dict(pin, descriptor=self._files[path].executable_descriptor,
                 seals=self._files[path].executable_record()["seals"]) for path, pin in self._pins.items()],
             "mappings": {str(path): target for path, target in self._mappings.items()},

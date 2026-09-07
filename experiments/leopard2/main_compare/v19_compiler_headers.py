@@ -286,8 +286,7 @@ class CompilerHeaders(_PinnedInputView):
     def arguments(self, argv, *, compile_only=True):
         self.validate_current()
         try:
-            require(type(compile_only) is bool and (compile_only or self.phase.language == "c"),
-                    "combined header compilation is only qualified for C")
+            require(type(compile_only) is bool, "header compilation mode is not boolean")
             require(type(argv) is list and len(argv) <= 480 and argv and argv[0] == self.phase.logical_driver and
                     all(type(value) is str and "\0" not in value for value in argv) and
                     argv.count("-c") == int(compile_only) and argv.count("-o") == 1 and

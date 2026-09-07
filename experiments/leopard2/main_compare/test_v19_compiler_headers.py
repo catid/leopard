@@ -178,11 +178,24 @@ class HeaderTests(unittest.TestCase):
         self.assertEqual(owner.record()["schema"], "leopard2-v19-compiler-headers/v2")
         self.assertNotIn("implicit_predefinition_sealed", owner.record())
 
-    def test_cpp_combined_compile_link_is_not_qualified(self):
+    def test_cpp_combined_compile_link_preserves_predefinition_and_cpp_roots(self):
         owner = self.enter()
-        with self.assertRaises(FAILURES):
-            owner.arguments(["/usr/bin/c++", "s.cpp", "-o", "out"], compile_only=False)
-        with self.assertRaises(FAILURES): owner.record()
+        argv = ["/usr/bin/c++", "s.cpp", "-o", "out"]
+        effective = owner.arguments(argv, compile_only=False)
+        self.assertEqual(effective[-3:], argv[1:])
+        self.assertIn("-nostdinc++", effective)
+        self.assertNotIn("-c", effective)
+        self.assertEqual(effective.count("-isystem"), len(self.roots))
+        self.assertEqual(effective[effective.index("-include") + 1],
+                         str(owner.root / module.C_PREDEFINITION_HEADER.lstrip("/")))
+
+    def test_cpp_stage_mismatch_or_nonboolean_mode_latches(self):
+        for mode, extra in ((True, []), (False, ["-c"]), (False, ["-E"]),
+                            (False, ["-S"]), (0, []), (1, ["-c"]), (None, [])):
+            owner = self.enter()
+            with self.subTest(mode=mode, extra=extra), self.assertRaises(FAILURES):
+                owner.arguments(["/usr/bin/c++", "s.cpp", "-o", "out", *extra], compile_only=mode)
+            with self.assertRaises(FAILURES): owner.record()
 
     def test_c_rejects_cpp_roots_and_unknown_language(self):
         self.inventory.phase.language = "c"

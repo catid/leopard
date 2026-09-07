@@ -101,6 +101,9 @@ class RuntimeDispatch:
         require(source_inputs is None or (type(source_inputs) is header_module.CompilerSourceInputs and
                 source_inputs.inventory is inventory), "dispatch source-input owner differs from inventory")
         self.source_inputs = source_inputs
+        require(link_inputs is None or not link_inputs.cpp_configuration or
+                (headers is not None and source_inputs is not None),
+                "C++ configuration dispatch requires both header and source owners")
         self._runner = provenance._run if _runner is None else _runner
         self._stack, self._state = ExitStack(), "new"
         self._snapshots, self._commands = {}, []
@@ -241,10 +244,12 @@ class RuntimeDispatch:
             require(type(argv) is list and len(argv) <= 511, "dispatcher argument count exceeds bound")
             selected = argv if self.source_inputs is None else self.source_inputs.arguments(argv)
             if self.link_inputs is not None and "-c" not in argv:
-                # CMake's C identification probe compiles and links in one
-                # driver call. Keep its implicit header in the sealed view too.
+                # CMake identification probes compile and link in one driver
+                # call. C++ requires an explicit configuration link profile and
+                # source/header owners; the benchmark/OpenMP routes stay separate.
                 selected = (self.headers.arguments(selected, compile_only=False)
-                            if self.headers is not None and self.phase.language == "c" else selected)
+                            if self.headers is not None and
+                            (self.phase.language == "c" or self.link_inputs.cpp_configuration) else selected)
                 effective = self.link_inputs.arguments(selected, self.prefix.descriptor)
             else:
                 selected = selected if self.headers is None else self.headers.arguments(selected)

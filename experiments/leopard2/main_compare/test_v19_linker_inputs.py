@@ -65,12 +65,13 @@ class LinkerTests(unittest.TestCase):
     def factory(self, path, **kwargs):
         return module.builder._StreamedTool(path, _trusted_owner=(os.getuid(), os.getgid()), **kwargs)
 
-    def owner(self, pins=None, *, openmp=False):
+    def owner(self, pins=None, *, openmp=False, cpp_configuration=False):
         return module.LinkerInputs(self.inventory, self.pins if pins is None else pins,
-            openmp=openmp, _file_factory=self.factory)
+            openmp=openmp, cpp_configuration=cpp_configuration, _file_factory=self.factory)
 
-    def enter(self, *, openmp=False):
-        owner = self.owner(self.pins + self.openmp_pins if openmp else None, openmp=openmp).__enter__()
+    def enter(self, *, openmp=False, cpp_configuration=False):
+        owner = self.owner(self.pins + self.openmp_pins if openmp else None, openmp=openmp,
+                           cpp_configuration=cpp_configuration).__enter__()
         def cleanup():
             owner._view_guard._close_without_verification()
             owner._source_guard._close_without_verification()
@@ -132,6 +133,44 @@ class LinkerTests(unittest.TestCase):
         self.assertEqual(effective[4:], argv[1:])
         self.assertEqual(owner.record()["language"], "c")
         self.assertEqual(len(owner.record()["files"]), 18)
+
+    def test_cpp_configuration_routes_implicit_defaults_with_distinct_record(self):
+        owner = self.enter(cpp_configuration=True)
+        for argv in (["/usr/bin/c++", "CMakeCXXCompilerId.cpp", "-o", "out"],
+                     ["/usr/bin/c++", "-v", "abi.o", "-o", "out"]):
+            original = list(argv)
+            effective = owner.arguments(argv, 123)
+            self.assertEqual(argv, original)
+            self.assertEqual(effective[4:], argv[1:])
+            self.assertEqual(effective[:4], [argv[0], "-B/proc/self/fd/123/",
+                "-B" + str(owner.root / "gcc-prefix") + "/", "--sysroot=" + str(owner.root)])
+        record = owner.record()
+        self.assertEqual(record["schema"], "leopard2-v19-linker-inputs/v4")
+        self.assertTrue(record["cpp_configuration_link_enabled"])
+        self.assertNotIn("openmp_link_enabled", record)
+        self.assertEqual((len(record["files"]), len(record["mappings"])), (18, 53))
+        default = self.enter()
+        self.assertEqual(default.record()["schema"], "leopard2-v19-linker-inputs/v2")
+        self.assertNotIn("cpp_configuration_link_enabled", default.record())
+        with self.assertRaises(FAILURES): default.arguments(argv, 123)
+
+    def test_cpp_configuration_selection_is_typed_exclusive_and_cpp_only(self):
+        for selection in (None, 0, 1, "yes"):
+            with self.subTest(selection=selection), self.assertRaises(FAILURES):
+                self.owner(cpp_configuration=selection)
+        with self.assertRaises(FAILURES): self.owner(openmp=True, cpp_configuration=True)
+        with self.assertRaises(FAILURES): self.owner(self.pins + self.openmp_pins, cpp_configuration=True)
+        self.inventory.phase.language = "c"
+        with self.assertRaises(FAILURES): self.owner(cpp_configuration=True)
+
+    def test_cpp_configuration_rejects_explicit_libraries_and_extension_flags(self):
+        for extra in (str(self.gcc / "libgomp.so"), str(self.system / "libpthread.a"), "-fopenmp",
+                      "-fno-openmp", "-fopenmp-simd", "-foffload=disable", "-fno-offload", "-fopenacc",
+                      "-pthread", "-pg", "-p", "-B/host", "-lfoo", "-c", "-specs=bad", "--sysroot=/"):
+            owner = self.enter(cpp_configuration=True)
+            with self.subTest(extra=extra), self.assertRaises(FAILURES):
+                owner.arguments(["/usr/bin/c++", "s.cpp", "-o", "out", extra], 123)
+            with self.assertRaises(FAILURES): owner.record()
 
     def test_c_nondefault_libraries_and_driver_overrides_latch(self):
         self.inventory.phase.language, self.inventory.phase.logical_driver = "c", "/usr/bin/cc"
