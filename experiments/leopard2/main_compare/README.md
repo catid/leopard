@@ -1367,6 +1367,65 @@ for remaining build tools, full fresh-build integration and live consumer
 handoff. No production codec change, benchmark retry, affinity change, arming,
 throughput gain or independent-model convergence is claimed.
 
+### Retained build roots and bounded archive proof (2026-09-07)
+
+`BuildToolExecution` now retains six non-GCC roots, their file-alias chains and
+sealed executable copies. Git, Make, ar and ranlib use original preflight pins;
+CMake and dash use explicitly new caller pins. `RuntimeInventory` accepts this
+separate build-tool profile and routes explicit jobs through its sealed loader
+and startup libraries. Its build-tool record is v2; the existing GCC v1 record
+shape is unchanged. Compiler jobs still require `RuntimeDispatch`, which refuses
+build-tool roots. Extra inherited object descriptors must already be sealed.
+Neither API routes arbitrary nested tools, scripts or dynamically loaded plugins.
+
+The final native check on ripper, `/tmp/leopard-v19-build-tools.WCLML7`, retains
+six roots and 49 ELF startup dependencies (62,776,880 dependency bytes). It runs
+six version/builtin checks and the exact saved baseline ar/ranlib recipe using
+sealed copies of four existing object files with their original member names.
+The newly generated 938,622-byte archive matches the saved archive in every byte,
+SHA-256 `9e006068fbdd72e318ba854688d614183e949c3fd36ff1192b1f490e7ca47260`.
+This reuses baseline objects via a private input-view primitive; it is not a
+full rebuild, public archive-profile integration or execution of the codec.
+
+**Complete runtime qualification remains false.** Independent standard-library
+replay of all eight job traces (5,336,641 bytes) finds nine ordinary system-file
+reads and eight external file mappings outside the retained startup inventory.
+CMake reads `/etc/gnutls/config`; ar/ranlib discover BFD plugins in two system
+directories and load LLVM/GNU/libdep plugins plus additional libraries. The
+observed LLVM mapping alone is 123,776,441 bytes, above the current 64-MiB runtime
+profile. CMake's four kernel `io_uring` mappings are classified separately, as is
+the generated archive's unsealed mapping during ranlib's in-place indexing.
+Post-index byte equality does not prove immutable input ownership during that
+producer step. No plugins were disabled/substituted and no resource limit was
+relaxed. Follow-up `leopard-79h.38.5.4.8.2.2.2.3.1` tracks these dynamic inputs;
+the `/bin/sh` directory alias, nested build execution and live consumer handoff
+also remain outside this proof.
+
+Eight focused suites pass 205 cases in each normal/optimized Python mode; all
+16 associated CTests pass. The first CTest run exposed Python 3.12 omitting
+`fcntl.F_GET_SEALS`; the fix uses the existing Linux constant fallback without
+weakening the required kernel seals. A regression removes the Python attribute
+and verifies the same check. Native execution was repeated after that fix.
+Four replay tests cover a positive partial result and twelve rejection variants
+in each mode, including refusal of unsupported full-qualification claims.
+Native peak is 401,559,552 bytes under 512 MiB; focused-suite peak is 114,171,904,
+CTest peak 112,644,096 and local replay peak 48,001,024 under 256 MiB. All six
+memory-event counters and swap are zero for these runs.
+
+The read-only 163-entry bundle `v19-build-tools.nVDzif` is verified locally and
+on ripper; outer `SHA256SUMS` is
+`82bd88640e11eae4c0188994e70486c162e071b05e180211ae6414ae5596eb88`.
+It preserves all 55 ELF inputs, objects, archives, traces, tests, and the first
+native/source snapshot and failed CTest logs. The first native snapshot is
+checksum-retained, not semantically replayed by the final replayer. All sixteen
+used runtime/template sources and three changed tests match this milestone.
+The root CMake change only registers the two new self-tests. Transfer/local
+replay logs are in `v19-build-tools-handoff.ORCjc9`, outer
+`e3ffe034bd376c8dcb9a9da11157870f11789de32a8b99277d946b8167d40db9`.
+See `results/v19_build_tools_20260907.json`. Runtime/build qualification and the
+performance objective stay open. No new timings, production promotion, Claude,
+affinity change or independent-model `CONVERGED` claim accompanies this result.
+
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.
 They cover stage ordering, exact mapping and cache dialects, link changes,

@@ -200,6 +200,12 @@ class OwnerTests(unittest.TestCase):
 
     def owner(self): return module.RuntimeDispatch(self.inventory, _runner=self.run_child)
 
+    def test_build_tool_roots_cannot_enter_compiler_dispatch(self):
+        phase = object.__new__(module.runtime.build_tools.BuildToolExecution)
+        inventory = type("BuildInventory", (), {"phase": phase})()
+        with self.assertRaises(FAILURES): module.RuntimeDispatch(inventory, _runner=self.run_child)
+        self.assertEqual(self.calls, [])
+
     def test_bootstrap_driver_route_false_claims_and_umask_restore(self):
         initial = os.umask(0o077)
         try:

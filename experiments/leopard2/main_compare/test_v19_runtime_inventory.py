@@ -148,6 +148,14 @@ class InventoryTests(unittest.TestCase):
         return module.RuntimeInventory(self.phase, _tool_factory=self.factory, _library_root=self.libs,
                                        _loader=self.loader, _preload=self.root / "preload")
 
+    def test_gcc_inventory_cannot_use_direct_build_tool_jobs(self):
+        with self.assertRaises(FAILURES):
+            with self.owner() as owner:
+                self.assertEqual(owner.record()["schema"], "leopard2-v19-runtime-inventory/v1")
+                self.assertNotIn("commands", owner.record())
+                owner.run_tool("driver", [str(self.driver.path)],
+                    _runner=lambda *args, **kwargs: self.fail("GCC job bypassed dispatcher"))
+
     def test_transitive_sealed_inventory_and_false_claims(self):
         with self.owner() as owner:
             record = owner.record()

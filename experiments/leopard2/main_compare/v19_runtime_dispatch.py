@@ -88,6 +88,7 @@ def validate_static_elf(data):
 class RuntimeDispatch:
     def __init__(self, inventory, *, headers=None, link_inputs=None, searches=None, source_inputs=None, _runner=None):
         require(type(inventory) is runtime.RuntimeInventory or _runner is not None, "dispatch requires a live runtime inventory")
+        require(type(inventory.phase) is not runtime.build_tools.BuildToolExecution, "compiler dispatch cannot borrow build-tool roots")
         self.inventory, self.phase = inventory, inventory.phase
         require(headers is None or (type(headers) is header_module.CompilerHeaders and headers.inventory is inventory),
                 "dispatch header owner differs from inventory")

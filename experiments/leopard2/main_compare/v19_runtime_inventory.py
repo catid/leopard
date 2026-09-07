@@ -1,9 +1,10 @@
 #!/usr/bin/python3
-"""Retained GCC startup dependencies; leopard-79h.38.5.4.8.2.2.2.3.
+"""Retained GCC/build-tool startup dependencies; leopard-79h.38.5.4.8.2.2.2.3.
 
 Linux ELF64/x86-64 system-library profile only. This API inventories and seals
-inputs and can ask the sealed loader to list resolutions; it does not dispatch
-compiler jobs, integrate the build recipe or claim complete runtime ownership.
+ELF startup inputs, lists resolutions and runs explicit build-root jobs. It does
+not own dlopen plugins/configuration, dispatch compiler jobs, integrate the full
+build recipe or claim complete runtime ownership.
 """
 from __future__ import annotations
 
@@ -17,12 +18,13 @@ import secrets
 import struct
 
 HERE = Path(__file__).resolve().parent
-dependency = HERE / "v19_compiler_execution.py"
+dependency = HERE / "v19_build_tool_execution.py"
 if dependency.resolve(strict=True) != dependency:
     raise RuntimeError("runtime inventory dependency is not canonical")
-spec = importlib.util.spec_from_file_location("v19_runtime_compiler", dependency)
-compiler = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(compiler)
+spec = importlib.util.spec_from_file_location("v19_runtime_build_tools", dependency)
+build_tools = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(build_tools)
+compiler = build_tools.compiler
 builder, provenance, require = compiler.builder, compiler.provenance, compiler.require
 LIBRARY_ROOT = Path("/usr/lib/x86_64-linux-gnu")
 LOADER = LIBRARY_ROOT / "ld-linux-x86-64.so.2"
@@ -155,16 +157,19 @@ class RuntimeInventory:
     """
     def __init__(self, phase, *, _tool_factory=None, _library_root=None, _loader=None, _include_plugin=True,
                  _preload=Path("/etc/ld.so.preload")):
-        require(type(phase) is compiler.CompilerExecution or _tool_factory is not None, "runtime requires a live compiler phase")
+        require(type(phase) in (compiler.CompilerExecution, build_tools.BuildToolExecution) or _tool_factory is not None,
+                "runtime requires a live compiler or build-tool phase")
         self.phase = phase
+        self._build_tools = type(phase) is build_tools.BuildToolExecution
         self.library_root = LIBRARY_ROOT if _library_root is None else Path(_library_root)
         self.loader_path = LOADER if _loader is None else Path(_loader)
         self.preload = Path(_preload)
         self._factory = builder._StreamedTool if _tool_factory is None else _tool_factory
-        self._plugin = _include_plugin
+        self._plugin = _include_plugin and not self._build_tools
         self._stack, self._state = ExitStack(), "new"
         self._files, self._metadata, self._links, self._roots, self._lists = {}, {}, {}, {}, {}
         self._total = 0
+        self._commands = []
 
     def _add(self, path):
         path = Path(path)
@@ -284,9 +289,57 @@ class RuntimeInventory:
             self._state = "failed"
             raise
 
+    def run_tool(self, role, argv, *, input_descriptors=(), _runner=None):
+        """Run one declared build root through the sealed loader/startup runtime.
+
+        The caller still owns the exact recipe and inputs. Extra input fds must
+        already be fully sealed; this is not dlopen, nested-tool or complete data routing.
+        Compiler jobs must use RuntimeDispatch instead.
+        """
+        self.validate_current()
+        record = None
+        try:
+            require(self._build_tools, "direct runtime jobs require the build-tool profile")
+            logical = self.phase.arguments(role, argv)
+            require(type(input_descriptors) is tuple and all(type(fd) is int and 3 <= fd < 65536 for fd in input_descriptors) and
+                    len(input_descriptors) <= 64 and len(set(input_descriptors)) == len(input_descriptors),
+                    "build input descriptors differ")
+            def input_fields():
+                fields = []
+                for fd in input_descriptors:
+                    require(not os.get_inheritable(fd) and
+                            builder.fcntl.fcntl(fd, getattr(builder.fcntl, "F_GET_SEALS", 1034)) == 15,
+                            "build input descriptor is not privately sealed")
+                    fields.append(provenance._stable_fields(os.fstat(fd)))
+                return fields
+            inputs = input_fields()
+            target, loader = self.phase._tools[role], self._files[self.loader_key]
+            loader_argv = [str(self.loader_path), "--inhibit-cache", "--glibc-hwcaps-mask", "", "--library-path",
+                f"/proc/self/fd/{self.prefix.descriptor}", "--argv0", logical[0],
+                f"/proc/self/fd/{target.executable_descriptor}", *logical[1:]]
+            require(len(loader_argv) <= 512, "effective build tool arguments exceed bound")
+            record = {"role": role, "logical_argv": logical, "loader_argv": loader_argv,
+                      "input_descriptors": list(input_descriptors), "status": "running"}
+            self._commands.append(record)
+            inherited = (self.prefix.descriptor, *(tool.executable_descriptor for tool in self.phase._tools.values()),
+                         *(tool.executable_descriptor for tool in self._files.values()), *input_descriptors)
+            output = (provenance._run if _runner is None else _runner)(loader_argv, "v19 sealed build tool " + role,
+                maximum_bytes=1 << 20, timeout=600, executable_descriptor=loader.executable_descriptor,
+                inherited_descriptors=tuple(dict.fromkeys(inherited)), environment_overrides=builder.ENVIRONMENT)
+            require(type(output) is bytes and len(output) <= 1 << 20, "build tool output exceeds bound")
+            self.validate_current()
+            require(input_fields() == inputs, "build input descriptor identity changed")
+            record.update(status="exit-zero", stdout_sha256=builder.hashlib.sha256(output).hexdigest())
+            return output
+        except BaseException as error:
+            if record is not None: record.update(status="failed", failure=type(error).__name__ + ": " + str(error))
+            self._state = "failed"
+            raise
+
     def record(self):
         self.validate_current()
-        return copy.deepcopy({"schema": "leopard2-v19-runtime-inventory/v1", "roots": self._roots,
+        return copy.deepcopy({"schema": "leopard2-v19-runtime-inventory/v2" if self._build_tools else "leopard2-v19-runtime-inventory/v1",
+            **({"root_profile": "build-tools", "commands": self._commands} if self._build_tools else {}), "roots": self._roots,
             "metadata": self._metadata, "sonames": self._sonames, "loader": self.loader_key,
             "files": {path: {**tool.executable_record(), "source_mode": os.fstat(tool.fd).st_mode}
                       for path, tool in self._files.items()}, "bytes": self._total, "loader_listings": self._lists,
