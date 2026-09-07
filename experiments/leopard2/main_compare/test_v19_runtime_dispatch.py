@@ -240,8 +240,7 @@ class OwnerTests(unittest.TestCase):
         roots = (str(headers),)
         profile = "C_INCLUDE_ROOTS" if self.inventory.phase.language == "c" else "CPP_INCLUDE_ROOTS"
         self.stack.enter_context(mock.patch.object(module.header_module, profile, roots))
-        if self.inventory.phase.language == "c":
-            self.stack.enter_context(mock.patch.object(module.header_module, "C_PREDEFINITION_HEADER", str(path)))
+        self.stack.enter_context(mock.patch.object(module.header_module, "C_PREDEFINITION_HEADER", str(path)))
         pin = {"path": str(path), "sha256": module.builder.hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
         def factory(path, **kwargs):
             return module.builder._StreamedTool(path, _trusted_owner=(os.getuid(), os.getgid()), **kwargs)

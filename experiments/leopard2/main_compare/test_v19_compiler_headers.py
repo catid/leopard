@@ -44,6 +44,7 @@ class HeaderTests(unittest.TestCase):
         self.second.write_bytes(b'#include "../one.h"\n')
         self.second.chmod(0o644)
         self.pins = [self.pin(path) for path in (self.first, self.second)]
+        self.stack.enter_context(mock.patch.object(module, "C_PREDEFINITION_HEADER", str(self.first)))
         self.live = True
         test = self
         class Phase:
@@ -111,6 +112,10 @@ class HeaderTests(unittest.TestCase):
         self.assertNotIn("-fno-canonical-system-headers", result)
         self.assertEqual(result.count("-isystem"), 3)
         self.assertEqual(result.count("-nostdinc"), 1)
+        self.assertEqual(result.count("-include"), 1)
+        self.assertEqual(result[result.index("-include") + 1], str(owner.root / str(self.first).lstrip("/")))
+        self.assertEqual(owner.record()["schema"], "leopard2-v19-compiler-headers/v3")
+        self.assertTrue(owner.record()["implicit_predefinition_sealed"])
 
     def test_recipe_overrides_latch_failure(self):
         for value in ("-isystem", "-include", "--sysroot=x", "-nostdinc++", "-Wp,-include,x", "-Xpreprocessor",
@@ -163,6 +168,15 @@ class HeaderTests(unittest.TestCase):
     def test_c_missing_predefinition_pin_is_rejected(self):
         self.c_phase()
         with self.assertRaises(FAILURES): self.owner(self.pins[1:])
+
+    def test_cpp_missing_predefinition_pin_is_rejected(self):
+        with self.assertRaises(FAILURES): self.owner(self.pins[1:])
+
+    def test_c_header_record_preserves_its_existing_schema(self):
+        self.c_phase()
+        owner = self.enter()
+        self.assertEqual(owner.record()["schema"], "leopard2-v19-compiler-headers/v2")
+        self.assertNotIn("implicit_predefinition_sealed", owner.record())
 
     def test_cpp_combined_compile_link_is_not_qualified(self):
         owner = self.enter()

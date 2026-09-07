@@ -61,7 +61,7 @@ def link_aliases(pins):
 
 
 class LinkerInputs(header_module._PinnedInputView):
-    """Retain the GCC13 C++ link inventory, also used by plain C probes.
+    """Retain GCC13 link data with an explicit C/C++ OpenMP probe profile.
 
     The original scripts remain byte-for-byte unchanged. The private GCC prefix
     supplies startup files and libraries; its enclosing sysroot supplies the
@@ -70,8 +70,7 @@ class LinkerInputs(header_module._PinnedInputView):
     """
     def __init__(self, inventory, pins, *, openmp=False, _file_factory=None):
         require(inventory.phase.language in ("c", "c++"), "link input profile requires C or C++")
-        require(type(openmp) is bool and (not openmp or inventory.phase.language == "c"),
-                "OpenMP link profile requires an explicit C selection")
+        require(type(openmp) is bool, "OpenMP link profile requires an explicit boolean selection")
         self.openmp = openmp
         selected = link_pins(pins, openmp=openmp)
         super().__init__(inventory, selected, (), link_aliases(selected),
@@ -89,17 +88,17 @@ class LinkerInputs(header_module._PinnedInputView):
                 "-nostdlib", "-nodefaultlibs", "-nostartfiles", "-static", "-shared", "-r", "-T", "-u"))
                 for value in argv[1:]), "link arguments override qualified input routing")
             replacements = {GCC_ROOT + "libgomp.so": "libgomp.so", SYSTEM_ROOT + "libpthread.a": "libpthread.a"}
-            if self.phase.language == "c++":
+            options = argv[1:]
+            if self.openmp:
+                require(argv.count("-fopenmp") == 1, "OpenMP link profile requires exactly one -fopenmp")
+                options = [value for value in options if value != "-fopenmp"]
+            require(not any(value.startswith(("-fopenmp", "-fno-openmp", "-foffload", "-fno-offload",
+                        "-fopenacc", "-pthread", "-pg")) or value == "-p" for value in options),
+                    "link flags differ from selected default or OpenMP profile")
+            if self.phase.language == "c++" and not self.openmp:
                 require(all(argv.count(path) == 1 for path in replacements), "qualified explicit link libraries differ")
             else:
-                options = argv[1:]
-                if self.openmp:
-                    require(argv.count("-fopenmp") == 1, "OpenMP link profile requires exactly one -fopenmp")
-                    options = [value for value in options if value != "-fopenmp"]
-                require(not any(path in argv for path in replacements) and not any(
-                    value.startswith(("-fopenmp", "-fno-openmp", "-foffload", "-fno-offload",
-                        "-fopenacc", "-pthread", "-pg")) or value == "-p" for value in options),
-                    "C link flags differ from selected default or OpenMP profile")
+                require(not any(path in argv for path in replacements), "probe profile uses implicit libraries only")
             prefix = self.root / "gcc-prefix"
             effective = [effective[0], effective[1], "-B" + str(prefix) + "/", "--sysroot=" + str(self.root), *effective[2:]]
             return [str(prefix / replacements[value]) if value in replacements else value for value in effective]

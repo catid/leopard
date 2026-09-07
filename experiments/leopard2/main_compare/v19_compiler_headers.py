@@ -278,8 +278,8 @@ class CompilerHeaders(_PinnedInputView):
         self.include_roots = ((C_INCLUDE_ROOTS if inventory.phase.language == "c" else CPP_INCLUDE_ROOTS)
                               if include_roots is None else include_roots)
         selected = header_pins(pins, self.include_roots, inventory.phase.language)
-        require(inventory.phase.language != "c" or Path(C_PREDEFINITION_HEADER) in selected,
-                "C profile requires the implicit predefinition header")
+        require(Path(C_PREDEFINITION_HEADER) in selected,
+                "header profile requires the implicit predefinition header")
         super().__init__(inventory, selected, self.include_roots, {path.relative_to("/"): path for path in selected},
             limits=(MAX_FILES, MAX_DIRECTORIES, MAX_FILE_BYTES), root_prefix="v19-headers-", _file_factory=_file_factory)
 
@@ -301,9 +301,9 @@ class CompilerHeaders(_PinnedInputView):
             for path in self.include_roots: extra += ["-isystem", str(self.root / path.lstrip("/"))]
             # -nostdinc also suppresses GCC's implicit predefinition header.
             # Restore its contents explicitly from the retained view; output
-            # equality alone may miss lost feature macros in a CMake ID probe.
-            if self.phase.language == "c":
-                extra += ["-include", str(self.root / C_PREDEFINITION_HEADER.lstrip("/"))]
+            # equality alone may miss lost feature macros in a CMake probe.
+            # This applies to C++ as well as C: omp.h alone does not restore it.
+            extra += ["-include", str(self.root / C_PREDEFINITION_HEADER.lstrip("/"))]
             return [argv[0], *extra, *argv[1:]]
         except BaseException:
             self._state = "failed"
@@ -311,7 +311,9 @@ class CompilerHeaders(_PinnedInputView):
 
     def record(self):
         self.validate_current()
-        return copy.deepcopy({"schema": "leopard2-v19-compiler-headers/v2", "root": str(self.root), "language": self.phase.language,
+        return copy.deepcopy({"schema": "leopard2-v19-compiler-headers/v3" if self.phase.language == "c++" else "leopard2-v19-compiler-headers/v2",
+            **({"implicit_predefinition_sealed": True} if self.phase.language == "c++" else {}),
+            "root": str(self.root), "language": self.phase.language,
             "include_roots": list(self.include_roots), "files": [dict(pin, descriptor=self._files[path].executable_descriptor,
                 seals=self._files[path].executable_record()["seals"]) for path, pin in self._pins.items()],
             "header_bytes": sum(row["size"] for row in self._pins.values()),

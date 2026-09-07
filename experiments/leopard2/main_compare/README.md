@@ -1224,9 +1224,9 @@ The 2026-09-07 C OpenMP milestone adds an explicit
 link inputs, using the same private GCC prefix/sysroot and unchanged script
 bytes. It requires exactly one `-fopenmp`; missing/duplicate flags, conflicting
 OpenMP/offload options and caller-supplied specs or linker routing are refused.
-The default profile retains its v2 records and eighteen-file inventory. Only
-the explicit C OpenMP profile emits v3, with 21 files and 59 mappings. This does
-not qualify C++ OpenMP or arbitrary offload configurations.
+At that milestone, the default profile retained its v2 records and eighteen-file
+inventory; the explicit C OpenMP profile emitted v3, with 21 files and 59 mappings.
+That C-only milestone did not qualify C++ OpenMP or arbitrary offload configurations.
 
 The native proof reconstructs `OpenMPTryFlag.c` and `OpenMPCheckVersion.c`
 from the retained CMake 3.28 `FindOpenMP.cmake` template and checks their original
@@ -1264,14 +1264,65 @@ with zero memory events/swap. Native trace replay peaks at 15,736,832 bytes.
 The 147-file evidence bundle is `v19-c-openmp.pPuxVe`, outer `SHA256SUMS`
 `717352eeb81bc1c628cd89940ffafa38d39427560dcfbdb51242f44cbc94c5af`.
 It is retained read-only locally and on ripper; both hosts reproduce the trace
-projection. All fifteen native runtime/template source files match the current
-tree. The reused snapshot also includes unused historical CMake/test files;
+projection. All fifteen native runtime/template source files matched `a43274a`.
+The reused snapshot also includes unused historical CMake/test files;
 the new tested source is separately under `review/`. The initial overbroad
 current-tree check and the corrected runtime-source check are retained in
 `v19-c-openmp-handoff.UuujtF`, together with transfer/finalization logs.
 The runtime issue stays open for C++ configuration, other build tools and full
 fresh-build/consumer integration. No timing, arming, production-code promotion,
 or Claude review occurred; review is Codex self-review plus deterministic checks.
+
+The subsequent C++ OpenMP milestone extends the explicit twenty-one-input
+profile to C++. Its recorded `-Wall -Wextra -fopenmp` recipes use implicit C++
+libraries, not the explicit library arguments of the existing benchmark link.
+The default eighteen-input profile now also refuses implicit OpenMP/offload
+flags, so a C++ caller cannot enable additional unowned inputs accidentally.
+Default link records remain v2; explicit C/C++ OpenMP records are v3 and retain
+the language distinction. Arbitrary offload settings remain outside the profile.
+
+This exposed a C++ header-routing bug: `-nostdinc` suppresses six predefined
+macros supplied by `stdc-predef.h`. A bounded dependency-only compiler observation
+shows that explicitly including that header restores the entire sorted macro
+table, not only the six differing entries. Like C, C++ now requires that header's
+pin and explicitly includes its sealed copy. Current C++ header records are v3
+with `implicit_predefinition_sealed:true`; C header records retain v2. Earlier
+v2 C++ evidence is historical and is not relabeled as proving this correction.
+
+Both reconstructed C++ OpenMP probes compile and link through the owned inputs.
+The 16,248-byte version executable exactly matches saved `ompver_CXX.bin`, hash
+`a5e305512b36338082ccf9c8477ead0959bfbeb4d1dbaea1dbc6041916ab2671`.
+Independent standard-library normal/optimized replay verifies 818,423 trace bytes,
+24 loader/helper launches and zero ordinary system reads for those two probes.
+The flag probe reads two sealed headers; the version probe reads all 27. Both
+read all 21 link inputs, including the C++ and math libraries unused by C.
+
+A separate sequential regression rebuilds the previously qualified Leopard1
+`LeopardFF16.cpp.o` with the restored predefinition header. All 459,984 bytes
+still match, hash `e25195f0a6c6e84f4dc2b8fcbedf34d6c3983f65feb0996e327503377770f28b`.
+Its 274 sealed headers, recipe, raw 5,854,562-byte trace and output are retained;
+that separate trace is checksum-verified, not semantically replayed by the
+OpenMP replayer. The first regression used the OpenMP working directory and
+failed full-byte equality because its debug compilation-directory path changed.
+The failed run and object remain retained. Returning to the owned, recorded
+`baseline-build` cwd restores exact equality; no comparison was weakened.
+
+Accepted native evidence is `/tmp/leopard-v19-cpp-openmp.sZjsMY` on ripper.
+Peak memory is 422,297,600 bytes under 512 MiB, with zero events/swap. Seven
+ownership suites pass 182 cases in each Python mode at 114,487,296-byte peak
+under 256 MiB; native result replay peaks at 21,917,696 bytes. The bounded
+dependency/macro observations do not claim runtime ownership. No generated or
+historical codec/probe executable is run, and there are no performance results.
+The 431-entry evidence bundle is `v19-cpp-openmp.VPyo8O`, outer `SHA256SUMS`
+`97bfb90763e68b70d7bb37fd330503f1f9c66ce91feb73d62d6ab0102b659575`.
+It is read-only locally and on ripper; both hosts reproduce the projection.
+All fifteen runtime/template source hashes and the three changed test sources
+match the current tree. Transfer and local replay logs are retained separately
+in `v19-cpp-openmp-handoff.BpfYMC`.
+Remaining work includes C++ identification/ABI configuration, other build tools,
+full fresh-build integration and live consumer handoff. This is Codex self-review
+and deterministic validation under the Claude opt-out, not independent-model
+`CONVERGED` or completion of the performance objective.
 
 The normal/optimized `leopard2_v19_fresh_build_*self_test` CTests use synthetic
 host/compiler responses with real filesystem descriptors and mutation guards.

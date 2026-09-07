@@ -164,6 +164,7 @@ class LinkerTests(unittest.TestCase):
         self.assertNotIn("openmp_link_enabled", default.record())
 
     def test_openmp_selection_and_inventory_are_explicit(self):
+        self.inventory.phase.language = "fortran"
         with self.assertRaises(FAILURES): self.owner(self.pins + self.openmp_pins, openmp=True)
         self.inventory.phase.language, self.inventory.phase.logical_driver = "c", "/usr/bin/cc"
         for selection in (None, 0, 1, "yes"):
@@ -192,6 +193,40 @@ class LinkerTests(unittest.TestCase):
         original = path.read_bytes()
         path.write_bytes(b"!" * len(original)); path.write_bytes(original)
         with self.assertRaises(FAILURES): owner.validate_current()
+
+    def test_cpp_openmp_routes_implicit_libraries_with_complete_inventory(self):
+        owner = self.enter(openmp=True)
+        argv = ["/usr/bin/c++", "-Wall", "-Wextra", "-fopenmp", "-v", "probe.o", "-o", "out", "-v"]
+        effective = owner.arguments(argv, 123)
+        self.assertEqual(effective[:4], [argv[0], "-B/proc/self/fd/123/", "-B" + str(owner.root / "gcc-prefix") + "/",
+                                        "--sysroot=" + str(owner.root)])
+        self.assertEqual(effective[4:], argv[1:])
+        record = owner.record()
+        self.assertEqual(record["language"], "c++")
+        self.assertEqual(record["schema"], "leopard2-v19-linker-inputs/v3")
+        self.assertTrue(record["openmp_link_enabled"])
+        self.assertEqual(len(record["files"]), 21)
+        self.assertEqual(len(record["mappings"]), 59)
+        for pin in self.openmp_pins:
+            path = Path(pin["path"])
+            self.assertEqual((owner.root / "gcc-prefix" / path.name).read_bytes(), path.read_bytes())
+
+    def test_cpp_default_cannot_implicitly_enable_openmp_inputs(self):
+        for extra in ("-fopenmp", "-fopenmp-simd", "-fno-openmp", "-foffload=disable", "-fopenacc", "-pthread", "-pg"):
+            owner = self.enter()
+            with self.subTest(extra=extra), self.assertRaises(FAILURES): owner.arguments(self.argv() + [extra], 123)
+            with self.assertRaises(FAILURES): owner.record()
+
+    def test_cpp_openmp_requires_one_flag_and_no_explicit_libraries(self):
+        original = ["/usr/bin/c++", "-fopenmp", "probe.o", "-o", "out"]
+        requests = [[value for value in original if value != "-fopenmp"]]
+        requests += [original + [extra] for extra in ("-fopenmp", "-fno-openmp", "-fopenmp-simd", "-foffload=disable",
+            "-fno-offload", "-fopenacc", "-pthread", "-pg", "-specs=bad", "-Wl,-T,bad", "-lbad",
+            str(self.gcc / "libgomp.so"), str(self.system / "libpthread.a"))]
+        for argv in requests:
+            owner = self.enter(openmp=True)
+            with self.subTest(argv=argv), self.assertRaises(FAILURES): owner.arguments(argv, 123)
+            with self.assertRaises(FAILURES): owner.record()
 
     def test_openmp_startup_preexisting_mmap_is_rehashed(self):
         self.inventory.phase.language, self.inventory.phase.logical_driver = "c", "/usr/bin/cc"
