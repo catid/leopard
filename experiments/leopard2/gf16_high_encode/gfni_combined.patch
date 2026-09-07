@@ -1,0 +1,127 @@
+--- a/LeopardFF16.cpp
++++ b/LeopardFF16.cpp
+@@ -1222,6 +1222,9 @@
+ // Unrolled IFFT for encoder.  The compile-time accumulation choice keeps the
+ // scalar oracle's stage loop identical after optimization while sharing one
+ // source definition with the qualified vector schedule.
++// Experiment-only entry, supplied by the isolated GFNI member and driver.
++extern "C" void LeoGFNIFinalAccumulate(
++    const void* const*, void* const*, unsigned, uint16_t, uint16_t, uint16_t, uint64_t);
+ template<bool FuseAccumulation>
+ static void IFFT_DIT_Encoder_Impl(
+     const backend::Ops& ops,
+@@ -1233,7 +1236,8 @@
+     void** xor_result,
+     const bool high_profile_transform,
+     const unsigned m,
+-    const ffe_t* skewLUT)
++    const ffe_t* skewLUT,
++    const unsigned experiment_mask)
+ {
+     // Decimation in time: Unroll 2 layers at a time
+     unsigned dist = 1, dist4 = 4;
+@@ -1325,15 +1329,23 @@
+ 
+             if (accumulate_split_stage)
+             {
+-                IFFT_DIT4_xor_Split_Range(
+-                    ops, bytes, work + r, xor_result + r, dist,
+-                    log_m01, log_m23, log_m02);
++                if (experiment_mask & 2U)
++                    LeoGFNIFinalAccumulate(work + r, xor_result + r, dist,
++                        log_m01, log_m23, log_m02, bytes);
++                else
++                    IFFT_DIT4_xor_Split_Range(
++                        ops, bytes, work + r, xor_result + r, dist,
++                        log_m01, log_m23, log_m02);
+             }
+             else
+             {
+-                IFFT_DIT4_Range(
+-                    ops, bytes, work + r, dist,
+-                    log_m01, log_m23, log_m02);
++                if ((experiment_mask & 1U) && dist == 1)
++                    ops.ff16_ifft_butterfly4_range(
++                        work + r, dist, log_m01, log_m23, log_m02, bytes, false);
++                else
++                    IFFT_DIT4_Range(
++                        ops, bytes, work + r, dist,
++                        log_m01, log_m23, log_m02);
+             }
+         }
+         if (accumulate_split_stage)
+@@ -1391,7 +1403,8 @@
+     void** xor_result,
+     const bool high_profile_transform,
+     const unsigned m,
+-    const ffe_t* skewLUT)
++    const ffe_t* skewLUT,
++    const unsigned experiment_mask = 0U)
+ {
+     // Matched-source crossover evidence qualifies the accumulating schedule
+     // for the isolated x86 vector tables.  The scalar implementation remains
+@@ -1405,13 +1418,13 @@
+     {
+         IFFT_DIT_Encoder_Impl<true>(ops, bytes, source_policy_bytes,
+             data, m_truncated,
+-            work, xor_result, high_profile_transform, m, skewLUT);
++            work, xor_result, high_profile_transform, m, skewLUT, experiment_mask);
+     }
+     else
+     {
+         IFFT_DIT_Encoder_Impl<false>(ops, bytes, source_policy_bytes,
+             data, m_truncated,
+-            work, xor_result, high_profile_transform, m, skewLUT);
++            work, xor_result, high_profile_transform, m, skewLUT, experiment_mask);
+     }
+ }
+ 
+@@ -2260,6 +2273,10 @@
+ //------------------------------------------------------------------------------
+ // Reed-Solomon Encode
+ 
++extern "C" unsigned LeoGFNICombinedExperiment(
++    const backend::Ops&, uint64_t, uint64_t, unsigned, unsigned, unsigned, unsigned,
++    const leopard2_internal::SparseForwardPlanBatchView*);
++
+ void ReedSolomonEncodeWithSourcePolicy(
+     const backend::Ops& ops,
+     uint64_t buffer_bytes,
+@@ -2279,6 +2296,10 @@
+ 
+     const ffe_t* skewLUT = FFTSkewStorage + m;
+ 
++    const unsigned experiment_mask = LeoGFNICombinedExperiment(
++        ops, buffer_bytes, source_policy_bytes, original_count, recovery_count,
++        requested_output_count, m, sparse_plans);
++
+     IFFT_DIT_Encoder(
+         ops,
+         buffer_bytes,
+@@ -2289,7 +2310,7 @@
+         nullptr, // No xor output
+         true, // Legacy-high transform
+         m,
+-        skewLUT);
++        skewLUT, experiment_mask);
+ 
+     const unsigned last_count = original_count % m;
+     if (m >= original_count)
+@@ -2313,7 +2334,7 @@
+             work, // xor destination
+             true, // Legacy-high transform
+             m,
+-            skewLUT);
++            skewLUT, experiment_mask);
+     }
+ 
+     // Handle final partial set of m pieces:
+@@ -2334,7 +2355,7 @@
+             work, // xor destination
+             true, // Legacy-high transform
+             m,
+-            skewLUT);
++            skewLUT, experiment_mask);
+     }
+ 
+ skip_body:

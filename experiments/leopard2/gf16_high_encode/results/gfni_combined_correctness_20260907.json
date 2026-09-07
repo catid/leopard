@@ -1,0 +1,40 @@
+{
+  "ancillary_peak_bytes": 48529408,
+  "bead": "leopard-79h.38.5.4.16",
+  "build_peak_bytes": 172507136,
+  "directed_public_cases_per_build": 14,
+  "full_build_metadata_qualification": false,
+  "full_parity_bytes": 244056064,
+  "full_parity_files": 24,
+  "kernel_cases_per_build": {
+    "first": 480,
+    "terminal": 512
+  },
+  "modes": {
+    "0": "neither",
+    "1": "first_only",
+    "2": "terminal_only",
+    "3": "both"
+  },
+  "native_peak_bytes": 157872128,
+  "performance_inference": false,
+  "production_promotion": false,
+  "public_modes_per_case": 4,
+  "public_records": 48,
+  "release_archive_isa": "pass",
+  "sanitizer_correctness": "pass",
+  "target_external_terminal_calls": [
+    0,
+    0,
+    6,
+    6
+  ],
+  "target_ops_callbacks": [
+    4132,
+    2632,
+    2596,
+    1096
+  ],
+  "timed": false,
+  "validated_native_scopes": 80
+}
