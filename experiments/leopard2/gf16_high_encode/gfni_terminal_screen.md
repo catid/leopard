@@ -1,7 +1,7 @@
 # GFNI terminal accumulation timing screen
 
 Bead: `leopard-79h.38.5.4.14`. Date: 2026-09-07.
-Preregistration: one terminal-only OFF/ON screen; no production promotion.
+Status: completed clean screen, below the fixed 5% threshold; no promotion.
 
 This contrasts the default-off field overlay with the qualified terminal
 kernel from correctness milestone `726a202`. First-stage forwarding remains
@@ -74,3 +74,54 @@ executes no codec. Full source/correctness provenance remains in
 Review is Codex self-review plus deterministic/adversarial/sanitizer checks,
 not independent-model `CONVERGED`. The parent objective and actual broader
 Release metadata/v19/exact-Leopard1 qualifications remain open.
+
+## Completed result
+
+Preregistration `ef963c6` was pushed before the sole server launch. All twelve
+untimed checks passed. The passive sibling counter stayed at 194060 over
+10.000063972 seconds, and all 144 timed invocations observed zero sibling
+work. Frozen hashes and executable identity remained unchanged throughout.
+The decision is `reject_for_this_screen`.
+
+Ratios are overlay-OFF time / terminal-ON time; greater than one favors fusion.
+They are geometric means of three round contrasts, not confidence intervals.
+
+| Cell / route | OFF / terminal | Same-OFF control |
+| --- | ---: | ---: |
+| K1000/R200/64 KiB AUTO/GFNI target | 1.042655 | 1.003660 |
+| Same shape, explicit AVX2 | 1.001940 | 1.007697 |
+| Same shape, explicit AVX-512 | 0.997797 | 0.999345 |
+| K1000/R200/32 KiB AUTO | 0.999727 | 0.999303 |
+| K1000/R199/64 KiB AUTO | 0.993877 | 1.007691 |
+| K4096/R512/4 KiB AUTO | 0.999601 | 1.002030 |
+
+All eleven aggregate controls meet the fixed 2% band. Individual control
+rounds need not: for example, the target's first same-OFF round is 1.026034
+and the R199 neighbor's second OFF/ON round is 0.977368. Their aggregate
+controls pass as preregistered. The target's three ratios are 1.047415,
+1.039629 and 1.040937. The 1.042654726 aggregate is directionally positive
+in all three rounds but below 1.05, so no production policy is promoted.
+This is not evidence of no benefit, nor a pristine-production or Leopard1 win.
+
+The independent stdlib replay rehashed all sixteen inputs, checked every raw
+record and trace in exact order, and independently recomputed log-median
+round/aggregate contrasts. Normal and optimized Python agree with the
+collector. The server scope exited zero and peaked at 133,791,744 bytes under
+256 MiB; the larger initial result replay peak is 12,275,712 bytes. All six
+memory-event counters and swap are zero. Production code remains unchanged.
+
+The complete read-only bundle `.research/leopard-79h/gfni-terminal-screen.33r6nh`
+is retained locally and on ripper, including front-end qualification, frozen
+inputs, all raw server output, independent replay and resource logs. The
+preceding `gfni-terminal.nEDGNa` correctness bundle and
+`sanitizer-isa-policy.DVv0Pp` correction bundle remain separately retained.
+
+- Attempt journal: `b44dc82dee0abb25f588b797586175aa353a5a62e0f5b4b935140368640d5f00`.
+- Server scope: `c0f5eaa5f55615bb027c59b630e3e8602e525a43be30fb411a49243ef0668ecf`.
+
+The terminal-only `.14` evaluation closes as a completed below-threshold
+experiment, not completion of the performance objective. Follow-up `.16`
+evaluates first-stage and terminal fusion together using a new four-state
+contrast. The separate 1.033262x and 1.042655x observations motivate that
+experiment but must not be multiplied, added, pooled or used to bypass fresh
+correctness, interaction and timing evidence. The original gates stay fixed.

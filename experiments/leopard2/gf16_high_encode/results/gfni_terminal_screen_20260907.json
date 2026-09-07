@@ -1,0 +1,153 @@
+{
+  "schema": "gfni-terminal-screen-result/v1",
+  "bead": "leopard-79h.38.5.4.14",
+  "date": "2026-09-07",
+  "preregistration_commit": "ef963c6",
+  "correctness_commit": "726a202",
+  "plan_sha256": "18ab975e9d7d00ca66565c2a73bd5055edf9254220120fff2a5be572b87661ae",
+  "pins_sha256": "e77e07384ea55259428c76d15e8fc2e8425a540acc3963fa458a651d7850f7ae",
+  "attempt_sha256": "b44dc82dee0abb25f588b797586175aa353a5a62e0f5b4b935140368640d5f00",
+  "scope_sha256": "c0f5eaa5f55615bb027c59b630e3e8602e525a43be30fb411a49243ef0668ecf",
+  "passive": {
+    "before": 194060,
+    "after": 194060,
+    "elapsed_ns": 10000063972
+  },
+  "result": {
+    "cells": [
+      {
+        "cell": 0,
+        "ratios": {
+          "off_vs_fused": 1.042654726385342,
+          "same_off": 1.003660463193867
+        },
+        "round_ratios": {
+          "off_vs_fused": [
+            1.0474152210253738,
+            1.0396290203085086,
+            1.0409365883278046
+          ],
+          "same_off": [
+            1.026033636253606,
+            0.9975645363727325,
+            0.9877745891640393
+          ]
+        }
+      },
+      {
+        "cell": 1,
+        "ratios": {
+          "off_vs_fused": 1.0019398399445891,
+          "same_off": 1.0076968612759512
+        },
+        "round_ratios": {
+          "off_vs_fused": [
+            0.999877884676656,
+            1.0029584414307444,
+            1.002986381959782
+          ],
+          "same_off": [
+            0.9988308300071896,
+            1.0013471634864681,
+            1.0230882731958453
+          ]
+        }
+      },
+      {
+        "cell": 2,
+        "ratios": {
+          "off_vs_fused": 0.9977973072965987,
+          "same_off": 0.9993445568553662
+        },
+        "round_ratios": {
+          "off_vs_fused": [
+            0.9985337217411796,
+            0.9984888228416701,
+            0.9963709089636217
+          ],
+          "same_off": [
+            0.9980286049516629,
+            1.0022489183560368,
+            0.9977624803442733
+          ]
+        }
+      },
+      {
+        "cell": 3,
+        "ratios": {
+          "off_vs_fused": 0.9997270463509688,
+          "same_off": 0.9993026767316868
+        },
+        "round_ratios": {
+          "off_vs_fused": [
+            0.998893347605526,
+            1.0002836740515173,
+            1.00000465865061
+          ],
+          "same_off": [
+            1.000196138845827,
+            1.000308660941988,
+            0.9974059379460061
+          ]
+        }
+      },
+      {
+        "cell": 4,
+        "ratios": {
+          "off_vs_fused": 0.9938768958437323,
+          "same_off": 1.0076910723288892
+        },
+        "round_ratios": {
+          "off_vs_fused": [
+            1.0017756117448504,
+            0.9773675715712273,
+            1.002696282487961
+          ],
+          "same_off": [
+            1.000844634197177,
+            1.023596060950251,
+            0.9988193831530068
+          ]
+        }
+      },
+      {
+        "cell": 5,
+        "ratios": {
+          "off_vs_fused": 0.9996006283303842,
+          "same_off": 1.0020295528835115
+        },
+        "round_ratios": {
+          "off_vs_fused": [
+            0.9981563822038451,
+            1.0012728513647526,
+            0.9993751183756413
+          ],
+          "same_off": [
+            1.0024326770644238,
+            1.000384967043853,
+            1.0032732178280825
+          ]
+        }
+      }
+    ],
+    "complete": true,
+    "decision": "reject_for_this_screen",
+    "exact_leopard1_claim": false,
+    "peak_bytes": 133791744,
+    "performance_inference": true,
+    "preflights": 12,
+    "production_promotion": false,
+    "timed_invocations": 144
+  },
+  "all_11_aggregate_controls_valid": true,
+  "all_timed_sibling_deltas_zero": true,
+  "ratio_definition": "overlay-OFF time / terminal-ON time; not pristine production or a Leopard1 comparison",
+  "independent_replay_normal_and_optimized_agree": true,
+  "production_changed": false,
+  "retention": {
+    "bundle": ".research/leopard-79h/gfni-terminal-screen.33r6nh",
+    "files_including_manifest": 524,
+    "manifest_sha256": "64245f30afb66f3ca652897d54cdfe4f6a7c4aa3083cb2788318c65263876637"
+  },
+  "next": "leopard-79h.38.5.4.16: fresh four-state first-stage/terminal combination, no historical ratio multiplication or exhausted-attempt retry"
+}

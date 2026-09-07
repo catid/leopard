@@ -62,5 +62,6 @@
   },
   "review": "Codex self-review and deterministic/adversarial/sanitizer checks; Claude opt-out; no independent-model CONVERGED claim",
   "subsequent_policy_correction": "gfni_terminal_sanitizer_policy.md: whole-sanitizer scan remains a recorded failure but is outside the pre-existing production Release ISA gate; .15 resolved without code or gate changes.",
-  "next": "Prepare a separate terminal-only preregistered OFF/ON timing screen; no first-stage combination, exhausted-lane retry or production promotion."
+  "subsequent_timing_screen": "gfni_terminal_screen.md: completed clean144-invocation screen,1.042654726 OFF/ON below1.05, no promotion. .14 closed as a completed below-threshold experiment; .16 is a distinct future four-state combination.",
+  "next": "Keep historical qualification evidence intact; use the screen report for current evaluation status."
 }

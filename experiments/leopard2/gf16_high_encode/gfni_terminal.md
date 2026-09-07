@@ -1,10 +1,11 @@
 # GFNI final inverse accumulation experiment
 
 Bead: `leopard-79h.38.5.4.14`. Date: 2026-09-07.
-Status: focused correctness and structural milestone passed; experiment-only,
-untimed. The extra sanitizer-archive scan was subsequently resolved as outside
-the existing production audit's scope; see `gfni_terminal_sanitizer_policy.md`.
-The terminal evaluation and parent performance goal remain incomplete.
+Status: focused correctness passed; the subsequent clean timing screen measured
+1.042655x OFF/ON, below the fixed 5% gate. The terminal-only evaluation is
+complete without promotion; see `gfni_terminal_screen.md`. The extra sanitizer
+scan was resolved under existing policy in `gfni_terminal_sanitizer_policy.md`.
+The parent performance goal remains incomplete.
 
 The preceding first-stage forwarding screen measured a directional 1.033262x
 OFF/ON ratio, below its 5% gate, and was not promoted. This experiment leaves
@@ -166,9 +167,9 @@ is `e83a217e680a23088e53208d9ba7747742e7918a1377e74efe9c35399b4ba342`.
 Replay its frozen `replay/verify_gfni_terminal.py` using the experiment bundle
 and baseline `preflight` paths in the established 256-MiB/no-swap scope.
 
-## Next gate
+## Next gate at the initial correctness milestone
 
-No timing has been attempted. A separate driver without per-callback wrappers,
+At that milestone no timing had been attempted. A separate driver without per-callback wrappers,
 qualified capacity for its warmup/measurement loop, and a newly preregistered
 frozen-binary OFF/ON screen are required. Keep first-stage forwarding OFF for
 this isolated contrast. Retain the 5% target and 2% control gates, same-OFF
@@ -182,3 +183,7 @@ Review provenance is Codex self-review plus deterministic/adversarial/sanitizer
 checks under the user's Claude opt-out, not independent-model `CONVERGED`.
 No Claude/API, subagent, unrelated workload, kernel setting or affinity change
 was used. The parent performance objective remains active.
+
+The later preregistered screen completed with valid controls but a below-gate
+1.042655x ratio. See `gfni_terminal_screen.md` for all results, limitations and
+the distinct four-state combination follow-up `.38.5.4.16`.
