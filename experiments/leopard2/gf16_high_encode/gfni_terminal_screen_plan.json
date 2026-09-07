@@ -1,0 +1,121 @@
+{
+  "schema": "gfni-terminal-screen-plan/v1",
+  "bead": "leopard-79h.38.5.4.14",
+  "scope": "One new GFNI terminal inverse accumulation ON versus overlay-OFF diagnostic. First-stage forwarding stays unchanged/OFF. Not a source-staging retry, not the exhausted .10 Leopard1 comparison or .13 first-stage attempt, not v19 qualification or production promotion. OFF includes the experimental field branch and hook and is not pristine production.",
+  "codec_commit": "36dc0c8f66604b8d974468e687c51e6183ecb61d",
+  "correctness_milestone": "726a202",
+  "build_policy": "Reuse frozen full dual-field Release archive bf189e85 from gfni-terminal.nEDGNa, base codec36dc0c8 plus field overlay a731146b and added GFNI kernel e53fffd3. No field/backend rebuild here. Only new front end and hook compiled with GCC13.3, C++11, -O3 -DNDEBUG -Wall -Wextra -Werror -fopenmp -pthread, LEO_GFNI_TERMINAL_CAPACITY=64 and exact base-commit definition. No linker/libc/public-encode/individual-callback wrappers, sanitizer or fno-builtin flags in timing executable. One executable handles both modes; only --terminal=0/1 changes. Both record a bounded once-per-pass trace checked and printed outside timing. Diagnostic, not zero-instrumentation production performance.",
+  "artifact_sha256": {
+    "Leopard2BackendAVX2.cpp": "e154659949041d5739b4c85767ac8783d8c65bb5bb95be5cd437cdb9023203ff",
+    "Leopard2BackendGFNI.cpp": "00c6f88be29548c5f876ee10b4f8147b91df7d300809b808845977f267b149b1",
+    "LeopardFF16.cpp": "497a04f957552d6cd32e4de1c0bd19f8a41515a119e5f8226d2d75c90c47e6d1",
+    "candidate.a": "bf189e85b309eda5dea55c8a47e5b78e38779822d3556f86f85c457e081be127",
+    "current_route_screen.cpp": "d2ba6c99caa97603ec7091a4a6e4fe805c1be56640e769e88d6aedebf79ccaa7",
+    "expected.json": "92c4a9e7ab49663c83c6b074d39180e1058fbfcbb4e7ff1989131d673a7b2bb8",
+    "gfni_terminal.cpp": "90fd9e32aaee8761ec562371fcbf037710abfe4ac1cb51a5255efe3408955b6f",
+    "gfni_terminal.h": "5349844ef23b4f03557552f053996510668c005f0a3024fc8dda1e3412dc1523",
+    "gfni_terminal.patch": "a731146b01c5013e084370862923ace33d1b49eb99a8cfc68780a3478d558ea5",
+    "gfni_terminal_backend.cpp": "e53fffd31283cd96b73f832bb070a8bbb0fbbcbee41259db7bca1bd1753a0596",
+    "gfni_terminal_timing.cpp": "5de4d5df8797abe9c13e6dce0d272f9625108a879dc4fa73ad250254716fbf76",
+    "run_current_route_screen.py": "cad9767bda653e9580841fdca16ef4fcfe1e3095d7169ee95b5fd9ae182d5593",
+    "run_gfni_terminal_screen.py": "5a9dd8dffb7ccf32796cea9994dd8bb3c53bdfd6cc1742af2446c528f895e0cd",
+    "run_split_cache_screen.py": "e060014b597b1510736e5cdffee3bc8220c7d66ca70f98dcb374112ca8764629",
+    "timing": "683d3cef87436cae6236ba83227dc1866bb9944d19d7598f02cd34de81b1788f"
+  },
+  "host": {
+    "hostname": "foureyes",
+    "kernel": "6.8.0-138-generic",
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper PRO 9985WX 64-Cores"
+  },
+  "host_selection": "Existing foureyes physical pair22/86; hostname/kernel/CPU identity and topology rechecked before this preregistration. No selection by speed, unrelated affinity intervention, workload stopping or kernel changes. Exhausted .10 and completed .13 supply no timings to this terminal contrast.",
+  "cpu": 22,
+  "sibling": 86,
+  "controller_cpu": 0,
+  "passive_seconds": 10,
+  "attempt_budget": 1,
+  "seed": 20260906,
+  "initial_untimed_encodes": 1,
+  "additional_warmups": 4,
+  "samples_per_process": 21,
+  "rounds": 3,
+  "orders": {
+    "off_vs_fused": [
+      "off",
+      "on",
+      "on",
+      "off"
+    ],
+    "same_off": [
+      "off_a",
+      "off_b",
+      "off_b",
+      "off_a"
+    ]
+  },
+  "cells": [
+    {
+      "id": 0,
+      "k": 1000,
+      "r": 200,
+      "bytes": 65536,
+      "requested": "auto",
+      "current_route": "gfni",
+      "role": "target"
+    },
+    {
+      "id": 1,
+      "k": 1000,
+      "r": 200,
+      "bytes": 65536,
+      "requested": "avx2",
+      "current_route": "avx2",
+      "role": "unchanged"
+    },
+    {
+      "id": 2,
+      "k": 1000,
+      "r": 200,
+      "bytes": 65536,
+      "requested": "avx512",
+      "current_route": "avx512",
+      "role": "unchanged"
+    },
+    {
+      "id": 3,
+      "k": 1000,
+      "r": 200,
+      "bytes": 32768,
+      "requested": "auto",
+      "current_route": "avx2",
+      "role": "unchanged"
+    },
+    {
+      "id": 4,
+      "k": 1000,
+      "r": 199,
+      "bytes": 65536,
+      "requested": "auto",
+      "current_route": "avx2",
+      "role": "unchanged"
+    },
+    {
+      "id": 5,
+      "k": 4096,
+      "r": 512,
+      "bytes": 4096,
+      "requested": "auto",
+      "current_route": "avx2",
+      "role": "unchanged"
+    }
+  ],
+  "sequence": "Cells0..5, rounds0..2, off_vs_fused then same_off, four processes each.144 timed invocations. OFF and both same-OFF labels share one immutable path/inode and --terminal=0 arguments; ON only changes to --terminal=1. No cross-cell absolute comparisons or multiplication with historical ratios.",
+  "workload": "Same existing six public GF16 legacy-high/native full-output workloads. One public encode per sample, initial1+warmup4+timed21; no initialization, allocation, source fill, parity hash or setup inside the clock. Single-thread setting enforced process-locally. New front end delegates the unchanged existing measurement loop once. Separate --exercise runs26 independent --check workloads without any clock; it tests pass-count capacity, not timed-loop allocation behavior.",
+  "validation": "24 Release/sanitizer OFF/ON records and12 full parity files122028032bytes equal independently linked Leopard1 references; four clock-free26-check target exercises produce52 passes each;16/64 capacities pass both modes, overflow, exact records, reset and neighbor in both builds. Default16 Release callback observer is byte-identical to726a202 (9219486c).16 malformed/invalid-timing requests refuse. Seven pure collector tests and retained-only qualification pass normal/-O.33 native scopes peak141201408/256MiB, build115245056/512MiB, all6 memory events0/swap0. Full Release archive ISA already passes; .15 separately verified existing sanitizer-correctness/Release-ISA policy and unchanged checker controls, no gate or sanitizer changes. Remote12 untimed checks must match before passive observation. All sources/executable/archive frozen and pinned.",
+  "validity": "Commit and push preregistration before launching the sole collector attempt. Hold canonical campaign lock plus physical-pair lease. Lane-owned read-only executable/archive/source/dependencies rehashed before and after every child; executable device/inode/size/mode stable. Ten-second passive sibling check immediately precedes timing; every timed process needs zero nonidle sibling jiffies. Any mismatch, failed child or contamination stops the attempt. Collector launch consumes the sole attempt even before clocks. No retry, CPU substitution, partial analysis, pooling, threshold relaxation or unrelated affinity change.",
+  "analysis": "Per-process median21; per-round sqrt(slot0*slot3/(slot1*slot2)); geometric mean3 round ratios. Require all144 invocations in exact order with expected trace counts and zero sibling work before any analysis. No confidence intervals, trimming or statistical retry.",
+  "decision": "All six same-OFF aggregate ratios and all five mechanically unchanged OFF/ON aggregate ratios must lie inside[1/1.02,1.02], otherwise inconclusive_controls with no performance conclusion. If controls valid, target OFF/ON>=1.05 and all three target rounds>1 select continue_to_future_qualification; otherwise reject_for_this_screen. No confidence interval, production/pure-current speedup, or exact-Leopard1 conclusion.",
+  "resources": "One substantial process at a time, builds512MiB-j1, tests/timing256MiB, swap0. Timed child CPU30s/file1MiB, walltimeout60s. Untimed parity checks256MiB/file16MiB. No broad controller, Claude/subagents, privileged settings, other workload/affinity change. Existing v19 and exact-Leopard1 gap gates stay incomplete and unchanged. Codex self-review plus deterministic/sanitizer validation, not independent-model CONVERGED."
+}

@@ -2,8 +2,9 @@
 
 Bead: `leopard-79h.38.5.4.14`. Date: 2026-09-07.
 Status: focused correctness and structural milestone passed; experiment-only,
-untimed. Full sanitizer-archive ISA qualification has an unresolved baseline
-failure tracked in `.38.5.4.15`. Neither task nor the parent goal is complete.
+untimed. The extra sanitizer-archive scan was subsequently resolved as outside
+the existing production audit's scope; see `gfni_terminal_sanitizer_policy.md`.
+The terminal evaluation and parent performance goal remain incomplete.
 
 The preceding first-stage forwarding screen measured a directional 1.033262x
 OFF/ON ratio, below its 5% gate, and was not promoted. This experiment leaves
@@ -131,8 +132,11 @@ archive fails identically; their offending member is byte-identical
 Observed `vmovdqu8` stores target ASan shadow offsets around `0x7fff8000`,
 consistent with sanitizer instrumentation; this is an inference, not a completed
 compiler diagnosis. The modified FF16/GFNI sanitizer members pass separately.
-That narrow pass does not replace the failing whole-archive gate. Follow-up
-`leopard-79h.38.5.4.15` remains open. No scanner or width policy was relaxed.
+That narrow pass does not make the whole archive pass. The initial milestone
+treated this as an unresolved gate; follow-up `leopard-79h.38.5.4.15` verified
+that existing project policy deliberately separates sanitizer correctness
+from unsanitized Release ISA auditing. See the correction report above.
+No scanner or width policy was relaxed, and the raw failures remain retained.
 The largest ancillary scan scope is 188,465,152 bytes with zero memory events
 and swap, including retained nonzero ISA exits.
 
@@ -171,8 +175,8 @@ this isolated contrast. Retain the 5% target and 2% control gates, same-OFF
 layout controls and zero-sibling requirement. Do not retry the exhausted `.10`
 Leopard1 attempt or `.13` screen, multiply old ratios, or infer a production
 speedup from the callback/traffic model. Any later combined experiment needs
-its own evidence. Production integration additionally needs the unresolved
-sanitizer ISA, broader correctness, v19 and exact-Leopard1 qualification gates.
+its own evidence. Production integration additionally needs broader correctness,
+unsanitized Release ISA/metadata, v19 and exact-Leopard1 qualification gates.
 
 Review provenance is Codex self-review plus deterministic/adversarial/sanitizer
 checks under the user's Claude opt-out, not independent-model `CONVERGED`.

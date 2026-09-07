@@ -61,5 +61,6 @@
     "baseline_manifest_sha256": "e83a217e680a23088e53208d9ba7747742e7918a1377e74efe9c35399b4ba342"
   },
   "review": "Codex self-review and deterministic/adversarial/sanitizer checks; Claude opt-out; no independent-model CONVERGED claim",
-  "next": "Resolve sanitizer ISA qualification and prepare a separate terminal-only preregistered OFF/ON timing screen; no first-stage combination, exhausted-lane retry or production promotion."
+  "subsequent_policy_correction": "gfni_terminal_sanitizer_policy.md: whole-sanitizer scan remains a recorded failure but is outside the pre-existing production Release ISA gate; .15 resolved without code or gate changes.",
+  "next": "Prepare a separate terminal-only preregistered OFF/ON timing screen; no first-stage combination, exhausted-lane retry or production promotion."
 }
