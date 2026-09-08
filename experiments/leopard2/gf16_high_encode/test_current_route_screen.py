@@ -1,11 +1,43 @@
 """Small pure tests; no benchmark subprocess or timing is executed."""
 import copy
+import json
+from pathlib import Path
 import unittest
 
-from run_current_route_screen import ORDERS, analyze, validate
+from run_current_route_screen import ORDERS, analyze, validate, validate_plan
 
 
 class CurrentRouteScreenTests(unittest.TestCase):
+    def test_host_specific_profiles(self):
+        for name in ("current_route_screen_plan.json", "current_route_screen_work_plan.json"):
+            plan = json.loads(Path(__file__).with_name(name).read_text())
+            validate_plan(plan, name)
+            for key in ("cpu", "sibling", "controller_cpu", "passive_seconds",
+                        "attempt_budget", "rounds", "samples_per_process"):
+                for value in (True, 0, plan[key] + 1, float(plan[key])):
+                    if type(value) is int and value == plan[key]:
+                        continue
+                    changed = copy.deepcopy(plan)
+                    changed[key] = value
+                    with self.assertRaises(ValueError, msg=key):
+                        validate_plan(changed, name)
+            for key in plan["host"]:
+                changed = copy.deepcopy(plan)
+                changed["host"][key] = "changed"
+                with self.assertRaises(ValueError, msg=key):
+                    validate_plan(changed, name)
+            other = ("current_route_screen_work_plan.json" if name ==
+                     "current_route_screen_plan.json" else "current_route_screen_plan.json")
+            with self.assertRaises(ValueError):
+                validate_plan(plan, other)
+            with self.assertRaises(ValueError):
+                validate_plan(plan, "../" + name)
+            for key in ("orders", "cells"):
+                changed = copy.deepcopy(plan)
+                changed[key] = {} if key == "orders" else []
+                with self.assertRaises(ValueError):
+                    validate_plan(changed, name)
+
     def setUp(self):
         self.rows = []
         for cell in range(6):

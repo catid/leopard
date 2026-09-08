@@ -66,24 +66,46 @@ def analyze(rows):
             "historical_exact_main_gap_closed": False}
 
 
-def run(bundle, output):
-    output.mkdir(mode=0o700)  # No resume, overwrite, retry or partial pooling.
-    plan = json.loads((bundle / "current_route_screen_plan.json").read_text())
-    pins = json.loads((bundle / "pins.json").read_text())
-    expected = json.loads((bundle / "expected.json").read_text())
+def validate_plan(plan, name):
+    profiles = {
+        "current_route_screen_plan.json": (22, 86, "foureyes", "6.8.0-138-generic",
+            "AMD Ryzen Threadripper PRO 9985WX 64-Cores"),
+        "current_route_screen_work_plan.json": (26, 90, "work", "6.8.0-137-generic",
+            "AMD Ryzen Threadripper 9980X 64-Cores"),
+    }
+    require(name in profiles, "unsupported plan name")
+    cpu, sibling, hostname, kernel, model = profiles[name]
+    for key in ("cpu", "sibling", "controller_cpu", "passive_seconds",
+                "attempt_budget", "rounds", "samples_per_process"):
+        require(type(plan[key]) is int, "protocol integer: " + key)
     require((plan["cpu"], plan["sibling"], plan["controller_cpu"], plan["passive_seconds"],
              plan["attempt_budget"], plan["rounds"], plan["samples_per_process"]) ==
-            (22, 86, 0, 10, 1, 3, 21), "changed protocol")
+            (cpu, sibling, 0, 10, 1, 3, 21), "changed protocol")
     require(plan["orders"] == ORDERS and
             [(x["k"], x["r"], x["bytes"], x["current_route"]) for x in plan["cells"]]
                 == CELLS, "changed cases/order")
+    require(plan["host"] == {"hostname": hostname, "kernel": kernel,
+        "vendor_id": "AuthenticAMD", "cpu family": "26", "model": "8",
+        "model name": model}, "changed host profile")
+
+
+def run(bundle, output, plan_name="current_route_screen_plan.json"):
+    validate_name = plan_name in ("current_route_screen_plan.json",
+                                 "current_route_screen_work_plan.json")
+    require(validate_name, "unsupported plan name")
+    output.mkdir(mode=0o700)  # No resume, overwrite, retry or partial pooling.
+    plan = json.loads((bundle / plan_name).read_text())
+    pins = json.loads((bundle / "pins.json").read_text())
+    expected = json.loads((bundle / "expected.json").read_text())
+    validate_plan(plan, plan_name)
+    cpu, sibling = plan["cpu"], plan["sibling"]
     require(plan["host"] == host_identity(), "host changed")
-    for cpu in (22, 86):
-        require(Path(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list")
-                .read_text().strip() == "22,86", "physical topology changed")
+    for member in (cpu, sibling):
+        require(Path(f"/sys/devices/system/cpu/cpu{member}/topology/thread_siblings_list")
+                .read_text().strip() == f"{cpu},{sibling}", "physical topology changed")
     os.sched_setaffinity(0, {0})
     state = {"schema": "leopard-gf16-current-route-attempt/v1", "pins": pins,
-             "plan_sha256": digest(bundle / "current_route_screen_plan.json"),
+             "plan_sha256": digest(bundle / plan_name),
              "host": host_identity(), "preflight": [], "invocations": [], "complete": False}
     lock_fds = []
 
@@ -101,7 +123,7 @@ def run(bundle, output):
         require(root.is_dir() and not root.is_symlink() and root.stat().st_uid == os.getuid()
                 and root.stat().st_mode & 0o777 == 0o700, "unsafe lease directory")
         for path in (Path("/tmp/leopard-gf8-authoritative.lock"),
-                     root / f"leopard2-cpu-pair-{os.getuid()}-22-86.lock"):
+                     root / f"leopard2-cpu-pair-{os.getuid()}-{cpu}-{sibling}.lock"):
             fd = os.open(path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
             lock_fds.append(fd)
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -110,15 +132,15 @@ def run(bundle, output):
                "OMP_NUM_THREADS": "1", "OMP_DYNAMIC": "FALSE", "OMP_THREAD_LIMIT": "1"}
 
         def invoke(executable, cell, label, measured):
-            command = ["/usr/bin/taskset", "-c", "22", "/usr/bin/prlimit", "--cpu=30:30",
+            command = ["/usr/bin/taskset", "-c", str(cpu), "/usr/bin/prlimit", "--cpu=30:30",
                        "--fsize=1048576:1048576", "--", str(bundle / executable),
                        "--measure" if measured else "--check", str(cell)]
-            before = sibling_ticks(86)
+            before = sibling_ticks(sibling)
             stdout, stderr = output / (label + ".stdout"), output / (label + ".stderr")
             with stdout.open("xb") as out, stderr.open("xb") as err:
                 child = subprocess.run(command, stdout=out, stderr=err, env=env,
                                        timeout=60, check=False)
-            after = sibling_ticks(86)
+            after = sibling_ticks(sibling)
             require(child.returncode == 0 and stderr.stat().st_size == 0, "child: " + label)
             require(stdout.stat().st_size <= 1048576, "output size")
             record = json.loads(stdout.read_text())
@@ -157,5 +179,7 @@ def run(bundle, output):
 
 
 if __name__ == "__main__":
-    require(len(sys.argv) == 3, "usage: run_current_route_screen.py frozen output")
-    run(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve())
+    require(len(sys.argv) in (3, 4),
+            "usage: run_current_route_screen.py frozen output [plan-name]")
+    run(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve(),
+        sys.argv[3] if len(sys.argv) == 4 else "current_route_screen_plan.json")

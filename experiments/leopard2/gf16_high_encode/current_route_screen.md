@@ -1,7 +1,30 @@
 # Current-route GF16 encoder diagnostic
 
 Bead: `leopard-79h.38.5.4.10`. Date: 2026-09-06.
-Status: **attempt exhausted at the passive gate; zero encode timings**.
+Status: **original server attempt exhausted; local-only successor being prepared**.
+
+## Local-only successor (2026-09-08)
+
+The user redirected all work to this machine because the SSH server is busy.
+No further inspection, computation or evidence transfer on either SSH server is
+authorized. The earlier proposal to move unrelated server threads is superseded,
+not approved. No unrelated local process will be stopped or have its affinity
+changed, and no persistent host settings will change.
+
+`current_route_screen_work_plan.json` separately preregisters one local attempt
+on `work`, Threadripper 9980X, kernel6.8.0-137-generic, CPU26/sibling90 with
+controllerCPU0. A read-only ten-second CPU survey showed both idle; no codec
+timings were used for CPU selection. The original plan and failure remain
+unchanged. The collector accepts only the two explicit host/CPU profiles, not
+arbitrary CPU substitution. Pinning applies only to our controller and children.
+
+Reuse the exact locally built binaries and archives listed below, in fresh
+lane-owned read-only copies. Replaying the retained correctness evidence again
+verified all13 file pins, six sanitizer records and61,014,016 full parity bytes.
+All six workloads,144 timed children,3 ABBA rounds,21 samples, identical-path
+controls,2-percent thresholds,10-second passive and zero-sibling gates remain
+unchanged. No pooling with server observations, retries, production promotion
+or v19 closure is permitted. Commit and push this successor before launch.
 
 ## Question and scope
 
