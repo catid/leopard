@@ -1,0 +1,78 @@
+{
+  "schema": "leopard-gf16-current-route-work-result/v1",
+  "date": "2026-09-08",
+  "bead": "leopard-79h.38.5.4.10",
+  "preregistration": "b8b9b1a9d8074b14f75fcf08a88646eefa8f8c2a",
+  "host": {
+    "hostname": "work",
+    "kernel": "6.8.0-137-generic",
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper 9980X 64-Cores"
+  },
+  "cpu": 26,
+  "sibling": 90,
+  "complete": false,
+  "attempt_budget_consumed": 1,
+  "untimed_checks": 12,
+  "timed_invocations": 24,
+  "passive": {
+    "before": 569301,
+    "after": 569301,
+    "elapsed_ns": 10000076453
+  },
+  "failure": {
+    "reason": "sibling activity; attempt stopped",
+    "cell": 0,
+    "round": 2,
+    "comparison": "same_current",
+    "slot": 3,
+    "sibling_delta": 4,
+    "prior_23_deltas_zero": true
+  },
+  "performance_inference": false,
+  "partial_ratios_computed": false,
+  "production_changed": false,
+  "servers_contacted": false,
+  "unrelated_affinity_changed": false,
+  "resources": {
+    "memory_peak": 132247552,
+    "memory_max": 268435456,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    },
+    "swap": 0,
+    "exit_code": 1
+  },
+  "validation": {
+    "prior_manifest_entries": 158,
+    "prior_frozen_pins": 13,
+    "prior_full_parity_bytes": 61014016,
+    "prior_sanitizer_records": 6,
+    "new_frozen_pins": 14,
+    "pure_tests_per_mode": 6,
+    "semantic_mutations_rejected_per_mode": 11,
+    "modes": [
+      "normal",
+      "optimized"
+    ],
+    "review": "Codex self-review and deterministic offline replay; user opted out of Claude; no independent-model CONVERGED claim"
+  },
+  "retention": {
+    "bundle": ".research/leopard-79h/gf16-current-route-work-failed.xhiwvW",
+    "manifest_entries": 102,
+    "manifest_sha256": "847a0721b8939b1c03a88cf3afc753e60bf1846643d0a7692aa1479fe5cdfbc6",
+    "journal_sha256": "c9885e8e70f5ce71aca405d253961fe0c9bf1a1b202b74b946ff237365126e2f",
+    "scope_log_sha256": "67644df0e8eccc1a43908bdb72fc05b793ee57ac03a058996e8dab2fee7ad523",
+    "required_prior_correctness_bundle": ".research/leopard-79h/gf16-current-route-failed.STc10h",
+    "prior_manifest_sha256": "e83a217e680a23088e53208d9ba7747742e7918a1377e74efe9c35399b4ba342",
+    "locations": "Local only, per user direction."
+  },
+  "next": "Controlled local CPU window with explicit authority for any unrelated-thread affinity exclusion/restoration and separately preregistered successor. No retry, CPU substitution or partial inference under the consumed plan; no SSH fallback. Combined-fusion screen pending, broader v19 qualification separate and open."
+}

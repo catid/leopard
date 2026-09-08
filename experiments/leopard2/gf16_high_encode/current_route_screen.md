@@ -1,7 +1,7 @@
 # Current-route GF16 encoder diagnostic
 
 Bead: `leopard-79h.38.5.4.10`. Date: 2026-09-06.
-Status: **original server attempt exhausted; local-only successor being prepared**.
+Status: **both original server and local successor attempts exhausted; no valid comparison**.
 
 ## Local-only successor (2026-09-08)
 
@@ -25,6 +25,38 @@ All six workloads,144 timed children,3 ABBA rounds,21 samples, identical-path
 controls,2-percent thresholds,10-second passive and zero-sibling gates remain
 unchanged. No pooling with server observations, retries, production promotion
 or v19 closure is permitted. Commit and push this successor before launch.
+
+Preregistration `b8b9b1a` was pushed before the sole local launch. All12 fresh
+untimed checks passed, and sibling90 remained at569301 non-idle jiffies during
+the10.000076453-second passive window. The run stopped on its24th timed
+invocation (cell0, round2, final same-current control): sibling90 accumulated
+4 non-idle jiffies. The preceding23 invocations had zero sibling deltas.
+The journal has `complete:false` and no analysis. No partial target ratio,
+cross-host comparison or performance conclusion is valid. Budget1/1 is
+exhausted; there was no retry or CPU substitution.
+
+The local scope exited1 after24.47 seconds, peaked at132,247,552 bytes under
+256MiB, and recorded all six memory event counters and swap as zero. No
+unrelated workload was moved or stopped. Neither SSH server was contacted.
+Raw evidence is `/tmp/leopard-current-local.BUcGF2`. The standalone
+`replay_current_route_work_failure.py` verifies all14 frozen inputs,12 raw
+checks,24 raw timing records, ordering, route/source identities, exact failure
+and resource evidence without computing a ratio. Normal and optimized Python
+replays also reject11 semantic mutations each. The original archive's complete
+158-entry manifest and full parity replay were rechecked locally before launch.
+
+Next measurement requires a controlled **local** CPU window and a separately
+preregistered successor. This user instruction changes the host, not the
+correctness, resource or isolation gates. Combined-fusion timing is still
+pending; the busy servers are not a fallback.
+
+The read-only102-entry local bundle is
+`.research/leopard-79h/gf16-current-route-work-failed.xhiwvW`, with outer
+`SHA256SUMS` hash `847a0721b8939b1c03a88cf3afc753e60bf1846643d0a7692aa1479fe5cdfbc6`.
+It contains the frozen artifacts, raw records, tests/replays and logs. The
+unchanged original correctness archive below is a required separate reference,
+not duplicated. The sealed-copy replay passed locally; no second-host copy was
+made. Structured details are in `results/current_route_work_20260908.json`.
 
 ## Question and scope
 
