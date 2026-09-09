@@ -1,0 +1,227 @@
+{
+  "schema": "leopard-avx2-adjacent-plan/v1",
+  "bead": "leopard-79h.38.5.4.18.3.2",
+  "host": {
+    "hostname": "work",
+    "kernel": "6.8.0-137-generic",
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper 9980X 64-Cores"
+  },
+  "cpu": 26,
+  "sibling": 90,
+  "controller_cpu": 0,
+  "passive_seconds": 10,
+  "condition": "slipgate-disabled-20260909",
+  "attempt_budget": 1,
+  "attempt_root": "/tmp/leopard-adjacent-screen.04vrZl/attempt1",
+  "rounds": 3,
+  "sample_passes": 21,
+  "spans_per_process": 84,
+  "groups": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    256,
+    1
+  ],
+  "paired_orders": [
+    "0110",
+    "1001"
+  ],
+  "cross_orders": {
+    "same_off": [
+      "0000",
+      "0000",
+      "0000",
+      "0000"
+    ],
+    "same_on": [
+      "1111",
+      "1111",
+      "1111",
+      "1111"
+    ],
+    "original_on": [
+      "PPPP",
+      "1111",
+      "1111",
+      "PPPP"
+    ],
+    "original_off": [
+      "PPPP",
+      "0000",
+      "0000",
+      "PPPP"
+    ],
+    "same_original": [
+      "PPPP",
+      "PPPP",
+      "PPPP",
+      "PPPP"
+    ]
+  },
+  "native_cross_orders": {
+    "native_on": [
+      "NNNN",
+      "1111",
+      "1111",
+      "NNNN"
+    ],
+    "same_native": [
+      "NNNN",
+      "NNNN",
+      "NNNN",
+      "NNNN"
+    ]
+  },
+  "target_cells": [
+    0,
+    1,
+    2,
+    8
+  ],
+  "affected_neighbors": [
+    3,
+    4
+  ],
+  "unchanged_neighbors": [
+    5,
+    6,
+    7
+  ],
+  "native_cells": [
+    0,
+    1,
+    2,
+    8
+  ],
+  "cells": [
+    [
+      1000,
+      200,
+      32768,
+      2,
+      3,
+      "encode",
+      "target"
+    ],
+    [
+      1000,
+      199,
+      65536,
+      2,
+      3,
+      "encode",
+      "target"
+    ],
+    [
+      1000,
+      200,
+      65536,
+      2,
+      3,
+      "encode",
+      "target"
+    ],
+    [
+      4096,
+      512,
+      4096,
+      2,
+      3,
+      "encode",
+      "affected_neighbor"
+    ],
+    [
+      1000,
+      199,
+      32768,
+      2,
+      0,
+      "encode",
+      "affected_neighbor"
+    ],
+    [
+      1000,
+      200,
+      32768,
+      2,
+      6,
+      "encode",
+      "unchanged_neighbor"
+    ],
+    [
+      1000,
+      200,
+      32768,
+      2,
+      0,
+      "encode",
+      "unchanged_neighbor"
+    ],
+    [
+      17,
+      7,
+      64,
+      1,
+      3,
+      "encode",
+      "unchanged_neighbor"
+    ],
+    [
+      1000,
+      200,
+      32768,
+      2,
+      3,
+      "one_item_batch",
+      "target"
+    ]
+  ],
+  "timed_processes": 690,
+  "preflights": 36,
+  "cross_control_aggregates": 31,
+  "within_control_aggregates": 124,
+  "paired_estimator": "median21_sqrt_off_product_over_on_product",
+  "within_estimator": "median21_sqrt_outer_product_over_inner_product_each_samepath_process_slot",
+  "process_estimator": "median84_all_group_averages",
+  "cross_estimator": "sqrt_cost0_cost3_over_cost1_cost2",
+  "round_aggregation": "geometric_mean_three_rounds_each_comparison_separately",
+  "minimum_gain": 1.05,
+  "original_minimum_gain": 1.05,
+  "native_minimum_gain": 1.05,
+  "equivalence_bound": 1.02,
+  "affected_neighbor_minimum": 0.9803921568627451,
+  "original_off_diagnostic_only": true,
+  "every_target_round_positive": true,
+  "production_promotion": false,
+  "confidence_intervals": false,
+  "authoritative_v19": false,
+  "pristine_off_claim": false,
+  "codec_commit": "45e2effd869859c9b3aa48190eff6f4738817c61",
+  "native_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+  "runtime_commit": "bd4c17594fa289b4b4f517f0d113b0f74bd68ebb",
+  "timer_commit": "a6634c781be0d4b31248de8d8d2a30a1e00511ef",
+  "artifact_sha256": {
+    "native": "fafc027e811613e5a5e82bdc0ad6d94e0081491dc6adc7b669c92a83a95b755e",
+    "original": "e45a2d4b305f5d16a75c548e978b11af4a50e6d28482d05ae9c95b5e0ba95a71",
+    "current": "b9089340fab39f6261dc2963b8fd0d7b14acf5dbeb8f0e556a1679302e74c3af",
+    "native.a": "3f83c55599cbfbeea5d15adf3627405bcde1cbed2ddf4a672fbc75b186f5c4c1",
+    "original.a": "89f33d3d43f792de078c38469f9406dded2b69126af2c6fc8db6e2acb77cd334",
+    "current.a": "542c340e53c1c607feb44e4d8b048bdcef41a7a04c2829c9fb62d27acd624644",
+    "build.json": "f02f61e9a9ced23552e2d720478d7699eba82ce38011efb73acdb3c475809592",
+    "checks.json": "12f817fe7e0b1c9879e53f8b5ff683b9333b60303c9f820d8bee6e091aa7300f",
+    "qualification.json": "4e328eb98f873e2b7abf8255676dc44b34dd27af3e7d16436933032ac816c307",
+    "qualification.manifest": "f3e58727918ded2e06b62c250ff1b19bde5d7860c107dbf9a8166a67fa0f4dfa",
+    "l2-driver.o": "94128723910cea77359a781767219dcc847fd15b14f40ed91972e172a4fec5da",
+    "native-driver.o": "d6c7ca19e9454a71328f51b3abca781a7cd26240c6cc591ccca57eaee28f094f",
+    "leopard2.cpp": "93412028272454b2457f9928a6bc4c34684591f5bee2c882a3ad0000fd50cc70",
+    "Leopard2Direct.h": "da4b39084cf7be12e824f46e799386d742120fe50a852c8b6a12dd9fe0c6b423"
+  }
+}

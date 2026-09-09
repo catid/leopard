@@ -1,0 +1,52 @@
+{
+  "attempt_created": false,
+  "bead": "leopard-79h.38.5.4.18.3.2",
+  "frozen_files": 40,
+  "original_and_runtime_shared_driver": true,
+  "pins_sha256": "afafff50bc5c2e7d7b1760169eea7d71f5afc44f6310e1fc3f10a10c037c25f1",
+  "plan_sha256": "81f7d2ffeb3ef22833470be72197960dc81225a2e62533076f8b735f377e1fcf",
+  "preflights": 36,
+  "prior_failed_fixture": {
+    "benchmark_executed": false,
+    "cause": "Pretty JSON exceeded unchanged 4MiB parser; compact complete/maximal fixture passes.",
+    "codec_executed": false,
+    "log_sha256": "b0c4f0b55f0d98feb9640e61198b5cf90e4ce14be894fad01fd78a7c0ea7ecd5",
+    "max_events": 0,
+    "oom_events": 0,
+    "peak": 61612032,
+    "swap": 0
+  },
+  "proposed_controls": 155,
+  "proposed_spans": 57960,
+  "proposed_timed_processes": 690,
+  "python_tests_per_mode": 20,
+  "qualification_commit": "a6634c781be0d4b31248de8d8d2a30a1e00511ef",
+  "resources": {
+    "freeze": {
+      "max_events": 0,
+      "maximum": 268435456,
+      "oom_events": 0,
+      "peak": 162521088,
+      "swap": 0
+    },
+    "tests-normal": {
+      "max_events": 0,
+      "maximum": 268435456,
+      "oom_events": 0,
+      "peak": 58589184,
+      "swap": 0
+    },
+    "tests-optimized": {
+      "max_events": 0,
+      "maximum": 268435456,
+      "oom_events": 0,
+      "peak": 57290752,
+      "swap": 0
+    }
+  },
+  "review": "Codex self-review and deterministic/adversarial checks; Claude waived, not independent-model CONVERGED",
+  "root": "/tmp/leopard-adjacent-screen.04vrZl",
+  "runtime_commit": "bd4c17594fa289b4b4f517f0d113b0f74bd68ebb",
+  "source_fields_match_qualified_build": true,
+  "timed": false
+}
