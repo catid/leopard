@@ -1,0 +1,51 @@
+--- a/Leopard2BackendAVX2.cpp
++++ b/Leopard2BackendAVX2.cpp
+@@ -13,0 +14,3 @@
++#if !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
++#include "avx2_pair_control.h"
++#endif
+@@ -951,2 +954,6 @@
+-template<bool Inverse>
+-static LEO_FORCE_INLINE void AVX2FF16Butterfly2Prepared(
++#if !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
++#include "avx2_pair_schedule.h"
++#endif
++
++template<bool Inverse, bool Scheduled>
++static LEO_FORCE_INLINE void AVX2FF16Butterfly2PreparedImpl(
+@@ -977,0 +985,15 @@
++#if !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT) && LEO_AVX2_PAIR_SCHEDULE
++        if (Inverse && Scheduled)
++        {
++            _mm256_storeu_si256(reinterpret_cast<__m256i*>(y + offset), y_low);
++            _mm256_storeu_si256(
++                reinterpret_cast<__m256i*>(y + offset + 32), y_high);
++            AVX2FF16PairProductAdd(y_low, y_high, low_tables, high_tables,
++                x_low, x_high);
++            _mm256_storeu_si256(reinterpret_cast<__m256i*>(x + offset), x_low);
++            _mm256_storeu_si256(
++                reinterpret_cast<__m256i*>(x + offset + 32), x_high);
++            offset += 64;
++            continue;
++        }
++#endif
+@@ -1018,0 +1041,19 @@
++}
++
++template<bool Inverse>
++static LEO_FORCE_INLINE void AVX2FF16Butterfly2Prepared(
++    void* x_pointer, void* y_pointer, uint16_t multiplier_log,
++    const __m256i low_tables[4], const __m256i high_tables[4], uint64_t byte_count)
++{
++#if !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
++    const bool enabled = Inverse && leo_pair_schedule_enabled;
++#if defined(LEO_PAIR_TRACE) && LEO_PAIR_TRACE
++    if (Inverse) LeoPairRecord(enabled, byte_count);
++#endif
++    if (enabled)
++        AVX2FF16Butterfly2PreparedImpl<Inverse, true>(x_pointer, y_pointer,
++            multiplier_log, low_tables, high_tables, byte_count);
++    else
++#endif
++        AVX2FF16Butterfly2PreparedImpl<Inverse, false>(x_pointer, y_pointer,
++            multiplier_log, low_tables, high_tables, byte_count);

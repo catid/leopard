@@ -1,0 +1,137 @@
+{
+  "schema": "leopard-avx2-pair-plan/v1",
+  "bead": "leopard-79h.38.5.4.18.2",
+  "host": {
+    "hostname": "work",
+    "kernel": "6.8.0-137-generic",
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper 9980X 64-Cores"
+  },
+  "cpu": 26,
+  "sibling": 90,
+  "controller_cpu": 0,
+  "condition": "slipgate-disabled-20260909",
+  "attempt_budget": 1,
+  "rounds": 3,
+  "samples_per_process": 21,
+  "passive_seconds": 10,
+  "orders": {
+    "on_over_off": [
+      "off",
+      "on",
+      "on",
+      "off"
+    ],
+    "same_off": [
+      "off",
+      "off",
+      "off",
+      "off"
+    ],
+    "same_on": [
+      "on",
+      "on",
+      "on",
+      "on"
+    ],
+    "on_over_native": [
+      "native",
+      "on",
+      "on",
+      "native"
+    ],
+    "same_native": [
+      "native",
+      "native",
+      "native",
+      "native"
+    ]
+  },
+  "cells": [
+    {
+      "k": 1000,
+      "r": 200,
+      "bytes": 32768,
+      "field": 2,
+      "backend": 3
+    },
+    {
+      "k": 1000,
+      "r": 199,
+      "bytes": 65536,
+      "field": 2,
+      "backend": 3
+    },
+    {
+      "k": 1000,
+      "r": 200,
+      "bytes": 65536,
+      "field": 2,
+      "backend": 3
+    },
+    {
+      "k": 4096,
+      "r": 512,
+      "bytes": 4096,
+      "field": 2,
+      "backend": 3
+    },
+    {
+      "k": 1000,
+      "r": 199,
+      "bytes": 32768,
+      "field": 2,
+      "backend": 0
+    },
+    {
+      "k": 1000,
+      "r": 200,
+      "bytes": 32768,
+      "field": 2,
+      "backend": 6
+    },
+    {
+      "k": 1000,
+      "r": 200,
+      "bytes": 32768,
+      "field": 2,
+      "backend": 0
+    },
+    {
+      "k": 17,
+      "r": 7,
+      "bytes": 64,
+      "field": 1,
+      "backend": 3
+    }
+  ],
+  "target_cells": [
+    0,
+    1,
+    2
+  ],
+  "affected_neighbors": [
+    3,
+    4
+  ],
+  "unchanged_neighbors": [
+    5,
+    6,
+    7
+  ],
+  "control_bound": 1.02,
+  "minimum_target_gain": 1.05,
+  "affected_neighbor_minimum": 0.9803921568627451,
+  "production_promotion": false,
+  "confidence_intervals": false,
+  "comparison": "same executable off/on; native Leopard1 target; not pristine-production OFF or isolated-load attribution",
+  "artifact_sha256": {
+    "native": "7b300649afe92fd1b8244d28ec58adb58d99fde857d86b75c0aa8758ed1da0d6",
+    "current": "01f3759c166f4147cb960251097b85c576ac954497e92b1c7b0c7c5cd594bca0",
+    "native.a": "3f83c55599cbfbeea5d15adf3627405bcde1cbed2ddf4a672fbc75b186f5c4c1",
+    "current.a": "388388a37d9048a821a7f3f96f9db657b73a38d2d8a4a4ba2816be5602950d78",
+    "expected.json": "4aeb089325e6bcf112280f576ff7c4e8da297c9da2ae1d4e4d60794ca7abe3e5"
+  }
+}
