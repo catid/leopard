@@ -106,5 +106,7 @@ whether the actual Cantor basis supports a GF256 tower representation and
 three-product multiplication. This is an untimed algebra/code-generation
 hypothesis, not an implemented optimization or predicted speedup. Conversion
 cost, extra XORs, table setup and whole-codec compatibility must be evaluated.
+The subsequent [untimed algebra and isolated-codegen proof](tower_algebra.md)
+now passes; whole-transform integration and conversion costs remain open.
 Any later timing requires separate qualification, method review and a new
 committed-and-pushed preregistration. The broader performance goal stays open.

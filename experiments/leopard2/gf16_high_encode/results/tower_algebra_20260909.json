@@ -1,0 +1,206 @@
+{
+  "schema": "leopard-tower-algebra-result/v1",
+  "tracker": "leopard-79h.18.20.2",
+  "date": "2026-09-09",
+  "outcome": "untimed_algebra_and_isolated_codegen_qualified",
+  "production_changes": false,
+  "performance_qualified": false,
+  "raw_root": "/tmp/leopard-tower-algebra.T3NxrT",
+  "delivery_root": "/tmp/leopard-tower-delivery.eJaDrq",
+  "original_field_source_commit": "45e2eff",
+  "original_field_source_sha256": "fd27e72cb09068d83bc32b23acf49c6d133382579f109d6cfa227361c43d8cbf",
+  "review": "Codex self-review and deterministic/adversarial checks under Claude opt-out, not independent-model CONVERGED.",
+  "limitations": [
+    "Not a whole-codec or butterfly candidate.",
+    "No full Leopard1 parity, decode, dispatch, public scratch/guard/tail or concurrency qualification for this representation.",
+    "GF256 multiplication derived from actual GF16 subfield, not assumed identical to existing GF8 tables.",
+    "Product tests exercise one unaligned 64-byte block plus in-place and zero-block cases; conversion also exercises two-block loops. Compact tails and partial overlaps excluded.",
+    "Static six-shuffle product excludes input/output conversion, coefficient table setup and surrounding FFT/butterfly work.",
+    "No timings, additive scheduling gains, default changes, or production promotion. ExperimentT eventual >=10% end-to-end promotion threshold retained."
+  ],
+  "replay": {
+    "codec_integrated": false,
+    "codegen": {
+      "tower_convert_blocks": {
+        "instructions": 18,
+        "loop_end": "0x16d",
+        "loop_start": "0x120",
+        "masks": 2,
+        "shifts": 1,
+        "shuffles": 4,
+        "stack_references": 0,
+        "xors": 3
+      },
+      "tower_product_blocks": {
+        "instructions": 30,
+        "loop_end": "0xd0",
+        "loop_start": "0x50",
+        "masks": 6,
+        "shifts": 3,
+        "shuffles": 6,
+        "stack_references": 0,
+        "xors": 6
+      }
+    },
+    "independent_model_review": false,
+    "proof": {
+      "constant_basis_products": 1048576,
+      "conversion_symbols": 65536,
+      "delta": 128,
+      "subfield_products": 65536,
+      "u_times_basis": [
+        256,
+        719,
+        1195,
+        2081,
+        4234,
+        8349,
+        16423,
+        32799
+      ]
+    },
+    "release_object_sha256": "f2adbdc0dd192d1be74fe4bee4d4c1bf90a53752ed4ad4d241d1198d5d73a35e",
+    "resources": {
+      "accepted_build": {
+        "all_events_zero": true,
+        "exit_status": 0,
+        "maximum": 536870912,
+        "peak": 144424960,
+        "swap": 0
+      },
+      "initial_build": {
+        "all_events_zero": true,
+        "exit_status": 1,
+        "maximum": 536870912,
+        "peak": 180490240,
+        "swap": 0
+      },
+      "native_checks": {
+        "all_events_zero": true,
+        "exit_status": 0,
+        "maximum": 268435456,
+        "peak": 28479488,
+        "swap": 0
+      }
+    },
+    "timed": false,
+    "tracker": "leopard-79h.18.20.2"
+  },
+  "retention": {
+    "tracker": "leopard-79h.18.20.2",
+    "root": "/home/catid/leopard/.research/leopard-79h/tower-algebra-qualified.jWRjOr",
+    "files": 81,
+    "bytes": 40981118,
+    "manifest_sha256": "b0a35bb9701d62b645d4e0145adcae6aa615721dea94765c2735d31d9aa60835",
+    "sealed_replays_match_raw": true,
+    "replay_sha256": "4bd667a35d8ca0284b4cb3b8c0d23d08c93619841bf68bbcceec8ad9099814f2",
+    "algebra_qualified": true,
+    "production_promotion": false,
+    "timed": false
+  },
+  "native_results": [
+    {
+      "profile": "release",
+      "result": {
+        "tracker": "leopard-79h.18.20.2",
+        "polynomial": 65581,
+        "u": 256,
+        "delta": 128,
+        "subfield_products": 65536,
+        "conversion_symbols": 65536,
+        "constant_basis_products": 1048576,
+        "additional_products": 1048576,
+        "vector_product_checks": 2097152,
+        "mutated_table_rejections": 6,
+        "table_bytes_per_multiplier": 96,
+        "conversion_table_bytes_each": 64,
+        "timed": false,
+        "production_integrated": false,
+        "u_times_basis": [
+          256,
+          719,
+          1195,
+          2081,
+          4234,
+          8349,
+          16423,
+          32799
+        ]
+      },
+      "exit_status": 0
+    },
+    {
+      "profile": "sanitize",
+      "result": {
+        "tracker": "leopard-79h.18.20.2",
+        "polynomial": 65581,
+        "u": 256,
+        "delta": 128,
+        "subfield_products": 65536,
+        "conversion_symbols": 65536,
+        "constant_basis_products": 1048576,
+        "additional_products": 1048576,
+        "vector_product_checks": 2097152,
+        "mutated_table_rejections": 6,
+        "table_bytes_per_multiplier": 96,
+        "conversion_table_bytes_each": 64,
+        "timed": false,
+        "production_integrated": false,
+        "u_times_basis": [
+          256,
+          719,
+          1195,
+          2081,
+          4234,
+          8349,
+          16423,
+          32799
+        ]
+      },
+      "exit_status": 0
+    }
+  ],
+  "cli_rejections": 6,
+  "pure_adversarial_tests_per_mode": 8,
+  "code_sources": {
+    "test_tower_algebra.cpp": "8d37aba652d9c1c8c19bf60fd3f4096f974c5ff3520361bd590ccc8e1e28186b",
+    "tower_avx2_probe.h": "0d8c3b6d57c8afa19eabe9995f44a323da2f3fa91a16a48ca2833e50864dfc7c",
+    "tower_avx2_probe.cpp": "b945199265fea61cd98e228befd3977037cbd6c6639b8230f7b7fa1b84776ee1"
+  },
+  "artifacts": {
+    "release/test_tower_algebra.o": "f2b5a2b020ee67878788521f49cd11aef3f8f6927a569e67472fd42c7fab387a",
+    "release/test_tower_algebra.d": "5260db23836c47d3db6598a4cdf23dfddded0badd469d21efffd5213452fac65",
+    "release/codec.a": "89f33d3d43f792de078c38469f9406dded2b69126af2c6fc8db6e2acb77cd334",
+    "release/tower_avx2_probe.o": "f2adbdc0dd192d1be74fe4bee4d4c1bf90a53752ed4ad4d241d1198d5d73a35e",
+    "release/codegen.txt": "b3e526cd85367c9a489c8501c60f4e9c009729e5373aa5e6cd65eb6e1e970394",
+    "release/tower_avx2_probe.d": "a75689095d0767208a38b2f5166dc5640da177ccddfbf98a9cb5f47daa86e2df",
+    "release/test": "451c5a996a65381daa4bb493d698783b919397568d5edb2473a2ae35e2758ee3",
+    "sanitize/test_tower_algebra.o": "9b4b4384a78a9185389555d21e0e07e9f8bc0074526bdfb0a995f9b630b62366",
+    "sanitize/test_tower_algebra.d": "6e17575a9e6085357d5a93e2b09510d70fd2ce49177418bf8315ff9867d01ffe",
+    "sanitize/codec.a": "501d5b0375455b137c8c24befb2e152a0ea2d773f8b094aa1388d0b5e6cb4410",
+    "sanitize/tower_avx2_probe-fixed.d": "5e233a5e947fe2b70f962c2406b7ef8c5c837e790c39fd6b75a97551e3d2c00e",
+    "sanitize/test_tower_algebra-fixed.o": "fcab374f64367fc34223f9615b0abe0d924e912b4b7ad720915ef14f1a7a40a2",
+    "sanitize/tower_avx2_probe.o": "b429a63443c48a37294aad33d8d558d43682a714edc59fac552876712388a7ed",
+    "sanitize/test_tower_algebra-fixed.d": "7b66a99130d7e0547e782be1d94eb3d1d26d15c5493a34e8225a3af39bfebf63",
+    "sanitize/tower_avx2_probe.d": "83f702b26ac098c5aab746be33a92721ac9825b2a08ea17ca172b1ece3a6673a",
+    "sanitize/tower_avx2_probe-fixed.o": "004f94d8686af4beaf0779154148fe98eff515cb6f1b1778d46d3c85872377b8",
+    "sanitize/test": "79c5c4938a0dc8a489ecc857a237b26f174287f7be32cc801ab28c00d4e401ee"
+  },
+  "additional_resources": {
+    "raw_replay": {
+      "peak": 25108480,
+      "maximum": 268435456,
+      "exit_status": 0,
+      "all_events_zero": true,
+      "swap": 0
+    },
+    "retention_and_sealed_replay": {
+      "peak": 73494528,
+      "maximum": 268435456,
+      "exit_status": 0,
+      "all_events_zero": true,
+      "swap": 0
+    }
+  },
+  "next": "Independent untimed whole-transform integration feasibility: account for every input/output conversion and constant; then isolated backend/kernel/public qualification before new method or timings."
+}
