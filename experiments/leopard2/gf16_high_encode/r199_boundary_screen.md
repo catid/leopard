@@ -110,3 +110,39 @@ Do not retry or pool any older attempt, alter unrelated thread affinity, or
 infer a result from the neighboring cases. A positive initial screen requires
 separate API/boundary/neighbor and same-binary integration qualification before
 any AUTO policy extension. The full performance goal remains open.
+
+## Fresh timing preregistration
+
+The [fixed plan](r199_boundary_screen_plan.json) and
+[collector](run_r199_boundary_screen.py) define one new local attempt in
+`/tmp/leopard-r199-screen.Snh2nV/attempt1`. This is a distinct experiment,
+not a retry of a consumed screen. The plan must be pushed before execution.
+
+The frozen directory has 23 pinned inputs. Plan SHA-256:
+`e021653e40ec8692916cede3ce4b4e75024216710a797a77f6de12ec1b29004f`;
+pins-file SHA-256:
+`a7085ce0b50c0e109e546c04b7c2f86f701665489c9b8bb225d3458268cd05c7`.
+Executables and archives are exact copies of the qualified versions above;
+AUTO and GFNI use the same production executable. The EOF normalization proof
+and original qualification records are pinned alongside the new sources.
+
+Each of three rounds runs six four-slot comparisons, totaling 72 timed
+processes, preceded by three untimed preflights. Named speed ratios are
+AUTO/native, GFNI/AUTO, and GFNI/native; each is comparator time divided by
+candidate time, so values above one favor the named numerator. The other
+three comparisons repeat native, AUTO, and GFNI independently in identical
+ABBA positions to detect drift. All three aggregate controls must remain
+within [1/1.02, 1.02]. GFNI/AUTO must reach 1.05 in aggregate and exceed one
+in every round to advance to separate policy qualification. No per-round
+outlier filtering, confidence interval, neighbor-qualification or production
+promotion claim is authorized by this diagnostic.
+
+Seventeen pure protocol/replay/qualification tests pass in normal and optimized
+Python using the actual frozen modules. The separate collector-free preclock
+replay validates original native parity, source normalization, archive and
+executable identity, fixed routes, record counts, resource limits and frozen
+source equality in both Python modes. These checks do not execute a codec
+or collect timing samples. The collector independently enforces the pushed
+plan/source identity, host and CPU topology, canonical lock plus CPU lease,
+shutdown condition, 10-second zero-sibling passive check, 30-second child CPU
+limit, and immutable input hashes before and after the measured sequence.

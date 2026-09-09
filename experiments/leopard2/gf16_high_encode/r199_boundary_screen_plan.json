@@ -1,0 +1,80 @@
+{
+  "schema": "leopard-r199-boundary-plan/v1",
+  "bead": "leopard-79h.38.5.4.19",
+  "host": {
+    "hostname": "work",
+    "kernel": "6.8.0-137-generic",
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper 9980X 64-Cores"
+  },
+  "cpu": 26,
+  "sibling": 90,
+  "controller_cpu": 0,
+  "condition": "slipgate-disabled-20260909",
+  "attempt_budget": 1,
+  "rounds": 3,
+  "samples_per_process": 21,
+  "passive_seconds": 10,
+  "orders": {
+    "auto_over_native": [
+      "native",
+      "auto",
+      "auto",
+      "native"
+    ],
+    "gfni_over_auto": [
+      "auto",
+      "gfni",
+      "gfni",
+      "auto"
+    ],
+    "gfni_over_native": [
+      "native",
+      "gfni",
+      "gfni",
+      "native"
+    ],
+    "same_native": [
+      "native",
+      "native",
+      "native",
+      "native"
+    ],
+    "same_auto": [
+      "auto",
+      "auto",
+      "auto",
+      "auto"
+    ],
+    "same_gfni": [
+      "gfni",
+      "gfni",
+      "gfni",
+      "gfni"
+    ]
+  },
+  "cells": [
+    {
+      "k": 1000,
+      "r": 199,
+      "bytes": 32768
+    }
+  ],
+  "control_bound": 1.02,
+  "future_candidate_minimum_gain": 1.05,
+  "production_promotion": false,
+  "confidence_intervals": false,
+  "attribution": "unchanged production AUTO, explicit GFNI and original native Leopard1",
+  "neighbor_qualification": false,
+  "qualification_manifest_sha256": "a509866ab0dbf2967a8a25258816134927f4b29ac8ce50c7bb3c2ce54de2fad3",
+  "normalization_manifest_sha256": "1746a82fe079ca4327717a5917e770cc403940219acb0db22c98bd91759e6037",
+  "artifact_sha256": {
+    "current": "d2edecdccc9d366fdd03d0412bb51a8439fe1aef15ed2ace9f34c0513d623490",
+    "current.a": "d8eb0985e7347e491ea069e2e39d64ec256a35808422d02c1df36641fb315c8a",
+    "expected.json": "fe2ad2623d76f3a63f050ce1fad5aaecdcc41ee7f57acb0130089ade1719cef6",
+    "native": "ea73abe01e1903ae0bf2fcd756ed978d0697095c798be07d282e894ae949747c",
+    "native.a": "3f83c55599cbfbeea5d15adf3627405bcde1cbed2ddf4a672fbc75b186f5c4c1"
+  }
+}
