@@ -44,7 +44,7 @@ struct Guard
     }
 };
 
-void Check(unsigned cell)
+void Check(unsigned cell, leo2_backend candidate_backend = LEO2_BACKEND_GFNI)
 {
     Require(cell < 8, "guarded cell");
     const unsigned k = cell < 6 ? 1000 : 17;
@@ -54,7 +54,7 @@ void Check(unsigned cell)
     const size_t offset = cell < 2 ? 0 : cell < 4 ? 1 : cell < 6 ? 2 : 1;
     const leo2_field field = cell == 6 ? LEO2_FIELD_GF8 : LEO2_FIELD_GF16;
     Codec baseline(k, r, field, LEO2_BACKEND_AVX2);
-    Codec candidate(k, r, field, LEO2_BACKEND_GFNI);
+    Codec candidate(k, r, field, candidate_backend);
     Require(leo2_context_field_mask(candidate.context.get()) ==
         (LEO2_FIELD_MASK_GF8 | LEO2_FIELD_MASK_GF16), "both fields required");
     const size_t scratch_bytes = candidate.Scratch(bytes);
@@ -135,6 +135,7 @@ void Check(unsigned cell)
 }
 }
 
+#ifndef LEO_BOUNDARY_GUARD_NO_MAIN
 int main(int argc, char** argv)
 {
     try
@@ -150,3 +151,4 @@ int main(int argc, char** argv)
         return 1;
     }
 }
+#endif

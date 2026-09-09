@@ -1,0 +1,85 @@
+{
+  "schema": "leopard-auto-gfni-boundary-candidate-checks/v1",
+  "date": "2026-09-09",
+  "bead": "leopard-79h.38.5.4.17.1",
+  "candidate_default_enabled": false,
+  "production_promotion": false,
+  "performance_qualified": false,
+  "timed_invocations": 0,
+  "core_source_sha256": "0e4cdc4485e96e6d1ca711ad0b5192925df01e7a4951bca3d40b35e580c061b7",
+  "private_header_sha256": "0c6ff3efdfbb8754cd5abebaf520f05241f16e4f5487f27b093aae4dbd2ca065",
+  "release_archive_sha256": "80bffc9e873585d9a18fcf6a294413b8c2a76d84fa6e7f9a437fb96ca8458533",
+  "sanitize_archive_sha256": "9a87a6baa349195e02c810fab8131fe5d4edfaf86de5a0efd1b7cafedb207c38",
+  "new_cells": [
+    {
+      "k": 1000,
+      "r": 200,
+      "bytes": 32768
+    },
+    {
+      "k": 1000,
+      "r": 199,
+      "bytes": 65536
+    }
+  ],
+  "preserved_old_cell": {
+    "k": 1000,
+    "r": 200,
+    "bytes": 65536
+  },
+  "checks": {
+    "native_commands": 60,
+    "commands_per_build": 30,
+    "builds": [
+      "Release",
+      "ASan+UBSan+LSan"
+    ],
+    "guarded_shapes": 8,
+    "boundary_modes": [
+      0,
+      1
+    ],
+    "subset_masks_per_shape": 6,
+    "route_matrix": true,
+    "actual_route_counts": true,
+    "concurrent_immutable_codec": true,
+    "decode_roundtrip": true,
+    "excluded_batch_paths": true,
+    "invalid_batch_atomicity": true,
+    "optional_qualification_boundary_wrappers": true,
+    "fresh_underlying_backend_fault_cache_replay": false,
+    "full_cmake_build": false,
+    "full_leopard1_parity_for_new_auto_candidate": false,
+    "independent_retained_audit_modes": [
+      "normal",
+      "optimized"
+    ],
+    "independent_archive_parser": true,
+    "unchanged_objects_per_build": 23,
+    "archive_objects_per_build": 24,
+    "source_inputs": 33,
+    "independent_model_converged": false
+  },
+  "resources": {
+    "build_archive_peak": 181243904,
+    "build_checks_peak": 94679040,
+    "build_cap": 536870912,
+    "native_check_peak": 175464448,
+    "native_check_cap": 268435456,
+    "native_check_wall_seconds": 33.29,
+    "all_successful_scope_memory_events_zero": true,
+    "swap_zero": true
+  },
+  "evidence": {
+    "scratch": "/tmp/leopard-auto-gfni-boundary.0JZpcL",
+    "local_archive": ".research/leopard-79h/auto-gfni-boundary-checks.bJ6wiH",
+    "manifest_entries": 218,
+    "local_archive_bytes": 74147297,
+    "manifest_sha256": "ae09b1b76a0dd877dcf0acff648df60c90cfdbe4442fbfbb0dee2f2bb71da512",
+    "sealed_copy_audit": true,
+    "reference": ".research/leopard-79h/gf16-current-route-failed.STc10h",
+    "initial_staging_failure_retained": true,
+    "initial_verifier_geometry_error_retained": true
+  },
+  "next": "Continue this Bead: candidate-specific AUTO timing driver and full L1 parity, fresh preregistration, >=5% target gain, <=2% controls/neighbors and zero sibling gates. Update production defaults/tests/docs only after qualification; broader goal remains open."
+}

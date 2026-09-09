@@ -423,6 +423,16 @@ bool AutoGF16GFNIEncodeSelectedForDiagnostics(
 unsigned AutoGF16GFNIEncodeCallCountForDiagnostics();
 bool FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics();
 
+// Default-off, boundary-only candidate control for K=1000/R=200/32 KiB and
+// K=1000/R=199/64 KiB. It does not disable the existing R=200/64-KiB route.
+// Set before codec creation, with all route inspection and codec operations
+// quiescent; leave unchanged while codecs execute concurrently. The global
+// AUTO GFNI enable/probe mode and every existing selector/API gate still apply.
+// An R=199 codec created with this control off has no cached optional table;
+// enabling it later cannot bypass that setup-time qualification requirement.
+bool SetAutoGF16GFNIBoundariesEnabledForDiagnostics(bool enabled);
+bool AutoGF16GFNIBoundariesEnabledForDiagnostics();
+
 /*
     Arithmetic-only same-executable benchmark control for the exact
     K=62/R=8/B=64 fused AVX2 leaf.  It deliberately does not affect adjacent

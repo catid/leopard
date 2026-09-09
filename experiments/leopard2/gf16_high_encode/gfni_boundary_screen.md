@@ -3,6 +3,10 @@
 Bead: `leopard-79h.38.5.4.17`. Date: 2026-09-09. Status: positive diagnostic;
 bounded AUTO implementation/qualification remains open.
 
+Implementation follow-up: the [default-off AUTO candidate](auto_gfni_boundary_candidate.md)
+now passes 60 focused Release/sanitizer checks. Its new AUTO performance gate
+is still pending; the explicit-backend results below are unchanged.
+
 The completed post-Slipgate diagnostic found current AUTO throughput at
 0.971964x Leopard1 for K=1000/R=200/32 KiB and 0.956348x for
 K=1000/R=199/64 KiB. Both use AVX2. In contrast, the qualified exact

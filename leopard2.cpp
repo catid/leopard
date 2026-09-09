@@ -1160,6 +1160,10 @@ static volatile uint32_t g_cauchy_log_reuse_mode =
 */
 static std::atomic<uint32_t> g_auto_gf16_gfni_encode_mode(1U);
 static thread_local unsigned g_auto_gf16_gfni_encode_call_count = 0U;
+// Boundary-only candidate control: 1 enabled, 2 disabled. Keep both states in
+// initialized data so qualification does not compare different text layouts.
+// Default remains off until the two additional AUTO cells are qualified.
+static std::atomic<uint32_t> g_auto_gf16_gfni_boundary_mode(2U);
 #endif
 #ifdef LEO_HAS_FF8
 static volatile uint32_t g_r1_early_dispatch_mode =
@@ -7897,10 +7901,10 @@ static bool UseAutoAVX512Encode(
 static bool CodecMayUseAutoGF16GFNIEncode(const leo2_codec* codec)
 {
     /*
-        Production selector for the exact qualified model-08 workload.
-        Neighbor screens are intentionally not promoted here: K, R, padded
-        side, and shard length all cross distinct FF16 layout and tiling paths.
-        A later same-binary boundary campaign may widen this predicate.
+        The original R=200/64-KiB model-08 route remains production-enabled.
+        A separate default-off control admits exactly R=199/64 KiB and
+        R=200/32 KiB for same-binary boundary qualification. Codec setup lacks
+        a shard length; UseAutoGF16GFNIEncode applies the exact byte gate.
     */
     return codec && codec->context && codec->context->auto_requested &&
         codec->context->auto_gf16_gfni_encode_host &&
@@ -7910,7 +7914,10 @@ static bool CodecMayUseAutoGF16GFNIEncode(const leo2_codec* codec)
         codec->field == LEO2_FIELD_GF16 &&
         codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
         codec->flags == 0 && codec->original_count == 1000U &&
-        codec->recovery_count == 200U && codec->padded_side == 256U;
+        codec->padded_side == 256U &&
+        (codec->recovery_count == 200U ||
+         (codec->recovery_count == 199U &&
+          g_auto_gf16_gfni_boundary_mode.load(std::memory_order_relaxed) == 1U));
 }
 #endif
 
@@ -7931,7 +7938,9 @@ static bool UseAutoGF16GFNIEncode(
         requested_recovery_prefix != codec->recovery_count)
         return false;
 
-    return buffer_bytes == 64U * 1024U;
+    return buffer_bytes == 64U * 1024U ||
+        (codec->recovery_count == 200U && buffer_bytes == 32U * 1024U &&
+         g_auto_gf16_gfni_boundary_mode.load(std::memory_order_relaxed) == 1U);
 #else
     (void)codec;
     (void)buffer_bytes;
@@ -16466,6 +16475,27 @@ bool FinishK16R16B64AVX512GFNIRouteProbeForDiagnostics()
         return false;
     g_k16r16_b64_avx512_gfni_mode = mode == 3U ? 1U : 2U;
     return true;
+#else
+    return false;
+#endif
+}
+
+bool SetAutoGF16GFNIBoundariesEnabledForDiagnostics(bool enabled)
+{
+#ifdef LEO_HAS_FF16
+    g_auto_gf16_gfni_boundary_mode.store(enabled ? 1U : 2U,
+        std::memory_order_relaxed);
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
+bool AutoGF16GFNIBoundariesEnabledForDiagnostics()
+{
+#ifdef LEO_HAS_FF16
+    return g_auto_gf16_gfni_boundary_mode.load(std::memory_order_relaxed) == 1U;
 #else
     return false;
 #endif
