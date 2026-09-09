@@ -1433,6 +1433,8 @@ void test_auto_gf16_gfni_encode(
     require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() ==
             1U,
         "AUTO GF16 GFNI encode production default is not enabled");
+    require(leopard2_internal::AutoGF16GFNIBoundariesEnabledForDiagnostics(),
+        "AUTO GF16 GFNI boundary production default is not enabled");
     if (!leopard::backend::IsCalibratedAutoGF16GFNIEncodeHost())
         return;
     if (leo2_context_backend(automatic.get()) != LEO2_BACKEND_AVX2 ||
@@ -1519,7 +1521,8 @@ void test_auto_gf16_gfni_encode(
         "AUTO GF16 GFNI selector changed an explicit backend");
 
     Codec below_k(automatic.get(), 999, 200);
-    Codec below_r(automatic.get(), 1000, 199);
+    Codec boundary_r(automatic.get(), 1000, 199);
+    Codec below_r(automatic.get(), 1000, 198);
     Codec above_r(automatic.get(), 1000, 201);
     Codec above_k(automatic.get(), 1001, 200);
     Codec low_profile(
@@ -1534,6 +1537,17 @@ void test_auto_gf16_gfni_encode(
     require_result(two_threads.result(), LEO2_SUCCESS,
         "two-thread AUTO context");
     Codec two_thread_codec(two_threads.get(), 1000, 200);
+    require(leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
+                boundary_r.get()) &&
+            selected_backend(boundary_r.get(), 65536, 199, 199) == LEO2_BACKEND_GFNI &&
+            selected_backend(candidate.get(), 32768, 200, 200) == LEO2_BACKEND_GFNI,
+        "qualified AUTO GF16 GFNI boundaries were not selected");
+    require(selected_backend(boundary_r.get(), 32768, 199, 199) == LEO2_BACKEND_AVX2 &&
+            selected_backend(boundary_r.get(), 65534, 199, 199) == LEO2_BACKEND_AVX2 &&
+            selected_backend(boundary_r.get(), 65538, 199, 199) == LEO2_BACKEND_AVX2 &&
+            selected_backend(boundary_r.get(), 65536, 198, 199) == LEO2_BACKEND_AVX2 &&
+            selected_backend(candidate.get(), 32768, 199, 200) == LEO2_BACKEND_AVX2,
+        "AUTO GF16 GFNI boundary escaped its byte/full-output scope");
     require(!leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
                 below_k.get()) &&
             !leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
@@ -1579,13 +1593,15 @@ void test_auto_gf16_gfni_encode(
     require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
             1U,
         "sparse AUTO encode entered the GF16 GFNI route");
-    const Shards avx2_parity = encode(
-        explicit_avx2.get(), original, 200, false);
-    const Shards gfni_parity = encode(
-        explicit_gfni.get(), original, 200, false);
-    require(automatic_parity == avx2_parity &&
-            automatic_parity == gfni_parity,
-        "AUTO GF16 GFNI widening changed parity bytes");
+    {
+        const Shards avx2_parity = encode(
+            explicit_avx2.get(), original, 200, false);
+        const Shards gfni_parity = encode(
+            explicit_gfni.get(), original, 200, false);
+        require(automatic_parity == avx2_parity &&
+                automatic_parity == gfni_parity,
+            "AUTO GF16 GFNI widening changed parity bytes");
+    } // Comparators are not needed by the batch/concurrency/decode checks.
     require(leo2_context_backend(automatic.get()) == LEO2_BACKEND_AVX2,
         "encode-only GFNI widening changed the AUTO context backend");
     require(leopard2_internal::AutoGF16GFNIEncodeCallCountForDiagnostics() ==
@@ -2386,13 +2402,25 @@ void test_selection_and_bytes(
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
     try
     {
+        require(argc == 1 || (argc == 2 && !std::strcmp(argv[1], "--gf16-gfni-only")),
+            "usage: leopard2_auto_encode_backend_test [--gf16-gfni-only]");
         require(leo_init() == Leopard_Success, "Leopard initialization");
         Context automatic(LEO2_BACKEND_AUTO);
         require_result(automatic.result(), LEO2_SUCCESS, "AUTO context");
+        if (argc == 2)
+        {
+            // Do not initialize unrelated SSSE3/AVX-512 tables for the
+            // focused GFNI route test; they otherwise live for the process.
+            Context focused_avx2(LEO2_BACKEND_AVX2);
+            Context focused_gfni(LEO2_BACKEND_GFNI);
+            test_auto_gf16_gfni_encode(automatic, focused_avx2, focused_gfni);
+            std::printf("Leopard2 focused AUTO GF16 GFNI backend passed\n");
+            return 0;
+        }
         Context scalar(LEO2_BACKEND_SCALAR);
         Context ssse3(LEO2_BACKEND_SSSE3);
         Context avx2(LEO2_BACKEND_AVX2);

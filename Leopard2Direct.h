@@ -423,7 +423,7 @@ bool AutoGF16GFNIEncodeSelectedForDiagnostics(
 unsigned AutoGF16GFNIEncodeCallCountForDiagnostics();
 bool FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics();
 
-// Default-off, boundary-only candidate control for K=1000/R=200/32 KiB and
+// Default-on, boundary-only diagnostic control for K=1000/R=200/32 KiB and
 // K=1000/R=199/64 KiB. It does not disable the existing R=200/64-KiB route.
 // Set before codec creation, with all route inspection and codec operations
 // quiescent; leave unchanged while codecs execute concurrently. The global

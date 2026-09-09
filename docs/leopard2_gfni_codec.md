@@ -404,13 +404,15 @@ Requirements 1-3 are now satisfied; requirements 4-6 remain open.
    `experiments/leopard2/optimization_log/24-gf16-affine-table-packing.md`).
    GF8 keeps its 32-byte rows deliberately: 8 KB total, and the radix-eight
    kernels load the duplicated form directly.
-3. **Selector policy — SATISFIED FOR ONE EXACT CELL.**  The production selector
+3. **Selector policy — THREE BOUNDED CELLS.** The production selector
    admits only AMD family 1Ah/model 08h, an AUTO AVX2 baseline, native-layout
-   flags-zero legacy-high GF16 `K=1000`, `R=200`, `T=256`, one context thread,
-   exactly 65,536 bytes, all 200 outputs, and either `leo2_encode` or the
+   flags-zero legacy-high GF16 `K=1000`, `T=256`, one context thread,
+   exactly `(R, bytes) = (200, 32768), (200, 65536), (199, 65536)`, all R
+   outputs, and either `leo2_encode` or the
    ordinary one-item batch path without scalable preflight scratch.  Explicit
    backends, decode, scalable-preflight, multi-item/reusable batches, and every
-   neighboring identity remain on their context table.  The sealed v2
+   other identities remain on their context table, including `(199, 32768)`.
+   The original sealed v2
    same-binary campaign retained 25 target ABBA rounds and 12 inactive cells:
    GFNI/AVX2 was 1.449623x for ordinary encode (95% CI
    `[1.445842, 1.453414]`) and 1.452917x for one-shot encode
@@ -421,6 +423,16 @@ Requirements 1-3 are now satisfied; requirements 4-6 remain open.
    `680b42c53e90dad3ec3529fbc048fcb273763d410eb84dd8421100014b8e2233`.
    This qualifies the bounded selector; it is not an exact-Leopard1
    performance claim.
+   The two added boundaries were separately qualified on the local
+   Threadripper 9980X in preregistration
+   `6bff9ecb8658c1313e88d680b47413d3f2531065`: 216 zero-sibling invocations,
+   ordinary-encode same-binary gains of 53.7% and 48.4%, and one-item-batch
+   gains of 54.2% and 46.1%. All eight controls and four unchanged neighbors
+   passed the 2% bound. The separately linked Leopard1 diagnostic ratios were
+   1.478279x and 1.428760x for ordinary encode. These are not confidence
+   intervals or broad exact-main/v19 closure. Full parity, route/fallback/API
+   checks and both-field sanitizers accompany the evidence in
+   `experiments/leopard2/gf16_high_encode/auto_gfni_boundary_screen.md`.
 4. **Isolated exact-main evidence.**  The counterbalanced
    `experiments/leopard2/main_compare/run_abba.py` lineage with the CPU-pair
    lease, source/build closure, and the zero-sibling-jiffy gate is still

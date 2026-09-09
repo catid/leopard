@@ -133,3 +133,59 @@ scope and pin hashes and unrounded results are in
 The attempt is consumed. Next integrate only the qualified default routes,
 update existing default assumptions/docs, and perform clean Release plus
 focused sanitizer checks. The broader goal and `.17.1` remain open.
+
+## Production integration
+
+The two qualified boundaries are now **default-on**. A clean GCC 13.3
+Release build with both fields and the production/test-hook archives passed.
+The entire production archive differs from the qualified default-off archive
+by exactly one byte, at offset 285580: `2` becomes `1`. Independent ELF
+inspection identifies it as the boundary-mode initializer in `.data`, not
+executable code. All other archive bytes, including all kernel code, are
+identical. The archive is
+`d8eb0985e7347e491ea069e2e39d64ec256a35808422d02c1df36641fb315c8a`.
+This preserves the measured same-binary on-state; no new timing is asserted.
+
+Final checks passed:
+
+- 60 focused native checks, 30 Release and 30 both-field ASan/UBSan/LSan,
+  including all three default routes, new boundaries, exclusions, guarded
+  tails/partials, API paths, fallback returns and shared-codec concurrency.
+- 13 CTests: hookless production parity for all three cells, the focused
+  existing backend suite, existing inert/fallback cases, and six new real
+  backend KAT/FF8-allocation/FF16-allocation failure cases. Each new case
+  checks fault consumption, successful AVX2 fallback and cached-failure reuse.
+- The separate production portable-ISA audit. Final native scope peaks were
+  175,161,344 bytes for the 60 checks, 230,985,728 for the 13 CTests, and
+  70,586,368 for ISA, each below 256 MiB with all six events and swap zero.
+
+One initial combined CTest scope hit the 256-MiB cap and is preserved as a
+failure, not a passing resource result. The new focused entry initially
+created unrelated SSSE3/AVX-512 contexts before branching; those table
+initializations are now avoided. Comparator parity buffers also leave scope
+before batch/concurrency/decode fixtures. The same checks pass without
+raising the cap or reducing their coverage. The broader monolithic tests
+were not run. The final comment-only source refresh reproduced exactly the
+same production archive and all three CMake test executable hashes.
+
+The retained-only production verifier independently parses archive members
+and the ELF data symbol, checks all 60 raw records and the CTest XML, rejects
+skipped integration cases, and verifies the initial failure plus final
+resource envelopes. Normal, Python `-O`, and readonly-copy runs pass; the
+sealed copy's manifest and final source snapshots match the worktree.
+This remains Codex self-review and deterministic evidence under the user's
+Claude opt-out, not independent-model `CONVERGED`.
+
+Production evidence is local readonly
+`.research/leopard-79h/auto-gfni-boundary-production.B5NV9R`: 1179 entries,
+85,466,116 bytes including the manifest; outer SHA-256
+`b6c584e2d705e9104d306b57d8cb9fc15bd24b1da7ed3c8655d8a9cdec90d16c`.
+The sanitizer checkpoint changes only the core object; its other 23 objects
+remain byte-identical to the previously qualified both-field archive. It
+predates only the final two-line comment correction, not a behavior change.
+
+This completes `.17.1` and its parent `.17`, not the overall performance
+goal. Next is `.38.5.4.18`: attribute and reduce the remaining explicitly
+requested AVX2 deficit. Explicit AVX2 is still explicit AVX2; routing it to
+GFNI would not solve that task. Broader CPU/size coverage and v19 exact-main
+release qualification remain separate, open work.

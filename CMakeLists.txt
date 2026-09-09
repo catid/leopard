@@ -2532,6 +2532,16 @@ if(LEO2_BUILD_TESTS)
             NAME leopard2_backend_auto_gfni_encode_ff8_allocation_fallback
             COMMAND leopard2_backend_failures_test
                 auto-gfni-encode-ff8-allocation-fallback)
+        foreach(boundary 32 r199)
+            foreach(fault kat ff8-allocation ff16-allocation)
+                set(boundary_test "leopard2_backend_auto_gfni_boundary_${boundary}_${fault}")
+                add_test(NAME ${boundary_test}
+                    COMMAND leopard2_backend_failures_test
+                        "auto-gfni-encode-${fault}-fallback" "boundary-${boundary}")
+                set_tests_properties(${boundary_test} PROPERTIES
+                    ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+            endforeach()
+        endforeach()
     endif()
     set_tests_properties(
         leopard2_backend_failure_scalar_ff8_allocation
@@ -2584,7 +2594,10 @@ if(LEO2_BUILD_TESTS)
     target_link_libraries(leopard2_auto_encode_backend_test leopard_test_hooks)
     add_test(NAME leopard2_auto_encode_backend
         COMMAND leopard2_auto_encode_backend_test)
-    set_tests_properties(leopard2_auto_encode_backend PROPERTIES
+    add_test(NAME leopard2_auto_gf16_gfni_backend
+        COMMAND leopard2_auto_encode_backend_test --gf16-gfni-only)
+    set_tests_properties(leopard2_auto_encode_backend
+        leopard2_auto_gf16_gfni_backend PROPERTIES
         ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
     # This target deliberately links the ordinary production archive, not

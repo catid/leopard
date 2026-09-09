@@ -1160,10 +1160,10 @@ static volatile uint32_t g_cauchy_log_reuse_mode =
 */
 static std::atomic<uint32_t> g_auto_gf16_gfni_encode_mode(1U);
 static thread_local unsigned g_auto_gf16_gfni_encode_call_count = 0U;
-// Boundary-only candidate control: 1 enabled, 2 disabled. Keep both states in
+// Boundary-only diagnostic control: 1 enabled, 2 disabled. Keep both states in
 // initialized data so qualification does not compare different text layouts.
-// Default remains off until the two additional AUTO cells are qualified.
-static std::atomic<uint32_t> g_auto_gf16_gfni_boundary_mode(2U);
+// The two additional cells passed the 2026-09-09 AUTO qualification campaign.
+static std::atomic<uint32_t> g_auto_gf16_gfni_boundary_mode(1U);
 #endif
 #ifdef LEO_HAS_FF8
 static volatile uint32_t g_r1_early_dispatch_mode =
@@ -7902,8 +7902,8 @@ static bool CodecMayUseAutoGF16GFNIEncode(const leo2_codec* codec)
 {
     /*
         The original R=200/64-KiB model-08 route remains production-enabled.
-        A separate default-off control admits exactly R=199/64 KiB and
-        R=200/32 KiB for same-binary boundary qualification. Codec setup lacks
+        A separate default-on control admits exactly R=199/64 KiB and
+        R=200/32 KiB after same-binary boundary qualification. Codec setup lacks
         a shard length; UseAutoGF16GFNIEncode applies the exact byte gate.
     */
     return codec && codec->context && codec->context->auto_requested &&

@@ -1,4 +1,4 @@
-// leopard-79h.38.5.4.17.1: focused tests of the default-off AUTO extension.
+// leopard-79h.38.5.4.17.1: focused tests of the qualified AUTO extension.
 #define LEO_BOUNDARY_GUARD_NO_MAIN 1
 #include "test_gfni_boundary.cpp"
 #include "Leopard2Backend.h"
@@ -146,6 +146,13 @@ void Count(unsigned count)
 void Routes()
 {
     Require(diag::AutoGF16GFNIEncodeModeForDiagnostics() == 1, "old production route disabled");
+    {
+        Config enabled200(Target(0)), enabled199(Target(1));
+        Require(enabled200.Selected(32768) && enabled200.Selected(65536) &&
+            enabled199.Selected(65536) && !enabled199.Selected(32768),
+            "production-default boundary routes");
+    }
+    Require(diag::SetAutoGF16GFNIBoundariesEnabledForDiagnostics(false), "disable boundaries");
     Config old(Target(0)), disabled(Target(1));
     Require(old.Selected(65536) && !old.Selected(32768), "default-off changed old R200 route");
     Require(!disabled.Selected(65536) &&
@@ -324,8 +331,8 @@ int main(int argc, char** argv)
 {
     try
     {
-        Require(argc >= 2 && !diag::AutoGF16GFNIBoundariesEnabledForDiagnostics(),
-            "candidate must default off");
+        Require(argc >= 2 && diag::AutoGF16GFNIBoundariesEnabledForDiagnostics(),
+            "qualified boundaries must default on");
         if (argc == 2 && !std::strcmp(argv[1], "--routes")) Routes();
         else
         {

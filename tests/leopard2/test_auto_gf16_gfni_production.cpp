@@ -34,7 +34,7 @@ void* aligned_scratch(std::vector<uint8_t>& storage)
     return reinterpret_cast<void*>(aligned);
 }
 
-void run_production_archive_route()
+void run_production_archive_route(unsigned recovery_count, size_t kBytes)
 {
     if (!leopard::backend::IsCalibratedAutoGF16GFNIEncodeHost())
     {
@@ -69,18 +69,19 @@ void run_production_archive_route()
 
     leo2_codec* candidate = NULL;
     leo2_codec* comparator = NULL;
-    require(leo2_codec_create(automatic, 1000, 200,
+    require(leo2_codec_create(automatic, 1000, recovery_count,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL,
             &candidate) == LEO2_SUCCESS && candidate,
         "production AUTO GF16 codec creation failed");
-    require(leo2_codec_create(avx2, 1000, 200,
+    require(leo2_codec_create(avx2, 1000, recovery_count,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL,
             &comparator) == LEO2_SUCCESS && comparator,
         "production explicit AVX2 codec creation failed");
 
-    static const uint64_t kBytes = 64U * 1024U;
     require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 1U,
         "production archive AUTO GF16 GFNI mode is not default-on");
+    require(leopard2_internal::AutoGF16GFNIBoundariesEnabledForDiagnostics(),
+        "production archive AUTO GF16 GFNI boundaries are not default-on");
     require(leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
                 candidate) &&
             leopard2_internal::AutoGF16GFNIEncodeSelectedForDiagnostics(
@@ -91,6 +92,13 @@ void run_production_archive_route()
             !leopard2_internal::AutoGF16GFNIEncodeSelectedForDiagnostics(
                 candidate, kBytes + 2U),
         "production archive selector escaped its exact byte cell");
+    require(!leopard2_internal::AutoGF16GFNIEncodeSelectedForDiagnostics(
+                comparator, kBytes),
+        "production archive widened an explicit AVX2 request");
+    if (recovery_count == 199)
+        require(!leopard2_internal::AutoGF16GFNIEncodeSelectedForDiagnostics(
+                    candidate, 32U * 1024U),
+            "production archive widened the unqualified R199/32-KiB hole");
 
     static const unsigned kDistinctOriginals = 17;
     std::vector<uint8_t> original(
@@ -104,13 +112,13 @@ void run_production_archive_route()
     for (size_t shard = 0; shard < original_ptrs.size(); ++shard)
         original_ptrs[shard] = original.data() +
             (shard % kDistinctOriginals) * kBytes;
-    std::vector<uint8_t> automatic_recovery(200U * kBytes);
-    std::vector<uint8_t> avx2_recovery(200U * kBytes);
-    std::vector<uint8_t> batch_recovery(200U * kBytes);
-    std::vector<void*> automatic_ptrs(200);
-    std::vector<void*> avx2_ptrs(200);
-    std::vector<void*> batch_ptrs(200);
-    for (unsigned shard = 0; shard < 200; ++shard)
+    std::vector<uint8_t> automatic_recovery(recovery_count * kBytes);
+    std::vector<uint8_t> avx2_recovery(recovery_count * kBytes);
+    std::vector<uint8_t> batch_recovery(recovery_count * kBytes);
+    std::vector<void*> automatic_ptrs(recovery_count);
+    std::vector<void*> avx2_ptrs(recovery_count);
+    std::vector<void*> batch_ptrs(recovery_count);
+    for (unsigned shard = 0; shard < recovery_count; ++shard)
     {
         automatic_ptrs[shard] =
             automatic_recovery.data() + shard * kBytes;
@@ -163,7 +171,8 @@ void run_production_archive_route()
     leo2_codec_destroy(candidate);
     leo2_context_destroy(avx2);
     leo2_context_destroy(automatic);
-    std::printf("Production AUTO GF16 GFNI route passed\n");
+    std::printf("Production AUTO GF16 GFNI route passed: R=%u bytes=%zu\n",
+        recovery_count, kBytes);
 }
 
 } // namespace
@@ -172,7 +181,9 @@ int main()
 {
     try
     {
-        run_production_archive_route();
+        run_production_archive_route(200, 65536);
+        run_production_archive_route(200, 32768);
+        run_production_archive_route(199, 65536);
         return 0;
     }
     catch (const std::exception& error)

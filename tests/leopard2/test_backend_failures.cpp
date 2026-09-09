@@ -387,7 +387,9 @@ void run_auto_avx512_fallback_case()
 
 void run_auto_gfni_encode_fallback_case(
     leopard::backend::TestSetupFault fault,
-    const char* label)
+    const char* label,
+    unsigned recovery_count = 200,
+    size_t kBytes = 64U * 1024U)
 {
     using namespace leopard::backend;
     if (!IsCalibratedAutoGF16GFNIEncodeHost() ||
@@ -422,7 +424,7 @@ void run_auto_gfni_encode_fallback_case(
         "AUTO GF16 baseline context creation failed");
 
     leo2_codec* codec = NULL;
-    require(leo2_codec_create(context, 1000, 200,
+    require(leo2_codec_create(context, 1000, recovery_count,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL, &codec) ==
             LEO2_SUCCESS && codec,
         "optional GFNI qualification failure escaped codec setup");
@@ -433,21 +435,20 @@ void run_auto_gfni_encode_fallback_case(
         "failed GFNI table remained available to AUTO encode");
     leo2_backend selected = LEO2_BACKEND_AUTO;
     require(leo2_test_codec_transform_encode_backend(
-            codec, 64U * 1024U, 200, 200, &selected) == LEO2_SUCCESS &&
+            codec, kBytes, recovery_count, recovery_count, &selected) == LEO2_SUCCESS &&
             selected == LEO2_BACKEND_AVX2,
         "AUTO did not retain AVX2 after optional GFNI failure");
 
-    static const size_t kBytes = 64U * 1024U;
     // Public encode permits source/source aliasing.  Reuse one source shard so
     // the exact eligible fallback call proves routing without allocating a
     // redundant 64-MiB input fixture.
     std::vector<uint8_t> original(kBytes);
     for (size_t i = 0; i < kBytes; ++i)
         original[i] = static_cast<uint8_t>(i * 19U);
-    std::vector<uint8_t> recovery(200U * kBytes);
+    std::vector<uint8_t> recovery(recovery_count * kBytes);
     std::vector<const void*> original_ptrs(1000, original.data());
-    std::vector<void*> recovery_ptrs(200);
-    for (unsigned shard = 0; shard < 200; ++shard)
+    std::vector<void*> recovery_ptrs(recovery_count);
+    for (unsigned shard = 0; shard < recovery_count; ++shard)
         recovery_ptrs[shard] = recovery.data() + shard * kBytes;
     size_t scratch_bytes = 0;
     require(leo2_encode_scratch_size(codec, kBytes, &scratch_bytes) ==
@@ -469,7 +470,7 @@ void run_auto_gfni_encode_fallback_case(
         "failed optional GFNI qualification counted an AUTO route");
 
     leo2_codec* second = NULL;
-    require(leo2_codec_create(context, 1000, 200,
+    require(leo2_codec_create(context, 1000, recovery_count,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL, &second) ==
             LEO2_SUCCESS && second,
         "cached optional GFNI failure changed later codec setup");
@@ -488,7 +489,8 @@ void run_auto_gfni_encode_fallback_case(
     leo2_codec_destroy(second);
     leo2_codec_destroy(codec);
     leo2_context_destroy(context);
-    std::printf("AUTO GF16 GFNI encode fallback passed: %s\n", label);
+    std::printf("AUTO GF16 GFNI encode fallback passed: %s R=%u bytes=%zu\n",
+        label, recovery_count, kBytes);
 }
 
 void run_auto_gfni_encode_disabled_inert_case()
@@ -835,6 +837,25 @@ int main(int argc, char** argv)
 {
     try
     {
+        if (argc == 3 && (std::strcmp(argv[2], "boundary-32") == 0 ||
+                          std::strcmp(argv[2], "boundary-r199") == 0))
+        {
+            using namespace leopard::backend;
+            require(leopard2_internal::AutoGF16GFNIBoundariesEnabledForDiagnostics(),
+                "GFNI boundary fallback did not start default-enabled");
+            TestSetupFault fault;
+            if (std::strcmp(argv[1], "auto-gfni-encode-kat-fallback") == 0)
+                fault = TestSetupFaultGFNIKAT;
+            else if (std::strcmp(argv[1], "auto-gfni-encode-ff16-allocation-fallback") == 0)
+                fault = TestSetupFaultGFNIFF16Allocation;
+            else if (std::strcmp(argv[1], "auto-gfni-encode-ff8-allocation-fallback") == 0)
+                fault = TestSetupFaultGFNIFF8Allocation;
+            else throw std::runtime_error("unknown GFNI boundary fallback fault");
+            const bool smaller_bytes = std::strcmp(argv[2], "boundary-32") == 0;
+            run_auto_gfni_encode_fallback_case(fault, argv[1],
+                smaller_bytes ? 200 : 199, smaller_bytes ? 32768 : 65536);
+            return 0;
+        }
         if (argc == 2 &&
             std::strcmp(argv[1], "auto-avx512-kat-fallback") == 0)
         {

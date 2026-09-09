@@ -346,12 +346,13 @@ expanded architectural register file.  Unsupported hosts return
 A second, narrower AUTO policy is enabled on the calibrated AMD family
 1Ah/model 08h host class.  A context whose reported baseline is AVX2 may borrow
 the startup-qualified VEX-256 GFNI table only for a native-layout, flags-zero,
-legacy-high GF16 codec with `K=1000`, `R=200`, `T=256`, a one-thread context,
-exactly 65,536 bytes per shard, and all 200 parity outputs requested.  The
+legacy-high GF16 codec with `K=1000`, `T=256`, a one-thread context, and all
+parity outputs requested. The admitted R/shard-byte pairs are exactly
+`200/32768`, `200/65536`, and `199/65536`; `199/32768` remains excluded. The
 admitted entry points are `leo2_encode` and ordinary
 `leo2_encode_batch(..., item_count=1, ...)` without caller-owned scalable
 preflight scratch.  The scalable-preflight alias, multi-item batches, reusable
-bindings, decode, neighboring K/R/byte cells, non-native layouts, nonzero codec
+bindings, decode, other K/R/byte cells, non-native layouts, nonzero codec
 flags, unknown CPU models, and every explicit backend request retain their
 context table.  Optional GFNI allocation or known-answer-test failure also
 falls back to AVX2 without failing codec creation.  The context continues to
