@@ -1,0 +1,291 @@
+{
+  "bead": "leopard-79h.38.5.4.18.3.1",
+  "status": "focused_runtime_matrix_passed_full_qualification_open",
+  "raw": "/tmp/leopard-avx2-adjacent-runtime-tls.mjeJwQ",
+  "retention": {
+    "root": "/home/catid/leopard/.research/leopard-79h/avx2-adjacent-runtime-focused.yMDquC",
+    "files": 736,
+    "bytes": 210828145,
+    "manifest_sha256": "86432e598901a3edd5c532b31b0d1b8b1591f28d725d1365870ffdf87fb8ad83",
+    "sealed_replays_match_raw": true,
+    "full_runtime_qualification": false
+  },
+  "build_record_sha256": "5c81b185be5dfa33c7677a2536b35df6e9c5df03483ba1cc2cbeb47573809e17",
+  "checks_record_sha256": "764de17680b7b050b4a48b58b75df7535ad80ffc6e820e0518e6fbb319041731",
+  "replay_sha256": "8bee89cfc31835576230e96fde9e8d0d899394a4dfaafdf9b00cb9302944771c",
+  "python_tests_per_mode": 8,
+  "raw_and_readonly_replays_normal_and_optimized_identical": true,
+  "profiles": {
+    "release": {
+      "object_sha256": "0b9ab2b97a85bd1e3b6bfec75ca69c2e39e2ad3aee8a69211fc71be2864778cc",
+      "archive_sha256": "542c340e53c1c607feb44e4d8b048bdcef41a7a04c2829c9fb62d27acd624644",
+      "unchanged_members": 23
+    },
+    "trace": {
+      "object_sha256": "4dc7cba333d7139cc946bb069303792b29a9e68502983dd8473e8b81034d7df6",
+      "archive_sha256": "e15e2c86f07b4713157c0a71ab3f3d2c5babe951cc17de9f3f08a98f033f9094",
+      "unchanged_members": 23
+    },
+    "sanitize": {
+      "object_sha256": "48bb7fb97be7d8ca32ccdb29842bebe5cba81138d09b45ac91f6800283f4642c",
+      "archive_sha256": "501d5b0375455b137c8c24befb2e152a0ea2d773f8b094aa1388d0b5e6cb4410",
+      "unchanged_members": 23
+    }
+  },
+  "replay": {
+    "bead": "leopard-79h.38.5.4.18.3.1",
+    "cli_refusals": 18,
+    "clock_boundary_qualified": false,
+    "codegen": {
+      "bead": "leopard-79h.38.5.4.18.3.1",
+      "codec_executed": false,
+      "isa_ceiling_pass": true,
+      "loops": {
+        "accumulating": [
+          {
+            "byte_shuffles": 8,
+            "end": "0x3d590",
+            "instructions": 39,
+            "stack_references": [],
+            "start": "0x3d4d0"
+          },
+          {
+            "byte_shuffles": 8,
+            "end": "0x3d7d6",
+            "instructions": 45,
+            "stack_references": [
+              "vmovdqa -0x18(%rsp),%ymm10",
+              "vmovdqa -0x78(%rsp),%ymm1",
+              "vmovdqa -0x58(%rsp),%ymm9",
+              "vmovdqa -0x38(%rsp),%ymm10"
+            ],
+            "start": "0x3d6f8"
+          }
+        ],
+        "forward": [
+          {
+            "byte_shuffles": 8,
+            "end": "0x3c926",
+            "instructions": 40,
+            "stack_references": [
+              "vmovdqa -0x78(%rsp),%ymm9",
+              "vmovdqa -0x18(%rsp),%ymm14",
+              "vmovdqa -0x58(%rsp),%ymm9",
+              "vmovdqa -0x38(%rsp),%ymm14"
+            ],
+            "start": "0x3c870"
+          },
+          {
+            "byte_shuffles": 8,
+            "end": "0x3cafa",
+            "instructions": 36,
+            "stack_references": [],
+            "start": "0x3ca58"
+          }
+        ],
+        "forward_range": [
+          {
+            "byte_shuffles": 8,
+            "end": "0x3afac",
+            "instructions": 40,
+            "stack_references": [
+              "vmovdqa 0x8(%rsp),%ymm15",
+              "vmovdqa 0x68(%rsp),%ymm11",
+              "vmovdqa 0x28(%rsp),%ymm15",
+              "vmovdqa 0x48(%rsp),%ymm11"
+            ],
+            "start": "0x3aef0"
+          },
+          {
+            "byte_shuffles": 8,
+            "end": "0x3b1e9",
+            "instructions": 36,
+            "stack_references": [],
+            "start": "0x3b140"
+          }
+        ],
+        "inverse": [
+          {
+            "byte_shuffles": 8,
+            "end": "0x3ba99",
+            "instructions": 40,
+            "stack_references": [
+              "vmovdqa -0x78(%rsp),%ymm11",
+              "vmovdqa -0x18(%rsp),%ymm9",
+              "vmovdqa -0x58(%rsp),%ymm11",
+              "vmovdqa -0x38(%rsp),%ymm9"
+            ],
+            "start": "0x3b9e0"
+          }
+        ]
+      },
+      "object_sha256": "0b9ab2b97a85bd1e3b6bfec75ca69c2e39e2ad3aee8a69211fc71be2864778cc",
+      "runtime_control_outside_vector_loops": true,
+      "timed": false
+    },
+    "focused_matrix_pass": true,
+    "full_native_parity_qualified": false,
+    "full_runtime_qualification": false,
+    "performance_qualified": false,
+    "positive": 87,
+    "production_changed": false,
+    "resources": {
+      "build": 255401984,
+      "checks": 187101184,
+      "codegen": 57163776
+    },
+    "timed": false,
+    "trace_counts": {
+      "0": {
+        "blocks": [
+          1406083,
+          983161
+        ],
+        "calls": [
+          3623,
+          2052
+        ]
+      },
+      "1": {
+        "blocks": [
+          2811523,
+          1966201
+        ],
+        "calls": [
+          6368,
+          3972
+        ]
+      },
+      "2": {
+        "blocks": [
+          1406083,
+          983161
+        ],
+        "calls": [
+          3623,
+          2052
+        ]
+      },
+      "3": {
+        "blocks": [
+          2811523,
+          1966201
+        ],
+        "calls": [
+          6368,
+          3972
+        ]
+      },
+      "4": {
+        "blocks": [
+          1406083,
+          983161
+        ],
+        "calls": [
+          3623,
+          2052
+        ]
+      },
+      "5": {
+        "blocks": [
+          2811523,
+          1966201
+        ],
+        "calls": [
+          6368,
+          3972
+        ]
+      },
+      "6": {
+        "blocks": [
+          643,
+          121
+        ],
+        "calls": [
+          878,
+          132
+        ]
+      },
+      "7": {
+        "blocks": [
+          665,
+          201
+        ],
+        "calls": [
+          900,
+          212
+        ]
+      },
+      "adjacent": {
+        "blocks": [
+          66178,
+          259516
+        ],
+        "calls": [
+          66413,
+          66585
+        ]
+      },
+      "concurrent": {
+        "blocks": [
+          688,
+          145
+        ],
+        "calls": [
+          908,
+          148
+        ]
+      },
+      "forward-ranges": {
+        "blocks": [
+          347395,
+          121
+        ],
+        "calls": [
+          5582,
+          132
+        ]
+      },
+      "pairs": {
+        "blocks": [
+          65263,
+          121
+        ],
+        "calls": [
+          1184,
+          132
+        ]
+      },
+      "roundtrip": {
+        "blocks": [
+          929968,
+          393361
+        ],
+        "calls": [
+          2723,
+          916
+        ]
+      },
+      "split": {
+        "blocks": [
+          643,
+          121
+        ],
+        "calls": [
+          878,
+          132
+        ]
+      }
+    },
+    "trace_counts_include_initialization": true,
+    "worker_trace_counts_aggregated": false
+  },
+  "additional_resources": {
+    "raw_replay_peak": 78954496,
+    "retention_peak": 192954368,
+    "limit": 268435456
+  },
+  "all_accepted_scopes_exit_zero": true,
+  "all_accepted_scopes_memory_events_and_swap_zero": true,
+  "independent_model_converged": false
+}
