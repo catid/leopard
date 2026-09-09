@@ -1,0 +1,29 @@
+{
+  "bead": "leopard-79h.38.5.4.19.1.2",
+  "status": "preclock_protocol_qualified",
+  "timed": false,
+  "default_enabled": false,
+  "method": "paired_r19932_screen_method.md",
+  "plan": "paired_r19932_screen_plan.json",
+  "raw": "/tmp/leopard-paired-integration.la42Cz",
+  "fixed_attempt": "/tmp/leopard-paired-integration.la42Cz/attempt1",
+  "native_preflights": 27,
+  "public_encode_calls_in_preflights": 108,
+  "python_tests_per_mode": 16,
+  "planned_timed_processes": 318,
+  "planned_cross_control_aggregates": 20,
+  "planned_within_control_aggregates": 80,
+  "pins_sha256": "4c877ed1bc2edcb8387e16314bb3502c4cb7252db07c86ad81fcd2b64474a630",
+  "preflight_record_sha256": "a6c51f73d49aa7f7ec3c39e6559a293792b2631bc7b9f5a7c0d8b01d05161a03",
+  "preparation_log_sha256": "c1bc647a78b13631819d965feda80441ff98316173b8bd19364c52e6745e633e",
+  "tests_log_sha256": "950a556dcb4ee99904ea6bc2589074335ad2d2aee1345b9d5247a272e5d7cc42",
+  "resources": {
+    "tests": {"peak": 42913792, "maximum": 268435456, "max_events": 0},
+    "preparation": {"peak": 154415104, "maximum": 268435456, "max_events": 0}
+  },
+  "all_accepted_scopes_exit_zero": true,
+  "all_accepted_scopes_no_oom_or_swap": true,
+  "independent_model_converged": false,
+  "actual_timings_require_committed_and_pushed_preregistration": true,
+  "candidate_promotion_requires_valid_performance_and_actual_default_on_qualification": true
+}
