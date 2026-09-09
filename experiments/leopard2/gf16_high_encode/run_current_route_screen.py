@@ -72,8 +72,13 @@ def validate_plan(plan, name):
             "AMD Ryzen Threadripper PRO 9985WX 64-Cores"),
         "current_route_screen_work_plan.json": (26, 90, "work", "6.8.0-137-generic",
             "AMD Ryzen Threadripper 9980X 64-Cores"),
+        "current_route_screen_post_slipgate_plan.json": (26, 90, "work", "6.8.0-137-generic",
+            "AMD Ryzen Threadripper 9980X 64-Cores"),
     }
     require(name in profiles, "unsupported plan name")
+    condition = ("slipgate-disabled-20260909" if
+                 name == "current_route_screen_post_slipgate_plan.json" else None)
+    require(plan.get("condition") == condition, "changed workload condition")
     cpu, sibling, hostname, kernel, model = profiles[name]
     for key in ("cpu", "sibling", "controller_cpu", "passive_seconds",
                 "attempt_budget", "rounds", "samples_per_process"):
@@ -91,7 +96,8 @@ def validate_plan(plan, name):
 
 def run(bundle, output, plan_name="current_route_screen_plan.json"):
     validate_name = plan_name in ("current_route_screen_plan.json",
-                                 "current_route_screen_work_plan.json")
+                                 "current_route_screen_work_plan.json",
+                                 "current_route_screen_post_slipgate_plan.json")
     require(validate_name, "unsupported plan name")
     output.mkdir(mode=0o700)  # No resume, overwrite, retry or partial pooling.
     plan = json.loads((bundle / plan_name).read_text())

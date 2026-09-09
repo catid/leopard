@@ -9,7 +9,8 @@ from run_current_route_screen import ORDERS, analyze, validate, validate_plan
 
 class CurrentRouteScreenTests(unittest.TestCase):
     def test_host_specific_profiles(self):
-        for name in ("current_route_screen_plan.json", "current_route_screen_work_plan.json"):
+        for name in ("current_route_screen_plan.json", "current_route_screen_work_plan.json",
+                     "current_route_screen_post_slipgate_plan.json"):
             plan = json.loads(Path(__file__).with_name(name).read_text())
             validate_plan(plan, name)
             for key in ("cpu", "sibling", "controller_cpu", "passive_seconds",
@@ -32,11 +33,23 @@ class CurrentRouteScreenTests(unittest.TestCase):
                 validate_plan(plan, other)
             with self.assertRaises(ValueError):
                 validate_plan(plan, "../" + name)
+            changed = copy.deepcopy(plan)
+            changed["condition"] = "changed"
+            with self.assertRaises(ValueError):
+                validate_plan(changed, name)
             for key in ("orders", "cells"):
                 changed = copy.deepcopy(plan)
                 changed[key] = {} if key == "orders" else []
                 with self.assertRaises(ValueError):
                     validate_plan(changed, name)
+
+    def test_post_shutdown_condition_cannot_relabel_old_local_attempt(self):
+        old = "current_route_screen_work_plan.json"
+        new = "current_route_screen_post_slipgate_plan.json"
+        for source, target in ((old, new), (new, old)):
+            plan = json.loads(Path(__file__).with_name(source).read_text())
+            with self.assertRaises(ValueError):
+                validate_plan(plan, target)
 
     def setUp(self):
         self.rows = []
