@@ -1,0 +1,35 @@
+--- a/Leopard2BackendAVX2.cpp
++++ b/Leopard2BackendAVX2.cpp
+@@ -948,6 +948,10 @@
+     AVX2FF16Operation<true>(destination, source, multiplier_log, byte_count);
+ }
+ 
++#if !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
++#include "avx2_pair_schedule.h"
++#endif
++
+ template<bool Inverse>
+ static LEO_FORCE_INLINE void AVX2FF16Butterfly2Prepared(
+     void* x_pointer,
+@@ -975,6 +979,21 @@
+             y_low = _mm256_xor_si256(y_low, x_low);
+             y_high = _mm256_xor_si256(y_high, x_high);
+         }
++#if !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT) && LEO_AVX2_PAIR_SCHEDULE
++        if (Inverse)
++        {
++            _mm256_storeu_si256(reinterpret_cast<__m256i*>(y + offset), y_low);
++            _mm256_storeu_si256(
++                reinterpret_cast<__m256i*>(y + offset + 32), y_high);
++            AVX2FF16PairProductAdd(y_low, y_high, low_tables, high_tables,
++                x_low, x_high);
++            _mm256_storeu_si256(reinterpret_cast<__m256i*>(x + offset), x_low);
++            _mm256_storeu_si256(
++                reinterpret_cast<__m256i*>(x + offset + 32), x_high);
++            offset += 64;
++            continue;
++        }
++#endif
+         __m256i product_low;
+         __m256i product_high;
+         AVX2FF16ProductVectors(y_low, y_high, low_tables, high_tables,
