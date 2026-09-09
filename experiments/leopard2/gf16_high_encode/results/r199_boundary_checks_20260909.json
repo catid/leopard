@@ -1,0 +1,72 @@
+{
+  "bead": "leopard-79h.38.5.4.19",
+  "positive_native_records": 49,
+  "total_records": 82,
+  "full_parity_comparisons": 9,
+  "full_native_leopard1_parity_bytes": 58687488,
+  "public_records": 17,
+  "clock_guards": 5,
+  "malformed_cli_refusals": 28,
+  "guarded_shapes_per_profile": 8,
+  "original_guarded_shapes_per_profile": 8,
+  "production_changed": false,
+  "timed": false,
+  "observed_operations": {
+    "auto": {
+      "xor": {
+        "calls": 3,
+        "lane_groups": 3
+      },
+      "ifft2": {
+        "calls": 1384,
+        "lane_groups": 1384
+      },
+      "fft2": {
+        "calls": 197,
+        "lane_groups": 197
+      },
+      "ifft2_xor": {
+        "calls": 384,
+        "lane_groups": 384
+      },
+      "ifft4_range": {
+        "calls": 80,
+        "lane_groups": 572
+      },
+      "fft4_range": {
+        "calls": 18,
+        "lane_groups": 180
+      }
+    },
+    "gfni": {
+      "xor": {
+        "calls": 3,
+        "lane_groups": 3
+      },
+      "ifft2": {
+        "calls": 1384,
+        "lane_groups": 1384
+      },
+      "fft2": {
+        "calls": 197,
+        "lane_groups": 197
+      },
+      "ifft2_xor": {
+        "calls": 384,
+        "lane_groups": 384
+      },
+      "ifft4_range": {
+        "calls": 80,
+        "lane_groups": 572
+      },
+      "fft4_range": {
+        "calls": 18,
+        "lane_groups": 180
+      }
+    }
+  },
+  "memory_peaks": {
+    "build": 155054080,
+    "preparation": 180563968
+  }
+}

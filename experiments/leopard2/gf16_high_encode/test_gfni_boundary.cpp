@@ -44,16 +44,10 @@ struct Guard
     }
 };
 
-void Check(unsigned cell, leo2_backend candidate_backend = LEO2_BACKEND_GFNI,
-    leo2_backend baseline_backend = LEO2_BACKEND_AVX2)
+void CheckShape(unsigned cell, unsigned k, unsigned r, size_t bytes,
+    size_t offset, leo2_field field, leo2_backend candidate_backend,
+    leo2_backend baseline_backend)
 {
-    Require(cell < 8, "guarded cell");
-    const unsigned k = cell < 6 ? 1000 : 17;
-    const unsigned r = cell < 6 ? (cell % 2 ? 199 : 200) : 7;
-    const size_t bytes = cell < 6 ? (cell % 2 ? 65536 : 32768) +
-        (cell >= 4 ? 2 : 0) : (cell == 6 ? 65 : 66);
-    const size_t offset = cell < 2 ? 0 : cell < 4 ? 1 : cell < 6 ? 2 : 1;
-    const leo2_field field = cell == 6 ? LEO2_FIELD_GF8 : LEO2_FIELD_GF16;
     Codec baseline(k, r, field, baseline_backend);
     Codec candidate(k, r, field, candidate_backend);
     Require(leo2_context_field_mask(candidate.context.get()) ==
@@ -133,6 +127,19 @@ void Check(unsigned cell, leo2_backend candidate_backend = LEO2_BACKEND_GFNI,
         "\"k\":%u,\"r\":%u,\"bytes\":%zu,\"misalignment\":%zu,\"field\":%u,"
         "\"subset_masks\":6,\"scratch_bytes\":%zu,\"timed\":false}\n",
         cell, k, r, bytes, offset, static_cast<unsigned>(field), scratch_bytes);
+}
+
+void Check(unsigned cell, leo2_backend candidate_backend = LEO2_BACKEND_GFNI,
+    leo2_backend baseline_backend = LEO2_BACKEND_AVX2)
+{
+    Require(cell < 8, "guarded cell");
+    const unsigned k = cell < 6 ? 1000 : 17;
+    const unsigned r = cell < 6 ? (cell % 2 ? 199 : 200) : 7;
+    const size_t bytes = cell < 6 ? (cell % 2 ? 65536 : 32768) +
+        (cell >= 4 ? 2 : 0) : (cell == 6 ? 65 : 66);
+    const size_t offset = cell < 2 ? 0 : cell < 4 ? 1 : cell < 6 ? 2 : 1;
+    const leo2_field field = cell == 6 ? LEO2_FIELD_GF8 : LEO2_FIELD_GF16;
+    CheckShape(cell, k, r, bytes, offset, field, candidate_backend, baseline_backend);
 }
 }
 
