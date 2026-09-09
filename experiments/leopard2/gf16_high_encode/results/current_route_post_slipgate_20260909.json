@@ -1,0 +1,208 @@
+{
+  "schema": "leopard-gf16-current-route-post-slipgate-result/v1",
+  "date": "2026-09-09",
+  "bead": "leopard-79h.38.5.4.10",
+  "preregistration": "23bcdd7f45bc6dc00eeaf51b30090d4e901d6f3c",
+  "condition": "slipgate-disabled-20260909",
+  "host": {
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper 9980X 64-Cores",
+    "hostname": "work",
+    "kernel": "6.8.0-137-generic"
+  },
+  "cpu": 26,
+  "sibling": 90,
+  "controller_cpu": 0,
+  "complete": true,
+  "untimed_checks": 12,
+  "timed_invocations": 144,
+  "sibling_nonidle_jiffies": 0,
+  "passive": {
+    "before": 570054,
+    "after": 570054,
+    "elapsed_ns": 10000241142
+  },
+  "analysis": {
+    "decision": "diagnostic_complete",
+    "cells": [
+      {
+        "cell": 0,
+        "round_ratios": {
+          "main_vs_current": [
+            1.3770127988368024,
+            1.410768646564993,
+            1.4602061378542885
+          ],
+          "same_current": [
+            1.0011542652890588,
+            1.0000887931710396,
+            1.0179243736149979
+          ]
+        },
+        "ratios": {
+          "main_vs_current": 1.415585097250121,
+          "same_current": 1.0063561199585445
+        },
+        "interpretation": "current_advantage"
+      },
+      {
+        "cell": 1,
+        "round_ratios": {
+          "main_vs_current": [
+            0.9636983192628978,
+            0.9719843203793123,
+            0.9736511851038441
+          ],
+          "same_current": [
+            1.0036136300578662,
+            0.9993480976792656,
+            0.9988720375293757
+          ]
+        },
+        "ratios": {
+          "main_vs_current": 0.9697681558960904,
+          "same_current": 1.0006089862178793
+        },
+        "interpretation": "investigate_current_deficit"
+      },
+      {
+        "cell": 2,
+        "round_ratios": {
+          "main_vs_current": [
+            1.040974265019118,
+            1.0511757112742772,
+            1.0509891517038135
+          ],
+          "same_current": [
+            1.0000192668178223,
+            0.996584010823568,
+            0.9896038700380407
+          ]
+        },
+        "ratios": {
+          "main_vs_current": 1.0477021807978082,
+          "same_current": 0.9953929393590494
+        },
+        "interpretation": "current_advantage"
+      },
+      {
+        "cell": 3,
+        "round_ratios": {
+          "main_vs_current": [
+            0.9839517453577387,
+            0.9817535804115246,
+            0.950549004266479
+          ],
+          "same_current": [
+            0.9981466827123747,
+            0.9950458590610095,
+            0.9964795102510973
+          ]
+        },
+        "ratios": {
+          "main_vs_current": 0.9719641988281623,
+          "same_current": 0.9965565451899969
+        },
+        "interpretation": "investigate_current_deficit"
+      },
+      {
+        "cell": 4,
+        "round_ratios": {
+          "main_vs_current": [
+            0.946486170388956,
+            0.9516742895814015,
+            0.9710594362628859
+          ],
+          "same_current": [
+            1.0005122663749222,
+            1.00097102365613,
+            0.9869125282233919
+          ]
+        },
+        "ratios": {
+          "main_vs_current": 0.9563484111806422,
+          "same_current": 0.9961105238052241
+        },
+        "interpretation": "investigate_current_deficit"
+      },
+      {
+        "cell": 5,
+        "round_ratios": {
+          "main_vs_current": [
+            1.0092804043785661,
+            1.0092998168527232,
+            1.0101382715873926
+          ],
+          "same_current": [
+            1.000552659675636,
+            1.0006169791374504,
+            0.9978746985404967
+          ]
+        },
+        "ratios": {
+          "main_vs_current": 1.009572751750339,
+          "same_current": 0.9996806286038739
+        },
+        "interpretation": "near_parity_or_uncertain"
+      }
+    ],
+    "confidence_intervals": false,
+    "authoritative_v19": false,
+    "production_promotion": false,
+    "historical_exact_main_gap_closed": false
+  },
+  "ratio_definition": "Leopard1 encode time / Leopard2 encode time = Leopard2 throughput / Leopard1 throughput. Above1 favors Leopard2. Diagnostic only on this host/build/shape.",
+  "resources": {
+    "memory_peak": 133763072,
+    "memory_max": 268435456,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    },
+    "swap": 0,
+    "exit_code": 0,
+    "wall_seconds": 73.52
+  },
+  "validation": {
+    "prior_manifest_entries": 158,
+    "full_parity_bytes": 61014016,
+    "prior_sanitizer_records": 6,
+    "pure_tests_per_mode": 7,
+    "offline_replay_modes": [
+      "normal",
+      "optimized"
+    ],
+    "rejected_mutations_per_mode": 15,
+    "control_failure_selfcheck": true,
+    "shutdown_condition_before_after": "Equal snapshots; all3servicesinactive/disabled/MainPID0 andbothcontainersstopped/restart=no",
+    "source_codecs": {
+      "current": "36dc0c8f66604b8d974468e687c51e6183ecb61d",
+      "current_tree": "d6bd7b74de1feabe75b6a2b9045d724f844e9b21",
+      "main": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "main_tree": "b7c8830d96a978f6ec14fe747095f066e351ae72"
+    },
+    "production_changes": false,
+    "review": "Codex self-review and standalone deterministic raw replay; no independent-model CONVERGED claim."
+  },
+  "evidence": {
+    "bundle": ".research/leopard-79h/gf16-current-post-slipgate.f4j4of",
+    "required_prior_bundle": ".research/leopard-79h/gf16-current-route-failed.STc10h",
+    "prior_manifest_sha256": "e83a217e680a23088e53208d9ba7747742e7918a1377e74efe9c35399b4ba342",
+    "journal_sha256": "a1ebcc14caf096152317175f4cebd5eaaf83d29804b9b0aadd94e314b441ffc4",
+    "scope_sha256": "491f30599bf60e1fdbaba1c3060aee778a734b69b5265588d3ad7d53d538310c",
+    "frozen_pins_sha256": "28eaea50b852f35c9ba8ba92cd693be70559d911070b4dcf67416cd93a2df17d",
+    "local_only": true
+  },
+  "next": [
+    "leopard-79h.38.5.4.17: EvaluateGFNI atAUTO32KiB/R199 boundaries beforeboundedselectorcandidate.",
+    "leopard-79h.38.5.4.18: SeparateexplicitAVX2 attribution; preserveforcedbackendsemantics.",
+    "CombinedGFNI first/terminal fusion lowerpriority becausecurrentAUTO64KiB targetalready1.415585x L1; candidateunpromoted.",
+    "Broaderproduction/v19 qualification remainsseparateandopen."
+  ]
+}

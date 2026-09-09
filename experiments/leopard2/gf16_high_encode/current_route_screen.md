@@ -1,7 +1,11 @@
 # Current-route GF16 encoder diagnostic
 
 Bead: `leopard-79h.38.5.4.10`. Date: 2026-09-06.
-Status: **both original server and local successor attempts exhausted; no valid comparison**.
+Status: **historical attempts exhausted; a distinct post-Slipgate successor now has valid diagnostic results**.
+
+See [the 2026-09-09 post-shutdown result](current_route_post_slipgate.md) for
+the complete144-invocation local comparison. The failures documented below
+remain unchanged and are excluded from that result.
 
 ## Local-only successor (2026-09-08)
 
