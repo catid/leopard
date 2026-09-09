@@ -52,9 +52,15 @@ struct Spec
 
 Spec Target(unsigned cell)
 {
+#ifdef LEO_AUTO_GFNI_R19932_TARGET
+    Require(cell == 0, "R19932 target cell");
+    Spec result;
+    result.r = 199;
+#else
     Require(cell < 2, "target cell");
     Spec result;
     if (cell) { result.r = 199; result.bytes = 65536; }
+#endif
     return result;
 }
 

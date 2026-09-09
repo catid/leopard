@@ -1,0 +1,65 @@
+{
+  "bead": "leopard-79h.38.5.4.19.1",
+  "positive_native_records": 223,
+  "total_records": 259,
+  "public_records": 117,
+  "clock_guards": 5,
+  "cli_refusals": 31,
+  "full_parity_comparisons": 44,
+  "full_native_leopard1_parity_bytes": 297765056,
+  "real_backend_checks": 12,
+  "registered_ctests": 3,
+  "release_isa_pass": true,
+  "archive_members": 24,
+  "unchanged_members": 23,
+  "hook_archive_members": 23,
+  "hook_unchanged_members": 22,
+  "default_enabled": false,
+  "timed": false,
+  "performance_qualified": false,
+  "production_promoted": false,
+  "resources": {
+    "build": {
+      "peak": 274698240,
+      "maximum": 536870912,
+      "max_events": 0,
+      "oom_events": 0,
+      "swap": 0
+    },
+    "preparation": {
+      "peak": 268435456,
+      "maximum": 268435456,
+      "max_events": 612,
+      "oom_events": 0,
+      "swap": 0
+    },
+    "finish-hooks": {
+      "peak": 66248704,
+      "maximum": 536870912,
+      "max_events": 0,
+      "oom_events": 0,
+      "swap": 0
+    },
+    "check-hooks": {
+      "peak": 78254080,
+      "maximum": 268435456,
+      "max_events": 0,
+      "oom_events": 0,
+      "swap": 0
+    },
+    "cmake-configure": {
+      "peak": 33656832,
+      "maximum": 536870912,
+      "max_events": 0,
+      "oom_events": 0,
+      "swap": 0
+    },
+    "ctest": {
+      "peak": 56586240,
+      "maximum": 268435456,
+      "max_events": 0,
+      "oom_events": 0,
+      "swap": 0
+    }
+  }
+}

@@ -433,6 +433,14 @@ bool FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics();
 bool SetAutoGF16GFNIBoundariesEnabledForDiagnostics(bool enabled);
 bool AutoGF16GFNIBoundariesEnabledForDiagnostics();
 
+// Default-off candidate for exactly K=1000/R=199/32 KiB. The existing
+// boundary control, qualified cached GFNI table, and all selector/API gates
+// remain required. This does not change the three established GFNI cells.
+// Set with codec operations and route inspection quiescent, preferably
+// before codec creation; never change it while codecs execute concurrently.
+bool SetAutoGF16GFNIR19932EnabledForDiagnostics(bool enabled);
+bool AutoGF16GFNIR19932EnabledForDiagnostics();
+
 /*
     Arithmetic-only same-executable benchmark control for the exact
     K=62/R=8/B=64 fused AVX2 leaf.  It deliberately does not affect adjacent

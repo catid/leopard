@@ -2532,7 +2532,7 @@ if(LEO2_BUILD_TESTS)
             NAME leopard2_backend_auto_gfni_encode_ff8_allocation_fallback
             COMMAND leopard2_backend_failures_test
                 auto-gfni-encode-ff8-allocation-fallback)
-        foreach(boundary 32 r199)
+        foreach(boundary 32 r199 r19932)
             foreach(fault kat ff8-allocation ff16-allocation)
                 set(boundary_test "leopard2_backend_auto_gfni_boundary_${boundary}_${fault}")
                 add_test(NAME ${boundary_test}

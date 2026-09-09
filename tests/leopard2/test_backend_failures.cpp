@@ -479,6 +479,44 @@ void run_auto_gfni_encode_fallback_case(
     require(!leopard2_internal::AutoGF16GFNIEncodeAvailableForDiagnostics(
             second),
         "cached failed GFNI table became available");
+    TestBackendState failed;
+    require(TestGetBackendState(LEO2_BACKEND_GFNI, &failed),
+        "failed optional GFNI backend state is unavailable");
+    check_table_accounting(LEO2_BACKEND_GFNI, failed);
+    const bool kat = fault == TestSetupFaultGFNIKAT;
+    require(!failed.qualified &&
+            failed.failure == (kat ? QualificationSelfTestFailed
+                                   : QualificationOutOfMemory),
+        "optional GFNI failure was not cached correctly");
+    require(failed.ff8_published == kat && failed.ff16_published == kat,
+        "optional GFNI failure partially published tables");
+
+    // Check all fallback output bytes against an explicit AVX2 codec, not
+    // merely the success status and the routing diagnostic.
+    context_options.backend = LEO2_BACKEND_AVX2;
+    leo2_context* reference_context = NULL;
+    leo2_codec* reference_codec = NULL;
+    require(leo2_context_create(&context_options, &reference_context) ==
+            LEO2_SUCCESS && reference_context,
+        "fallback reference context creation failed");
+    require(leo2_codec_create(reference_context, 1000, recovery_count,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL,
+            &reference_codec) == LEO2_SUCCESS && reference_codec,
+        "fallback reference codec creation failed");
+    size_t reference_scratch_bytes = 0;
+    require(leo2_encode_scratch_size(reference_codec, kBytes,
+            &reference_scratch_bytes) == LEO2_SUCCESS &&
+            reference_scratch_bytes <= scratch_bytes,
+        "fallback reference scratch exceeds the validated allocation");
+    std::vector<uint8_t> reference(recovery.size());
+    for (unsigned shard = 0; shard < recovery_count; ++shard)
+        recovery_ptrs[shard] = reference.data() + shard * kBytes;
+    require(leo2_encode(reference_codec, kBytes, original_ptrs.data(),
+            recovery_ptrs.data(), reinterpret_cast<void*>(aligned),
+            reference_scratch_bytes) == LEO2_SUCCESS && reference == recovery,
+        "fallback output differs from explicit AVX2");
+    leo2_codec_destroy(reference_codec);
+    leo2_context_destroy(reference_context);
     require(leopard2_internal::AutoGF16GFNIEncodeModeForDiagnostics() == 1U,
         "AUTO GF16 GFNI fallback route probe changed the enabled view");
     require(leopard2_internal::FinishAutoGF16GFNIEncodeRouteProbeForDiagnostics(),
@@ -838,7 +876,8 @@ int main(int argc, char** argv)
     try
     {
         if (argc == 3 && (std::strcmp(argv[2], "boundary-32") == 0 ||
-                          std::strcmp(argv[2], "boundary-r199") == 0))
+                          std::strcmp(argv[2], "boundary-r199") == 0 ||
+                          std::strcmp(argv[2], "boundary-r19932") == 0))
         {
             using namespace leopard::backend;
             require(leopard2_internal::AutoGF16GFNIBoundariesEnabledForDiagnostics(),
@@ -852,8 +891,13 @@ int main(int argc, char** argv)
                 fault = TestSetupFaultGFNIFF8Allocation;
             else throw std::runtime_error("unknown GFNI boundary fallback fault");
             const bool smaller_bytes = std::strcmp(argv[2], "boundary-32") == 0;
+            const bool r19932 = std::strcmp(argv[2], "boundary-r19932") == 0;
+            if (r19932)
+                require(leopard2_internal::SetAutoGF16GFNIR19932EnabledForDiagnostics(true),
+                    "enable exact R199/32KiB candidate for fallback test");
             run_auto_gfni_encode_fallback_case(fault, argv[1],
-                smaller_bytes ? 200 : 199, smaller_bytes ? 32768 : 65536);
+                smaller_bytes ? 200 : 199,
+                smaller_bytes || r19932 ? 32768 : 65536);
             return 0;
         }
         if (argc == 2 &&

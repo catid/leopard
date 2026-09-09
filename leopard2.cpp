@@ -1164,6 +1164,9 @@ static thread_local unsigned g_auto_gf16_gfni_encode_call_count = 0U;
 // initialized data so qualification does not compare different text layouts.
 // The two additional cells passed the 2026-09-09 AUTO qualification campaign.
 static std::atomic<uint32_t> g_auto_gf16_gfni_boundary_mode(1U);
+// Separate default-off candidate for R=199/32 KiB. Keep the established
+// boundary routes unchanged while this exact additional cell is qualified.
+static std::atomic<uint32_t> g_auto_gf16_gfni_r19932_mode(2U);
 #endif
 #ifdef LEO_HAS_FF8
 static volatile uint32_t g_r1_early_dispatch_mode =
@@ -7939,8 +7942,11 @@ static bool UseAutoGF16GFNIEncode(
         return false;
 
     return buffer_bytes == 64U * 1024U ||
-        (codec->recovery_count == 200U && buffer_bytes == 32U * 1024U &&
-         g_auto_gf16_gfni_boundary_mode.load(std::memory_order_relaxed) == 1U);
+        (buffer_bytes == 32U * 1024U &&
+         g_auto_gf16_gfni_boundary_mode.load(std::memory_order_relaxed) == 1U &&
+         (codec->recovery_count == 200U ||
+          (codec->recovery_count == 199U &&
+           g_auto_gf16_gfni_r19932_mode.load(std::memory_order_relaxed) == 1U)));
 #else
     (void)codec;
     (void)buffer_bytes;
@@ -16475,6 +16481,27 @@ bool FinishK16R16B64AVX512GFNIRouteProbeForDiagnostics()
         return false;
     g_k16r16_b64_avx512_gfni_mode = mode == 3U ? 1U : 2U;
     return true;
+#else
+    return false;
+#endif
+}
+
+bool SetAutoGF16GFNIR19932EnabledForDiagnostics(bool enabled)
+{
+#ifdef LEO_HAS_FF16
+    g_auto_gf16_gfni_r19932_mode.store(enabled ? 1U : 2U,
+        std::memory_order_relaxed);
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
+bool AutoGF16GFNIR19932EnabledForDiagnostics()
+{
+#ifdef LEO_HAS_FF16
+    return g_auto_gf16_gfni_r19932_mode.load(std::memory_order_relaxed) == 1U;
 #else
     return false;
 #endif
