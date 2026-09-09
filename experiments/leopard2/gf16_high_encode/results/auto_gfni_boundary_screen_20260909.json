@@ -1,0 +1,233 @@
+{
+  "schema": "leopard-auto-gfni-boundary-result/v1",
+  "bead": "leopard-79h.38.5.4.17.1",
+  "date": "2026-09-09",
+  "preregistration": "6bff9ecb8658c1313e88d680b47413d3f2531065",
+  "candidate_commit": "35f53fb5c12f3f336f5a0e6235c5c243993a604a",
+  "leopard1_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+  "passive": {
+    "before": 570178,
+    "after": 570178,
+    "elapsed_ns": 10000532241
+  },
+  "analysis": {
+    "cells": [
+      {
+        "cell": 0,
+        "role": "target",
+        "round_ratios": {
+          "off_on": [
+            1.5341848138189111,
+            1.5391824056322208,
+            1.5367753169805796
+          ],
+          "same_on": [
+            0.9888879355176324,
+            1.0045326165498494,
+            0.9968388960648207
+          ],
+          "main_on": [
+            1.4880051411220092,
+            1.4653870928675552,
+            1.4815360033173466
+          ]
+        },
+        "ratios": {
+          "off_on": 1.5367128237465506,
+          "same_on": 0.9967326825761644,
+          "main_on": 1.478278751629016
+        }
+      },
+      {
+        "cell": 1,
+        "role": "target",
+        "round_ratios": {
+          "off_on": [
+            1.4603109040069182,
+            1.4936931582985915,
+            1.4983754991458236
+          ],
+          "same_on": [
+            0.9998603634794144,
+            1.003157025465093,
+            1.0004822577557142
+          ],
+          "main_on": [
+            1.4481515107273533,
+            1.40974786985388,
+            1.4286386288031525
+          ]
+        },
+        "ratios": {
+          "off_on": 1.4840292501192274,
+          "same_on": 1.001165527953748,
+          "main_on": 1.4287599871298244
+        }
+      },
+      {
+        "cell": 2,
+        "role": "target",
+        "round_ratios": {
+          "off_on": [
+            1.5409383390053404,
+            1.5470186592131396,
+            1.539511209140786
+          ],
+          "same_on": [
+            1.0033815397511707,
+            0.9960667447020514,
+            1.0013668405372267
+          ]
+        },
+        "ratios": {
+          "off_on": 1.5424859704962057,
+          "same_on": 1.0002669461482552
+        }
+      },
+      {
+        "cell": 3,
+        "role": "target",
+        "round_ratios": {
+          "off_on": [
+            1.4597562957426644,
+            1.4624089862118763,
+            1.460257317554251
+          ],
+          "same_on": [
+            0.9991054759484138,
+            0.9984338956600733,
+            0.9977699300756364
+          ]
+        },
+        "ratios": {
+          "off_on": 1.460807080084329,
+          "same_on": 0.9984362850204467
+        }
+      },
+      {
+        "cell": 4,
+        "role": "unchanged_neighbor",
+        "round_ratios": {
+          "off_on": [
+            1.0036979102197616,
+            0.9985712044600099,
+            0.9986893922728045
+          ],
+          "same_on": [
+            1.0013586282473896,
+            1.0020409894216327,
+            1.003183598342843
+          ]
+        },
+        "ratios": {
+          "off_on": 1.0003166518544813,
+          "same_on": 1.0021941225727962
+        }
+      },
+      {
+        "cell": 5,
+        "role": "unchanged_neighbor",
+        "round_ratios": {
+          "off_on": [
+            0.9992583794127956,
+            0.9939140043227269,
+            0.9944701534311279
+          ],
+          "same_on": [
+            1.0038853002688504,
+            1.0034233745812546,
+            0.9999854986351585
+          ]
+        },
+        "ratios": {
+          "off_on": 0.9958779592521572,
+          "same_on": 1.0024298802811584
+        }
+      },
+      {
+        "cell": 6,
+        "role": "unchanged_neighbor",
+        "round_ratios": {
+          "off_on": [
+            1.002299912291514,
+            1.0011113829854232,
+            1.0038389876919336
+          ],
+          "same_on": [
+            1.0022994289263183,
+            0.9972821905502804,
+            0.997925253176481
+          ]
+        },
+        "ratios": {
+          "off_on": 1.0024161391651512,
+          "same_on": 0.9991664735076284
+        }
+      },
+      {
+        "cell": 7,
+        "role": "unchanged_neighbor",
+        "round_ratios": {
+          "off_on": [
+            0.9994007413859386,
+            0.9949554190247911,
+            0.9988285180986738
+          ],
+          "same_on": [
+            1.0012767111986784,
+            0.9992801183245629,
+            0.9990525688367249
+          ]
+        },
+        "ratios": {
+          "off_on": 0.99772627061715,
+          "same_on": 0.9998693004490691
+        }
+      }
+    ],
+    "controls_pass": true,
+    "neighbors_pass": true,
+    "targets_pass": true,
+    "decision": "continue_to_production_integration",
+    "confidence_intervals": false,
+    "production_promotion": false,
+    "authoritative_v19": false
+  },
+  "preparation_checks": 40,
+  "preflight_checks": 24,
+  "timed_invocations": 216,
+  "full_parity_comparison_bytes": 134938624,
+  "all_timed_sibling_deltas_zero": true,
+  "native_resources": {
+    "peak": 128065536,
+    "maximum": 268435456,
+    "all_six_memory_events_zero": true,
+    "swap": 0,
+    "elapsed_seconds": 89.87,
+    "exit": 0
+  },
+  "independent_replay": {
+    "normal": true,
+    "optimized": true,
+    "readonly_copy": true,
+    "rejected_mutations": 15,
+    "decision_gate_selfchecks": 4
+  },
+  "evidence": {
+    "bundle": ".research/leopard-79h/auto-gfni-boundary-screen.fvwFjq",
+    "entries": 671,
+    "bytes_including_manifest": 258806789,
+    "outer_manifest_sha256": "bf66d846bf2907a222d5ee87fcfba60abe3b7fc99966498c26982564af296268",
+    "journal_sha256": "383790fd94221d107dc3b2fccc9396ac6404828a8811ea27a2f2b15fec3f8537",
+    "scope_sha256": "5d644d0cde435b9453de3396af20335c987aaa16e114dfb7e727272cb7167a4e",
+    "pins_sha256": "d5a53d20b603a498e1aa6cede047106769f0616b94acb14a8dd9c7a5af3888bf"
+  },
+  "limitations": [
+    "Candidate qualification, not default-on integration",
+    "Native Leopard1 build is not ISA-matched to explicitly restricted Leopard2",
+    "No Leopard1 batch API comparison",
+    "No confidence intervals or broad v19/other-CPU closure",
+    "Codex self-review under user Claude opt-out; no independent-model CONVERGED"
+  ],
+  "next": "Integrate default-on selector and default-route tests/docs; clean Release and focused sanitizer validation before closing .17.1."
+}

@@ -85,3 +85,51 @@ Raw preparation: `/tmp/leopard-auto-boundary-screen.2TfJyu`. The existing
 candidate correctness reference is the local readonly 218-entry bundle
 `.research/leopard-79h/auto-gfni-boundary-checks.bJ6wiH`, outer manifest
 `ae09b1b76a0dd877dcf0acff648df60c90cfdbe4442fbfbb0dee2f2bb71da512`.
+
+## Qualification result
+
+Preregistration `6bff9ecb8658c1313e88d680b47413d3f2531065` was pushed
+before the sole launch. All 24 preflights and 216 timed children passed;
+every timed sibling delta was zero. Sibling 90 stayed at 570178 non-idle
+jiffies through the 10.000532241-second passive window. Shutdown snapshots
+matched. Scope exit was zero after 89.87 seconds, peak 128,065,536 bytes /
+256 MiB, all six memory events zero, swap zero.
+
+Ratios are candidate throughput divided by comparator throughput:
+
+| Workload | Candidate / boundary-off | Candidate / Leopard1 | Same-on control |
+| --- | ---: | ---: | ---: |
+| R200 / 32 KiB, ordinary | 1.536713 | 1.478279 | 0.996733 |
+| R199 / 64 KiB, ordinary | 1.484029 | 1.428760 | 1.001166 |
+| R200 / 32 KiB, one-item batch | 1.542486 | not compared | 1.000267 |
+| R199 / 64 KiB, one-item batch | 1.460807 | not compared | 0.998436 |
+| Existing R200 / 64 KiB | 1.000317 | not compared | 1.002194 |
+| Inactive R199 / 32 KiB | 0.995878 | not compared | 1.002430 |
+| Explicit AVX2 R200 / 32 KiB | 1.002416 | not compared | 0.999166 |
+| K4096 / R512 / 4 KiB | 0.997726 | not compared | 0.999869 |
+
+All four targets clear 5%, every target round is positive, and all eight
+controls plus four unchanged neighbors pass the 2% equivalence bound.
+Decision: **continue to production integration**. The code remains
+default-off at this evidence checkpoint; qualification is not yet a claim
+that the enabled default has passed its clean integration build.
+
+The independent retained-only replayer imports no collector and executes no
+codec. Normal, Python `-O`, and readonly-copy runs agree on all 54 round
+ratios, 18 aggregates and the decision. It verifies the 14 frozen inputs,
+seven build artifacts, 40 preparation records, 24 preflights, 216 raw timing
+records, full Leopard1 parity, resource limits and shutdown state. Fifteen
+malformed-row/claim mutations are rejected; four synthetic cases check the
+positive gate and all three rejection decisions.
+
+Evidence is local readonly `.research/leopard-79h/auto-gfni-boundary-screen.fvwFjq`:
+671 manifest entries, 258,806,789 bytes including the manifest; outer SHA-256
+`bf66d846bf2907a222d5ee87fcfba60abe3b7fc99966498c26982564af296268`.
+Retention peak was 36,311,040 bytes / 256 MiB and readonly replay peak was
+90,300,416 bytes / 256 MiB, both with all events/swap zero. The exact journal,
+scope and pin hashes and unrounded results are in
+`results/auto_gfni_boundary_screen_20260909.json`.
+
+The attempt is consumed. Next integrate only the qualified default routes,
+update existing default assumptions/docs, and perform clean Release plus
+focused sanitizer checks. The broader goal and `.17.1` remain open.
