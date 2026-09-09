@@ -77,6 +77,12 @@ is consumed; this is not an invitation to repeat it.
 
 ## Evidence-driven next work
 
+Follow-up: [the fresh GFNI boundary screen](gfni_boundary_screen.md) now finds
+explicit GFNI 54.5% and 47.1% faster than current AUTO at the two default-route
+deficits below. Full parity, guarded sanitizer checks and all 72 isolated
+timings passed, with independent raw replay. A bounded AUTO implementation is
+next (`leopard-79h.38.5.4.17.1`); no production selector change has shipped yet.
+
 The old broad assumption that the current AUTO64-KiB target trails Leopard1 is
 not supported: it is41.6% ahead in this diagnostic. The remaining measured
 deficits are AVX2 cases, including two default-route boundaries.

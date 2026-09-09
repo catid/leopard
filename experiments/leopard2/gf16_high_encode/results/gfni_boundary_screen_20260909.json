@@ -1,0 +1,142 @@
+{
+  "schema": "leopard-gfni-boundary-result/v1",
+  "date": "2026-09-09",
+  "bead": "leopard-79h.38.5.4.17",
+  "preregistration": "d1d3cbfbe6e2fa94460c32bc374f1a0950aaf2e3",
+  "codec_commit": "36dc0c8f66604b8d974468e687c51e6183ecb61d",
+  "leopard1_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+  "host": {
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper 9980X 64-Cores",
+    "hostname": "work",
+    "kernel": "6.8.0-137-generic"
+  },
+  "cpu": 26,
+  "sibling": 90,
+  "condition": "slipgate-disabled-20260909",
+  "complete": true,
+  "preflights": 8,
+  "timed_invocations": 72,
+  "passive": {
+    "before": 570109,
+    "after": 570109,
+    "elapsed_ns": 10000091881
+  },
+  "sibling_nonidle_jiffies": 0,
+  "analysis": {
+    "controls_pass": true,
+    "cells": [
+      {
+        "cell": 0,
+        "round_ratios": {
+          "auto_vs_gfni": [
+            1.54639021299153,
+            1.5432041723426477,
+            1.5448006487538484
+          ],
+          "main_vs_gfni": [
+            1.4251001580811908,
+            1.4642496502916578,
+            1.4980863104942124
+          ],
+          "same_gfni": [
+            1.0004659154551656,
+            0.9944689267084611,
+            0.9990089045328073
+          ]
+        },
+        "ratios": {
+          "auto_vs_gfni": 1.5447977971116096,
+          "main_vs_gfni": 1.4621742034792942,
+          "same_gfni": 0.9979779782815443
+        },
+        "decision": "qualify_bounded_auto_candidate"
+      },
+      {
+        "cell": 1,
+        "round_ratios": {
+          "auto_vs_gfni": [
+            1.459063891502484,
+            1.4950903227088799,
+            1.4599000829840962
+          ],
+          "main_vs_gfni": [
+            1.4499007032742326,
+            1.4547657653667778,
+            1.419729140182924
+          ],
+          "same_gfni": [
+            1.0021383277490663,
+            1.0316111860515733,
+            0.9971910979851507
+          ]
+        },
+        "ratios": {
+          "auto_vs_gfni": 1.471256149697267,
+          "main_vs_gfni": 1.441381498208777,
+          "same_gfni": 1.010200011990429
+        },
+        "decision": "qualify_bounded_auto_candidate"
+      }
+    ],
+    "confidence_intervals": false,
+    "production_promotion": false,
+    "neighbor_qualification": false,
+    "authoritative_v19": false
+  },
+  "ratio_definition": "Comparator encode time / explicit GFNI encode time = explicit GFNI throughput / comparator throughput. Diagnostic only.",
+  "resources": {
+    "build_peak": 130965504,
+    "build_max": 536870912,
+    "check_peak": 256364544,
+    "check_max": 268435456,
+    "timing_peak": 127823872,
+    "timing_max": 268435456,
+    "timing_wall_seconds": 39.32,
+    "all_memory_events_zero": true,
+    "swap_zero": true,
+    "exit_code": 0
+  },
+  "validation": {
+    "compared_parity_bytes": 58785792,
+    "guarded_shapes_per_build": 8,
+    "subset_masks_per_shape": 6,
+    "full_parity_routes": [
+      "auto",
+      "avx2",
+      "gfni"
+    ],
+    "both_fields": true,
+    "sanitizers": [
+      "ASan",
+      "UBSan",
+      "LSan"
+    ],
+    "collector_tests_per_mode": 7,
+    "independent_replay_modes": [
+      "normal",
+      "optimized"
+    ],
+    "rejected_replay_mutations": 15,
+    "control_failure_selfcheck": true,
+    "production_source_changes": false,
+    "independent_model_converged": false
+  },
+  "evidence": {
+    "local_archive": ".research/leopard-79h/gfni-boundary.COQ16A",
+    "manifest_sha256": "cff77de2515b10d316dba74a8f029441c9d4cdc3f49db09ad85c17ed380c1e5f",
+    "manifest_entries": 279,
+    "local_archive_bytes": 150580568,
+    "frozen_copy_replay": true,
+    "scratch": "/tmp/leopard-gfni-boundary.iIwWWx",
+    "journal_sha256": "337d847c992973d5b0d54a05914a4cc09f890b7faf073dc3b8f9e401da72b6be",
+    "scope_sha256": "ca4621f0fe80f989e7bfe6f89e59864055679b84698afc816fa571f5a5b2cbba",
+    "pins_sha256": "9e6e63281427faacb51fb4c581ba239cfd24f81936b11de8e600105c87233862",
+    "reference": ".research/leopard-79h/gf16-current-route-failed.STc10h",
+    "reference_manifest_sha256": "e83a217e680a23088e53208d9ba7747742e7918a1377e74efe9c35399b4ba342"
+  },
+  "next_task": "leopard-79h.38.5.4.17.1",
+  "next": "Qualify a bounded AUTO extension for exactly R200/32768 and R199/65536 under existing host/thread/profile/layout/flags/full-output/API gates. No production promotion yet."
+}
