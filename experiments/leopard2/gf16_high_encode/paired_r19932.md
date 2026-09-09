@@ -1,6 +1,9 @@
 # Untimed paired AUTO R199/32 KiB frontend
 
-Bead: `leopard-79h.38.5.4.19.1.1` (still open).
+Bead: `leopard-79h.38.5.4.19.1.1`.
+
+Update: the separate timer adapter is now qualified without benchmark clocks;
+see `paired_timer_r19932.md`. The prototype evidence below is unchanged.
 
 The new **untimed schedule prototype** passes Release and full Leopard2
 ASan/UBSan/LSan checks. It does not establish a speedup or fix the cause of
@@ -89,15 +92,16 @@ only its initial snapshot. Replays also rehash the original pinned build
 inputs at their recorded local paths; this is not a standalone/hermetic bundle.
 Machine-readable outcome: `results/paired_r19932_checks_20260909.json`.
 
-## Remaining gate
+## Remaining gate at the prototype milestone
 
-This is not yet a qualified timing executable. A real grouped start/end timer
-adapter, its exact cost boundary and normalization still need clock-free
+At this prototype milestone, this was not yet a qualified timing executable.
+A real grouped start/end timer adapter, its exact cost boundary and
+normalization still needed clock-free
 qualification (including deterministic synthetic-clock tests). The prototype
 currently performs full parity/guard checks between groups; their placement
 must be explicit in any timing adapter rather than silently changing the
-workload. Plain grouped execution must also be exercised without the external
-witness. The active Bead remains open for that work.
+workload. Plain grouped execution also needed exercise without the external
+witness. Those untimed requirements are now covered by `paired_timer_r19932.md`.
 
 Any subsequent performance experiment requires a separate explicit review and
 a committed **and pushed** preregistration. Preserve both native and same-path

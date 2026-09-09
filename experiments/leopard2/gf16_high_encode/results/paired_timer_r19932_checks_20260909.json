@@ -1,0 +1,33 @@
+{
+  "bead": "leopard-79h.38.5.4.19.1.1",
+  "status": "untimed_timer_adapter_qualified",
+  "timed": false,
+  "default_enabled": false,
+  "positive": 182,
+  "clock_aborts": 18,
+  "clock_faults": 12,
+  "cli_refusals": 42,
+  "synthetic_spans": 7560,
+  "parity_files": 170,
+  "parity_bytes": 1034468224,
+  "per_profile_group_unit_cases": 37,
+  "python_tests_per_mode": 10,
+  "raw": "/tmp/leopard-paired-timer-fixed.nU5rLs",
+  "superseded_partial": "/tmp/leopard-paired-timer.eRs5C1",
+  "readonly": ".research/leopard-79h/paired-timer-qualified.D601n0",
+  "manifest_entries": 751,
+  "manifest_sha256": "6c86e08b8fcef3a7d3a9c345b5820bf9e8af1310133b6c8835cd4adcc2fab37b",
+  "build_record_sha256": "dbf149282bd1f6adc45ce244e118c494e1ab4fdfe4ea658397f10340f7e76826",
+  "check_record_sha256": "3cc97b3153e2b74a7ed0928d96ba2246ae7e48f6c5618baec652b59f2a108539",
+  "replay_sha256": "40b721c933ef1a8cc8ebe099624309f21c80f8b999f2177a2df638f1542f9ed5",
+  "resources": {
+    "build": {"peak": 158175232, "maximum": 536870912, "max_events": 0},
+    "checks": {"peak": 183197696, "maximum": 268435456, "max_events": 0},
+    "replay": {"peak": 268435456, "maximum": 268435456, "max_events": 7385},
+    "retention": {"peak": 268435456, "maximum": 268435456, "max_events": 24599}
+  },
+  "all_accepted_scopes_exit_zero": true,
+  "all_accepted_scopes_no_oom_or_swap": true,
+  "independent_model_converged": false,
+  "next_bead": "leopard-79h.38.5.4.19.1.2"
+}
