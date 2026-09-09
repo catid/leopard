@@ -115,7 +115,12 @@ def codegen(text):
         require(len(branches) == 1, 'unique loop')
         end, start = branches[0]
         loop = [row for row in rows if start <= row[0] <= end]
-        stack = [row for row in rows if re.search(r'\[(?:r|e)(?:sp|bp)\b', row[2])]
+        # Ordinary RET is the ABI return, not a spill or nested call. Reject
+        # other implicit stack accesses too: operand-only matching misses
+        # PUSH/POP and a CALL hidden behind a helper introduced by codegen.
+        stack = [row for row in rows if
+                 re.search(r'\[(?:r|e)(?:sp|bp)\b', row[2]) or
+                 re.fullmatch(r'(?:push|pop)[a-z]*|(?:l?call)[a-z]*|enter|leave', row[1])]
         shuffles = sum(row[1] == 'vpshufb' for row in loop)
         require(not stack, 'stack references')
         require(shuffles == (6 if name == 'tower_product_blocks' else 4), 'shuffle count')

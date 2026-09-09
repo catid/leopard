@@ -29,6 +29,11 @@ class ReplayTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             codegen(ASSEMBLY.replace('[rdi]', '[rsp]', 1))
 
+    def test_implicit_stack_reference(self):
+        for instruction in ('push', 'pop', 'pushfq', 'popfq', 'call', 'lcall', 'enter', 'leave'):
+            with self.subTest(instruction=instruction), self.assertRaises(ValueError):
+                codegen(ASSEMBLY.replace('movabs', instruction, 1))
+
     def test_missing_loop(self):
         with self.assertRaises(ValueError):
             codegen(ASSEMBLY.replace('jne', 'je', 1))
