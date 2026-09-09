@@ -1,0 +1,225 @@
+{
+  "aggregate_ratios": 24,
+  "analysis": {
+    "authoritative_v19": false,
+    "cells": [
+      {
+        "cell": 0,
+        "ratios": {
+          "current_over_native": 0.9889857290535049,
+          "current_over_pure": 1.1840109484888928,
+          "pure_over_native": 0.8383965214200031,
+          "same_current": 0.9998144386009684,
+          "same_native": 1.008322829899635,
+          "same_pure": 0.997036755525935
+        },
+        "round_ratios": {
+          "current_over_native": [
+            0.9882237709715473,
+            1.0010070054910731,
+            0.9778622063571389
+          ],
+          "current_over_pure": [
+            1.185674870371752,
+            1.1711278409035684,
+            1.195355912711802
+          ],
+          "pure_over_native": [
+            0.8193906862095047,
+            0.8534142007356332,
+            0.8427475813942494
+          ],
+          "same_current": [
+            0.999459175617525,
+            1.0004139948857584,
+            0.9995704179109963
+          ],
+          "same_native": [
+            1.00102070643281,
+            0.9997589563228031,
+            1.0243784570119614
+          ],
+          "same_pure": [
+            0.988457981118815,
+            1.0037375409940996,
+            0.9989761650027655
+          ]
+        }
+      },
+      {
+        "cell": 1,
+        "ratios": {
+          "current_over_native": 0.9167244577565355,
+          "current_over_pure": 1.166436617646238,
+          "pure_over_native": 0.7862874231379069,
+          "same_current": 0.9983776898424002,
+          "same_native": 1.0011670062205238,
+          "same_pure": 0.9990180532063886
+        },
+        "round_ratios": {
+          "current_over_native": [
+            0.9179769278081625,
+            0.9170141494347519,
+            0.9151844915133951
+          ],
+          "current_over_pure": [
+            1.1616621666679183,
+            1.173029932742665,
+            1.1646474896966816
+          ],
+          "pure_over_native": [
+            0.7851845015427199,
+            0.7873228969586497,
+            0.7863563294045792
+          ],
+          "same_current": [
+            0.9971520311895432,
+            0.996953971388977,
+            1.001032359121491
+          ],
+          "same_native": [
+            1.0029000234365553,
+            0.9985592095873256,
+            1.0020470726608681
+          ],
+          "same_pure": [
+            0.9953023940868057,
+            1.0002237921309722,
+            1.001538802333139
+          ]
+        }
+      },
+      {
+        "cell": 2,
+        "ratios": {
+          "current_over_native": 0.972627276738069,
+          "current_over_pure": 1.189709640258446,
+          "pure_over_native": 0.8278895409193954,
+          "same_current": 1.0017984650979486,
+          "same_native": 0.9907022497900938,
+          "same_pure": 1.0039614257771488
+        },
+        "round_ratios": {
+          "current_over_native": [
+            0.9776785411526365,
+            0.9426074513497109,
+            0.998417956489673
+          ],
+          "current_over_pure": [
+            1.1975188183677137,
+            1.1890028738575036,
+            1.1826539616893799
+          ],
+          "pure_over_native": [
+            0.8365839820906393,
+            0.8121944142038751,
+            0.8351176157751936
+          ],
+          "same_current": [
+            1.0002988178591998,
+            1.0041243231088766,
+            1.0009764111441035
+          ],
+          "same_native": [
+            1.0070838383316099,
+            0.9749628853845242,
+            0.9903204284496357
+          ],
+          "same_pure": [
+            1.009270435123466,
+            1.006818324953257,
+            0.9958465358876284
+          ]
+        }
+      },
+      {
+        "cell": 3,
+        "ratios": {
+          "current_over_native": 0.997241629141164,
+          "current_over_pure": 1.2282998389481408,
+          "pure_over_native": 0.7929021184155178,
+          "same_current": 1.0004408973716516,
+          "same_native": 0.998969027432814,
+          "same_pure": 0.9967178273366111
+        },
+        "round_ratios": {
+          "current_over_native": [
+            0.996664638620198,
+            0.9958962490756704,
+            0.9991669311874648
+          ],
+          "current_over_pure": [
+            1.2654252272318247,
+            1.2208598020630337,
+            1.1995294145278206
+          ],
+          "pure_over_native": [
+            0.7930008466815031,
+            0.7933314497103358,
+            0.7923743569124206
+          ],
+          "same_current": [
+            1.001839964202013,
+            0.997372466575061,
+            1.0021173569641895
+          ],
+          "same_native": [
+            1.0011364677189136,
+            1.0003888886467633,
+            0.9953915032275058
+          ],
+          "same_pure": [
+            1.0012671819216996,
+            0.9992695881567475,
+            0.9896554631738305
+          ]
+        }
+      }
+    ],
+    "confidence_intervals": false,
+    "controls_pass": true,
+    "decision": "attribution_available",
+    "production_promotion": false
+  },
+  "cli_rejections": 32,
+  "clock_guard_rejections": 4,
+  "frozen_inputs": 18,
+  "full_parity_comparison_bytes": 139198464,
+  "memory_peaks": {
+    "attempt1": 129486848,
+    "build": 145870848,
+    "preflight": 160559104,
+    "pure-tests": 13971456,
+    "pure-tests-opt": 16920576
+  },
+  "preflights": 12,
+  "preparation_checks": 48,
+  "preregistration": "a5f55792fcc955a5aa4b997848b3ba58252b611b",
+  "round_ratios": 72,
+  "sibling_nonidle_jiffies": 0,
+  "timed_invocations": 288,
+  "schema": "leopard-avx2-isa-result/v1",
+  "bead": "leopard-79h.38.5.4.18.1",
+  "passive": {
+    "before": 570324,
+    "after": 570324,
+    "elapsed_ns": 10000119040
+  },
+  "raw_workspace": "/tmp/leopard-avx2-isa-screen.xsFlEg",
+  "attempt_sha256": "9358f12f16525ea1c04c4a336412fc828d6ea940d420a7b3df39cc8d9e1213f3",
+  "scope_sha256": "01c79f55f80000202cca904b76f4011f7c1fe1a8c3c966050950d73fbebcf5ef",
+  "plan_sha256": "18726106b86444a71e66aca0c38d2825ffcb14ebeb8795b507d742ff69b6b51b",
+  "pins_sha256": "14b646005c3d0ddee8e3418a14db5b61bbd62a288ccba7ba166931f68aabaf10",
+  "codec_archives": {
+    "native": "3f83c55599cbfbeea5d15adf3627405bcde1cbed2ddf4a672fbc75b186f5c4c1",
+    "pure": "eaf35fac2953161df251a7fc837bf1c94409435ff127ce90811fad5b4f6524bc",
+    "current": "d8eb0985e7347e491ea069e2e39d64ec256a35808422d02c1df36641fb315c8a"
+  },
+  "caveats": [
+    "Native-to-pure changes target and tuning, not just one instruction family.",
+    "No new production optimization; native Leopard1 remains the product comparator.",
+    "Cell0 has mixed directional rounds versus native; cell3 is near parity.",
+    "Two individual native-control rounds exceed2percent; the preregistered aggregate controls all pass.",
+    "Do not pool with older drivers/attempts or claim confidence intervals."
+  ]
+}

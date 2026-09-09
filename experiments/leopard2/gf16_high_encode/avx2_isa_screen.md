@@ -101,3 +101,66 @@ commit must actually be pushed before launching the attempt. The independent
 replayer imports no collector, executes no codec, reconstructs all72 round
 ratios and24 aggregates from raw stdout, checks conditions/resources/pins,
 and re-compares every preparation parity byte to the retained native oracle.
+
+## Completed result
+
+Preregistration `a5f55792fcc955a5aa4b997848b3ba58252b611b` was pushed before
+the sole attempt. All288 timed children and12 preflights completed. Every
+timed sibling delta was zero; passive ticks stayed570324 over10,000,119,040ns.
+All12 aggregate same-profile controls passed, ranging from0.990702 to1.008323.
+
+Throughput ratios (larger means the numerator is faster):
+
+| Cell | Pure L1 / native L1 | L2 AVX2 / native L1 | L2 AVX2 / pure L1 |
+| --- | ---: | ---: | ---: |
+| K1000/R200/64KiB | 0.838397 | 0.988986 | 1.184011 |
+| K1000/R200/32KiB | 0.786287 | 0.916724 | 1.166437 |
+| K1000/R199/64KiB | 0.827890 | 0.972627 | 1.189710 |
+| K4096/R512/4KiB | 0.792902 | 0.997242 | 1.228300 |
+
+Leopard2's explicit AVX2 implementation beats the AVX2-restricted Leopard1
+comparator by16.6–22.8%, in the same direction in every round of every cell.
+The generic hypothesis that Leopard2 is slower under the same AVX2 ceiling
+is not supported by these measurements. Native Leopard1 is substantially
+faster than its own restricted build, consistent with the static codegen
+finding; do not infer a unique instruction-level cause or exact causal share.
+
+The original native target remains relevant. Native L1 has higher aggregate
+throughput than explicit L2 at R200/32KiB (about9.1%) and R199/64KiB
+(about2.8%, with variable rounds). The64KiB R200 target has mixed rounds
+`0.988224, 1.001007, 0.977862` for L2/native and is treated as near parity,
+not a stable win or reproduced3.12% gap. The4KiB neighbor is also near parity.
+Do not pool these results with the earlier driver or call a difference
+between experiments a production regression: this run is an unchanged-codec
+three-build attribution contrast with a new, common driver.
+
+Two individual native-control rounds were outside2%: cell0/round2 at1.024378
+and cell2/round1 at0.974963. The preregistered gate was on all12 three-round
+aggregate controls, which passed. Retain those rounds; there are no CIs and
+no claim that every individual control round was within2%.
+
+The timing scope took121.22s and peaked at129,486,848 bytes under256MiB,
+all six memory-event counters and swap zero. Independent replay passed in
+normal and optimized Python: all18 frozen inputs,72 round ratios,24
+aggregates,302 stdout/stderr pairs, shutdown conditions, resources,48
+preparation checks and139,198,464 full parity bytes. Replay peaks were
+150,106,112 and16,076,800 bytes under256MiB, all counters/swap zero.
+
+The complete numerical result is
+[`results/avx2_isa_screen_20260909.json`](results/avx2_isa_screen_20260909.json).
+Raw workspace: `/tmp/leopard-avx2-isa-screen.xsFlEg`; the retained read-only
+copy and its outer manifest are recorded in Beads. Key hashes:
+
+- Attempt journal: `9358f12f16525ea1c04c4a336412fc828d6ea940d420a7b3df39cc8d9e1213f3`.
+- Timing resource log: `01c79f55f80000202cca904b76f4011f7c1fe1a8c3c966050950d73fbebcf5ef`.
+- Frozen pins: `14b646005c3d0ddee8e3418a14db5b61bbd62a288ccba7ba166931f68aabaf10`.
+
+This completes the attribution experiment, not the broader performance goal.
+There was no production code change or promotion. The completed AUTO GFNI
+improvements at the two boundary cells remain separate. A next AVX2 candidate
+should address a concrete kernel cost while preserving the ISA contract;
+the inspected two-way inverse loop reloads four spilled table vectors per
+64-byte iteration. A reduced-live-range product schedule is a new hypothesis
+to test, not a measured improvement. Keep the existing tables, split
+transform, byte tiling and public API semantics; do not repeat rejected broad
+fusion/cache-block/copy-removal experiments or claim API overhead attribution.
