@@ -124,6 +124,13 @@ copy removal, smaller tiling, cache blocking or broad four-way fusion, or
 infer dispatch costs from the existing native-L1 ratio. Candidate promotion
 still requires focused Release and ASan/UBSan/LSan correctness plus the
 preregistered 5% target / 2% controls-and-neighbors gates and independent
-exact-L1 validation. The broader goal and production-delivery blocker remain
-open. Claude review is explicitly waived by the user; review here is Codex
+exact-L1 validation. The broader goal remains open. Claude review is explicitly
+waived by the user; review here is Codex
 self-review and deterministic checks, not independent-model `CONVERGED`.
+
+Delivery update: the forwarded personal SSH agent recovered during handoff.
+Git and Dolt sync succeeded; `c16951c`, including the validated default-on AUTO
+integration `3a2f064`, was pushed. Fresh read-only production and 216-record
+qualification replays passed, so `.17`, `.17.1`, and the authentication child
+are closed. The new comparison child `.18.1` is unblocked. Unrelated existing
+changes to `.beads/interactions.jsonl` were preserved byte-for-byte.
