@@ -1,0 +1,94 @@
+{
+  "schema": "leopard-avx2-isa-plan/v1",
+  "bead": "leopard-79h.38.5.4.18.1",
+  "host": {
+    "hostname": "work",
+    "kernel": "6.8.0-137-generic",
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper 9980X 64-Cores"
+  },
+  "cpu": 26,
+  "sibling": 90,
+  "controller_cpu": 0,
+  "condition": "slipgate-disabled-20260909",
+  "attempt_budget": 1,
+  "rounds": 3,
+  "samples_per_process": 21,
+  "passive_seconds": 10,
+  "orders": {
+    "pure_over_native": [
+      "native",
+      "pure",
+      "pure",
+      "native"
+    ],
+    "current_over_native": [
+      "native",
+      "current",
+      "current",
+      "native"
+    ],
+    "current_over_pure": [
+      "pure",
+      "current",
+      "current",
+      "pure"
+    ],
+    "same_native": [
+      "native",
+      "native",
+      "native",
+      "native"
+    ],
+    "same_pure": [
+      "pure",
+      "pure",
+      "pure",
+      "pure"
+    ],
+    "same_current": [
+      "current",
+      "current",
+      "current",
+      "current"
+    ]
+  },
+  "cells": [
+    {
+      "k": 1000,
+      "r": 200,
+      "bytes": 65536
+    },
+    {
+      "k": 1000,
+      "r": 200,
+      "bytes": 32768
+    },
+    {
+      "k": 1000,
+      "r": 199,
+      "bytes": 65536
+    },
+    {
+      "k": 4096,
+      "r": 512,
+      "bytes": 4096
+    }
+  ],
+  "control_bound": 1.02,
+  "future_candidate_minimum_gain": 1.05,
+  "production_promotion": false,
+  "confidence_intervals": false,
+  "attribution": "native target/tuning versus generic AVX2 ceiling; not single-instruction ablation",
+  "artifact_sha256": {
+    "native": "df17c7c018baaa7327da67b80f24639da23e983dd20cc83779a33b0270aa3b09",
+    "native.a": "3f83c55599cbfbeea5d15adf3627405bcde1cbed2ddf4a672fbc75b186f5c4c1",
+    "pure": "ccc15aa31b2428437dee2aba332dbef7e59fdc3a8207d88a164ceb23a399a254",
+    "pure.a": "eaf35fac2953161df251a7fc837bf1c94409435ff127ce90811fad5b4f6524bc",
+    "current": "7c58d6290186bf3388ba98a2c8454690542336783a85b87850f9dc581aa94322",
+    "current.a": "d8eb0985e7347e491ea069e2e39d64ec256a35808422d02c1df36641fb315c8a",
+    "expected.json": "7f1c0d0b03203b5b7649f405967a18020e4eafce9fd6cfe43bf10ad464c8f5df"
+  }
+}
