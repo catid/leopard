@@ -1,0 +1,440 @@
+{
+  "aggregate_ratios": 30,
+  "analysis": {
+    "affected_neighbors_pass": true,
+    "authoritative_v19": false,
+    "cells": [
+      {
+        "cell": 0,
+        "ratios": {
+          "on_over_native": 0.948842303756672,
+          "on_over_off": 1.0259749181692905,
+          "same_native": 1.0007444039931137,
+          "same_off": 0.999807855116016,
+          "same_on": 1.0008784354236755
+        },
+        "round_ratios": {
+          "on_over_native": [
+            0.9441232600835727,
+            0.9444191725471281,
+            0.9580509933012712
+          ],
+          "on_over_off": [
+            1.022612785200608,
+            1.0265209714479793,
+            1.0288005479549613
+          ],
+          "same_native": [
+            1.0017674806940315,
+            1.00145352219322,
+            0.9990144797395691
+          ],
+          "same_off": [
+            1.0001828858817718,
+            0.9963317434651404,
+            1.0029198965058113
+          ],
+          "same_on": [
+            1.000958508271885,
+            0.9969380467864524,
+            1.004754015506863
+          ]
+        }
+      },
+      {
+        "cell": 1,
+        "ratios": {
+          "on_over_native": 0.9895507517348839,
+          "on_over_off": 1.0298695123103097,
+          "same_native": 1.000407411943352,
+          "same_off": 1.0000398773366406,
+          "same_on": 1.0003150588926095
+        },
+        "round_ratios": {
+          "on_over_native": [
+            0.9756867731168138,
+            1.017066645960587,
+            0.9764598473151171
+          ],
+          "on_over_off": [
+            1.024966349872376,
+            1.0397214898825433,
+            1.0249908232857232
+          ],
+          "same_native": [
+            1.0022632036132708,
+            0.9996071254701193,
+            0.9993545006450879
+          ],
+          "same_off": [
+            0.9996704411984323,
+            1.00105027853479,
+            0.9993996956193348
+          ],
+          "same_on": [
+            1.0001720075880864,
+            1.0011931596762627,
+            0.9995806745340106
+          ]
+        }
+      },
+      {
+        "cell": 2,
+        "ratios": {
+          "on_over_native": 1.0126989808204796,
+          "on_over_off": 1.0341115071077607,
+          "same_native": 0.995974007412861,
+          "same_off": 1.000583320280207,
+          "same_on": 0.999716075562915
+        },
+        "round_ratios": {
+          "on_over_native": [
+            1.0203411856329678,
+            0.999973588208325,
+            1.0179048232824928
+          ],
+          "on_over_off": [
+            1.051061024976624,
+            1.026448940051465,
+            1.0250305981725567
+          ],
+          "same_native": [
+            1.0049023888093829,
+            1.0014461695100867,
+            0.9817310458689278
+          ],
+          "same_off": [
+            0.9990588122489914,
+            1.002282377034228,
+            1.0004113898209457
+          ],
+          "same_on": [
+            0.9992788356475866,
+            0.9994199266695957,
+            1.0004498730633127
+          ]
+        }
+      },
+      {
+        "cell": 3,
+        "ratios": {
+          "on_over_off": 1.0207855014174467,
+          "same_off": 0.9989830107003799,
+          "same_on": 1.0003889694758237
+        },
+        "round_ratios": {
+          "on_over_off": [
+            1.0255349615071059,
+            1.021093289475143,
+            1.0157517667572735
+          ],
+          "same_off": [
+            0.9948143718811251,
+            1.0005802218482835,
+            1.0015677738891717
+          ],
+          "same_on": [
+            1.006146223399404,
+            0.999278751671736,
+            0.9957697505058442
+          ]
+        }
+      },
+      {
+        "cell": 4,
+        "ratios": {
+          "on_over_off": 1.02841078274502,
+          "same_off": 0.9991720271868438,
+          "same_on": 1.000663292306363
+        },
+        "round_ratios": {
+          "on_over_off": [
+            1.0271009074961344,
+            1.0273659626277118,
+            1.0307695450109908
+          ],
+          "same_off": [
+            0.9949891007769537,
+            1.0043198155219346,
+            0.9982296056583023
+          ],
+          "same_on": [
+            1.0020209170092111,
+            0.9999864214616384,
+            0.9999839183321187
+          ]
+        }
+      },
+      {
+        "cell": 5,
+        "ratios": {
+          "on_over_off": 1.0026330608022778,
+          "same_off": 1.0019341628764566,
+          "same_on": 1.0010955583558718
+        },
+        "round_ratios": {
+          "on_over_off": [
+            1.0056523013251004,
+            1.0047575887765003,
+            0.997509214051018
+          ],
+          "same_off": [
+            1.0012404023576147,
+            1.0007666026949547,
+            1.003798136384239
+          ],
+          "same_on": [
+            1.0032439951617373,
+            1.0009501689520919,
+            0.9990968215322021
+          ]
+        }
+      },
+      {
+        "cell": 6,
+        "ratios": {
+          "on_over_off": 0.9974722634179094,
+          "same_off": 1.00125605539405,
+          "same_on": 1.0016460129623868
+        },
+        "round_ratios": {
+          "on_over_off": [
+            0.9989697358645246,
+            0.9877221650918635,
+            1.0058086203089471
+          ],
+          "same_off": [
+            0.9984435132131363,
+            1.002074036232795,
+            1.0032569048579847
+          ],
+          "same_on": [
+            1.0006712454586555,
+            1.0031425279032815,
+            1.001125991999825
+          ]
+        }
+      },
+      {
+        "cell": 7,
+        "ratios": {
+          "on_over_off": 1.0010389643083117,
+          "same_off": 0.9899467713262614,
+          "same_on": 1.0193547023261103
+        },
+        "round_ratios": {
+          "on_over_off": [
+            1.0307764064044151,
+            0.9731694731799861,
+            1
+          ],
+          "same_off": [
+            0.9731694731799861,
+            0.9968895725584536,
+            1
+          ],
+          "same_on": [
+            1,
+            1.0339925652537352,
+            1.0243740684764373
+          ]
+        }
+      }
+    ],
+    "confidence_intervals": false,
+    "controls_pass": true,
+    "decision": "below_target_gate",
+    "production_promotion": false,
+    "targets_pass": false,
+    "unchanged_neighbors_pass": true
+  },
+  "frozen_inputs": 20,
+  "memory_peaks": {
+    "attempt1": 130514944,
+    "build": 256970752,
+    "drivers": 137785344,
+    "preparation": 214880256,
+    "unit": 13975552,
+    "unit-opt": 16322560
+  },
+  "preflights": 19,
+  "preparation": {
+    "full_parity_bytes": 361368192,
+    "positive_records": 184,
+    "records": 211,
+    "route_counts": {
+      "off": [
+        [
+          3672,
+          0,
+          1880064,
+          0
+        ],
+        [
+          7344,
+          0,
+          3760128,
+          0
+        ],
+        [
+          7344,
+          0,
+          3760128,
+          0
+        ],
+        [
+          12544,
+          0,
+          802816,
+          0
+        ],
+        [
+          3672,
+          0,
+          1880064,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
+      ],
+      "on": [
+        [
+          0,
+          3672,
+          0,
+          1880064
+        ],
+        [
+          0,
+          7344,
+          0,
+          3760128
+        ],
+        [
+          0,
+          7344,
+          0,
+          3760128
+        ],
+        [
+          0,
+          12544,
+          0,
+          802816
+        ],
+        [
+          0,
+          3672,
+          0,
+          1880064
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0
+        ]
+      ]
+    }
+  },
+  "preregistration": "7d8fc08c538d69c6a9e7fe6048f6317bd93e4a7a",
+  "round_ratios": 90,
+  "sibling_nonidle_jiffies": 0,
+  "timed_invocations": 360,
+  "schema": "avx2-pair-screen-result/v1",
+  "bead": "leopard-79h.38.5.4.18.2",
+  "date": "2026-09-09",
+  "attempt_budget": 1,
+  "attempts_consumed": 1,
+  "source_base": "3a2f064",
+  "raw_workspace": "/tmp/leopard-avx2-pair-runtime.W1LY8Q",
+  "passive": {
+    "before": 570411,
+    "after": 570411,
+    "elapsed_ns": 10000279210
+  },
+  "raw_attempt_sha256": "d414f2c7d2466051db568c18246f24c39eb76cab4a3e72487d4db0dd224ffdf8",
+  "attempt_scope_sha256": "6556f6d19aa804ca325a1d283213a81bcbe5c4c662847a4d60817ded961ef148",
+  "frozen_pins_sha256": "3ed2c034c4348b731d6de3b2a1d3c29d22a822332a3eccb18372e37a50884c03",
+  "plan_sha256": "9807c751da5c98a67a6ba3a95908f851c6d926eb07ab02559625b495cb8f0153",
+  "independent_replay": {
+    "normal": true,
+    "optimized": true,
+    "sealed_copy": true,
+    "codec_execution": false,
+    "memory_peaks": {
+      "normal": 41029632,
+      "optimized": 44310528,
+      "sealed_copy": 120713216
+    },
+    "memory_events_all_zero": true,
+    "swap": 0
+  },
+  "retained_bundle": {
+    "path": ".research/leopard-79h/avx2-pair-screen.m_vukpir",
+    "files": 1356,
+    "bytes": 508545667,
+    "outer_sha256": "da76c223dacb2977699f39ab045150323b30ee020ab9b4cddcb19f5935495c46",
+    "local_only": true,
+    "read_only": true,
+    "external_original_dependencies": [
+      ".research/leopard-79h/auto-gfni-boundary-production.B5NV9R",
+      ".research/leopard-79h/avx2-isa-attribution.qqNHjs",
+      ".research/leopard-79h/gf16-current-route-failed.STc10h"
+    ]
+  },
+  "retention_scope": {
+    "path": "/tmp/leopard-avx2-pair-retention.0zpWXS/retain.log",
+    "sha256": "3db75c9bc969da0cc2ce772c8f7d9aa3f5616052596e9dfd011bd5d7a51d6cfd",
+    "exit_status": 0,
+    "memory_peak": 268435456,
+    "memory_max": 268435456,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 507,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    },
+    "swap": 0
+  },
+  "interpretation": {
+    "candidate_status": "below_5_percent_target_gate_not_promoted",
+    "off_is_pristine_production": false,
+    "native_leopard1_is_isa_matched": false,
+    "all_target_on_off_rounds_above_one": true,
+    "individual_control_outliers_retained": true,
+    "cross_experiment_pooling": false,
+    "overall_goal_complete": false,
+    "review": "Codex self-review plus deterministic and adversarial checks; Claude explicitly opted out, no independent-model CONVERGED claim"
+  }
+}

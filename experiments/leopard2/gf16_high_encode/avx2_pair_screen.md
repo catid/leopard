@@ -123,6 +123,101 @@ inventory:20 files; pins SHA
 `3ed2c034c4348b731d6de3b2a1d3c29d22a822332a3eccb18372e37a50884c03`;
 plan SHA `9807c751da5c98a67a6ba3a95908f851c6d926eb07ab02559625b495cb8f0153`.
 
-Raw workspace: `/tmp/leopard-avx2-pair-runtime.W1LY8Q`. Results will be added
-after the sole attempt and independent replay. The broader performance goal
-remains open regardless of this experiment's result.
+Raw workspace: `/tmp/leopard-avx2-pair-runtime.W1LY8Q`.
+
+## Completed result: below the target gate
+
+Preregistration `7d8fc08c538d69c6a9e7fe6048f6317bd93e4a7a` was published
+and fetched before clocks. The sole attempt completed all360 timed children
+and19 preflights. All19 aggregate controls, all three unchanged neighbors and
+both affected neighbors passed. Every timed sibling delta was zero; passive
+sibling ticks stayed570411 for10,000,279,210ns.
+
+The candidate improved each target in every round, but **none of the three
+aggregate target gains reached5%**. Decision: `below_target_gate`. The
+candidate remains experiment-only; no production codec source was changed.
+
+| Cell | K/R/bytes and request | ON/OFF throughput | ON/native Leopard1 |
+| --- | --- | ---: | ---: |
+| 0 | 1000/200/32768 AVX2 | 1.025975 | 0.948842 |
+| 1 | 1000/199/65536 AVX2 | 1.029870 | 0.989551 |
+| 2 | 1000/200/65536 AVX2 | 1.034112 | 1.012699 |
+| 3 | 4096/512/4096 AVX2, affected neighbor | 1.020786 | not measured |
+| 4 | 1000/199/32768 AUTO→AVX2, affected neighbor | 1.028411 | not measured |
+| 5 | 1000/200/32768 GFNI, unchanged | 1.002633 | not measured |
+| 6 | 1000/200/32768 AUTO→GFNI, unchanged | 0.997472 | not measured |
+| 7 | 17/7/64 GF8 AVX2, unchanged | 1.001039 | not measured |
+
+Native Leopard1 still leads the candidate by about5.39% in cell0. Cells1–2
+are near parity with native and include mixed/near-equal rounds; do not claim
+a robust native win from cell2's1.27% aggregate lead. The2.60%,2.99%,3.41%
+target improvements compare runtime ON with runtime OFF, **not pristine
+production**. Do not pool these ratios with the earlier native/pure-L1 screen,
+calculate an exact fraction of the old gap closed, or add separately measured
+kernel gains. This experiment supplies no confidence intervals or whole-CPU,
+v19 or production-integration qualification.
+
+All individual rounds remain in the [numerical result](results/avx2_pair_screen_20260909.json).
+In the small GF8 neighbor, same-OFF round0 was0.973169 and same-ON rounds1–2
+were1.033993/1.024374, outside the2% interval. Their preregistered aggregates
+were0.989947/1.019355 and passed. The unchanged GF8 ON/OFF rounds also varied
+(1.030776,0.973169,1.000000), with a passing1.001039 aggregate. None were
+removed. The gate was on aggregates before observing any result.
+
+## Replay, resources and retained evidence
+
+The prewritten, independent stdlib replayer derives all90 round and30
+aggregate ratios from raw samples without importing the collector or executing
+a codec. Normal Python, optimized Python and the retained-copy replay passed;
+they also verify20 frozen inputs, the preregistered source, all raw records,
+the184 positive preparation records, full361,368,192 parity bytes and the23
+unchanged members of each candidate archive.
+
+The timing scope took129.94s, peaked at130,514,944 bytes under256MiB and
+had all six memory-event counters and swap zero. Normal/optimized/sealed
+replays peaked at41,029,632/44,310,528/120,713,216 bytes under256MiB,
+also with all six counters and swap zero. These replays did not rerun the
+consumed timing attempt.
+
+The complete local read-only bundle is
+`.research/leopard-79h/avx2-pair-screen.m_vukpir`:1,356 files,
+508,545,667 bytes, outer manifest SHA-256
+`da76c223dacb2977699f39ab045150323b30ee020ab9b4cddcb19f5935495c46`.
+It retains source/control/driver copies, commands, actual objects and archives,
+disassemblies, protocol tests, preparation/parity, raw timing records and both
+live replay logs. Its original-archive/oracle dependencies remain in the
+separately retained production, ISA-attribution and original-route bundles;
+the numerical result names them. No remote worker was used.
+
+The separate artifact-copy scope completed with byte-for-byte copy checks and
+no OOM or swap, but reached its256MiB cap and recorded507 `memory.events.max`
+events. **That copy scope is not an all-zero resource result.** It was outside
+timing; no performance gate was relaxed. Its log is
+`/tmp/leopard-avx2-pair-retention.0zpWXS/retain.log`, SHA-256
+`3db75c9bc969da0cc2ce772c8f7d9aa3f5616052596e9dfd011bd5d7a51d6cfd`.
+The independently replayed sealed copy passed with all-zero memory events.
+An additional read-only delivery audit checked every1,355 manifest member,
+the complete read-only namespace, file/byte totals and exact report agreement
+with all three replay outputs. It passed at41,054,208 bytes under256MiB
+with all six memory-event counters and swap zero.
+
+From the repository root, under the canonical256MiB/no-swap lock wrapper:
+
+```bash
+python3 .research/leopard-79h/avx2-pair-screen.m_vukpir/frozen/replay_avx2_pair_screen.py \
+  .research/leopard-79h/avx2-pair-screen.m_vukpir \
+  7d8fc08c538d69c6a9e7fe6048f6317bd93e4a7a
+```
+
+## Next optimization boundary
+
+Do not retime this consumed candidate or lower its5% gate. Source and actual
+object inspection show that the untouched forward pair and accumulating
+inverse pair also reload spilled tables; the accumulating loop additionally
+reloads source-x vectors. Their different liveness and disjoint-output
+contracts make them distinct scheduling candidates. First establish their
+current execution counts and inspect a bounded codegen prototype; only a
+qualified new candidate may receive a fresh preregistered experiment.
+Any combined gain must be measured directly, not inferred from this result.
+Follow-up: `leopard-79h.38.5.4.18.3`. The parent residual-gap task and broader
+performance goal remain open.
