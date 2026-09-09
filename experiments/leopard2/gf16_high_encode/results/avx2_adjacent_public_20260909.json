@@ -1,0 +1,405 @@
+{
+  "bead": "leopard-79h.38.5.4.18.3.1",
+  "status": "clock_free_runtime_qualification_passed",
+  "raw": "/tmp/leopard-adjacent-public.84pxnc",
+  "retention": {
+    "root": "/home/catid/leopard/.research/leopard-79h/avx2-adjacent-public.NFkTeG",
+    "files": 1401,
+    "bytes": 1920371965,
+    "manifest_sha256": "f3e58727918ded2e06b62c250ff1b19bde5d7860c107dbf9a8166a67fa0f4dfa",
+    "sealed_replays_match_raw": true,
+    "full_runtime_qualification": true,
+    "performance_qualified": false
+  },
+  "build_record_sha256": "f02f61e9a9ced23552e2d720478d7699eba82ce38011efb73acdb3c475809592",
+  "checks_record_sha256": "12f817fe7e0b1c9879e53f8b5ff683b9333b60303c9f820d8bee6e091aa7300f",
+  "replay_sha256": "4e328eb98f873e2b7abf8255676dc44b34dd27af3e7d16436933032ac816c307",
+  "replay": {
+    "bead": "leopard-79h.38.5.4.18.3.1",
+    "cli_refusals": 80,
+    "clock_aborts": 42,
+    "clock_faults": 20,
+    "default_enabled": false,
+    "full_runtime_qualification": true,
+    "guard_checks": {
+      "canaries": 2,
+      "expected_asan_rejections": 2
+    },
+    "isolated_model": [
+      {
+        "accumulating_blocks": 196608,
+        "accumulating_pairs": 384,
+        "affected": true,
+        "callbacks": 2066,
+        "forward_blocks": 340480,
+        "forward_pairs": 665,
+        "operations": {
+          "fft2": {
+            "calls": 197,
+            "lane_groups": 197
+          },
+          "fft4_range": {
+            "calls": 18,
+            "lane_groups": 180
+          },
+          "ifft2": {
+            "calls": 1384,
+            "lane_groups": 1384
+          },
+          "ifft2_xor": {
+            "calls": 384,
+            "lane_groups": 384
+          },
+          "ifft4_range": {
+            "calls": 80,
+            "lane_groups": 572
+          },
+          "xor": {
+            "calls": 3,
+            "lane_groups": 3
+          }
+        }
+      },
+      {
+        "accumulating_blocks": 393216,
+        "accumulating_pairs": 768,
+        "affected": true,
+        "callbacks": 4132,
+        "forward_blocks": 680960,
+        "forward_pairs": 1330,
+        "operations": {
+          "fft2": {
+            "calls": 394,
+            "lane_groups": 394
+          },
+          "fft4_range": {
+            "calls": 36,
+            "lane_groups": 360
+          },
+          "ifft2": {
+            "calls": 2768,
+            "lane_groups": 2768
+          },
+          "ifft2_xor": {
+            "calls": 768,
+            "lane_groups": 768
+          },
+          "ifft4_range": {
+            "calls": 160,
+            "lane_groups": 1144
+          },
+          "xor": {
+            "calls": 6,
+            "lane_groups": 6
+          }
+        }
+      },
+      {
+        "accumulating_blocks": 393216,
+        "accumulating_pairs": 768,
+        "affected": true,
+        "callbacks": 4132,
+        "forward_blocks": 680960,
+        "forward_pairs": 1330,
+        "operations": {
+          "fft2": {
+            "calls": 394,
+            "lane_groups": 394
+          },
+          "fft4_range": {
+            "calls": 36,
+            "lane_groups": 360
+          },
+          "ifft2": {
+            "calls": 2768,
+            "lane_groups": 2768
+          },
+          "ifft2_xor": {
+            "calls": 768,
+            "lane_groups": 768
+          },
+          "ifft4_range": {
+            "calls": 160,
+            "lane_groups": 1144
+          },
+          "xor": {
+            "calls": 6,
+            "lane_groups": 6
+          }
+        }
+      },
+      {
+        "accumulating_blocks": 114688,
+        "accumulating_pairs": 1792,
+        "affected": true,
+        "callbacks": 3749,
+        "forward_blocks": 114752,
+        "forward_pairs": 1793,
+        "operations": {
+          "fft2": {
+            "calls": 255,
+            "lane_groups": 255
+          },
+          "fft4_range": {
+            "calls": 85,
+            "lane_groups": 512
+          },
+          "ifft2": {
+            "calls": 256,
+            "lane_groups": 256
+          },
+          "ifft2_xor": {
+            "calls": 1792,
+            "lane_groups": 1792
+          },
+          "ifft4_out": {
+            "calls": 1024,
+            "lane_groups": 1024
+          },
+          "ifft4_range": {
+            "calls": 336,
+            "lane_groups": 3072
+          },
+          "xor": {
+            "calls": 1,
+            "lane_groups": 1
+          }
+        }
+      },
+      {
+        "accumulating_blocks": 196608,
+        "accumulating_pairs": 384,
+        "affected": true,
+        "callbacks": 2066,
+        "forward_blocks": 340480,
+        "forward_pairs": 665,
+        "operations": {
+          "fft2": {
+            "calls": 197,
+            "lane_groups": 197
+          },
+          "fft4_range": {
+            "calls": 18,
+            "lane_groups": 180
+          },
+          "ifft2": {
+            "calls": 1384,
+            "lane_groups": 1384
+          },
+          "ifft2_xor": {
+            "calls": 384,
+            "lane_groups": 384
+          },
+          "ifft4_range": {
+            "calls": 80,
+            "lane_groups": 572
+          },
+          "xor": {
+            "calls": 3,
+            "lane_groups": 3
+          }
+        }
+      },
+      {
+        "accumulating_blocks": 0,
+        "accumulating_pairs": 0,
+        "affected": false,
+        "callbacks": 2066,
+        "forward_blocks": 0,
+        "forward_pairs": 0,
+        "operations": {
+          "fft2": {
+            "calls": 197,
+            "lane_groups": 197
+          },
+          "fft4_range": {
+            "calls": 18,
+            "lane_groups": 180
+          },
+          "ifft2": {
+            "calls": 1384,
+            "lane_groups": 1384
+          },
+          "ifft2_xor": {
+            "calls": 384,
+            "lane_groups": 384
+          },
+          "ifft4_range": {
+            "calls": 80,
+            "lane_groups": 572
+          },
+          "xor": {
+            "calls": 3,
+            "lane_groups": 3
+          }
+        }
+      },
+      {
+        "accumulating_blocks": 0,
+        "accumulating_pairs": 0,
+        "affected": false,
+        "callbacks": 2066,
+        "forward_blocks": 0,
+        "forward_pairs": 0,
+        "operations": {
+          "fft2": {
+            "calls": 197,
+            "lane_groups": 197
+          },
+          "fft4_range": {
+            "calls": 18,
+            "lane_groups": 180
+          },
+          "ifft2": {
+            "calls": 1384,
+            "lane_groups": 1384
+          },
+          "ifft2_xor": {
+            "calls": 384,
+            "lane_groups": 384
+          },
+          "ifft4_range": {
+            "calls": 80,
+            "lane_groups": 572
+          },
+          "xor": {
+            "calls": 3,
+            "lane_groups": 3
+          }
+        }
+      },
+      {
+        "accumulating_blocks": 0,
+        "accumulating_pairs": 0,
+        "affected": false,
+        "callbacks": 0,
+        "forward_blocks": 0,
+        "forward_pairs": 0,
+        "operations": {}
+      },
+      {
+        "accumulating_blocks": 196608,
+        "accumulating_pairs": 384,
+        "affected": true,
+        "callbacks": 2066,
+        "forward_blocks": 340480,
+        "forward_pairs": 665,
+        "operations": {
+          "fft2": {
+            "calls": 197,
+            "lane_groups": 197
+          },
+          "fft4_range": {
+            "calls": 18,
+            "lane_groups": 180
+          },
+          "ifft2": {
+            "calls": 1384,
+            "lane_groups": 1384
+          },
+          "ifft2_xor": {
+            "calls": 384,
+            "lane_groups": 384
+          },
+          "ifft4_range": {
+            "calls": 80,
+            "lane_groups": 572
+          },
+          "xor": {
+            "calls": 3,
+            "lane_groups": 3
+          }
+        }
+      }
+    ],
+    "parity_bytes": 1744826816,
+    "parity_files": 296,
+    "performance_qualified": false,
+    "positive": 307,
+    "prior_focused_record_pins": {
+      "build/build.json": "5c81b185be5dfa33c7677a2536b35df6e9c5df03483ba1cc2cbeb47573809e17",
+      "checks/checks.json": "764de17680b7b050b4a48b58b75df7535ad80ffc6e820e0518e6fbb319041731",
+      "replay.json": "8bee89cfc31835576230e96fde9e8d0d899394a4dfaafdf9b00cb9302944771c"
+    },
+    "prior_native_bytes": 60981696,
+    "prior_native_sha256": [
+      "1ed1021a14fc220bd08d19520a509b10b317995e4660acc9864614c1469fa016",
+      "480e60942f72967b8abff4164538a06753a491dbe0b9385b5d4cc5166afbcecb",
+      "f40dac361cf33f66f7e0e4b71a9cfe2172ffe9630b99def03cb703bd52185b06",
+      "2657ba76bac7e28c92a7d12f00ce9d8096e14158fb20d22eecbcbf47ac132676",
+      "0748c48dd2c2835d6311756aed16e10d07fa40f62c43380f36c6af2e1e2634b9",
+      "1ed1021a14fc220bd08d19520a509b10b317995e4660acc9864614c1469fa016",
+      "1ed1021a14fc220bd08d19520a509b10b317995e4660acc9864614c1469fa016",
+      "111086ed8e5e3872014903ba1a975f94ed9b9741eade3c9096f00fd93ec6d1d0",
+      "1ed1021a14fc220bd08d19520a509b10b317995e4660acc9864614c1469fa016"
+    ],
+    "resources": {
+      "build": {
+        "max_events": 0,
+        "maximum": 536870912,
+        "oom_events": 0,
+        "peak": 203186176,
+        "swap": 0
+      },
+      "checks": {
+        "max_events": 0,
+        "maximum": 268435456,
+        "oom_events": 0,
+        "peak": 190586880,
+        "swap": 0
+      },
+      "guard-build": {
+        "max_events": 0,
+        "maximum": 536870912,
+        "oom_events": 0,
+        "peak": 86859776,
+        "swap": 0
+      },
+      "guard-checks": {
+        "max_events": 0,
+        "maximum": 268435456,
+        "oom_events": 0,
+        "peak": 21233664,
+        "swap": 0
+      }
+    },
+    "synthetic_spans": 11760,
+    "timed": false
+  },
+  "driver_objects": {
+    "native": "d6c7ca19e9454a71328f51b3abca781a7cd26240c6cc591ccca57eaee28f094f",
+    "l2-release": "94128723910cea77359a781767219dcc847fd15b14f40ed91972e172a4fec5da",
+    "sanitize": "e615756951bdb23e35544bcb2c2f0adca61a80b02e6d8268bb72a7243b167c1a"
+  },
+  "archives": {
+    "native": "3f83c55599cbfbeea5d15adf3627405bcde1cbed2ddf4a672fbc75b186f5c4c1",
+    "original": "89f33d3d43f792de078c38469f9406dded2b69126af2c6fc8db6e2acb77cd334",
+    "release": "542c340e53c1c607feb44e4d8b048bdcef41a7a04c2829c9fb62d27acd624644",
+    "trace": "e15e2c86f07b4713157c0a71ab3f3d2c5babe951cc17de9f3f08a98f033f9094",
+    "sanitize": "501d5b0375455b137c8c24befb2e152a0ea2d773f8b094aa1388d0b5e6cb4410"
+  },
+  "python_tests_per_mode": 9,
+  "worktree_and_sealed_tests_pass": true,
+  "raw_and_sealed_normal_and_optimized_replays_identical": true,
+  "additional_resources": {
+    "raw_validation": {
+      "peak": 95191040,
+      "maximum": 268435456,
+      "max_events": 0,
+      "oom_events": 0,
+      "swap": 0
+    },
+    "retention": {
+      "peak": 268435456,
+      "maximum": 268435456,
+      "max_events": 6738,
+      "oom_events": 0,
+      "swap": 0,
+      "exit_status": 0
+    }
+  },
+  "production_unchanged": true,
+  "performance_qualified": false,
+  "next_task": "leopard-79h.38.5.4.18.3.2",
+  "review": "Codex self-review and deterministic/adversarial tests; Claude explicitly waived, not independent-model CONVERGED"
+}

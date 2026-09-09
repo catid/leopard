@@ -1,5 +1,10 @@
 # AVX2 forward/accumulating runtime control: focused checks pass
 
+Update: the subsequent [public frontend qualification](avx2_adjacent_public.md)
+now completes the clock-free native-parity, isolated-count and clock-boundary
+gates. The focused-only status below is the historical `bd4c175` milestone;
+performance qualification and production integration still remain open.
+
 Bead `leopard-79h.38.5.4.18.3.1` remains in progress. This milestone is
 **untimed and experiment-only**. Full native Leopard1 parity, public frontend
 route/count/cost-boundary qualification and the performance gate remain open.
