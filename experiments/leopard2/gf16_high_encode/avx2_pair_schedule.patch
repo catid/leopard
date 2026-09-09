@@ -1,9 +1,6 @@
 --- a/Leopard2BackendAVX2.cpp
 +++ b/Leopard2BackendAVX2.cpp
-@@ -948,6 +948,10 @@
-     AVX2FF16Operation<true>(destination, source, multiplier_log, byte_count);
- }
- 
+@@ -951,3 +951,7 @@
 +#if !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
 +#include "avx2_pair_schedule.h"
 +#endif
