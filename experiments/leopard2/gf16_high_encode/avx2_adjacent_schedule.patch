@@ -1,0 +1,40 @@
+--- a/Leopard2BackendAVX2.cpp
++++ b/Leopard2BackendAVX2.cpp
+@@ -841,0 +842,4 @@
++#if !defined(LEO2_GFNI_VARIANT) && !defined(LEO2_AVX512_VARIANT)
++#include "avx2_adjacent_schedule.h"
++#endif
++
+@@ -977,0 +982,7 @@
++#if !defined(LEO2_GFNI_VARIANT) && !defined(LEO2_AVX512_VARIANT) && (LEO_AVX2_ADJACENT_SCHEDULE & 1)
++        if (!Inverse)
++            AVX2FF16AdjacentProductAdd(y_low, y_high, low_tables, high_tables,
++                x_low, x_high);
++        else
++#endif
++        {
+@@ -983,0 +995 @@
++        }
+@@ -1183,0 +1196,16 @@
++#if !defined(LEO2_GFNI_VARIANT) && !defined(LEO2_AVX512_VARIANT) && (LEO_AVX2_ADJACENT_SCHEDULE & 2)
++        // All four buffers are disjoint by the accumulating-pair contract.
++        // Finish y output before the product; retain x in the accumulators.
++        _mm256_storeu_si256(reinterpret_cast<__m256i*>(y_output + offset),
++            _mm256_xor_si256(y_low, _mm256_loadu_si256(
++                reinterpret_cast<const __m256i*>(y_output + offset))));
++        _mm256_storeu_si256(reinterpret_cast<__m256i*>(y_output + offset + 32),
++            _mm256_xor_si256(y_high, _mm256_loadu_si256(
++                reinterpret_cast<const __m256i*>(y_output + offset + 32))));
++        x_low = _mm256_xor_si256(x_low, _mm256_loadu_si256(
++            reinterpret_cast<const __m256i*>(x_output + offset)));
++        x_high = _mm256_xor_si256(x_high, _mm256_loadu_si256(
++            reinterpret_cast<const __m256i*>(x_output + offset + 32)));
++        AVX2FF16AdjacentProductAdd(y_low, y_high, low_tables, high_tables,
++            x_low, x_high);
++#else
+@@ -1197,0 +1226 @@
++#endif
+@@ -1201,0 +1231 @@
++#if defined(LEO2_GFNI_VARIANT) || defined(LEO2_AVX512_VARIANT) || !(LEO_AVX2_ADJACENT_SCHEDULE & 2)
+@@ -1205,0 +1236 @@
++#endif

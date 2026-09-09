@@ -1,0 +1,190 @@
+{
+  "bead": "leopard-79h.38.5.4.18.3",
+  "timed": false,
+  "codec_executed": false,
+  "correctness_qualified": false,
+  "dynamic_path_counts_qualified": false,
+  "modes": {
+    "0": {
+      "object_sha256": "bf615cd0bb211ea3b8fd8a2c7e6c8a9651f5317857cd8ddcd910c03e74fe1e5d",
+      "loops": {
+        "inverse": {
+          "start": "0x3c260",
+          "end": "0x3c319",
+          "instructions": 40,
+          "byte_shuffles": 8,
+          "stack_references": [
+            "vmovdqa -0x78(%rsp),%ymm11",
+            "vmovdqa -0x18(%rsp),%ymm9",
+            "vmovdqa -0x58(%rsp),%ymm11",
+            "vmovdqa -0x38(%rsp),%ymm9"
+          ]
+        },
+        "forward": {
+          "start": "0x3b7a0",
+          "end": "0x3b856",
+          "instructions": 40,
+          "byte_shuffles": 8,
+          "stack_references": [
+            "vmovdqa -0x78(%rsp),%ymm11",
+            "vmovdqa -0x18(%rsp),%ymm9",
+            "vmovdqa -0x58(%rsp),%ymm11",
+            "vmovdqa -0x38(%rsp),%ymm9"
+          ]
+        },
+        "forward_range": {
+          "start": "0x3a9c0",
+          "end": "0x3aa70",
+          "instructions": 39,
+          "byte_shuffles": 8,
+          "stack_references": [
+            "vmovdqa 0x28(%rsp),%ymm0",
+            "vmovdqa 0x48(%rsp),%ymm1",
+            "vmovdqa 0x8(%rsp),%ymm0"
+          ]
+        },
+        "accumulating": {
+          "start": "0x3cce0",
+          "end": "0x3cdc2",
+          "instructions": 45,
+          "byte_shuffles": 8,
+          "stack_references": [
+            "vmovdqa -0x78(%rsp),%ymm11",
+            "vmovdqa -0x18(%rsp),%ymm9",
+            "vmovdqa -0x58(%rsp),%ymm11",
+            "vmovdqa -0x38(%rsp),%ymm9"
+          ]
+        }
+      }
+    },
+    "1": {
+      "object_sha256": "b577bec29fe6181ed76ee302178568ca7c30999c70a467fbef1e539d0ce22b7c",
+      "loops": {
+        "inverse": {
+          "start": "0x3c220",
+          "end": "0x3c2d9",
+          "instructions": 40,
+          "byte_shuffles": 8,
+          "stack_references": [
+            "vmovdqa -0x78(%rsp),%ymm11",
+            "vmovdqa -0x18(%rsp),%ymm9",
+            "vmovdqa -0x58(%rsp),%ymm11",
+            "vmovdqa -0x38(%rsp),%ymm9"
+          ]
+        },
+        "forward": {
+          "start": "0x3b780",
+          "end": "0x3b823",
+          "instructions": 36,
+          "byte_shuffles": 8,
+          "stack_references": []
+        },
+        "forward_range": {
+          "start": "0x3a9c0",
+          "end": "0x3aa61",
+          "instructions": 36,
+          "byte_shuffles": 8,
+          "stack_references": []
+        },
+        "accumulating": {
+          "start": "0x3cca0",
+          "end": "0x3cd82",
+          "instructions": 45,
+          "byte_shuffles": 8,
+          "stack_references": [
+            "vmovdqa -0x78(%rsp),%ymm11",
+            "vmovdqa -0x18(%rsp),%ymm9",
+            "vmovdqa -0x58(%rsp),%ymm11",
+            "vmovdqa -0x38(%rsp),%ymm9"
+          ]
+        }
+      }
+    },
+    "2": {
+      "object_sha256": "46a20b229616a2ced610d802685e4b8070a744f343d8001a1690230c7a9b0af4",
+      "loops": {
+        "inverse": {
+          "start": "0x3c260",
+          "end": "0x3c319",
+          "instructions": 40,
+          "byte_shuffles": 8,
+          "stack_references": [
+            "vmovdqa -0x78(%rsp),%ymm11",
+            "vmovdqa -0x18(%rsp),%ymm9",
+            "vmovdqa -0x58(%rsp),%ymm11",
+            "vmovdqa -0x38(%rsp),%ymm9"
+          ]
+        },
+        "forward": {
+          "start": "0x3b7a0",
+          "end": "0x3b856",
+          "instructions": 40,
+          "byte_shuffles": 8,
+          "stack_references": [
+            "vmovdqa -0x78(%rsp),%ymm11",
+            "vmovdqa -0x18(%rsp),%ymm9",
+            "vmovdqa -0x58(%rsp),%ymm11",
+            "vmovdqa -0x38(%rsp),%ymm9"
+          ]
+        },
+        "forward_range": {
+          "start": "0x3a9c0",
+          "end": "0x3aa70",
+          "instructions": 39,
+          "byte_shuffles": 8,
+          "stack_references": [
+            "vmovdqa 0x28(%rsp),%ymm0",
+            "vmovdqa 0x48(%rsp),%ymm1",
+            "vmovdqa 0x8(%rsp),%ymm0"
+          ]
+        },
+        "accumulating": {
+          "start": "0x3ccc0",
+          "end": "0x3cd86",
+          "instructions": 39,
+          "byte_shuffles": 8,
+          "stack_references": []
+        }
+      }
+    },
+    "3": {
+      "object_sha256": "514f4de1d07b5325673d2a828ed447854db5c69427be7acf5edfe080c2fb1c1a",
+      "loops": {
+        "inverse": {
+          "start": "0x3c220",
+          "end": "0x3c2d9",
+          "instructions": 40,
+          "byte_shuffles": 8,
+          "stack_references": [
+            "vmovdqa -0x78(%rsp),%ymm11",
+            "vmovdqa -0x18(%rsp),%ymm9",
+            "vmovdqa -0x58(%rsp),%ymm11",
+            "vmovdqa -0x38(%rsp),%ymm9"
+          ]
+        },
+        "forward": {
+          "start": "0x3b780",
+          "end": "0x3b823",
+          "instructions": 36,
+          "byte_shuffles": 8,
+          "stack_references": []
+        },
+        "forward_range": {
+          "start": "0x3a9c0",
+          "end": "0x3aa61",
+          "instructions": 36,
+          "byte_shuffles": 8,
+          "stack_references": []
+        },
+        "accumulating": {
+          "start": "0x3cc80",
+          "end": "0x3cd46",
+          "instructions": 39,
+          "byte_shuffles": 8,
+          "stack_references": []
+        }
+      }
+    }
+  },
+  "build_memory_peak": 182116352
+}
