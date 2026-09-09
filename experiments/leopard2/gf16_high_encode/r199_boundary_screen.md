@@ -1,8 +1,10 @@
 # Remaining AUTO R199 / 32 KiB boundary
 
 Tracking: `leopard-79h.38.5.4.19`, in progress. Date: 2026-09-09.
-The new comparison frontend is correctness-qualified, **not timed**.
-No production source, route policy, compiler flags or codec archive changed.
+The correctness-qualified comparison completed its fresh, preregistered timing
+screen below. Explicit GFNI clears the candidate gate, while current AUTO is
+slower than native Leopard1. No production source, route policy, compiler flags
+or codec archive changed in this experiment.
 
 Current `UseAutoGF16GFNIEncode` admits K=1000/R=200 at 32 KiB and
 K=1000/R=199 or 200 at 64 KiB on this model-08 host. It deliberately leaves
@@ -26,12 +28,13 @@ ISA/tuning; this is not a pure-AVX2 or single-instruction comparison.
 
 The normal Release frontend is `d2edecdccc9d366fdd03d0412bb51a8439fe1aef15ed2ace9f34c0513d623490`;
 native frontend is `ea73abe01e1903ae0bf2fcd756ed978d0697095c798be07d282e894ae949747c`.
-Both are built but have only executed their single-check, untimed mode.
+At qualification, both had executed only their single-check, untimed mode;
+fresh immutable copies were subsequently timed in the screen below.
 Their separately linked clock-guard variants also exercise the complete
 1 check + 4 warmup + 21 sample-call schedule without reading a benchmark clock.
 Five deliberate clock attempts terminate at the guard with status 86.
 
-Only the public encode call is inside the future sample interval. Initialization,
+Only the public encode call is inside each sample interval. Initialization,
 allocation, input generation, scratch query, hashes and parity dumps are outside.
 Native Leopard1 returns parity in its first R work buffers; Leopard2 uses
 separate parity outputs. Both conventions remain intact. Scratch sizes are
@@ -99,7 +102,7 @@ The accepted same-path check peaked at 136,261,632/512 MiB, all events/swap
 zero. The owned temporary source copy was restored to its exact original
 bytes; no codec archive or previously qualified executable was modified.
 
-## Remaining performance gate
+## Timing gates fixed before execution
 
 Before clocks, qualify the collector/protocol and commit **and push** a fresh
 immutable one-attempt preregistration. Measure AUTO/native, GFNI/AUTO and
@@ -146,3 +149,57 @@ or collect timing samples. The collector independently enforces the pushed
 plan/source identity, host and CPU topology, canonical lock plus CPU lease,
 shutdown condition, 10-second zero-sibling passive check, 30-second child CPU
 limit, and immutable input hashes before and after the measured sequence.
+
+## Completed screen result
+
+Preregistration `4a94b6959de7a184ea3c3fff53c8af688b935c8a` was pushed before
+the one permitted attempt. All 72 timed processes and three untimed preflights
+completed; every timed sibling delta is zero. The passive check held at
+570562 non-idle jiffies for 10,000,282,351 ns. Input hashes and the shutdown
+condition remained unchanged. No retry remains for this plan.
+
+| Speed ratio | Aggregate | Meaning at this exact cell |
+| --- | ---: | --- |
+| AUTO / native Leopard1 | 0.921866 | Native Leopard1 is 8.48% faster than current AUTO |
+| Explicit GFNI / AUTO | 1.530715 | GFNI is 53.07% faster than current AUTO |
+| Explicit GFNI / native Leopard1 | 1.422845 | GFNI is 42.28% faster than native Leopard1 |
+
+GFNI/AUTO round ratios are 1.538028, 1.528745, and 1.525401. All exceed
+one and the aggregate exceeds the fixed 1.05 threshold. All three aggregate
+controls pass: native 0.991529, AUTO 0.997843, GFNI 0.996872. The first native
+control round is 0.975990, outside the aggregate-bound interval when considered
+alone; it remains included and disclosed. The preregistered gate is aggregate,
+not a retrospectively selected per-round filter.
+
+The [numerical result](results/r199_boundary_screen_20260909.json) contains all
+18 round ratios and six aggregates. Separate normal and optimized
+[collector-free replays](replay_r199_boundary_screen.py) reproduce the raw
+timings, ordering, hashes, three controls and decision, as well as the original
+49 positive qualification records and 58,687,488 parity-comparison bytes.
+This is one bounded host/cell diagnostic, without confidence intervals or
+claims about other payloads, CPUs, API shapes, or production promotion.
+
+The timed scope peaked at 79,679,488/256 MiB, all six memory-event counters
+and swap zero. Normal/optimized replays peaked at 24,088,576/27,414,528 bytes,
+also all zero. Raw attempt SHA-256:
+`7440e9b68a6ff6043463bc886c2fa9a7941cd13b776408a51f16d5603e212e07`;
+scope log SHA-256:
+`41948e0099f2fa18e8c605286e397d757f50061e93a0499b6b1b2dc3a633f752`.
+
+The local read-only screen bundle
+`.research/leopard-79h/r199-boundary-screen.phaaow0s` contains 195 files,
+5,342,219 bytes, outer manifest SHA-256
+`ff24ff39a65e396cc1743eea67693dff047fc243eec3e72bda597dedaaa285d0`.
+It retains all raw timings, frozen inputs, plan, scripts, tests and replay
+logs; qualification and normalization bundles remain separately pinned local
+dependencies. Its full manifest, permissions and sealed-copy semantic replay
+pass and reproduce the published result. Retention peaked at 10,608,640 bytes;
+full-manifest plus sealed replay at 29,831,168, each under 256 MiB with all
+six memory-event counters and swap zero. Separate delivery logs are in
+`/tmp/leopard-r199-screen-delivery.BYl6zj`.
+
+Next: `leopard-79h.38.5.4.19.1` owns the exact AUTO R199/32 KiB integration,
+using a separate default-OFF diagnostic control, full API/boundary/sanitizer
+qualification, and a new same-binary OFF/ON screen before default promotion.
+The explicit-backend gain above must not be presented as an already shipped
+AUTO improvement. The parent and full goal remain open.

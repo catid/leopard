@@ -1,0 +1,72 @@
+{
+  "preregistration": "4a94b6959de7a184ea3c3fff53c8af688b935c8a",
+  "frozen_inputs": 23,
+  "preflights": 3,
+  "timed_invocations": 72,
+  "sibling_nonidle_jiffies": 0,
+  "round_ratios": 18,
+  "aggregate_ratios": 6,
+  "preparation_checks": 49,
+  "full_parity_comparison_bytes": 58687488,
+  "memory_peaks": {
+    "pure-tests": 13520896,
+    "pure-tests-opt": 16093184,
+    "freeze": 30175232,
+    "preclock": 24924160,
+    "preclock-opt": 26988544,
+    "attempt1": 79679488
+  },
+  "analysis": {
+    "cells": [
+      {
+        "cell": 0,
+        "round_ratios": {
+          "auto_over_native": [
+            0.9240486937558483,
+            0.9247885740396815,
+            0.9167805871028036
+          ],
+          "gfni_over_auto": [
+            1.5380281037093428,
+            1.5287449239845736,
+            1.5254012142415263
+          ],
+          "gfni_over_native": [
+            1.410166065437937,
+            1.4417512965790558,
+            1.4168131000328812
+          ],
+          "same_native": [
+            0.9759904338301362,
+            1.0021615955407461,
+            0.996626314287654
+          ],
+          "same_auto": [
+            1.0003923385760316,
+            0.9965779274666303,
+            0.9965634806353469
+          ],
+          "same_gfni": [
+            0.9930704651300108,
+            0.9994157146960014,
+            0.9981408114475636
+          ]
+        },
+        "ratios": {
+          "auto_over_native": 0.9218655245348923,
+          "gfni_over_auto": 1.5307154381412778,
+          "gfni_over_native": 1.4228454343160566,
+          "same_native": 0.9915285464490186,
+          "same_auto": 0.9978429573190816,
+          "same_gfni": 0.9968718925399163
+        }
+      }
+    ],
+    "controls_pass": true,
+    "decision": "qualify_bounded_auto_candidate",
+    "production_promotion": false,
+    "confidence_intervals": false,
+    "neighbor_qualification": false,
+    "authoritative_v19": false
+  }
+}
