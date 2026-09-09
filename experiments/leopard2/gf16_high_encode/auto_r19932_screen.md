@@ -1,8 +1,9 @@
 # AUTO R=199 / 32 KiB integration screen
 
-Bead: `leopard-79h.38.5.4.19.1`. Fresh preregistration; no integration samples
-collected when this plan was written. This is not a retry of the exhausted
-direct R199 screen or an automatic production promotion.
+Bead: `leopard-79h.38.5.4.19.1`. **Completed, inconclusive controls; default
+remains off.** Preregistration `aa2b03438503338ab622af29ebbe2f41234fc37d` was
+committed and pushed before clocks. The single attempt is consumed and may not
+be retried. The original protocol below remains unchanged.
 
 The [default-off candidate](auto_r19932_candidate.md), source commit
 `45e2effd869859c9b3aa48190eff6f4738817c61`, has passed focused Release and full
@@ -74,3 +75,84 @@ earlier qualification were replayed without codec execution. Preparation peak
 80,752,640 bytes; freeze/replay/tests peak 90,071,040 bytes, both below 256 MiB
 with all six memory events zero and swap disabled. Review is Codex self-review
 and deterministic/adversarial tests; Claude and subagents remain opted out.
+
+## Completed result: do not promote
+
+All 372 timed invocations and 27 preflights completed, with exact recorded
+workload/route identities and zero sibling non-idle jiffies. The passive
+observation was 10,000,475,534 ns, with the sibling counter unchanged at 570683.
+The fixed decision is **`inconclusive_controls`**, not an accepted optimization
+and not evidence that the candidate regresses.
+
+| Target API | OFF / ON | Native / ON | Qualification |
+| --- | ---: | ---: | --- |
+| Ordinary encode | 1.5388704673 | 1.4549241629 | Inconclusive controls |
+| One-item batch | 1.5263170544 | 1.4709829783 | Inconclusive controls |
+
+The numerical target ratios are positive in all three rounds and exceed both
+5% thresholds. All seven unchanged-neighbor aggregates are inside the fixed
+2% interval. However, three of the 20 same-path aggregate controls fail:
+
+| Unchanged control | Aggregate ratio | Required interval |
+| --- | ---: | --- |
+| Native Leopard1, ordinary target (cell 0) | 0.9746447598 | [0.9803921569, 1.02] |
+| Explicit AVX2, same ON (cell 6) | 0.9758334085 | [0.9803921569, 1.02] |
+| GF8, same OFF (cell 8) | 0.9516373686 | [0.9803921569, 1.02] |
+
+No outlier, round or control is removed. The apparent 52.6–53.9% improvement
+over OFF and 45.5–47.1% improvement over native are **not qualified speedup
+claims**. The previous independent direct screen is not pooled with this run.
+
+Read-only inspection identifies different symptoms, not a proven host cause:
+
+- Native cell 0, round 2 same-path process medians are 4.132661, 4.405398,
+  4.363876 and 4.158098 ms. The slower middle processes contain sustained
+  slower samples, not merely one maximum that could explain their medians.
+- Explicit AVX2 cell 6, round 0 medians are 4.476764, 4.808288, 4.780066 and
+  4.498366 ms. This millisecond-scale shift cannot be explained by the tiny
+  GF8 call's nanosecond-scale granularity.
+- GF8 same-OFF process medians range from 150 to 190 ns. Round 1 medians are
+  150, 190, 170 and 161 ns; its control ratio is 0.864683768. Timing individual
+  calls at this scale is too coarse and variable here for a stable 2% claim.
+  This observation does not justify weakening the bound.
+
+No system-frequency, scheduler, allocation-placement, cache or thermal cause
+was isolated by these records. The result does not authorize unrelated process
+affinity changes, host configuration changes, CPU movement or a timing retry.
+
+## Retained evidence and next work
+
+[Machine-readable raw replay](results/auto_r19932_screen_20260909.json).
+Collector-free replay passes in normal and optimized Python and agrees with
+the collector's fixed decision and all 93 round / 31 aggregate ratios. It also
+revalidates all 22 frozen inputs and the earlier 223-positive qualification,
+including 297,765,056 full parity comparison bytes and its resource caveat.
+Read-only retained-copy replays and its full manifest check pass.
+
+Native scope peak: 128,798,720 / 268,435,456 bytes. Raw replay peak:
+98,013,184 bytes. Retention plus sealed replays/manifest: 119,652,352 bytes.
+These scopes exited zero, with all six memory events zero and no swap.
+
+Read-only bundle:
+`.research/leopard-79h/auto-r19932-screen-inconclusive.rexj13hd`.
+842 files, 7,127,981 bytes; manifest SHA-256:
+`fca53b9ad4da9da6190878e64f01be1c16111f008230459a89d69388c13f54ee`.
+Raw attempt journal SHA-256:
+`00a9b20bb3f1d077a30154c14d8b6d08896b6f967b9f01b8e3487fb96afe39e0`.
+Scope log SHA-256:
+`5baf809bebf1416b353d770c9148c3eadbb9f0da0baa44c0d8da15ed424c2293`.
+Delivery logs: `/tmp/leopard-auto-r19932-screen-delivery.9nv5Aj`.
+
+Next Bead `leopard-79h.38.5.4.19.1.1` is **untimed methodology qualification**:
+preserve the qualified codec and all nine cases, check a paired OFF/ON frontend
+using the same codec/buffers within one process, and amortize clock overhead
+across grouped repeated public calls for tiny workloads. This is a hypothesis
+for improving measurement stability, not a demonstrated fix for the native or
+AVX2 process shifts. Group averages must not be mislabeled single-call latency.
+
+That child may perform clock-free correctness, call-count, route, bounds,
+parity and clock-abort checks only. It may not execute a benchmark, retry this
+attempt, pool data or relax existing gates. A timed successor requires its own
+explicit review and committed/pushed preregistration. Actual default-on
+artifact verification and production enablement remain after that gate. The
+integration, parent performance task and full user goal remain open.

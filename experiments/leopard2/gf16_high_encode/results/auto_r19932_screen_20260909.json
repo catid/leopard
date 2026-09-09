@@ -1,0 +1,343 @@
+{
+  "preregistration": "aa2b03438503338ab622af29ebbe2f41234fc37d",
+  "frozen_inputs": 22,
+  "preflights": 27,
+  "timed_invocations": 372,
+  "sibling_nonidle_jiffies": 0,
+  "qualification": {
+    "bead": "leopard-79h.38.5.4.19.1",
+    "positive_native_records": 223,
+    "total_records": 259,
+    "public_records": 117,
+    "clock_guards": 5,
+    "cli_refusals": 31,
+    "full_parity_comparisons": 44,
+    "full_native_leopard1_parity_bytes": 297765056,
+    "real_backend_checks": 12,
+    "registered_ctests": 3,
+    "release_isa_pass": true,
+    "archive_members": 24,
+    "unchanged_members": 23,
+    "hook_archive_members": 23,
+    "hook_unchanged_members": 22,
+    "default_enabled": false,
+    "timed": false,
+    "performance_qualified": false,
+    "production_promoted": false,
+    "resources": {
+      "build": {
+        "peak": 274698240,
+        "maximum": 536870912,
+        "max_events": 0,
+        "oom_events": 0,
+        "swap": 0
+      },
+      "preparation": {
+        "peak": 268435456,
+        "maximum": 268435456,
+        "max_events": 612,
+        "oom_events": 0,
+        "swap": 0
+      },
+      "finish-hooks": {
+        "peak": 66248704,
+        "maximum": 536870912,
+        "max_events": 0,
+        "oom_events": 0,
+        "swap": 0
+      },
+      "check-hooks": {
+        "peak": 78254080,
+        "maximum": 268435456,
+        "max_events": 0,
+        "oom_events": 0,
+        "swap": 0
+      },
+      "cmake-configure": {
+        "peak": 33656832,
+        "maximum": 536870912,
+        "max_events": 0,
+        "oom_events": 0,
+        "swap": 0
+      },
+      "ctest": {
+        "peak": 56586240,
+        "maximum": 268435456,
+        "max_events": 0,
+        "oom_events": 0,
+        "swap": 0
+      }
+    }
+  },
+  "analysis": {
+    "cells": [
+      {
+        "cell": 0,
+        "role": "target",
+        "round_ratios": {
+          "off_on": [
+            1.5367647750352675,
+            1.5392931414304782,
+            1.5405559076234763
+          ],
+          "same_off": [
+            0.9974901918586304,
+            0.9992312235049583,
+            0.99836067126231
+          ],
+          "same_on": [
+            0.9936320703901629,
+            1.004961454347536,
+            0.9901553348694072
+          ],
+          "native_on": [
+            1.4700155979586742,
+            1.4604057339574639,
+            1.4345827265337951
+          ],
+          "same_native": [
+            0.9816575491954708,
+            0.9975750308503026,
+            0.9454389174364201
+          ]
+        },
+        "ratios": {
+          "off_on": 1.5388704672593625,
+          "same_off": 0.9983604425278749,
+          "same_on": 0.9962296095984036,
+          "native_on": 1.4549241629275664,
+          "same_native": 0.9746447597902083
+        }
+      },
+      {
+        "cell": 1,
+        "role": "target",
+        "round_ratios": {
+          "off_on": [
+            1.5353945042671537,
+            1.5416523794165382,
+            1.502200254593377
+          ],
+          "same_off": [
+            1.000032230711443,
+            1.0074826615156427,
+            0.9957303951771568
+          ],
+          "same_on": [
+            1.0034311871743502,
+            0.9998927885659068,
+            0.9914721377295851
+          ],
+          "native_on": [
+            1.4777819267653873,
+            1.4632334503727822,
+            1.471970038372388
+          ],
+          "same_native": [
+            1.0225430537211921,
+            0.9446101163068454,
+            1.0374001011207417
+          ]
+        },
+        "ratios": {
+          "off_on": 1.5263170543798532,
+          "same_off": 1.0010700019960264,
+          "same_on": 0.9982527496733875,
+          "native_on": 1.470982978318572,
+          "same_native": 1.0006760226770028
+        }
+      },
+      {
+        "cell": 2,
+        "role": "unchanged_neighbor",
+        "round_ratios": {
+          "off_on": [
+            1.0006204731270198,
+            1.0007359339888033,
+            0.9977627639996696
+          ],
+          "same_off": [
+            0.9973476694101621,
+            1.0009015522823477,
+            0.9999694321919872
+          ],
+          "same_on": [
+            1.0026750787492529,
+            1.0041615076618033,
+            1.0032629399988287
+          ]
+        },
+        "ratios": {
+          "off_on": 0.9997054439513673,
+          "same_off": 0.9994050848996581,
+          "same_on": 1.0033663226446778
+        }
+      },
+      {
+        "cell": 3,
+        "role": "unchanged_neighbor",
+        "round_ratios": {
+          "off_on": [
+            1.00316258869087,
+            0.998176293234984,
+            0.9991727650912955
+          ],
+          "same_off": [
+            1.0349169808191976,
+            0.9993108218426839,
+            0.9975229188665713
+          ],
+          "same_on": [
+            0.9818776206157483,
+            1.000084242726315,
+            0.9967454681907452
+          ]
+        },
+        "ratios": {
+          "off_on": 1.0001682305582522,
+          "same_off": 1.0104379801828365,
+          "same_on": 0.992870800466461
+        }
+      },
+      {
+        "cell": 4,
+        "role": "unchanged_neighbor",
+        "round_ratios": {
+          "off_on": [
+            1.001617253783094,
+            1.0334429585438127,
+            1.0039875343365086
+          ],
+          "same_off": [
+            0.9939074790566607,
+            1.0074822746249352,
+            0.9992383526628047
+          ],
+          "same_on": [
+            1.0004640239032867,
+            0.9998159759282103,
+            1.0005014391644633
+          ]
+        },
+        "ratios": {
+          "off_on": 1.0129131500957091,
+          "same_off": 1.0001937946571196,
+          "same_on": 1.0002604301583964
+        }
+      },
+      {
+        "cell": 5,
+        "role": "unchanged_neighbor",
+        "round_ratios": {
+          "off_on": [
+            0.9997987891450878,
+            0.9923877741754294,
+            0.9977055938340625
+          ],
+          "same_off": [
+            0.9991342432126185,
+            1.0016385285439193,
+            1.0058740243591004
+          ],
+          "same_on": [
+            0.999511633395814,
+            0.9994515406054835,
+            0.9996510679455362
+          ]
+        },
+        "ratios": {
+          "off_on": 0.9966258319617232,
+          "same_off": 1.0022117407616256,
+          "same_on": 0.9995380771549559
+        }
+      },
+      {
+        "cell": 6,
+        "role": "unchanged_neighbor",
+        "round_ratios": {
+          "off_on": [
+            0.997925922672092,
+            1.0038731431064416,
+            1.0037502530172582
+          ],
+          "same_off": [
+            0.9711721337833308,
+            0.9972805644398259,
+            0.9996049256256416
+          ],
+          "same_on": [
+            0.9360462578826154,
+            0.9966210017049869,
+            0.9960925712823067
+          ]
+        },
+        "ratios": {
+          "off_on": 1.0018459246066638,
+          "same_off": 0.9892680546761705,
+          "same_on": 0.9758334084594061
+        }
+      },
+      {
+        "cell": 7,
+        "role": "unchanged_neighbor",
+        "round_ratios": {
+          "off_on": [
+            0.9985407255478783,
+            1.0010086806102263,
+            0.994190054099632
+          ],
+          "same_off": [
+            1.0029541337863714,
+            1.0019438866201538,
+            1.0021993616943048
+          ],
+          "same_on": [
+            1.0049300231312743,
+            0.9990807618232294,
+            1.0047268328972807
+          ]
+        },
+        "ratios": {
+          "off_on": 0.9979091697401083,
+          "same_off": 1.002365702289512,
+          "same_on": 1.002908871222113
+        }
+      },
+      {
+        "cell": 8,
+        "role": "unchanged_neighbor",
+        "round_ratios": {
+          "off_on": [
+            1.0327955589886444,
+            0.9935831303734438,
+            0.9375
+          ],
+          "same_off": [
+            1.0,
+            0.8646837679613578,
+            0.9966832412776431
+          ],
+          "same_on": [
+            1.003327796219494,
+            0.9701425001453319,
+            1.0066666666666666
+          ]
+        },
+        "ratios": {
+          "off_on": 0.9871806085187138,
+          "same_off": 0.9516373685544467,
+          "same_on": 0.9932411124493813
+        }
+      }
+    ],
+    "controls_pass": false,
+    "neighbors_pass": true,
+    "targets_pass": true,
+    "native_pass": true,
+    "decision": "inconclusive_controls",
+    "production_promotion": false,
+    "confidence_intervals": false,
+    "authoritative_v19": false
+  },
+  "memory_peak": 128798720
+}

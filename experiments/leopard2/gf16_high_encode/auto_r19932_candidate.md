@@ -125,11 +125,13 @@ Large raw artifacts remain local; source, result and replay code are in Git.
 
 ## Next gate and roadmap
 
-The integration remains open. Next: commit and push a fresh immutable timing
-preregistration for the same-binary OFF/ON candidate, native Leopard1, ordinary
-and one-item batch targets, and unchanged controls/neighbors. Preserve the
-5% improvement threshold, 2% controls/neighbor bounds, zero SMT sibling activity,
-CPU26/90, one bounded attempt and the local resource/locking policy.
+The integration remains open. The fresh [same-binary integration
+screen](auto_r19932_screen.md), preregistration `aa2b034`, completed all 372
+timed invocations but failed three unchanged-path control aggregates. It is
+inconclusive, consumed and may not be retried. No default promotion follows.
+Next is untimed qualification of a paired, clock-amortized measurement frontend
+under `leopard-79h.38.5.4.19.1.1`, with unchanged codecs and safety gates. Any
+timed successor requires a separate reviewed, committed and pushed plan.
 
 Only after that gate passes may the default change. The actual default-on
 artifact must then be inspected and rerun through focused safety/route tests;
