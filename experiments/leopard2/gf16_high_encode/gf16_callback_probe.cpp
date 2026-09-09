@@ -1,7 +1,10 @@
 // Clock-free, driver-only callback attribution for leopard-79h.38.5.4.12.
 // Link to the pinned portable archive; do not use with legacy in-field SIMD.
 #define main CallbackWorkloadMain
-#include "current_route_screen.cpp"
+#ifndef LEO_GF16_CALLBACK_WORKLOAD
+#define LEO_GF16_CALLBACK_WORKLOAD "current_route_screen.cpp"
+#endif
+#include LEO_GF16_CALLBACK_WORKLOAD
 #undef main
 #include "Leopard2Backend.h"
 #include "Leopard2Plan.h"

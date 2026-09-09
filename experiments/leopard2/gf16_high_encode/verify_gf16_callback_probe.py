@@ -15,14 +15,18 @@ OPS = ("multiply", "multiply_add", "xor", "xor_2to1", "xor4", "copy", "ifft2", "
 
 
 def model(cell):
+    return model_shape(CELLS[cell])
+
+
+def model_shape(shape):
     """Structural high-profile traversal, not a model of CPU time or traffic.
 
-    The six fixed cases have complete four-source groups, nonzero inverse
+    The supported fixture shapes have complete four-source groups, nonzero inverse
     skews, and payloads above the field's 128-byte fused threshold. The first
     forward group has zero-skew mask5; all remaining groups have mask0.
     A radix-four group represents four logical radix-two edges per lane.
     """
-    k, r, public_bytes, kind, tile, passes = CELLS[cell]
+    k, r, public_bytes, kind, tile, passes = shape
     side = 1 << (r - 1).bit_length()
     require(k % 4 == 0 and tile > 128 and kind in (3,5,6), "model scope")
     counts = Counter()
@@ -68,10 +72,14 @@ def model(cell):
 
 
 def validate_counts(record, cell):
+    return validate_shape_counts(record, CELLS[cell])
+
+
+def validate_shape_counts(record, shape):
     require(set(record) == {"schema", "timed", "calls", "passes", "buckets"} and
             record["schema"] == "gf16-callback-counts/v1" and record["timed"] is False,
             "callback schema")
-    k,r,public_bytes,kind,tile,passes = CELLS[cell]
+    k,r,public_bytes,kind,tile,passes = shape
     side = 1 << (r - 1).bit_length()
     equal(record["passes"], [{"kind":kind,"k":k,"r":r,"requested":r,"side":side,
         "sparse_blocks":0,"bytes":tile,"source_policy":public_bytes}] * passes)
@@ -87,7 +95,7 @@ def validate_counts(record, cell):
         key = tuple(bucket[name] for name in ("op","distance","zero_mask","prefer_fused","bytes"))
         require(key not in actual, "duplicate bucket")
         actual[key] = bucket["calls"]
-    require(actual == model(cell) and sum(actual.values()) == record["calls"], "schedule model mismatch")
+    require(actual == model_shape(shape) and sum(actual.values()) == record["calls"], "schedule model mismatch")
     return {op: {"calls":sum(n for key,n in actual.items() if key[0] == op),
                  "lane_groups":sum(key[1]*n for key,n in actual.items() if key[0] == op)}
             for op in OPS if any(key[0] == op for key in actual)}

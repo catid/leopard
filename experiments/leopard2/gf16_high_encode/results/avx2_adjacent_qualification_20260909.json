@@ -1,0 +1,280 @@
+{
+  "bead": "leopard-79h.38.5.4.18.3",
+  "timed": false,
+  "mode": 3,
+  "positive_native_records": 62,
+  "records": 84,
+  "full_native_leopard1_parity_bytes": 217712384,
+  "production_changed": false,
+  "observed_production_counts": [
+    {
+      "cell": 0,
+      "callbacks": 2066,
+      "operations": {
+        "xor": {
+          "calls": 3,
+          "lane_groups": 3
+        },
+        "ifft2": {
+          "calls": 1384,
+          "lane_groups": 1384
+        },
+        "fft2": {
+          "calls": 197,
+          "lane_groups": 197
+        },
+        "ifft2_xor": {
+          "calls": 384,
+          "lane_groups": 384
+        },
+        "ifft4_range": {
+          "calls": 80,
+          "lane_groups": 572
+        },
+        "fft4_range": {
+          "calls": 18,
+          "lane_groups": 180
+        }
+      },
+      "affected": true,
+      "forward_pairs": 665,
+      "forward_blocks": 340480,
+      "accumulating_pairs": 384,
+      "accumulating_blocks": 196608
+    },
+    {
+      "cell": 1,
+      "callbacks": 4132,
+      "operations": {
+        "xor": {
+          "calls": 6,
+          "lane_groups": 6
+        },
+        "ifft2": {
+          "calls": 2768,
+          "lane_groups": 2768
+        },
+        "fft2": {
+          "calls": 394,
+          "lane_groups": 394
+        },
+        "ifft2_xor": {
+          "calls": 768,
+          "lane_groups": 768
+        },
+        "ifft4_range": {
+          "calls": 160,
+          "lane_groups": 1144
+        },
+        "fft4_range": {
+          "calls": 36,
+          "lane_groups": 360
+        }
+      },
+      "affected": true,
+      "forward_pairs": 1330,
+      "forward_blocks": 680960,
+      "accumulating_pairs": 768,
+      "accumulating_blocks": 393216
+    },
+    {
+      "cell": 2,
+      "callbacks": 4132,
+      "operations": {
+        "xor": {
+          "calls": 6,
+          "lane_groups": 6
+        },
+        "ifft2": {
+          "calls": 2768,
+          "lane_groups": 2768
+        },
+        "fft2": {
+          "calls": 394,
+          "lane_groups": 394
+        },
+        "ifft2_xor": {
+          "calls": 768,
+          "lane_groups": 768
+        },
+        "ifft4_range": {
+          "calls": 160,
+          "lane_groups": 1144
+        },
+        "fft4_range": {
+          "calls": 36,
+          "lane_groups": 360
+        }
+      },
+      "affected": true,
+      "forward_pairs": 1330,
+      "forward_blocks": 680960,
+      "accumulating_pairs": 768,
+      "accumulating_blocks": 393216
+    },
+    {
+      "cell": 3,
+      "callbacks": 3749,
+      "operations": {
+        "xor": {
+          "calls": 1,
+          "lane_groups": 1
+        },
+        "ifft2": {
+          "calls": 256,
+          "lane_groups": 256
+        },
+        "fft2": {
+          "calls": 255,
+          "lane_groups": 255
+        },
+        "ifft2_xor": {
+          "calls": 1792,
+          "lane_groups": 1792
+        },
+        "ifft4_out": {
+          "calls": 1024,
+          "lane_groups": 1024
+        },
+        "ifft4_range": {
+          "calls": 336,
+          "lane_groups": 3072
+        },
+        "fft4_range": {
+          "calls": 85,
+          "lane_groups": 512
+        }
+      },
+      "affected": true,
+      "forward_pairs": 1793,
+      "forward_blocks": 114752,
+      "accumulating_pairs": 1792,
+      "accumulating_blocks": 114688
+    },
+    {
+      "cell": 4,
+      "callbacks": 2066,
+      "operations": {
+        "xor": {
+          "calls": 3,
+          "lane_groups": 3
+        },
+        "ifft2": {
+          "calls": 1384,
+          "lane_groups": 1384
+        },
+        "fft2": {
+          "calls": 197,
+          "lane_groups": 197
+        },
+        "ifft2_xor": {
+          "calls": 384,
+          "lane_groups": 384
+        },
+        "ifft4_range": {
+          "calls": 80,
+          "lane_groups": 572
+        },
+        "fft4_range": {
+          "calls": 18,
+          "lane_groups": 180
+        }
+      },
+      "affected": true,
+      "forward_pairs": 665,
+      "forward_blocks": 340480,
+      "accumulating_pairs": 384,
+      "accumulating_blocks": 196608
+    },
+    {
+      "cell": 5,
+      "callbacks": 2066,
+      "operations": {
+        "xor": {
+          "calls": 3,
+          "lane_groups": 3
+        },
+        "ifft2": {
+          "calls": 1384,
+          "lane_groups": 1384
+        },
+        "fft2": {
+          "calls": 197,
+          "lane_groups": 197
+        },
+        "ifft2_xor": {
+          "calls": 384,
+          "lane_groups": 384
+        },
+        "ifft4_range": {
+          "calls": 80,
+          "lane_groups": 572
+        },
+        "fft4_range": {
+          "calls": 18,
+          "lane_groups": 180
+        }
+      },
+      "affected": false,
+      "forward_pairs": 0,
+      "forward_blocks": 0,
+      "accumulating_pairs": 0,
+      "accumulating_blocks": 0
+    },
+    {
+      "cell": 6,
+      "callbacks": 2066,
+      "operations": {
+        "xor": {
+          "calls": 3,
+          "lane_groups": 3
+        },
+        "ifft2": {
+          "calls": 1384,
+          "lane_groups": 1384
+        },
+        "fft2": {
+          "calls": 197,
+          "lane_groups": 197
+        },
+        "ifft2_xor": {
+          "calls": 384,
+          "lane_groups": 384
+        },
+        "ifft4_range": {
+          "calls": 80,
+          "lane_groups": 572
+        },
+        "fft4_range": {
+          "calls": 18,
+          "lane_groups": 180
+        }
+      },
+      "affected": false,
+      "forward_pairs": 0,
+      "forward_blocks": 0,
+      "accumulating_pairs": 0,
+      "accumulating_blocks": 0
+    },
+    {
+      "cell": 7,
+      "callbacks": 0,
+      "operations": {},
+      "affected": false,
+      "forward_pairs": 0,
+      "forward_blocks": 0,
+      "accumulating_pairs": 0,
+      "accumulating_blocks": 0
+    }
+  ],
+  "memory_peaks": {
+    "checks-build": 236920832,
+    "native": 245288960,
+    "qualification-delivery-unit": 12398592,
+    "qualification-delivery-unit-opt": 16306176
+  },
+  "archive_sha256": {
+    "release": "935cbcac7fe6ca0ec6ca7255a32b6991e60d72a843ba4321ee67070999bbc175",
+    "sanitize": "88d4cb0e8ddd4d8bd040346af06527782102d32bb586b7628f1105322dd15b0f"
+  }
+}
