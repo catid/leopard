@@ -1,0 +1,63 @@
+{
+  "schema": "leopard-gfni-boundary-plan/v1",
+  "bead": "leopard-79h.38.5.4.17",
+  "host": {
+    "hostname": "work",
+    "kernel": "6.8.0-137-generic",
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper 9980X 64-Cores"
+  },
+  "cpu": 26,
+  "sibling": 90,
+  "controller_cpu": 0,
+  "condition": "slipgate-disabled-20260909",
+  "attempt_budget": 1,
+  "rounds": 3,
+  "samples_per_process": 21,
+  "passive_seconds": 10,
+  "orders": {
+    "auto_vs_gfni": [
+      "auto",
+      "gfni",
+      "gfni",
+      "auto"
+    ],
+    "main_vs_gfni": [
+      "main",
+      "gfni",
+      "gfni",
+      "main"
+    ],
+    "same_gfni": [
+      "gfni_a",
+      "gfni_b",
+      "gfni_b",
+      "gfni_a"
+    ]
+  },
+  "cells": [
+    {
+      "k": 1000,
+      "r": 200,
+      "bytes": 32768
+    },
+    {
+      "k": 1000,
+      "r": 199,
+      "bytes": 65536
+    }
+  ],
+  "minimum_gain": 1.05,
+  "control_bound": 1.02,
+  "production_promotion": false,
+  "neighbor_qualification": false,
+  "artifact_sha256": {
+    "main": "3ce29f467b84cb0e890cd94bd3b5eff0370a4ed16d657c505c4897d437e7d42d",
+    "current": "ba8062c9232c6ada9b73b90822cc87477ae6b11b1dea7bf9625422b54d999b25",
+    "main.a": "3f83c55599cbfbeea5d15adf3627405bcde1cbed2ddf4a672fbc75b186f5c4c1",
+    "current.a": "259c2c9aa3f51b1f941eac84270ad37c39c2a5b3cc06b1676a414f8088ad88e6",
+    "expected.json": "6210d05086fbb92952c7cf53cc60024a99b0ac5ba9c1d5fb8b6d049f028d9d64"
+  }
+}
