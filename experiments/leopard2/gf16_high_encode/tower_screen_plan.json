@@ -1,0 +1,231 @@
+{
+  "schema": "leopard-tower-plan/v1",
+  "bead": "leopard-79h.38.5.4.18.4.3",
+  "host": {
+    "hostname": "work",
+    "kernel": "6.8.0-137-generic",
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper 9980X 64-Cores"
+  },
+  "cpu": 26,
+  "sibling": 90,
+  "controller_cpu": 0,
+  "passive_seconds": 10,
+  "condition": "slipgate-disabled-20260909",
+  "attempt_budget": 1,
+  "attempt_root": "/tmp/leopard-tower-screen.0mjTlC/attempt1",
+  "rounds": 3,
+  "sample_passes": 21,
+  "spans_per_process": 84,
+  "groups": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    256,
+    1
+  ],
+  "paired_orders": [
+    "0110",
+    "1001"
+  ],
+  "cross_orders": {
+    "same_off": [
+      "0000",
+      "0000",
+      "0000",
+      "0000"
+    ],
+    "same_on": [
+      "1111",
+      "1111",
+      "1111",
+      "1111"
+    ],
+    "original_on": [
+      "PPPP",
+      "1111",
+      "1111",
+      "PPPP"
+    ],
+    "original_off": [
+      "PPPP",
+      "0000",
+      "0000",
+      "PPPP"
+    ],
+    "same_original": [
+      "PPPP",
+      "PPPP",
+      "PPPP",
+      "PPPP"
+    ]
+  },
+  "native_cross_orders": {
+    "native_on": [
+      "NNNN",
+      "1111",
+      "1111",
+      "NNNN"
+    ],
+    "same_native": [
+      "NNNN",
+      "NNNN",
+      "NNNN",
+      "NNNN"
+    ]
+  },
+  "target_cells": [
+    0,
+    1,
+    2,
+    4,
+    8
+  ],
+  "affected_neighbors": [],
+  "unchanged_neighbors": [
+    3,
+    5,
+    6,
+    7
+  ],
+  "native_cells": [
+    0,
+    1,
+    2,
+    4,
+    8
+  ],
+  "cells": [
+    [
+      1000,
+      200,
+      32768,
+      2,
+      3,
+      "encode",
+      "target"
+    ],
+    [
+      1000,
+      199,
+      65536,
+      2,
+      3,
+      "encode",
+      "target"
+    ],
+    [
+      1000,
+      200,
+      65536,
+      2,
+      3,
+      "encode",
+      "target"
+    ],
+    [
+      4096,
+      512,
+      4096,
+      2,
+      3,
+      "encode",
+      "unchanged_neighbor"
+    ],
+    [
+      1000,
+      199,
+      32768,
+      2,
+      0,
+      "encode",
+      "target"
+    ],
+    [
+      1000,
+      200,
+      32768,
+      2,
+      6,
+      "encode",
+      "unchanged_neighbor"
+    ],
+    [
+      1000,
+      200,
+      32768,
+      2,
+      0,
+      "encode",
+      "unchanged_neighbor"
+    ],
+    [
+      17,
+      7,
+      64,
+      1,
+      3,
+      "encode",
+      "unchanged_neighbor"
+    ],
+    [
+      1000,
+      200,
+      32768,
+      2,
+      3,
+      "one_item_batch",
+      "target"
+    ]
+  ],
+  "timed_processes": 714,
+  "preflights": 36,
+  "cross_control_aggregates": 32,
+  "within_control_aggregates": 128,
+  "paired_estimator": "median21_sqrt_off_product_over_on_product",
+  "within_estimator": "median21_sqrt_outer_product_over_inner_product_each_samepath_process_slot",
+  "process_estimator": "median84_all_group_averages",
+  "cross_estimator": "sqrt_cost0_cost3_over_cost1_cost2",
+  "round_aggregation": "geometric_mean_three_rounds_each_comparison_separately",
+  "minimum_gain": 1.1,
+  "original_minimum_gain": 1.1,
+  "native_minimum_gain": 1.1,
+  "equivalence_bound": 1.02,
+  "affected_neighbor_minimum": 0.9803921568627451,
+  "original_off_diagnostic_only": true,
+  "every_target_round_positive": true,
+  "production_promotion": false,
+  "confidence_intervals": false,
+  "authoritative_v19": false,
+  "pristine_off_claim": false,
+  "codec_commit": "45e2effd869859c9b3aa48190eff6f4738817c61",
+  "native_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+  "runtime_commit": "6917d49425841d656416820e13ff2b77e6bdc507",
+  "timer_commit": "7d17cda578b0a5e991d10f0c956fa1803bd09f62",
+  "artifact_sha256": {
+    "native": "9f777340c054041870f15c916374ae5728ea3c4cb6a5291c12ffe1cd0e942115",
+    "original": "dd0c82b408e00744716f809c1c87a7f972eb5d7be010079b5154c44cbd290f68",
+    "current": "45ba62393647dcc64873eb592402e551b33de37719245540310ca0bf988920b9",
+    "native.a": "3f83c55599cbfbeea5d15adf3627405bcde1cbed2ddf4a672fbc75b186f5c4c1",
+    "original.a": "89f33d3d43f792de078c38469f9406dded2b69126af2c6fc8db6e2acb77cd334",
+    "current.a": "24a78109405a25a5164e656bcaabbcc9aff586849a7899492cbaf290b3018ba9",
+    "build.json": "d304b72038eb460efd69ccd2526bd26c187fec083be7ba2f2724c7085a479818",
+    "checks.json": "71c9d4d37e96322f5381558a452c3fd7e51da24a7b4f9ac9c3066dc7f0e7320b",
+    "qualification.log": "e796f82d638e888d142fc8ff7335d97711299471973b79de00eb90c64cf200ec",
+    "qualification.manifest": "c52a32f869cdd5c8aa4886fcc9f4bc2ee77fa7f1f9a2bc27cd295600b29a1c20",
+    "l2-driver.o": "99223acc12f2f616c0e4e5c0cb39d7a1a5207aa27570eedf3f08a1ec9290aa75",
+    "native-driver.o": "e718e89c0d9b454862251034adef1dd598e21d242959af5bdc1941aaa0d93ba4",
+    "leopard2.cpp": "93412028272454b2457f9928a6bc4c34684591f5bee2c882a3ad0000fd50cc70",
+    "Leopard2Direct.h": "da4b39084cf7be12e824f46e799386d742120fe50a852c8b6a12dd9fe0c6b423"
+  },
+  "temperature": "warm_after_four_preflights",
+  "extra_table_bytes": 6291456,
+  "boundary_conversions_inside_encode": true,
+  "cold_initialization_measured": false
+}

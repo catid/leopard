@@ -1,0 +1,67 @@
+{
+  "schema": "leopard-tower-screen-preparation/v1",
+  "bead": "leopard-79h.38.5.4.18.4.3",
+  "date_utc": "2026-09-10",
+  "status": "qualified_before_preregistration_publication",
+  "timed": false,
+  "performance_qualified": false,
+  "production_promotion": false,
+  "root": "/tmp/leopard-tower-screen.0mjTlC",
+  "qualification_commit": "7d17cda578b0a5e991d10f0c956fa1803bd09f62",
+  "frozen_inputs": 51,
+  "preflights": 36,
+  "pure_tests_per_mode": 21,
+  "modes": [
+    "normal",
+    "optimized"
+  ],
+  "target_cells": [
+    0,
+    1,
+    2,
+    4,
+    8
+  ],
+  "excluded_neighbors": [
+    3,
+    5,
+    6,
+    7
+  ],
+  "timed_processes_planned": 714,
+  "cross_controls": 32,
+  "within_controls": 128,
+  "aggregates": 201,
+  "round_ratios": 603,
+  "gate": 1.1,
+  "equivalence_bound": 1.02,
+  "extra_table_bytes": 6291456,
+  "cold_initialization_measured": false,
+  "hashes": {
+    "pins": "074468031f0bf0c7e9c2f2acd7e1b7e4a2a101d219375ddb413fde003d135b17",
+    "plan": "457e5df0a1b2993ec178a15f13f10fddf5afe6695506796e65175dfa1f08ffdd",
+    "checks": "21b5821cdb2aebe23fa4f9f80063a139b0633eb035e877d3b2f53f1c7c418367",
+    "tests_normal": "de119c64dd1d4578b2293ad5d2a6ec1dc9008d9cd00469e450b72b3418d322f4",
+    "tests_optimized": "5d88e2feef1d547826a45646850b2e6e938b7a70baffc537d54cc7d7d73aba15",
+    "freeze": "bcf294248a37df796b48253cd49e1696250dfba668beae39b96f0a24f0570cd0",
+    "audit": "cfcd5223727d14f6588df02141d441c86f338faaf34b534a6902be1eb20ecb98"
+  },
+  "peak_bytes": {
+    "tests_normal": 56061952,
+    "tests_optimized": 55730176,
+    "freeze": 154693632,
+    "audit": 10579968
+  },
+  "resource_limit_bytes": 268435456,
+  "all_six_memory_events_zero": true,
+  "swap_bytes": 0,
+  "review": {
+    "method": "Codex self-review plus local read-only bug reviewer",
+    "findings_resolved": [
+      "Clarify one initial passive window versus per-process zero tick deltas",
+      "Adversarial lifetime initialization snapshots and total across all nine cells and schedules"
+    ],
+    "independent_model_converged": false
+  },
+  "next_gate": "Commit and push this protocol, verify frozen source against published commit, then execute the sole attempt in leopard-79h.38.5.4.18.4.4. No prior timing reused."
+}
