@@ -1,0 +1,769 @@
+{
+  "schema": "leopard-gf8-retained-shift-audit/v1",
+  "bead": "leopard-79h.38.5.4.19.1.4",
+  "codec_executions": 0,
+  "new_timings": 0,
+  "performance_decision": null,
+  "pins": {
+    "tower/frozen/original": "dd0c82b408e00744716f809c1c87a7f972eb5d7be010079b5154c44cbd290f68",
+    "tower/frozen/current": "45ba62393647dcc64873eb592402e551b33de37719245540310ca0bf988920b9",
+    "tower/frozen/original.a": "89f33d3d43f792de078c38469f9406dded2b69126af2c6fc8db6e2acb77cd334",
+    "tower/frozen/current.a": "24a78109405a25a5164e656bcaabbcc9aff586849a7899492cbaf290b3018ba9",
+    "tower/frozen/l2-driver.o": "99223acc12f2f616c0e4e5c0cb39d7a1a5207aa27570eedf3f08a1ec9290aa75",
+    "tower/frozen/build.json": "d304b72038eb460efd69ccd2526bd26c187fec083be7ba2f2724c7085a479818",
+    "tower/frozen/leopard2.cpp": "93412028272454b2457f9928a6bc4c34684591f5bee2c882a3ad0000fd50cc70",
+    "tower/frozen/avx2_adjacent_public.cpp": "3e098de4ac232fc58f2816908f09f7c882efd6b0f2f84605cec5a8835e47cccd",
+    "tower/attempt1/attempt.json": "4b0040d9455698a22cbde47b0803cabfcd9c889a8695931671662d70475de163",
+    "paired/frozen/current": "2a8cca6b4d4edfb945186506e3d170d868dc5ef9cbfef46dd1a3e9181b2d688c",
+    "paired/frozen/current.a": "89f33d3d43f792de078c38469f9406dded2b69126af2c6fc8db6e2acb77cd334",
+    "paired/frozen/paired_timer_r19932.cpp": "58890549f49632f657fd225b914f95cef15d7a88c6c3c940880db64587deb20c",
+    "paired/attempt1/attempt.json": "40c2f5bcccfaf89efaaf83a939b2362e7e9c51af3ec6435207b0eb38bcd52409",
+    "paired/SHA256SUMS": "2c1dd4857bc6dc35de7d6ce33421f6ef7de50e448f438d7743835b842df2d5c4"
+  },
+  "requested_backend_from_pinned_source": {
+    "paired_GF8_cell8": "AUTO",
+    "tower_GF8_cell7": "AVX2"
+  },
+  "archive_comparison": {
+    "unchanged": [
+      "leopard.cpp.o",
+      "leopard2.cpp.o",
+      "Leopard2Backend.cpp.o",
+      "Leopard2BackendScalar.cpp.o",
+      "Leopard2CpuFeatures.cpp.o",
+      "Leopard2Plan.cpp.o",
+      "LeopardCommon.cpp.o",
+      "LeopardFF8.cpp.o",
+      "Leopard2BackendSSSE3.cpp.o",
+      "Leopard2BackendAVX2.cpp.o",
+      "Leopard2BackendAVX2Xor.cpp.o",
+      "Leopard2BackendAVX2T16Q2.cpp.o",
+      "Leopard2BackendAVX2T8K62.cpp.o",
+      "Leopard2BackendAVX2T16K66.cpp.o",
+      "Leopard2BackendAVX2T32B256.cpp.o",
+      "Leopard2BackendAVX2T16B64.cpp.o",
+      "Leopard2LowP32B64AVX2.cpp.o",
+      "Leopard2BackendAVX2T2K4.cpp.o",
+      "Leopard2BackendAVX2T8K8B1024.cpp.o",
+      "Leopard2BackendAVX512.cpp.o",
+      "Leopard2BackendGFNI.cpp.o",
+      "Leopard2BackendAVX512GFNIT128.cpp.o",
+      "Leopard2BackendAVX512GFNIT16.cpp.o"
+    ],
+    "changed": [
+      "LeopardFF16.cpp.o"
+    ],
+    "added": [
+      "tower_butterfly_probe.cpp.o",
+      "tower_encoder.cpp.o"
+    ],
+    "removed": []
+  },
+  "inspected_function_instances": 108,
+  "non_main_comparisons": {
+    "count": 70,
+    "all_normalized_equal": true
+  },
+  "layout": [
+    {
+      "address": 18640,
+      "size": 7128,
+      "mod64": 16,
+      "mod4096": 2256,
+      "instructions": 1500,
+      "raw_sha256": "680f118920d6110c98568912bb2be415311491b9952ff262ba17fd31107dc880",
+      "normalized_sha256": "2f88b47906da844678f6aebb365a5afc8b1d4307274d16977ada3fa6b3c92470",
+      "profile": "original",
+      "symbol": "main",
+      "occurrence": 0,
+      "disassembly": "original-0-0.asm",
+      "disassembly_sha256": "18b31342790461a3c56bab1278dfaa0f21c1b9c6c0ffb926db9025a911cace41"
+    },
+    {
+      "address": 180224,
+      "size": 7102,
+      "mod64": 0,
+      "mod4096": 0,
+      "instructions": 1707,
+      "raw_sha256": "a8c4871997c35630787b728b13e38dc1674067e8c2da8dcec39e9285ab9201a2",
+      "normalized_sha256": "2b51d83e92f42e6a93ade6e0ee539cd5ea536c0f21d515c61321a4fcad599413",
+      "profile": "original",
+      "symbol": "leo2_encode",
+      "occurrence": 0,
+      "disassembly": "original-1-0.asm",
+      "disassembly_sha256": "d94e25c27b3977f874030642dd1aef6bbbed7bf8d0f5ce63b0ed9fa2eab89416"
+    },
+    {
+      "address": 78736,
+      "size": 1259,
+      "mod64": 16,
+      "mod4096": 912,
+      "instructions": 272,
+      "raw_sha256": "da320f171793b0e09d588eb3cec71658449a164aa6bf4013f16b07b389b771f5",
+      "normalized_sha256": "90816e83808387fcb69240d9b10c554d0e094067ce6e7139c1660379ca591f80",
+      "profile": "original",
+      "symbol": "_ZN12_GLOBAL__N_1L24SelectTransformEncodeOpsEPK10leo2_codecmjjbb",
+      "occurrence": 0,
+      "disassembly": "original-3-0.asm",
+      "disassembly_sha256": "f67dc2094431d24baaf7831288e5b3fe66849b5fd99a438b491035f1a8fd30f4"
+    },
+    {
+      "address": 18800,
+      "size": 7128,
+      "mod64": 48,
+      "mod4096": 2416,
+      "instructions": 1500,
+      "raw_sha256": "a5978c0c1d58420154e5782fc74251a5df623752b9821a369121b3686fb7f55c",
+      "normalized_sha256": "73d6e867442fb7af0c5e3e484ad8b9655909ea6738cc34fbe9e475059592ab33",
+      "profile": "tower",
+      "symbol": "main",
+      "occurrence": 0,
+      "disassembly": "tower-0-0.asm",
+      "disassembly_sha256": "0941e5c8dd14e415aabe948afb7b017da6f6f4937f87fedb2ba9f38aa858123a",
+      "normalized_equal_original": false,
+      "difference_count": 8,
+      "instruction_count_delta": 0,
+      "first_differences": [
+        {
+          "index": 23,
+          "original": [
+            84,
+            "lea <_IO_stdin_used+0x518>(%rip),%rsi"
+          ],
+          "current": [
+            84,
+            "lea <_IO_stdin_used+0x528>(%rip),%rsi"
+          ]
+        },
+        {
+          "index": 130,
+          "original": [
+            583,
+            "lea <_IO_stdin_used+0x588>(%rip),%rsi"
+          ],
+          "current": [
+            583,
+            "lea <_IO_stdin_used+0x598>(%rip),%rsi"
+          ]
+        },
+        {
+          "index": 145,
+          "original": [
+            658,
+            "lea <_IO_stdin_used+0x5b0>(%rip),%rsi"
+          ],
+          "current": [
+            658,
+            "lea <_IO_stdin_used+0x5c0>(%rip),%rsi"
+          ]
+        },
+        {
+          "index": 376,
+          "original": [
+            1696,
+            "lea <_IO_stdin_used+0x5d8>(%rip),%rsi"
+          ],
+          "current": [
+            1696,
+            "lea <_IO_stdin_used+0x5e8>(%rip),%rsi"
+          ]
+        },
+        {
+          "index": 1132,
+          "original": [
+            5371,
+            "lea <_IO_stdin_used+0x6b8>(%rip),%rsi"
+          ],
+          "current": [
+            5371,
+            "lea <_IO_stdin_used+0x6c8>(%rip),%rsi"
+          ]
+        },
+        {
+          "index": 1169,
+          "original": [
+            5559,
+            "lea <_IO_stdin_used+0x818>(%rip),%rsi"
+          ],
+          "current": [
+            5559,
+            "lea <_IO_stdin_used+0x828>(%rip),%rsi"
+          ]
+        },
+        {
+          "index": 1249,
+          "original": [
+            5957,
+            "lea <_IO_stdin_used+0x838>(%rip),%rsi"
+          ],
+          "current": [
+            5957,
+            "lea <_IO_stdin_used+0x848>(%rip),%rsi"
+          ]
+        },
+        {
+          "index": 1392,
+          "original": [
+            6635,
+            "lea <_IO_stdin_used+0x690>(%rip),%rsi"
+          ],
+          "current": [
+            6635,
+            "lea <_IO_stdin_used+0x6a0>(%rip),%rsi"
+          ]
+        }
+      ]
+    },
+    {
+      "address": 180736,
+      "size": 7102,
+      "mod64": 0,
+      "mod4096": 512,
+      "instructions": 1707,
+      "raw_sha256": "5fc4aab7f0d5a386f3a0a12936dc7482e7d8281f80f65cd6da118b185e5fd5d0",
+      "normalized_sha256": "2b51d83e92f42e6a93ade6e0ee539cd5ea536c0f21d515c61321a4fcad599413",
+      "profile": "tower",
+      "symbol": "leo2_encode",
+      "occurrence": 0,
+      "disassembly": "tower-1-0.asm",
+      "disassembly_sha256": "b0497c4e60004832e428e84e6dcb84d21d5d44d29ba90722ebe84152f6d93413",
+      "normalized_equal_original": true
+    },
+    {
+      "address": 79248,
+      "size": 1259,
+      "mod64": 16,
+      "mod4096": 1424,
+      "instructions": 272,
+      "raw_sha256": "8ad108ca1c33b6f06ec159a782432df732948501642adc31a18239b0d7fdd466",
+      "normalized_sha256": "90816e83808387fcb69240d9b10c554d0e094067ce6e7139c1660379ca591f80",
+      "profile": "tower",
+      "symbol": "_ZN12_GLOBAL__N_1L24SelectTransformEncodeOpsEPK10leo2_codecmjjbb",
+      "occurrence": 0,
+      "disassembly": "tower-3-0.asm",
+      "disassembly_sha256": "3f7163401772b226ba0d23cdaca348fcc6ebd2d49454beeeebb63709ac62740f",
+      "normalized_equal_original": true
+    },
+    {
+      "address": 18416,
+      "size": 6442,
+      "mod64": 48,
+      "mod4096": 2032,
+      "instructions": 1391,
+      "raw_sha256": "6877e2bdd77d286cb3bf26a5c53ff5d29fc6862c711f5de45b277d641b519e16",
+      "normalized_sha256": "8ce132c9507b9b9d5efdd1f1ce541fdc91650cae572c3e32bace4fc18d544e2b",
+      "profile": "paired",
+      "symbol": "main",
+      "occurrence": 0,
+      "disassembly": "paired-0-0.asm",
+      "disassembly_sha256": "e7907da07f52435999d6a25fcde07773f2a68bdd600723095179fee7e8a2d090",
+      "normalized_equal_original": false,
+      "difference_count": 1464,
+      "instruction_count_delta": -109,
+      "first_differences": [
+        {
+          "index": 13,
+          "original": [
+            34,
+            "sub $0x420,%rsp"
+          ],
+          "current": [
+            34,
+            "sub $0x2a0,%rsp"
+          ]
+        },
+        {
+          "index": 14,
+          "original": [
+            41,
+            "mov %edi,-0x440(%rbp)"
+          ],
+          "current": [
+            41,
+            "mov %edi,-0x2bc(%rbp)"
+          ]
+        },
+        {
+          "index": 15,
+          "original": [
+            47,
+            "mov %rsi,-0x418(%rbp)"
+          ],
+          "current": [
+            47,
+            "mov %rsi,-0x290(%rbp)"
+          ]
+        },
+        {
+          "index": 21,
+          "original": [
+            75,
+            "jbe <main+0x18b1>"
+          ],
+          "current": [
+            75,
+            "jbe <main+0x1600>"
+          ]
+        },
+        {
+          "index": 23,
+          "original": [
+            84,
+            "lea <_IO_stdin_used+0x518>(%rip),%rsi"
+          ],
+          "current": [
+            84,
+            "lea <_IO_stdin_used+0x490>(%rip),%rsi"
+          ]
+        },
+        {
+          "index": 25,
+          "original": [
+            96,
+            "mov -0x418(%rbp),%rax"
+          ],
+          "current": [
+            96,
+            "mov -0x290(%rbp),%rax"
+          ]
+        },
+        {
+          "index": 40,
+          "original": [
+            152,
+            "mov -0x418(%rbp),%rbx"
+          ],
+          "current": [
+            152,
+            "mov -0x290(%rbp),%rcx"
+          ]
+        },
+        {
+          "index": 41,
+          "original": [
+            159,
+            "mov 0x10(%rbx),%rax"
+          ],
+          "current": [
+            159,
+            "lea <_IO_stdin_used+0xf4>(%rip),%rsi"
+          ]
+        }
+      ]
+    },
+    {
+      "address": 179136,
+      "size": 7102,
+      "mod64": 0,
+      "mod4096": 3008,
+      "instructions": 1707,
+      "raw_sha256": "4aed8b94ef93e84cfda3225c50579f9d6eaac347d1add627a68bdbc4bc24a132",
+      "normalized_sha256": "2b51d83e92f42e6a93ade6e0ee539cd5ea536c0f21d515c61321a4fcad599413",
+      "profile": "paired",
+      "symbol": "leo2_encode",
+      "occurrence": 0,
+      "disassembly": "paired-1-0.asm",
+      "disassembly_sha256": "82633f51eb921709c6733d16a4aa29ebe0f0efb23375fdd558880ed060decd1b",
+      "normalized_equal_original": true
+    },
+    {
+      "address": 77648,
+      "size": 1259,
+      "mod64": 16,
+      "mod4096": 3920,
+      "instructions": 272,
+      "raw_sha256": "f7dd7ce838112f232d7990fca55d928b6011c859dbc80329709ecaad3afb866a",
+      "normalized_sha256": "90816e83808387fcb69240d9b10c554d0e094067ce6e7139c1660379ca591f80",
+      "profile": "paired",
+      "symbol": "_ZN12_GLOBAL__N_1L24SelectTransformEncodeOpsEPK10leo2_codecmjjbb",
+      "occurrence": 0,
+      "disassembly": "paired-3-0.asm",
+      "disassembly_sha256": "7508679b675b7571eaaae912a113d83f2392d167b6ad2615778279453f07b453",
+      "normalized_equal_original": true
+    }
+  ],
+  "grouped_public_loop": {
+    "original": {
+      "start": 22448,
+      "start_mod64": 48,
+      "call": 22490,
+      "call_mod64": 26,
+      "backedge": 22522,
+      "normalized_instructions": [
+        [
+          0,
+          "mov -0x318(%rbp),%r9"
+        ],
+        [
+          7,
+          "mov -0x388(%rbp),%r8"
+        ],
+        [
+          14,
+          "mov -0x378(%rbp),%rcx"
+        ],
+        [
+          21,
+          "mov -0x380(%rbp),%rdx"
+        ],
+        [
+          28,
+          "mov -0x368(%rbp),%rsi"
+        ],
+        [
+          35,
+          "mov -0x360(%rbp),%rdi"
+        ],
+        [
+          42,
+          "call <leo2_encode>"
+        ],
+        [
+          47,
+          "test %eax,%eax"
+        ],
+        [
+          49,
+          "jne <main.cold+0x2cb>"
+        ],
+        [
+          55,
+          "addl $0x1,-0x338(%rbp)"
+        ],
+        [
+          62,
+          "mov -0x338(%rbp),%eax"
+        ],
+        [
+          68,
+          "cmp %eax,-0x370(%rbp)"
+        ],
+        [
+          74,
+          "jne <main+0xee0>"
+        ]
+      ]
+    },
+    "tower": {
+      "start": 22608,
+      "start_mod64": 16,
+      "call": 22650,
+      "call_mod64": 58,
+      "backedge": 22682,
+      "normalized_instructions": [
+        [
+          0,
+          "mov -0x318(%rbp),%r9"
+        ],
+        [
+          7,
+          "mov -0x388(%rbp),%r8"
+        ],
+        [
+          14,
+          "mov -0x378(%rbp),%rcx"
+        ],
+        [
+          21,
+          "mov -0x380(%rbp),%rdx"
+        ],
+        [
+          28,
+          "mov -0x368(%rbp),%rsi"
+        ],
+        [
+          35,
+          "mov -0x360(%rbp),%rdi"
+        ],
+        [
+          42,
+          "call <leo2_encode>"
+        ],
+        [
+          47,
+          "test %eax,%eax"
+        ],
+        [
+          49,
+          "jne <main.cold+0x2cb>"
+        ],
+        [
+          55,
+          "addl $0x1,-0x338(%rbp)"
+        ],
+        [
+          62,
+          "mov -0x338(%rbp),%eax"
+        ],
+        [
+          68,
+          "cmp %eax,-0x370(%rbp)"
+        ],
+        [
+          74,
+          "jne <main+0xee0>"
+        ]
+      ]
+    }
+  },
+  "grouped_loop_normalized_equal": true,
+  "paired_gf8_same_off": [
+    {
+      "round": 0,
+      "process_slot": 0,
+      "raw_sha256": "7040dc5b8bc096fedff69c63997b1d31b289eed25dfdd5ea11a535c5f5c819c7",
+      "median": 167.125,
+      "minimum": 166.1875,
+      "maximum": 177.76171875,
+      "slot_medians": [
+        167.1640625,
+        167.1640625,
+        167.04296875,
+        166.96484375
+      ],
+      "first_pass": 168.2578125,
+      "last_pass": 166.7734375,
+      "retained_spans": 84,
+      "single_call_latency": false
+    },
+    {
+      "round": 0,
+      "process_slot": 1,
+      "raw_sha256": "429ee3b783f69d8f8b4779ff7aa89f68249118b86f3286100cded28f9fb08da2",
+      "median": 169.001953125,
+      "minimum": 167.59375,
+      "maximum": 179.1328125,
+      "slot_medians": [
+        169.04296875,
+        169.15625,
+        168.8828125,
+        168.96484375
+      ],
+      "first_pass": 169.275390625,
+      "last_pass": 168.494140625,
+      "retained_spans": 84,
+      "single_call_latency": false
+    },
+    {
+      "round": 0,
+      "process_slot": 2,
+      "raw_sha256": "4ae0ac3cc2ae748086ca30a309c6b2470323bc03b1b2ba141f6efa98c05fd6c6",
+      "median": 169.62890625,
+      "minimum": 168.375,
+      "maximum": 183.9453125,
+      "slot_medians": [
+        169.62890625,
+        169.74609375,
+        169.51171875,
+        169.86328125
+      ],
+      "first_pass": 169.140625,
+      "last_pass": 170.25390625,
+      "retained_spans": 84,
+      "single_call_latency": false
+    },
+    {
+      "round": 0,
+      "process_slot": 3,
+      "raw_sha256": "4069a2186dbf00bf5335c453e6d0e405362b1779f5aee4829dd09e64063bee0c",
+      "median": 167.9453125,
+      "minimum": 166.3828125,
+      "maximum": 178.94140625,
+      "slot_medians": [
+        167.984375,
+        167.9453125,
+        167.9453125,
+        167.984375
+      ],
+      "first_pass": 169.7265625,
+      "last_pass": 167.75,
+      "retained_spans": 84,
+      "single_call_latency": false
+    },
+    {
+      "round": 1,
+      "process_slot": 0,
+      "raw_sha256": "7b5e722b0ae43eb38df3b1fc2e16e1c6a8c62b15219a0f69f944a1bb7b2b0cd4",
+      "median": 167.046875,
+      "minimum": 165.44140625,
+      "maximum": 177.4140625,
+      "slot_medians": [
+        167.1640625,
+        167.046875,
+        167.046875,
+        167.046875
+      ],
+      "first_pass": 167.494140625,
+      "last_pass": 168.0625,
+      "retained_spans": 84,
+      "single_call_latency": false
+    },
+    {
+      "round": 1,
+      "process_slot": 1,
+      "raw_sha256": "f7051c215d6548fd936a9ffdbf2131448b8d5a091509748f52bdc01ea06b2310",
+      "median": 150.45703125,
+      "minimum": 149.87109375,
+      "maximum": 187.390625,
+      "slot_medians": [
+        150.41796875,
+        150.49609375,
+        150.3046875,
+        150.5390625
+      ],
+      "first_pass": 150.341796875,
+      "last_pass": 150.458984375,
+      "retained_spans": 84,
+      "single_call_latency": false
+    },
+    {
+      "round": 1,
+      "process_slot": 2,
+      "raw_sha256": "7d799e2156940e21855acc5bba8c358040b9576375ba9b927fda4bfe5ebc7d8a",
+      "median": 151.0859375,
+      "minimum": 150.45703125,
+      "maximum": 161.64453125,
+      "slot_medians": [
+        151.0859375,
+        151.08203125,
+        151.0859375,
+        151.0859375
+      ],
+      "first_pass": 151.259765625,
+      "last_pass": 151.044921875,
+      "retained_spans": 84,
+      "single_call_latency": false
+    },
+    {
+      "round": 1,
+      "process_slot": 3,
+      "raw_sha256": "ebc32b2813d7678bb8d1085f13a26bc6af75555971063ac9b06281abdb06c83c",
+      "median": 151.0859375,
+      "minimum": 149.9140625,
+      "maximum": 162.23046875,
+      "slot_medians": [
+        151.125,
+        151.04296875,
+        151.08203125,
+        151.125
+      ],
+      "first_pass": 151.26171875,
+      "last_pass": 151.4765625,
+      "retained_spans": 84,
+      "single_call_latency": false
+    },
+    {
+      "round": 2,
+      "process_slot": 0,
+      "raw_sha256": "da71f99cdf10610ea521d63f84a103247ebdbf6a89b50ff68e701dbe9bc6aa25",
+      "median": 170.25390625,
+      "minimum": 169.04296875,
+      "maximum": 182.265625,
+      "slot_medians": [
+        170.48828125,
+        170.01953125,
+        170.33203125,
+        169.94140625
+      ],
+      "first_pass": 170.4296875,
+      "last_pass": 169.90234375,
+      "retained_spans": 84,
+      "single_call_latency": false
+    },
+    {
+      "round": 2,
+      "process_slot": 1,
+      "raw_sha256": "7c25d4c3dfb66daf8b21c38e35016c6a1a3c489fccb6de8b60efe38f915bd7fd",
+      "median": 168.31640625,
+      "minimum": 166.7734375,
+      "maximum": 180.03125,
+      "slot_medians": [
+        168.140625,
+        168.609375,
+        168.4140625,
+        168.10546875
+      ],
+      "first_pass": 168.21875,
+      "last_pass": 168.0234375,
+      "retained_spans": 84,
+      "single_call_latency": false
+    },
+    {
+      "round": 2,
+      "process_slot": 2,
+      "raw_sha256": "9f102ccb6f62d13830ce676bf7b87fc8aa41c3fd565afd03557e60df237cf684",
+      "median": 166.14453125,
+      "minimum": 164.38671875,
+      "maximum": 179.25,
+      "slot_medians": [
+        166.3046875,
+        167.203125,
+        166.22265625,
+        165.875
+      ],
+      "first_pass": 167.3203125,
+      "last_pass": 167.7109375,
+      "retained_spans": 84,
+      "single_call_latency": false
+    },
+    {
+      "round": 2,
+      "process_slot": 3,
+      "raw_sha256": "b2b3837009048f90e9b8ce82f3dc7f379e2ae5771c73b8e9e8107105a589f581",
+      "median": 170.52734375,
+      "minimum": 169.1953125,
+      "maximum": 184.0625,
+      "slot_medians": [
+        170.68359375,
+        170.17578125,
+        170.5703125,
+        170.41015625
+      ],
+      "first_pass": 172.306640625,
+      "last_pass": 170.626953125,
+      "retained_spans": 84,
+      "single_call_latency": false
+    }
+  ],
+  "limitation": "Static placement and normalized disassembly are not a causal performance attribution. Historical process mappings, allocation addresses and hardware counters are absent.",
+  "date_utc": "2026-09-10",
+  "full_result_sha256": "4812ff5c64cc115303936c7376c85da6c5336952413d502ef4f89da9c282eb8b",
+  "retention": {
+    "path": ".research/leopard-79h/gf8-shift-audit.w9805W",
+    "manifest_sha256": "33a353fda2dc44995b6c06482ccd1bccfffed9f9cc86845db64ea34e1b84bd0d",
+    "files": 123,
+    "bytes": 4751088,
+    "sealed_report_is_pre_retention": true,
+    "original_evidence_unchanged": true
+  },
+  "validation": {
+    "pure_tests_per_mode": 10,
+    "modes": [
+      "normal",
+      "optimized"
+    ],
+    "final_review": "Local read-only Codex review; findings fixed; no further actionable defects in bounded static pass",
+    "independent_model_converged": false,
+    "matching_final_audits": [
+      "normal",
+      "optimized",
+      "read-only-copy"
+    ],
+    "memory_limit_bytes": 268435456,
+    "peak_bytes": {
+      "normal_audit": 46125056,
+      "optimized_audit": 50708480,
+      "readonly_audit": 46047232,
+      "normal_tests": 16863232,
+      "optimized_tests": 21389312,
+      "retention": 4882432
+    },
+    "final_memory_events_zero": true,
+    "swap_bytes": 0,
+    "retained_failures": [
+      "initial normalizer unit test incorrectly normalized a non-PC-relative annotation; fixed",
+      "initial retention manifest included itself; failed checksum and original manifest preserved, corrected final manifest verified"
+    ],
+    "next_task": "leopard-79h.38.5.4.19.1.4.1"
+  }
+}
