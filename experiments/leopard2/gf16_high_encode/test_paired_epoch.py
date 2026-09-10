@@ -3,6 +3,9 @@ from pathlib import Path
 import copy
 import json
 import os
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 import paired_epoch_overlay as overlay
@@ -136,6 +139,91 @@ class OracleTests(unittest.TestCase):
             mutations.append(records+[dict(schema=verify.DRIVER,timed=False)])
             for bad in mutations:
                 with self.assertRaises(ValueError): check(bad)
+
+class FinalToolTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name); self.folder=self.root/'final_tools'; self.folder.mkdir()
+        self.pins={}
+        baseline=self.root/'build/baseline'; baseline.mkdir(parents=True)
+        units=self.root/'units'; units.mkdir()
+        for name in verify.FINAL_PYTHON | set(verify.BASE_NAMES) | set(verify.UNIT_SOURCES):
+            if name in verify.FINAL_PYTHON: shutil.copyfile(ROOT/name,self.folder/name)
+            else: (self.folder/name).write_text('fixture asset: '+name+'\n')
+            self.pins[name]=verify.sha(self.folder/name)
+            if name in verify.BASE_NAMES: shutil.copyfile(self.folder/name,baseline/name)
+            if name in verify.UNIT_SOURCES: shutil.copyfile(self.folder/name,units/name)
+        (self.root/'build/build.json').write_text(json.dumps(dict(
+            baseline={n:self.pins[n] for n in verify.BASE_NAMES})))
+        (units/'build.json').write_text(json.dumps(dict(
+            source_sha256={n:self.pins[n] for n in verify.UNIT_SOURCES})))
+        self.manifest()
+
+    def manifest(self):
+        (self.root/'final-tools.json').write_text(json.dumps(dict(bead=verify.BEAD,timed=False,files=self.pins)))
+
+    def changed(self,name):
+        path=self.folder/name; path.write_text(path.read_text()+'\n')
+        self.pins[name]=verify.sha(path); self.manifest()
+
+    def test_complete_final_inventory(self):
+        verify.verify_final_tools(self.root)
+        self.assertEqual(len(self.pins),24)
+
+    def test_missing_dependency_and_digest(self):
+        name='verify_auto_gfni_boundary_checks.py'
+        (self.folder/name).unlink(); self.pins.pop(name); self.manifest()
+        with self.assertRaises(ValueError): verify.verify_final_tools(self.root)
+
+    def test_changed_asset_with_updated_digest(self):
+        for name in ('paired_timer_r19932.cpp','test_paired_epoch_native.cpp'):
+            original=(self.folder/name).read_bytes(); self.changed(name)
+            with self.assertRaises(ValueError): verify.verify_final_tools(self.root)
+            (self.folder/name).write_bytes(original); self.pins[name]=verify.sha(self.folder/name); self.manifest()
+
+    def test_executing_verifier_identity(self):
+        self.changed('verify_paired_epoch.py')
+        with self.assertRaises(ValueError): verify.verify_final_tools(self.root)
+
+    def executing_check(self, source, extra=''):
+        program = ('import sys; from pathlib import Path; '
+                   'sys.path.insert(0, sys.argv[1]); '
+                   'import verify_paired_epoch as verify; import verify_paired_epoch_units; '
+                   + extra + 'verify.verify_final_tools(Path(sys.argv[2]))')
+        return subprocess.run([sys.executable, '-I', '-B', *([] if __debug__ else ['-O']),
+                               '-c', program, str(source), str(self.root)],
+                              capture_output=True, text=True, timeout=10)
+
+    def test_drifted_executing_dependency(self):
+        source=self.root/'executing'; shutil.copytree(self.folder,source)
+        self.assertEqual(self.executing_check(source).returncode,0)
+        for name in ('verify_paired_epoch_units.py','verify_paired_metadata.py','paired_epoch_overlay.py'):
+            with self.subTest(name=name):
+                original=(source/name).read_text()
+                (source/name).write_text(original+'\nDRIFTED_DEPENDENCY = True\n')
+                result=self.executing_check(source)
+                self.assertNotEqual(result.returncode,0)
+                self.assertIn('executing dependency hash: '+name,result.stderr)
+                (source/name).write_text(original)
+
+    def test_drifted_duplicate_main_module(self):
+        source=self.root/'executing'; shutil.copytree(self.folder,source)
+        alias=source/'alias'; alias.mkdir()
+        (alias/'verify_paired_epoch.py').write_text(
+            (source/'verify_paired_epoch.py').read_text()+'\nDRIFTED_DEPENDENCY = True\n')
+        extra = ("import importlib.util; "
+                 "spec=importlib.util.spec_from_file_location('epoch_alias', "
+                 "Path(sys.argv[1])/'alias/verify_paired_epoch.py'); "
+                 "module=importlib.util.module_from_spec(spec); "
+                 "sys.modules['epoch_alias']=module; spec.loader.exec_module(module); ")
+        result=self.executing_check(source,extra)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('executing dependency hash: verify_paired_epoch.py',result.stderr)
+
+    def test_unlisted_directory(self):
+        (self.folder/'unlisted').mkdir()
+        with self.assertRaises(ValueError): verify.verify_final_tools(self.root)
+
 
 class RetainedRecordTests(unittest.TestCase):
     @classmethod

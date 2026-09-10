@@ -1,7 +1,7 @@
-# Three-epoch frontend: implementation and boundary-check checkpoint
+# Three-epoch frontend: completed clock-free qualification
 
 Tracker `leopard-79h.38.5.4.19.1.4.3`, 2026-09-10.
-**Full qualification is still in progress. No real timing, production change,
+**Clock-free qualification is complete. No real timing, production change,
 new performance result, or AUTO R199/32KiB enablement.**
 
 This implements the separately [reviewed diagnostic design](paired_epoch_method.md).
@@ -52,16 +52,29 @@ progress after a signal is incomplete evidence, never an inferred zero count.
    `root` field. It does not. The verifier now uses that manifest's independently
    pinned original command root. This error stopped verification before any
    codec execution; its source/log remain in the first run's `precheck-failure`.
+4. Checking retained tool digests and the executing main verifier alone did
+   not bind its executing dependencies. Final replay now checks every loaded
+   local module against the frozen source hashes, including duplicate/aliased
+   main modules. Isolated subprocess regressions first pass with matching
+   tools, then reject drifted unit/prior/overlay dependencies and an aliased
+   main while the retained files remain unchanged.
 
 The user-authorized local read-only reviewer independently confirmed the first
-two findings and reviewed the corrections. This is bounded Codex review and
+two findings, identified the fourth, and accepted the corrections with no
+remaining material finding in its bounded static review. This is Codex review and
 deterministic evidence under the user's Claude opt-out, not an independent
 Claude fixed-point `CONVERGED` claim.
 
-## Validation completed at this checkpoint
+## Final validation
 
-- Eleven pure overlay/oracle/provenance tests pass. The four real-record test
-  methods are explicitly deferred until the complete new matrix exists.
+- All366 matrix processes completed with the expected outcomes:270 positive,
+  18 deliberate clock aborts,36 arithmetic-clock refusals and42 CLI refusals.
+- Positive records contain1,434,240 public calls,57,240 selections,1,620
+  snapshots and22,680 synthetic spans. All261 full native-reference parity
+  comparisons pass, covering1,582,128,320 bytes. These are not timed samples.
+- Twenty-two overlay/oracle/provenance tests pass, including four real-record
+  mutation methods, plus twelve retention tests. Both Python modes pass with
+  no skips in the worktree and sealed copy (34 methods per sealed mode).
 - 42 supplemental native processes pass: original-native, Release and full
   ASan/UBSan with leak detection. Geometry/probe units have33/45/45 cases.
 - The actual shared probe guard is tested against the old predicate's false
@@ -71,39 +84,63 @@ Claude fixed-point `CONVERGED` claim.
   and changed later endpoints, and exercise ordered/cumulative mark refusals.
 - Actual synthetic-wrapper units accept all504 endpoints, refuse the505th
   before writing, and reject unknown faults and malformed fault epochs.
-- Frontend build peak219,262,976 bytes and unit build peak168,275,968 bytes,
-  each under512MiB. Pure-test peak14,204,928 bytes and the unit-controller
-  peak28,016,640 bytes are under256MiB. These scopes have all memory events and
-  swap zero. Individual native units also pass their256MiB/no-swap scopes.
+- Every matrix record has its own validated resource envelope. The highest
+  child peak is182,046,720 bytes; controller peak45,821,952 bytes, elapsed
+  30:16.55 and exit0. The supplemental unit maximum is17,457,152 bytes.
+
+| Final scope | Peak bytes | Cap |
+| --- | ---: | ---: |
+| Frontend build / unit build |219262976 /168275968 |512MiB |
+| Source tests, normal / optimized |38699008 /46440448 |256MiB |
+| Source retention tests, normal / optimized |14860288 /16924672 |256MiB |
+| Raw replay, normal / optimized |82419712 /83603456 |256MiB |
+| Private retention |72028160 |256MiB |
+| Sealed replay, normal / optimized |82890752 /83910656 |256MiB |
+| Sealed34-test suite, normal / optimized |37920768 /45608960 |256MiB |
+
+All listed final scopes and native children have zero memory-event counters
+and zero swap, with no raised caps. Normal/optimized full replays independently
+check the original build/run inventories, ELF/recipe identities, all raw
+records/parity bytes, supplemental units and final24-file tool closure.
 
 The first full matrix was deliberately stopped after the probe-guard discovery.
 It retains241 records:240 validated records, including178 positive processes,
 then the explicitly terminated owned sanitizer child with exit143. This is not
 a complete qualification. Nothing from it is labeled timing evidence.
 
-The corrected366-process matrix is separately running from
+The corrected366-process matrix is terminal at
 `/tmp/leopard-paired-epoch-quiescent.qGx924`; the earlier root
 `/tmp/leopard-paired-epoch-final.LVkuUB` is preserved unchanged. Each native
 child has the canonical lock,256MiB/no swap,60-second CPU and120-second wall
 bounds. Builds are serial512MiB/no-swap with compiler GC10/4096. No SSH worker
 or unrelated process/host setting is used or changed.
 
-The Bead stays open for the full corrected matrix, real-record adversarial
-tests, independent replay, evidence sealing and final delivery. A subsequent
-steady-clock frontend/collector and committed-and-pushed timing preregistration
-remain separate gates; this checkpoint authorizes no real benchmark clocks.
+## Retained evidence and limits
 
-## Pending evidence-retention checkpoint
+The read-only bundle `.research/leopard-79h/paired-epoch-qualified.unzse9`
+contains1984 files and2,967,079,659 bytes, including the separately labeled
+`stopped_attempt`. Outer manifest SHA256:
+`a4749f44c89c6528c1280699f8fce4a22b3b1e917e78be3a72a5a8f4ed09d772`.
+All four actual raw/sealed normal/optimized replay results have SHA256
+`9bc766dc89c1ac37f1f7257bc7e4028907b958f4c6ac8086abe1e8b683438973`.
 
-`retain_paired_epoch.py` and its twelve-test companion are committed as pending
-work, not validated delivery. They preserve the complete corrected run and the
-separately stopped earlier run in private read-only copies. Static review added
-refusals for an existing final-tools manifest and overlapping input histories.
-The overlap regression now constructs an otherwise valid nested stopped history,
-so the new guard must reject before any destination file is created.
+A separate stdlib-only audit checks every raw/sealed byte digest, exact sealed
+file/directory namespace and read-only modes, distinct source/copy inodes,
+both complete and stopped inventories, replay equality and final test/resource
+logs. No source or earlier evidence was overwritten. Exit143 alone does not
+establish deliberate termination; the recorded owned-process stop supplies
+that history, and the incomplete run is never accepted as qualification.
 
-These retention tests have not yet run: the corrected native matrix still owns
-the serial qualification workflow. Final-tool inventory/provenance verification,
-normal/optimized tests and replays, and sealed-copy delivery remain required.
-The implementation and this pending work share the single integration branch
-`codex/claude-fable-5-1-audit`; no master merge or release is asserted.
+Delivery logs and independent audit source are at
+`/tmp/leopard-paired-epoch-delivery.cYar1M`. The
+[structured result](results/paired_epoch_frontend_20260910.json) records the
+full totals and delivery identities. Final replay tools are a separate pinned
+inventory:14 Python files, eight baseline assets and two unit C++ sources.
+The original captured build/collection tools are not rewritten.
+
+The implementation stays on `codex/claude-fable-5-1-audit`; no mainline merge
+or public release is asserted. Next qualify the separate steady-clock frontend
+and collector/replayer, then independently review and commit **and push** the
+fresh one-attempt diagnostic preregistration before any real clocks. Even a
+future all-pass diagnostic cannot promote R19932 AUTO. Historical control-shift
+cause, valid AUTO integration and the user-facing release remain open.

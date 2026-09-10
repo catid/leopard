@@ -35,6 +35,10 @@ BUILD_TOOLS = frozenset(('build_paired_epoch.py','paired_epoch_overlay.py','pair
     'verify_auto_gfni_boundary_checks.py','verify_auto_r19932_checks.py','verify_paired_metadata.py',
     'verify_paired_r19932.py','verify_paired_timer_r19932.py'))
 RUN_TOOLS = BUILD_TOOLS | {'run_paired_epoch_checks.py','verify_paired_epoch.py','verify_paired_epoch_units.py'}
+FINAL_ROOTS = ('verify_paired_epoch.py','verify_paired_epoch_units.py','test_paired_epoch.py',
+               'retain_paired_epoch.py','test_retain_paired_epoch.py','build_paired_epoch_units.py')
+FINAL_PYTHON = BUILD_TOOLS | set(FINAL_ROOTS)
+UNIT_SOURCES = ('test_paired_epoch_native.cpp','test_paired_epoch_clock.cpp')
 
 
 def inventory():
@@ -240,6 +244,46 @@ def verify_build(root):
     return build, images, build_resources((root/'build.log').read_text())
 
 
+def verify_final_tools(root):
+    """Final replay tools are separate from the immutable collection tools."""
+    final = parse((root/'final-tools.json').read_text())
+    keys(final, 'bead timed files')
+    equal([final['bead'],final['timed']],[BEAD,False])
+    folder = root/'final_tools'
+    require(folder.is_dir() and not folder.is_symlink(),'real final tools directory')
+    names = FINAL_PYTHON | set(BASE_NAMES) | set(UNIT_SOURCES)
+    equal(sorted(final['files']), sorted(names))
+    equal(sorted(p.name for p in folder.iterdir()), sorted(names))
+    check_inventory(folder, final['files'])
+    equal(sorted(tool_closure(folder, FINAL_ROOTS)), sorted(FINAL_PYTHON))
+    equal(sha(Path(__file__)), final['files']['verify_paired_epoch.py'])
+    # Retained copies alone do not identify the code doing this replay. Bind
+    # every loaded local module, including an aliased/duplicate main verifier,
+    # to the final source digests. Do not import collectors or other unused
+    # tools merely because they belong to the retained source closure.
+    for module_name, module in tuple(sys.modules.items()):
+        source = getattr(module, '__file__', None)
+        expected_name = module_name + '.py'
+        name = Path(source).name if source else None
+        if expected_name not in FINAL_PYTHON and name not in FINAL_PYTHON:
+            continue
+        require(source is not None and name in FINAL_PYTHON,
+                'executing dependency source: ' + module_name)
+        if expected_name in FINAL_PYTHON:
+            equal(name, expected_name)
+        require(sha(Path(source)) == final['files'][name],
+                'executing dependency hash: ' + name)
+    build = parse((root/'build/build.json').read_text())
+    units = parse((root/'units/build.json').read_text())
+    for name in BASE_NAMES:
+        equal(final['files'][name], build['baseline'][name])
+        equal(sha(folder/name), sha(root/'build/baseline'/name))
+    for name in UNIT_SOURCES:
+        equal(final['files'][name], units['source_sha256'][name])
+        equal(sha(folder/name), sha(root/'units'/name))
+    return sha(root/'final-tools.json')
+
+
 def replay(root):
     build, images, build_peak = verify_build(root)
     checks = parse((root/'checks/checks.json').read_text())
@@ -277,10 +321,11 @@ def replay(root):
     equal(sorted(p.name for p in (root/'checks').iterdir()), sorted(files))
     from verify_paired_epoch_units import replay as unit_replay
     unit_result = unit_replay(root)
+    final_tools = verify_final_tools(root)
     return dict(bead=BEAD, timed=False, default_enabled=False, totals=totals, build_peak=build_peak,
                 maximum_native_peak=max(peaks), all_native_memory_events_zero=True, swap_bytes=0,
-                boundary_units=unit_result, qualification_complete=False,
-                remaining='real-record adversarial checks, final review and sealed delivery',
+                boundary_units=unit_result, native_matrix_complete=True, diagnostic_only=True,
+                final_tools_sha256=final_tools,
                 historical_shift_cause_established=False)
 
 
