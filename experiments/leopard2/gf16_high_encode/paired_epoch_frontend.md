@@ -92,3 +92,18 @@ The Bead stays open for the full corrected matrix, real-record adversarial
 tests, independent replay, evidence sealing and final delivery. A subsequent
 steady-clock frontend/collector and committed-and-pushed timing preregistration
 remain separate gates; this checkpoint authorizes no real benchmark clocks.
+
+## Pending evidence-retention checkpoint
+
+`retain_paired_epoch.py` and its twelve-test companion are committed as pending
+work, not validated delivery. They preserve the complete corrected run and the
+separately stopped earlier run in private read-only copies. Static review added
+refusals for an existing final-tools manifest and overlapping input histories.
+The overlap regression now constructs an otherwise valid nested stopped history,
+so the new guard must reject before any destination file is created.
+
+These retention tests have not yet run: the corrected native matrix still owns
+the serial qualification workflow. Final-tool inventory/provenance verification,
+normal/optimized tests and replays, and sealed-copy delivery remain required.
+The implementation and this pending work share the single integration branch
+`codex/claude-fable-5-1-audit`; no master merge or release is asserted.
