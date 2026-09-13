@@ -28,6 +28,11 @@ replaced or made reusable by another freeze. Each child launch has a flushed,
 fsynced intent before execution and a separate durable outcome afterward;
 failed/timeout output remains evidence, never a successful measurement.
 
+The campaign runner is the sole owner of the canonical lock and CPU lease.
+The scope wrapper must invoke the runner directly; callers must not add an
+outer `flock` around it. This prevents a self-deadlock from being mistaken for
+an experiment result.
+
 The unchanged diagnostic consists of nine cells, 27 preflights, 318 measured
 processes, three complete epochs per process, 21 sample passes, four warmups,
 252 spans, 100 controls per epoch and 264 homogeneous process trajectories.
