@@ -1,7 +1,7 @@
 {
   "schema": "leopard-epoch-campaign-plan/v1",
   "bead": "leopard-79h.38.5.4.19.1.4.4",
-  "ready_to_time": false,
+  "ready_to_time": true,
   "host": {
     "hostname": "work",
     "kernel": "6.8.0-139-generic",
