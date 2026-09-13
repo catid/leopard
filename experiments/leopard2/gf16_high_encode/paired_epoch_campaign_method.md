@@ -35,8 +35,9 @@ an experiment result.
 
 The controller command is also part of the evidence identity. Launchers must
 use the absolute `/usr/bin/timeout`, `/usr/bin/prlimit`, and `/usr/bin/python3`
-paths emitted by `controller_command`; equivalent bare command names are not
-accepted by the independent resource-log verifier.
+paths emitted by `controller_command`, wrapped by `/usr/bin/time -v` so the
+resource footer includes its exit-status record. Equivalent bare command names
+or an omitted timing footer are not accepted by the independent verifier.
 
 The unchanged diagnostic consists of nine cells, 27 preflights, 318 measured
 processes, three complete epochs per process, 21 sample passes, four warmups,

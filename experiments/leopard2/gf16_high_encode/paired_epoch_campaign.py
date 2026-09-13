@@ -9,7 +9,7 @@ import verify_paired_epoch_timing as qualified
 from verify_paired_metadata import sha,parse,equal,require
 
 BEAD=qualified.BEAD
-ROOT=Path('/home/catid/leopard/.research/leopard-79h/paired-epoch-campaign-final.fSHScp')
+ROOT=Path('/home/catid/leopard/.research/leopard-79h/paired-epoch-campaign-v3.fSHScp')
 QUALIFIED=Path('/home/catid/leopard/.research/leopard-79h/paired-epoch-timing-qualified.8oRYqG')
 PLAN='paired_epoch_campaign_plan.json'
 MANIFEST_PIN='b2970bbcc95e0bc9eaf63a96b53bd20039c809187a5930c7426d593871ef4abd'
