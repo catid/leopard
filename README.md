@@ -1,5 +1,67 @@
 # Leopard-RS
 
+Leopard-RS is a portable C/C++ library for systematic Reed–Solomon erasure
+coding.  Leopard2 adds an object-based API (`leopard2.h`) while preserving the
+original `leopard.h` API and wire format.  It encodes parity shards and
+recovers missing data shards for up to 65,536 originals.
+
+## Quick start
+
+Requirements are CMake 3.16+, a C99/C++11 compiler, and OpenMP when the
+parallel context is used.  A portable release build needs no CPU-specific
+flags:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target leopard
+ctest --test-dir build --output-on-failure
+```
+
+Include `leopard2.h`, call `leo2_context_create`, create a codec with
+`leo2_codec_create`, query scratch with `leo2_encode_scratch_size`, then call
+`leo2_encode`.  Use `leo2_decode_plan_create` and
+`leo2_decode_plan_execute` for recovery.  Every call returns a `leo2_result`;
+the complete signatures, buffer-alias rules, shard layouts, and a recovery
+example are in [`examples/leopard2_minimal.c`](examples/leopard2_minimal.c),
+[`docs/leopard2_api.md`](docs/leopard2_api.md), and
+[`leopard2.h`](leopard2.h).  The original API remains available through
+[`leopard.h`](leopard.h).
+
+After building the library, compile and run the example with:
+
+```sh
+cc -std=c11 -I. -c examples/leopard2_minimal.c -o build/leopard2_minimal.o
+c++ build/leopard2_minimal.o build/libleopard.a -fopenmp -o build/leopard2_minimal
+build/leopard2_minimal
+```
+
+`LEO2_BACKEND_AUTO` is the recommended backend.  Applications may request
+`SCALAR`, `SSSE3`, `AVX2`, `AVX512`, or `GFNI` explicitly; an explicit request
+never silently widens to another ISA.  AUTO's measured GFNI shortcuts are
+bounded to documented AMD model/shape combinations and retain safe fallbacks;
+unknown CPUs use the portable runtime policy.  GF16 odd payloads require the
+explicit padded-odd layout.
+
+## Performance evidence
+
+The checked-in [performance atlas](docs/performance/leopard2_atlas/README_PERFORMANCE.md)
+contains reproducible throughput, setup, memory, and native-Leopard1
+comparisons with machine-readable provenance.  Its plots are single-core
+measurements on the recorded host, not universal guarantees.  The separately
+qualified current release routes report 53.7% and 48.4% AUTO throughput gains
+at two GF16 boundary workloads; the R199/32-KiB extension remains disabled
+because its cross-process stability control was inconclusive.  See the
+retained experiment reports under `experiments/` for exact gates and failed
+alternatives; they are excluded from user source archives.
+
+Atlas snapshots: [encode speedup](docs/performance/leopard2_atlas/plots/encode_speedup_vs_leopard1.svg),
+[one-loss decode](docs/performance/leopard2_atlas/plots/decode_one_speedup_vs_leopard1.svg),
+and [full-loss decode](docs/performance/leopard2_atlas/plots/decode_full_speedup_vs_leopard1.svg).
+These remain labeled atlas evidence until the final-source refresh is complete.
+
+For release-archive contents and reproducibility policy, see
+[`docs/release_distribution.md`](docs/release_distribution.md).
+
 Windows users should use the CMake workflow described in
 [`docs/leopard2_windows_build.md`](docs/leopard2_windows_build.md).  The
 checked-in Visual Studio 2015-format solution remains available for legacy
