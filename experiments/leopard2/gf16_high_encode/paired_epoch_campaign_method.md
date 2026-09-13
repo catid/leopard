@@ -33,6 +33,11 @@ The scope wrapper must invoke the runner directly; callers must not add an
 outer `flock` around it. This prevents a self-deadlock from being mistaken for
 an experiment result.
 
+The controller command is also part of the evidence identity. Launchers must
+use the absolute `/usr/bin/timeout`, `/usr/bin/prlimit`, and `/usr/bin/python3`
+paths emitted by `controller_command`; equivalent bare command names are not
+accepted by the independent resource-log verifier.
+
 The unchanged diagnostic consists of nine cells, 27 preflights, 318 measured
 processes, three complete epochs per process, 21 sample passes, four warmups,
 252 spans, 100 controls per epoch and 264 homogeneous process trajectories.
