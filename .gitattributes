@@ -7,3 +7,17 @@ experiments/leopard2/non_power_of_two/c7/results/logs/*-configure.stdout.txt whi
 experiments/leopard2/non_power_of_two/c7/results/logs/*-compile.stderr.txt whitespace=-blank-at-eol
 experiments/leopard2/non_power_of_two/c7/results/logs/*-core-build.stdout.txt whitespace=-blank-at-eof
 experiments/leopard2/non_power_of_two/c7/results/logs/*-CMakeCache.txt whitespace=-blank-at-eof
+
+# Keep the Git repository's research history, but omit session and experiment
+# material from source archives intended for users.
+/.research/** export-ignore
+/.beads/** export-ignore
+/.agents/** export-ignore
+/.claude/** export-ignore
+/.codex/** export-ignore
+/experiments/** export-ignore
+/AGENTS.md export-ignore
+/CLAUDE.md export-ignore
+/findings.md export-ignore
+/plan.md export-ignore
+/resume.md export-ignore
