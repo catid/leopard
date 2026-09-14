@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="520" viewBox="0 0 900 520">
+<rect width="900" height="520" fill="white"/>
+<text x="450" y="30" text-anchor="middle" font-family="sans-serif" font-size="20">Final-source GF16 metrics vs native Leopard1</text>
+<text x="225" y="70" text-anchor="middle" font-family="sans-serif" font-size="15">Encode throughput (GB/s)</text>
+<line x1="60" y1="300" x2="390" y2="300" stroke="#222"/><line x1="60" y1="90" x2="60" y2="300" stroke="#222"/>
+<rect x="95" y="165" width="55" height="135" fill="#777"/><rect x="155" y="109" width="55" height="191" fill="#2b6cb0"/><rect x="255" y="167" width="55" height="133" fill="#777"/><rect x="315" y="83" width="55" height="217" fill="#2b6cb0"/>
+<text x="122" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L1 one</text><text x="182" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L2 one</text><text x="282" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L1 full</text><text x="342" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L2 full</text>
+<text x="122" y="157" text-anchor="middle" font-family="sans-serif" font-size="12">6.81</text><text x="182" y="101" text-anchor="middle" font-family="sans-serif" font-size="12">10.96</text><text x="282" y="159" text-anchor="middle" font-family="sans-serif" font-size="12">6.87</text><text x="342" y="75" text-anchor="middle" font-family="sans-serif" font-size="12">9.71</text>
+<text x="675" y="70" text-anchor="middle" font-family="sans-serif" font-size="15">Working memory per stripe (MiB)</text>
+<line x1="500" y1="300" x2="850" y2="300" stroke="#222"/><line x1="500" y1="90" x2="500" y2="300" stroke="#222"/>
+<rect x="540" y="90" width="65" height="210" fill="#777"/><rect x="610" y="195" width="65" height="105" fill="#2b6cb0"/><rect x="730" y="90" width="65" height="210" fill="#777"/><rect x="800" y="226" width="65" height="74" fill="#2b6cb0"/>
+<text x="572" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L1 enc</text><text x="642" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L2 enc</text><text x="762" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L1 dec</text><text x="832" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L2 dec</text>
+<text x="572" y="82" text-anchor="middle" font-family="sans-serif" font-size="12">32</text><text x="642" y="187" text-anchor="middle" font-family="sans-serif" font-size="12">16.0</text><text x="762" y="82" text-anchor="middle" font-family="sans-serif" font-size="12">128</text><text x="832" y="218" text-anchor="middle" font-family="sans-serif" font-size="12">11.2</text>
+<text x="450" y="380" text-anchor="middle" font-family="sans-serif" font-size="14">L2 setup: 3.9–4.1 µs codec creation; 55.8–107.4 µs decode-plan setup</text>
+<text x="450" y="405" text-anchor="middle" font-family="sans-serif" font-size="12">One-loss and full-loss workloads, K=1000/R=200, 64 KiB shards, one thread</text>
+<text x="450" y="430" text-anchor="middle" font-family="sans-serif" font-size="12">Gray = native Leopard1 work allocation; blue = Leopard2 scratch allocation</text>
+<text x="450" y="470" text-anchor="middle" font-family="sans-serif" font-size="12">Standalone medians from the same immutable release artifacts; setup and memory are not ABBA ratios</text>
+</svg>

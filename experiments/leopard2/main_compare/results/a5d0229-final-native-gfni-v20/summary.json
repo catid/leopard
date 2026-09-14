@@ -26,5 +26,32 @@
     "leopard1": "dff1249dbc8f8ab9fd6a43656757b3fec9666301f118df92502ad381f6f95b13",
     "leopard2": "6f8d7e8b9ba229e149bf100c5c28636f74a7cdb64c64b16182f409f8e8ee852c"
   },
+  "steady_state_measurements": {
+    "cell": "K=1000,R=200,B=65536,one-thread",
+    "full_loss": {
+      "native_leopard1_encode_gb_s": 6.867342,
+      "leopard2_encode_gb_s": 9.70834,
+      "native_leopard1_decode_gb_s": 1.144691,
+      "leopard2_reused_decode_gb_s": 2.895268,
+      "native_encode_work_bytes": 33554432,
+      "leopard2_encode_scratch_bytes": 16808512,
+      "native_decode_work_bytes": 134217728,
+      "leopard2_decode_scratch_bytes": 11722688,
+      "leopard2_codec_setup_us": 3.916,
+      "leopard2_decode_plan_setup_us": 107.441
+    },
+    "one_loss": {
+      "native_leopard1_encode_gb_s": 6.814664,
+      "leopard2_encode_gb_s": 10.95956,
+      "native_leopard1_decode_gb_s": 1.579941,
+      "leopard2_reused_decode_gb_s": 6.525089,
+      "native_encode_work_bytes": 33554432,
+      "leopard2_encode_scratch_bytes": 16808512,
+      "native_decode_work_bytes": 134217728,
+      "leopard2_decode_scratch_bytes": 8460736,
+      "leopard2_codec_setup_us": 4.096,
+      "leopard2_decode_plan_setup_us": 55.793
+    }
+  },
   "evidence_path": "/tmp/leopard-final-abba-gfni18"
 }

@@ -62,6 +62,9 @@ Atlas snapshots: [encode speedup](docs/performance/leopard2_atlas/plots/encode_s
 and [full-loss decode](docs/performance/leopard2_atlas/plots/decode_full_speedup_vs_leopard1.svg).
 The final-source GFNI point is shown separately in
 [final_native_gfni_encode_speedup.svg](docs/performance/leopard2_atlas/plots/final_native_gfni_encode_speedup.svg).
+The paired one-loss/full-loss throughput, setup, and working-memory snapshot
+is [final_native_gfni_metrics.svg](docs/performance/leopard2_atlas/plots/final_native_gfni_metrics.svg);
+these latter figures are standalone medians, not ABBA confidence intervals.
 
 For release-archive contents and reproducibility policy, see
 [`docs/release_distribution.md`](docs/release_distribution.md).
