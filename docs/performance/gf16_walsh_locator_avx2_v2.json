@@ -1,0 +1,32 @@
+{
+  "schema": "leopard2-gf16-walsh-locator-avx2-v2",
+  "source_commit": "6d2a16fc8167c35516fd20e1cc83231b4314a05e",
+  "executable_sha256": "d6945a66e179e2fe78f741fd2645ef19780482efb843b94ec6135749fccb678f",
+  "source_dirty_at_configure": false,
+  "artifact_sha256_before_after_equal": true,
+  "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+  "cpu": 0,
+  "reserved_smt_sibling": 64,
+  "sibling_non_idle_jiffies": [0, 0, 0, 0, 0, 0],
+  "omp_num_threads": "1",
+  "omp_dynamic": "FALSE",
+  "calls_per_sample": 8,
+  "iterations": 31,
+  "warmup_samples": 5,
+  "seed": 17,
+  "process_measurement_order": "ABBA scalar-active/AVX2-active",
+  "acceptance": {
+    "minimum_speedup": 1.10,
+    "all_cells_passed": true,
+    "correctness_oracle": "independent full-field GF16 Walsh reference",
+    "auto_route_changed": false
+  },
+  "cells": [
+    {"n": 32, "erasures": 32, "scalar_active_median_us": 0.908875, "scalar_active_mad_us": 0.007500, "avx2_active_median_us": 0.048875, "avx2_active_mad_us": 0.000125, "speedup": 18.596, "max_rss_kib": 14336, "exit_status": 0},
+    {"n": 64, "erasures": 40, "scalar_active_median_us": 1.045250, "scalar_active_mad_us": 0.008875, "avx2_active_median_us": 0.082625, "avx2_active_mad_us": 0.000000, "speedup": 12.651, "max_rss_kib": 14336, "exit_status": 0},
+    {"n": 256, "erasures": 64, "scalar_active_median_us": 1.862750, "scalar_active_mad_us": 0.008750, "avx2_active_median_us": 0.240375, "avx2_active_mad_us": 0.001250, "speedup": 7.749, "max_rss_kib": 14336, "exit_status": 0},
+    {"n": 1024, "erasures": 64, "scalar_active_median_us": 5.092625, "scalar_active_mad_us": 0.006250, "avx2_active_median_us": 1.034000, "avx2_active_mad_us": 0.001250, "speedup": 4.925, "max_rss_kib": 14336, "exit_status": 0},
+    {"n": 4096, "erasures": 256, "scalar_active_median_us": 19.104750, "scalar_active_mad_us": 0.016250, "avx2_active_median_us": 4.629375, "avx2_active_mad_us": 0.010000, "speedup": 4.127, "max_rss_kib": 14336, "exit_status": 0},
+    {"n": 65536, "erasures": 8192, "scalar_active_median_us": 336.918750, "scalar_active_mad_us": 0.131375, "avx2_active_median_us": 86.337500, "avx2_active_mad_us": 0.220375, "speedup": 3.902, "max_rss_kib": 14336, "exit_status": 0}
+  ]
+}
