@@ -33,7 +33,7 @@ be pooled across cells or across source/executable identities.
 
 - Build from a clean checkout of the pushed commit; copy the executable into a
   lane-owned immutable artifact directory and hash it before and after timing.
-- Hold `/tmp/leopard-gf8-authoritative.lock` directly with a nonblocking
+- Hold `${ATLAS_TMP}/leopard-gf8-authoritative.lock` directly with a nonblocking
   exclusive `flock`; do not wrap a runner that acquires this lock in another
   lock.
 - Pin the benchmark to physical CPU 0 and reserve its SMT sibling CPU 64.
