@@ -1521,6 +1521,18 @@ static std::atomic<unsigned> g_r1_small_reduction_mode(0U);
     reusable-plan API never consults this switch.
 */
 static std::atomic<unsigned> g_one_shot_plan_setup_mode(3U);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+/* The mutation deliberately adds a second owner claim without changing the
+   executed route.  This lets the hook-linked test prove that exclusivity is
+   an invariant, rather than merely observing today's final result. */
+static std::atomic<bool> g_one_shot_selector_overlap_mutation(false);
+static thread_local unsigned g_one_shot_selector_owner_mask = 0U;
+
+static LEO_FORCE_INLINE void RecordOneShotSelectorOwner(unsigned bit)
+{
+    g_one_shot_selector_owner_mask |= bit;
+}
+#endif
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
 // Same-executable benchmark control.  Both states are nonzero so changing the
 // word cannot perturb linked instruction text; production-enabled builds start
@@ -9279,6 +9291,11 @@ static leo2_result TryOneShotEqualRoundedDirectRepair(
         // than converting a valid multi-loss call into INTERNAL_ERROR.
         if (missing_count != 1)
         {
+#ifdef LEO2_ENABLE_TEST_HOOKS
+            if (g_one_shot_selector_overlap_mutation.load(
+                    std::memory_order_relaxed))
+                RecordOneShotSelectorOwner(1U);
+#endif
             handled = false;
             return LEO2_SUCCESS;
         }
@@ -9434,6 +9451,9 @@ static leo2_result TryOneShotEqualRoundedDirectRepair(
         handled = false;
         return LEO2_SUCCESS;
     }
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    RecordOneShotSelectorOwner(1U);
+#endif
 
     ScratchLayout layout;
     size_t rounded_bytes = 0;
@@ -10771,6 +10791,9 @@ static leo2_result TryOneShotRawTranslatedLowDecode(
             geometry.layout.pointer_offset, pattern))
         return LEO2_SUCCESS;
 
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    RecordOneShotSelectorOwner(2U);
+#endif
     handled = true;
     result = ValidateRawOneShotDecodeBuffers(codec, shard_bytes,
         original_present, recovery_present, original_presence_range,
@@ -11594,6 +11617,14 @@ static leo2_result TryOneShotRawNativeHighDecode(
     if (missing_original_count < 3 ||
         missing_original_count > codec->recovery_count)
         return LEO2_SUCCESS;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    /* Synthetic overlap: retain native-high as the executed owner while
+       recording a translated-low claim for the invariant checker. */
+    RecordOneShotSelectorOwner(4U);
+    if (g_one_shot_selector_overlap_mutation.load(
+            std::memory_order_relaxed))
+        RecordOneShotSelectorOwner(2U);
+#endif
     DecodeScratchGeometry geometry;
     leo2_result result = DecodeLayout(
         codec, NULL, shard_bytes, false, geometry);
@@ -16840,6 +16871,34 @@ bool SetOneShotPlanSetupModeForDiagnostics(unsigned mode)
         return false;
     g_one_shot_plan_setup_mode.store(mode, std::memory_order_release);
     return true;
+}
+
+bool SetOneShotSelectorOverlapMutationForDiagnostics(bool enabled)
+{
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    g_one_shot_selector_overlap_mutation.store(
+        enabled, std::memory_order_release);
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
+void ResetOneShotSelectorOwnerMaskForDiagnostics()
+{
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    g_one_shot_selector_owner_mask = 0U;
+#endif
+}
+
+unsigned OneShotSelectorOwnerMaskForDiagnostics()
+{
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    return g_one_shot_selector_owner_mask;
+#else
+    return 0U;
+#endif
 }
 
 bool SetLowP32B64TerminalEnabledForDiagnostics(bool enabled)
@@ -26213,6 +26272,9 @@ static LEO2_ONE_SHOT_GENERAL_NOINLINE leo2_result DecodeOneShotGeneral(
     void* scratch,
     size_t scratch_bytes)
 {
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    g_one_shot_selector_owner_mask = 0U;
+#endif
     bool r1_metadata_checked = false;
     bool r1_terminal_handled = false;
     const leo2_result r1_terminal_result =

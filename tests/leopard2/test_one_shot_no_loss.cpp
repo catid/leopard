@@ -1147,6 +1147,46 @@ void test_raw_transient_decode(leo2_context* automatic_context)
         require(leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(3),
             "raw native-high production mode restore failed");
     }
+    {
+        /* K=16/R=8 with three losses is owned by native-high.  The hook
+           mutation injects a translated-low claim without changing execution;
+           the ownership mask must therefore change from one bit to two and
+           return to the production invariant when restored. */
+        RawTransientFixture fixture(avx2, 16, 8, 64);
+        fixture.Configure(3, 0, false);
+        require(leopard2_internal::SetOneShotSelectorOverlapMutationForDiagnostics(
+                    false),
+            "one-shot selector mutation disable failed");
+        require_raw_transient_success(fixture.Observe(), fixture, true,
+            "one-shot selector ownership production");
+        const unsigned production_mask =
+            leopard2_internal::OneShotSelectorOwnerMaskForDiagnostics();
+        require(production_mask != 0U &&
+                    (production_mask & (production_mask - 1U)) == 0U,
+            "production one-shot selector ownership is not exclusive");
+
+        fixture.ResetOutputs();
+        require(leopard2_internal::SetOneShotSelectorOverlapMutationForDiagnostics(
+                    true),
+            "one-shot selector mutation enable failed");
+        require_raw_transient_success(fixture.Observe(), fixture, true,
+            "one-shot selector overlap mutation");
+        const unsigned mutated_mask =
+            leopard2_internal::OneShotSelectorOwnerMaskForDiagnostics();
+        require((mutated_mask & (mutated_mask - 1U)) != 0U,
+            "selector-overlap mutation was not detected");
+
+        fixture.ResetOutputs();
+        require(leopard2_internal::SetOneShotSelectorOverlapMutationForDiagnostics(
+                    false),
+            "one-shot selector mutation restore failed");
+        require_raw_transient_success(fixture.Observe(), fixture, true,
+            "one-shot selector ownership restored");
+        const unsigned restored_mask =
+            leopard2_internal::OneShotSelectorOwnerMaskForDiagnostics();
+        require(restored_mask == production_mask,
+            "restoring selector mutation changed ownership mask");
+    }
 #endif
 
     if (leo2_context_backend(automatic_context) == LEO2_BACKEND_AVX2)
