@@ -116,7 +116,7 @@ static Options ParseOptions(int argc, char** argv)
             std::cout
                 << "Usage: bench_leopard2_locator [options]\n"
                 << "  --field gf8|gf16\n"
-                << "  --backend scalar|avx2 (GF16 only)\n"
+                << "  --backend scalar|avx2|compare (GF16 only for avx2/compare)\n"
                 << "  --n POWER_OF_TWO\n"
                 << "  --erasures N\n"
                 << "  --calls N\n"
@@ -294,6 +294,56 @@ static std::pair<Summary, Summary> MeasurePair(
     }
     return std::make_pair(
         Summarize(direct_samples), Summarize(active_samples));
+}
+
+template<class Ffe>
+static std::pair<Summary, Summary> MeasureActiveBackendPair(
+    void (*scalar_active)(unsigned, const uint8_t*, Ffe*),
+    void (*candidate_active)(unsigned, const uint8_t*, Ffe*),
+    unsigned n,
+    const std::vector<uint8_t>& erasures,
+    unsigned calls,
+    unsigned iterations,
+    unsigned warmup,
+    std::vector<Ffe>& scalar_output,
+    std::vector<Ffe>& candidate_output)
+{
+    for (unsigned pass = 0; pass < warmup; ++pass)
+    {
+        if ((pass & 1u) == 0)
+        {
+            Warm(scalar_active, n, erasures, calls, 1, scalar_output);
+            Warm(candidate_active, n, erasures, calls, 1, candidate_output);
+        }
+        else
+        {
+            Warm(candidate_active, n, erasures, calls, 1, candidate_output);
+            Warm(scalar_active, n, erasures, calls, 1, scalar_output);
+        }
+    }
+
+    std::vector<double> scalar_samples, candidate_samples;
+    scalar_samples.reserve(iterations);
+    candidate_samples.reserve(iterations);
+    for (unsigned sample = 0; sample < iterations; ++sample)
+    {
+        if ((sample & 1u) == 0)
+        {
+            scalar_samples.push_back(MeasureOne(
+                scalar_active, n, erasures, calls, scalar_output));
+            candidate_samples.push_back(MeasureOne(
+                candidate_active, n, erasures, calls, candidate_output));
+        }
+        else
+        {
+            candidate_samples.push_back(MeasureOne(
+                candidate_active, n, erasures, calls, candidate_output));
+            scalar_samples.push_back(MeasureOne(
+                scalar_active, n, erasures, calls, scalar_output));
+        }
+    }
+    return std::make_pair(
+        Summarize(scalar_samples), Summarize(candidate_samples));
 }
 
 static std::string Environment(const char* name)
@@ -488,17 +538,114 @@ static int Run(
     return 0;
 }
 
+static int RunGF16Compare(const Options& options)
+{
+    if (options.n < 2 || options.n > leopard::ff16::kOrder ||
+        (options.n & (options.n - 1)) != 0 ||
+        options.erasures > options.n || options.calls == 0 ||
+        options.iterations == 0 || !g_backend_ops)
+    {
+        std::cerr << "invalid benchmark dimensions" << std::endl;
+        return 2;
+    }
+    if (!leopard::ff16::Initialize())
+    {
+        std::cerr << "field initialization failed" << std::endl;
+        return 1;
+    }
+
+    std::vector<uint8_t> erasures(options.n, 0);
+    const uint32_t multiplier = Mix(options.seed) | 1u;
+    const uint32_t offset = Mix(options.seed ^ 0x6d2b79f5u);
+    for (unsigned i = 0; i < options.erasures; ++i)
+        erasures[(i * multiplier + offset) & (options.n - 1)] = 1;
+
+    std::vector<leopard::ff16::ffe_t> scalar_output(options.n),
+        candidate_output(options.n), expected(options.n);
+    leopard::ff16::PrepareDecodeWalshActive(
+        options.n, &erasures[0], &scalar_output[0]);
+    PrepareGF16Backend(options.n, &erasures[0], &candidate_output[0]);
+    leopard::ff16::PrepareDecodeWalshReference(
+        options.n, &erasures[0], &expected[0]);
+    if (!Equivalent(scalar_output, expected) ||
+        !Equivalent(candidate_output, expected))
+    {
+        std::cerr << "locator oracle mismatch" << std::endl;
+        return 1;
+    }
+
+    const std::pair<Summary, Summary> measured = MeasureActiveBackendPair(
+        leopard::ff16::PrepareDecodeWalshActive,
+        PrepareGF16Backend,
+        options.n, erasures, options.calls, options.iterations,
+        options.warmup, scalar_output, candidate_output);
+    const std::vector<unsigned> allowed_cpus = AllowedCpus();
+    std::cout << std::setprecision(17)
+              << "{\n"
+              << "  \"schema\": \"leopard2-locator-benchmark-v3\",\n"
+              << "  \"build\": { \"source_git_sha\": ";
+    WriteJsonString(std::cout, LEO2_LOCATOR_SOURCE_GIT_SHA);
+    std::cout << ", \"source_dirty_at_configure\": "
+              << (LEO2_LOCATOR_SOURCE_DIRTY ? "true" : "false")
+              << ", \"compiler\": ";
+    WriteJsonString(std::cout, CompilerId());
+    std::cout << ", \"compiler_version\": ";
+    WriteJsonString(std::cout, CompilerVersion());
+    std::cout << " },\n"
+              << "  \"runtime\": { \"allowed_cpus\": [";
+    for (size_t i = 0; i < allowed_cpus.size(); ++i)
+    {
+        if (i)
+            std::cout << ',';
+        std::cout << allowed_cpus[i];
+    }
+    std::cout << "], \"openmp_macro\": ";
+#if defined(_OPENMP)
+    std::cout << _OPENMP;
+#else
+    std::cout << 0;
+#endif
+    std::cout << ", \"omp_num_threads\": ";
+    WriteJsonString(std::cout, Environment("OMP_NUM_THREADS"));
+    std::cout << ", \"omp_dynamic\": ";
+    WriteJsonString(std::cout, Environment("OMP_DYNAMIC"));
+    std::cout << " },\n"
+              << "  \"field\": \"gf16\",\n"
+              << "  \"parent_n\": " << options.n << ",\n"
+              << "  \"erasure_count\": " << options.erasures << ",\n"
+              << "  \"calls_per_sample\": " << options.calls << ",\n"
+              << "  \"iterations\": " << options.iterations << ",\n"
+              << "  \"warmup_calls\": "
+              << static_cast<uint64_t>(options.warmup) * options.calls
+              << ",\n"
+              << "  \"seed\": " << options.seed << ",\n"
+              << "  \"measurement_order\": \"ABBA\",\n"
+              << "  \"scalar_active_walsh\": { \"median_us\": "
+              << measured.first.median_us << ", \"mad_us\": "
+              << measured.first.mad_us << ", \"samples_us\": ";
+    WriteSamples(measured.first.samples_us);
+    std::cout << " },\n"
+              << "  \"avx2_active_walsh\": { \"median_us\": "
+              << measured.second.median_us << ", \"mad_us\": "
+              << measured.second.mad_us << ", \"samples_us\": ";
+    WriteSamples(measured.second.samples_us);
+    std::cout << " }\n}\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
     const Options options = ParseOptions(argc, argv);
-    if (options.backend != "scalar" && options.backend != "avx2")
+    if (options.backend != "scalar" && options.backend != "avx2" &&
+        options.backend != "compare")
     {
         std::cerr << "invalid backend" << std::endl;
         return 2;
     }
-    if (options.backend == "avx2" && options.field != "gf16")
+    if ((options.backend == "avx2" || options.backend == "compare") &&
+        options.field != "gf16")
     {
         std::cerr << "avx2 backend mode is only available for gf16" <<
             std::endl;
@@ -520,7 +667,7 @@ int main(int argc, char** argv)
     if (options.field == "gf16")
     {
 #ifdef LEO_HAS_FF16
-        if (options.backend == "avx2")
+        if (options.backend == "avx2" || options.backend == "compare")
         {
 #ifdef LEO_HAS_FF8
             if (!leopard::ff8::Initialize())
@@ -555,6 +702,8 @@ int main(int argc, char** argv)
                     std::endl;
                 return 1;
             }
+            if (options.backend == "compare")
+                return RunGF16Compare(options);
             return Run<leopard::ff16::ffe_t>(options,
                 leopard::ff16::kOrder, leopard::ff16::Initialize,
                 leopard::ff16::PrepareDecodeDirect,
