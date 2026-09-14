@@ -3694,7 +3694,7 @@ def validate_canonical_build_configuration_entries(
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED":
                 ("ON" if raw_schema in (
                     RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18,
-                    RAW_SCHEMA_V19) else "OFF"),
+                    RAW_SCHEMA_V19, RAW_SCHEMA_V20) else "OFF"),
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
         } if raw_schema in (
             RAW_SCHEMA_V11, RAW_SCHEMA_V12, RAW_SCHEMA_V13,
@@ -3708,7 +3708,7 @@ def validate_canonical_build_configuration_entries(
         } if raw_schema in (
             RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14,
             RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18,
-            RAW_SCHEMA_V19) else {}),
+            RAW_SCHEMA_V19, RAW_SCHEMA_V20) else {}),
         **({
             "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
         } if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS else {}),
@@ -3723,7 +3723,7 @@ def validate_canonical_build_configuration_entries(
                 ("ON" if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS else "OFF"),
         } if raw_schema in (
             RAW_SCHEMA_V15, RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18,
-            RAW_SCHEMA_V19) else {}),
+            RAW_SCHEMA_V19, RAW_SCHEMA_V20) else {}),
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
     }
     require(all(entries.get(name) == value for name, value in expected.items()) and
@@ -4306,7 +4306,7 @@ def candidate_required_cache(raw_schema: str) -> dict[str, str | None]:
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED":
                 ("ON" if raw_schema in (
                     RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18,
-                    RAW_SCHEMA_V19) else "OFF"),
+                    RAW_SCHEMA_V19, RAW_SCHEMA_V20) else "OFF"),
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
         })
     if raw_schema in (
@@ -4640,7 +4640,7 @@ def expected_compile_argv(
                "-DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1"]
               if raw_schema in (
                   RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18,
-                  RAW_SCHEMA_V19) else []),
+                  RAW_SCHEMA_V19, RAW_SCHEMA_V20) else []),
             "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK=0",
             "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
             "-DLEO2_HAVE_AVX2_BACKEND=1",
@@ -4693,7 +4693,7 @@ def expected_compile_argv(
                   RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA_V12,
                   RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15,
                   RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18,
-                  RAW_SCHEMA_V19)
+                  RAW_SCHEMA_V19, RAW_SCHEMA_V20)
               else []),
             "-DLEO2_HAVE_GFNI_BACKEND=1",
             "-DLEO2_HAVE_SSSE3_BACKEND=1",
@@ -4725,7 +4725,7 @@ def expected_compile_argv(
                   if raw_schema in (
                       RAW_SCHEMA_V13, RAW_SCHEMA_V14, RAW_SCHEMA_V15,
                       RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18,
-                      RAW_SCHEMA_V19) else []),
+                      RAW_SCHEMA_V19, RAW_SCHEMA_V20) else []),
                 *(["-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1"]
                   if raw_schema in (
                       RAW_SCHEMA_V12, RAW_SCHEMA_V13, RAW_SCHEMA_V14,
@@ -4765,7 +4765,7 @@ def expected_compile_argv(
                 *(["-DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1"]
                   if raw_schema in (
                       RAW_SCHEMA_V16, RAW_SCHEMA_V17, RAW_SCHEMA_V18,
-                      RAW_SCHEMA_V19) else []),
+                      RAW_SCHEMA_V19, RAW_SCHEMA_V20) else []),
                 "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
             ])
         if raw_schema in (
