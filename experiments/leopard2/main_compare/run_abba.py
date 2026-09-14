@@ -580,6 +580,13 @@ CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V17 = \
     CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V10
 CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V18 = \
     CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V17
+CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V20 = (
+    *CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V18,
+    ("bench/leopard2/high_sparse_auto_benchmark.cpp",
+     "bench_leopard2_high_sparse_auto.dir"),
+    ("tests/leopard2/direct_oracle.cpp",
+     "bench_leopard2_high_sparse_auto.dir"),
+)
 CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS = \
     CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V18
 CANDIDATE_CONFIGURED_SOURCES_V17 = tuple(dict.fromkeys((
@@ -681,6 +688,8 @@ BUILD_CONFIGURATION_FILE_SCHEMA_V9 = \
     "leopard2-benchmark-build-configuration/v9"
 BUILD_CONFIGURATION_FILE_SCHEMA_V13 = \
     "leopard2-benchmark-build-configuration/v13"
+BUILD_CONFIGURATION_FILE_SCHEMA_V16 = \
+    "leopard2-benchmark-build-configuration/v16"
 BUILD_CONFIGURATION_FILE_SCHEMA = BUILD_CONFIGURATION_FILE_SCHEMA_V13
 BUILD_CONFIGURATION_RELATIVE_PATH = (
     "generated/leopard2-benchmark-attestation/"
@@ -758,6 +767,47 @@ BUILD_CONFIGURATION_VARIABLES_V10 = (
     *BUILD_CONFIGURATION_VARIABLES_V9[17:],
 )
 BUILD_CONFIGURATION_VARIABLES = BUILD_CONFIGURATION_VARIABLES_V10
+BUILD_CONFIGURATION_VARIABLES_V16 = (
+    "CMAKE_BUILD_TYPE",
+    "CMAKE_GENERATOR",
+    "CMAKE_CONFIGURATION_TYPES",
+    "CMAKE_CXX_COMPILER",
+    "CMAKE_CXX_FLAGS",
+    "CMAKE_CXX_FLAGS_DEBUG",
+    "CMAKE_CXX_FLAGS_RELEASE",
+    "CMAKE_CXX_FLAGS_RELWITHDEBINFO",
+    "CMAKE_CXX_FLAGS_MINSIZEREL",
+    "ENABLE_OPENMP",
+    "LEOPARD_ENABLE_GF8",
+    "LEOPARD_ENABLE_GF16",
+    "LEO2_BACKEND_VARIANT",
+    "LEO2_BENCHMARK_GIT_EXECUTABLE",
+    "LEO2_BUILD_BENCHMARKS",
+    "LEO2_BUILD_TESTS",
+    "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
+    "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED",
+    "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
+    "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
+    "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO",
+    "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE",
+    "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO",
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
+    "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING",
+    "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING",
+    "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING",
+    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED",
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
+    "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE",
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
+    "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+    "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK",
+)
 CMAKE_CACHE_ENTRY_TYPES = frozenset((
     "BOOL", "FILEPATH", "INTERNAL", "PATH", "STATIC", "STRING",
     "UNINITIALIZED",
@@ -812,6 +862,9 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": frozenset(("STRING",)),
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": frozenset(("BOOL",)),
@@ -3486,12 +3539,17 @@ def build_configuration_contract_for_raw_schema(
             BUILD_CONFIGURATION_FILE_SCHEMA_V9,
             BUILD_CONFIGURATION_VARIABLES_V9,
         )
-    if raw_schema in (RAW_SCHEMA_V17, RAW_SCHEMA_V18, RAW_SCHEMA_V19,
-                      RAW_SCHEMA_V20):
+    if raw_schema in (RAW_SCHEMA_V17, RAW_SCHEMA_V18, RAW_SCHEMA_V19):
         return (
             BUILD_CONFIGURATION_RECORD_SCHEMA_V10,
             BUILD_CONFIGURATION_FILE_SCHEMA_V13,
             BUILD_CONFIGURATION_VARIABLES_V10,
+        )
+    if raw_schema == RAW_SCHEMA_V20:
+        return (
+            BUILD_CONFIGURATION_RECORD_SCHEMA_V10,
+            BUILD_CONFIGURATION_FILE_SCHEMA_V16,
+            BUILD_CONFIGURATION_VARIABLES_V16,
         )
     raise EvidenceError(
         "build-closure schema lacks configuration contract")
@@ -3511,7 +3569,8 @@ def build_configuration_material(
                 BUILD_CONFIGURATION_VARIABLES_V5,
                 BUILD_CONFIGURATION_VARIABLES_V4,
                 BUILD_CONFIGURATION_VARIABLES_V3,
-                BUILD_CONFIGURATION_VARIABLES_V2) and
+                BUILD_CONFIGURATION_VARIABLES_V2,
+                BUILD_CONFIGURATION_VARIABLES_V16) and
             set(entries) == set(variables),
             "benchmark effective-configuration variables differ")
     lines: list[str] = []
@@ -4206,8 +4265,10 @@ def candidate_compile_actions_for_raw_schema(
         non_library = CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V10
     elif raw_schema == RAW_SCHEMA_V17:
         non_library = CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V17
-    elif raw_schema in (RAW_SCHEMA_V18, RAW_SCHEMA_V19, RAW_SCHEMA_V20):
+    elif raw_schema in (RAW_SCHEMA_V18, RAW_SCHEMA_V19):
         non_library = CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V18
+    elif raw_schema == RAW_SCHEMA_V20:
+        non_library = CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS_V20
     else:
         non_library = tuple(CANDIDATE_NON_LIBRARY_COMPILE_TARGETS_V9.items())
     return library + non_library
@@ -4332,6 +4393,12 @@ def candidate_required_cache(raw_schema: str) -> dict[str, str | None]:
             "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
             "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "ON",
+        })
+    if raw_schema == RAW_SCHEMA_V20:
+        result.update({
+            "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO": "ON",
+            "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE": "OFF",
+            "LEO2_EXPERIMENT_HIGH_SPARSE_DIRECT_ENCODE_AUTO": "OFF",
         })
     return result
 
@@ -4525,7 +4592,42 @@ def expected_compile_argv(
             relative == "Leopard2BackendAVX2T8K8B1024.cpp" and \
             resolved_compiler_is_gnu(compiler_path):
         isolated_flags[relative].insert(-1, "-flive-range-shrinkage")
-    if relative == "bench/leopard2/locator_benchmark.cpp":
+    if (relative == "bench/leopard2/high_sparse_auto_benchmark.cpp" or
+            (relative == "tests/leopard2/direct_oracle.cpp" and
+             candidate_target == "bench_leopard2_high_sparse_auto.dir")):
+        require(isinstance(build_configuration, Mapping) and
+                build_configuration.get("schema") ==
+                BUILD_CONFIGURATION_RECORD_SCHEMA_V10 and
+                HEX256.fullmatch(str(build_configuration.get(
+                    "configuration_sha256"))) is not None,
+                "current candidate compile profile lacks its effective "
+                "build configuration")
+        entries = build_configuration.get("entries")
+        build_type = validate_embedded_build_type(
+            entries, str(build_configuration.get("embedded_build_type")),
+            authoritative=True)
+        attestation_header = (
+            Path(specification["candidate_build_dir"]) / "generated" /
+            "leopard2-benchmark-attestation" /
+            "leopard2_benchmark_source_attestation.h")
+        definitions = [
+            '-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SCHEMA="'
+            f'{BUILD_CONFIGURATION_FILE_SCHEMA_V16}"',
+            "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256="
+            f'"{build_configuration["configuration_sha256"]}"',
+            f'-DLEO2_BENCHMARK_BUILD_TYPE="{build_type}"',
+            f'-DLEO2_BENCHMARK_BUILD_VARIANT="{entries["LEO2_BACKEND_VARIANT"]}"',
+            "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
+            "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER="
+            f'"{attestation_header}"',
+            *( ["-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1"]
+               if raw_schema in GFNI_ENCODE_CAMPAIGN_SCHEMAS else []),
+            "-DLEO2_HIGH_SPARSE_AUTO_LIBRARY_TEST_HOOKS=0",
+        ]
+        includes = [f"-I{candidate_root}",
+                    f"-I{candidate_root / 'tests/leopard2'}"]
+        propagated_openmp = ["-fopenmp"]
+    elif relative == "bench/leopard2/locator_benchmark.cpp":
         candidate_commit = specification.get("candidate_commit")
         require(isinstance(candidate_commit, str) and
                 re.fullmatch(r"[0-9a-f]{40}", candidate_commit) is not None,
@@ -11452,7 +11554,7 @@ def _run_campaign_owned(
             options.reservation_file, options.cpu, options.reserved_sibling
         ) as reservation, pair_guard as pair_lease:
             os.sched_setaffinity(0, housekeeping)
-            initial = input_snapshot(specification)
+            initial = input_snapshot(specification, RAW_SCHEMA)
             require_v17_production_gfni_source(specification, initial)
             executable_snapshots = capture_campaign_executables(
                 specification, initial, snapshot_owner)
@@ -11503,7 +11605,7 @@ def _run_campaign_owned(
                     "campaign produced no scheduler isolation evidence")
             require(isolation["accepted"] is True,
                     "per-invocation CPU rejection screen failed")
-            final = input_snapshot(specification)
+            final = input_snapshot(specification, RAW_SCHEMA)
             require(final == initial, "input identity changed during campaign")
             for role in ("baseline", "candidate"):
                 require(snapshot_owner.inspect(role) ==
