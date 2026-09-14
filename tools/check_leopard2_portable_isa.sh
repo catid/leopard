@@ -78,7 +78,7 @@ forbidden_mnemonics='^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|mo
 # kernel starts using another AVX/AVX2 mnemonic, reviewers must add that
 # mnemonic after checking its architectural feature contract.  A broad `v*'
 # exemption would silently admit instructions whose CPUID bits are not probed.
-allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vbroadcastss|vextracti128|vinserti128|vmovaps|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpackuswb|vpaddq|vpaddw|vpand|vpandn|vpblendd|vpblendw|vpbroadcastb|vpbroadcastd|vpbroadcastq|vpbroadcastw|vpcmpeqb|vpcmpeqd|vpcmpgtw|vperm2i128|vpermq|vpextrq|vpextrw|vpinsrb|vpminub|vpmovsxbw|vpmovzxbw|vpmuludq|vpmullw|vpshufb|vpshufd|vpshufhw|vpshuflw|vpsrldq|vpsrlq|vpsrlw|vpsubw|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
+allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vbroadcastss|vextracti128|vinserti128|vmovaps|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpackusdw|vpackuswb|vpaddd|vpaddq|vpaddw|vpand|vpandn|vpblendd|vpblendw|vpbroadcastb|vpbroadcastd|vpbroadcastq|vpbroadcastw|vpcmpeqb|vpcmpeqd|vpcmpeqw|vpcmpgtw|vperm2i128|vpermq|vpextrq|vpextrw|vpinsrb|vpminub|vpmovsxbw|vpmovzxwd|vpmovzxbw|vpmulld|vpmuludq|vpmullw|vpshufb|vpshufd|vpshufhw|vpshuflw|vpsrld|vpsrldq|vpsrlq|vpsrlw|vpsubd|vpsubw|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
 
 # The GFNI candidate is compiled with `-mavx2 -mgfni -mno-avx512f' and is gated
 # on a runtime probe that establishes AVX2 *and* the separately enumerated GFNI

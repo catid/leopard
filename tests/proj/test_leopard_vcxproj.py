@@ -1250,6 +1250,20 @@ class CMakeProductionGraph(object):
         "leopard2_v19_fresh_build_optimized_self_test": 1,
         "leopard2_v19_retained_lineage_self_test": 1,
         "leopard2_v19_retained_lineage_optimized_self_test": 1,
+        "leopard2_v19_compiler_execution_self_test": 1,
+        "leopard2_v19_compiler_execution_optimized_self_test": 1,
+        "leopard2_v19_build_tool_execution_self_test": 1,
+        "leopard2_v19_build_tool_execution_optimized_self_test": 1,
+        "leopard2_v19_runtime_inventory_self_test": 1,
+        "leopard2_v19_runtime_inventory_optimized_self_test": 1,
+        "leopard2_v19_compiler_headers_self_test": 1,
+        "leopard2_v19_compiler_headers_optimized_self_test": 1,
+        "leopard2_v19_linker_inputs_self_test": 1,
+        "leopard2_v19_linker_inputs_optimized_self_test": 1,
+        "leopard2_v19_compiler_search_self_test": 1,
+        "leopard2_v19_compiler_search_optimized_self_test": 1,
+        "leopard2_v19_runtime_dispatch_self_test": 1,
+        "leopard2_v19_runtime_dispatch_optimized_self_test": 1,
         "leopard2_pair_qualification_contract_self_test": 1,
         "leopard2_pair_qualification_contract_optimized_self_test": 1,
         "leopard2_pair_qualification_acquire_self_test": 1,
@@ -1367,6 +1381,20 @@ class CMakeProductionGraph(object):
         "leopard2_v19_fresh_build_optimized_self_test",
         "leopard2_v19_retained_lineage_self_test",
         "leopard2_v19_retained_lineage_optimized_self_test",
+        "leopard2_v19_compiler_execution_self_test",
+        "leopard2_v19_compiler_execution_optimized_self_test",
+        "leopard2_v19_build_tool_execution_self_test",
+        "leopard2_v19_build_tool_execution_optimized_self_test",
+        "leopard2_v19_runtime_inventory_self_test",
+        "leopard2_v19_runtime_inventory_optimized_self_test",
+        "leopard2_v19_compiler_headers_self_test",
+        "leopard2_v19_compiler_headers_optimized_self_test",
+        "leopard2_v19_linker_inputs_self_test",
+        "leopard2_v19_linker_inputs_optimized_self_test",
+        "leopard2_v19_compiler_search_self_test",
+        "leopard2_v19_compiler_search_optimized_self_test",
+        "leopard2_v19_runtime_dispatch_self_test",
+        "leopard2_v19_runtime_dispatch_optimized_self_test",
         "leopard2_pair_qualification_acquire_self_test",
         "leopard2_pair_qualification_acquire_optimized_self_test",
         "leopard2_pair_qualification_bridge_acquire_self_test",
@@ -1427,7 +1455,7 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "cf6fd764351e29e094efb8356c3cfdd2d745b6ef103b5bd11c41453bedd1a4e5"
+        "9c7585e721f7edb37166e1f8d542cd5ced1ddff5820b569994c121ea60633681"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
@@ -1572,6 +1600,24 @@ class CMakeProductionGraph(object):
         ("set_tests_properties", (
             "leopard2_v19_fresh_build_self_test",
             "leopard2_v19_fresh_build_optimized_self_test",
+            "PROPERTIES", "ENVIRONMENT",
+            "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning",
+            "TIMEOUT", "60")): 1,
+        ("set_tests_properties", (
+            "leopard2_v19_compiler_execution_self_test",
+            "leopard2_v19_compiler_execution_optimized_self_test",
+            "leopard2_v19_build_tool_execution_self_test",
+            "leopard2_v19_build_tool_execution_optimized_self_test",
+            "leopard2_v19_runtime_inventory_self_test",
+            "leopard2_v19_runtime_inventory_optimized_self_test",
+            "leopard2_v19_compiler_headers_self_test",
+            "leopard2_v19_compiler_headers_optimized_self_test",
+            "leopard2_v19_linker_inputs_self_test",
+            "leopard2_v19_linker_inputs_optimized_self_test",
+            "leopard2_v19_compiler_search_self_test",
+            "leopard2_v19_compiler_search_optimized_self_test",
+            "leopard2_v19_runtime_dispatch_self_test",
+            "leopard2_v19_runtime_dispatch_optimized_self_test",
             "PROPERTIES", "ENVIRONMENT",
             "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning",
             "TIMEOUT", "60")): 1,
@@ -3309,6 +3355,12 @@ class CMakeProductionGraph(object):
                          (BOOL_SYMBOL_PREFIX + "external:" + text,),
                          (reason,))]
             return [(BOOL_TRUE, (text,), ())]
+        # This source-capability bit only controls whether repository-only
+        # research tests are registered.  It must not alter the production
+        # graph proof: the same CMake graph is audited from both a Git
+        # checkout and an export-ignore source archive.
+        if name == "LEO2_HAVE_RESEARCH_SOURCES":
+            return [(BOOL_TRUE, ("1",), ())]
         variants = self._variable_variants(name, active_guard)
         if not variants:
             reason = "unmodeled CMake conditional variable: " + name
@@ -6581,6 +6633,13 @@ class CMakeGraphMutationTest(unittest.TestCase):
             "experiments/leopard2/non_power_of_two/c7/run_authoritative.py",
             "experiments/leopard2/non_power_of_two/c7/test_checkpoint.py",
             "experiments/leopard2/non_power_of_two/c7/validate_evidence.py",
+        }
+        # Public archives omit the repository-only experiments tree.  Keep
+        # the checkout's historical replay inventory strict while admitting
+        # the intentionally smaller archive-shaped inventory.
+        authenticated_replay_contracts = {
+            relative for relative in authenticated_replay_contracts
+            if (ROOT / relative).is_file()
         }
         legacy_reference = re.compile(
             r"liblibleopard|CMakeFiles/libleopard[.]dir|"
