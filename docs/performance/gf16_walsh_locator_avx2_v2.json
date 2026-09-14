@@ -4,7 +4,7 @@
   "executable_sha256": "d6945a66e179e2fe78f741fd2645ef19780482efb843b94ec6135749fccb678f",
   "source_dirty_at_configure": false,
   "artifact_sha256_before_after_equal": true,
-  "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+  "canonical_lock": "${ATLAS_TMP}/leopard-gf8-authoritative.lock",
   "cpu": 0,
   "reserved_smt_sibling": 64,
   "sibling_non_idle_jiffies": [0, 0, 0, 0, 0, 0],

@@ -23,7 +23,7 @@ unchanged.
 
 - Build from a clean checkout of this pushed commit; copy the executable into a
   lane-owned immutable artifact directory and hash it before and after timing.
-- Hold `/tmp/leopard-gf8-authoritative.lock` directly with a nonblocking
+- Hold `${ATLAS_TMP}/leopard-gf8-authoritative.lock` directly with a nonblocking
   exclusive `flock`; do not add an outer lock around a runner that owns it.
 - Pin to physical CPU 0 and reserve SMT sibling CPU 64. For every cell record
   sibling **non-idle** jiffies from `/proc/stat` fields

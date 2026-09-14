@@ -271,6 +271,16 @@ class AtlasTests(unittest.TestCase):
         self.assertIn("${ATLAS_TMP}", metadata)
         self.assertIn("${LEOPARD_SOURCE}", reproduce)
         self.assertIn("${ATLAS_TMP}", reproduce)
+        gf16_root = evidence_root.parent
+        gf16_files = (
+            gf16_root / "gf16_walsh_locator_avx2_v2.json",
+            gf16_root / "gf16_walsh_locator_avx2_preregistration.md",
+            gf16_root / "gf16_walsh_locator_avx2_preregistration_v2.md",
+        )
+        for path in gf16_files:
+            text = path.read_text()
+            self.assertNotIn("/tmp/leopard-gf8-authoritative.lock", text)
+            self.assertIn("${ATLAS_TMP}/leopard-gf8-authoritative.lock", text)
 
     def test_archive_safe_paths_rewrites_nested_metadata(self) -> None:
         value = {"paths": ["/home/catid/leopard/src", "/tmp/build"],
