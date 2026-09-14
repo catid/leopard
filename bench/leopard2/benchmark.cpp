@@ -2617,7 +2617,8 @@ static int Run(const Options& options)
         codec, &original_present[0], &recovery_present[0], &plan), "decode plan create");
     leopard2_internal::DecodePlanPrunedScheduleInfo
         reusable_plan_schedule_info = {};
-    if (options.small_dual_regular_fallback_mode >= 0 &&
+    if ((options.small_dual_regular_fallback_mode >= 0 ||
+         options.report_decode_path) &&
         !leopard2_internal::GetDecodePlanPrunedScheduleInfo(
             plan, &reusable_plan_schedule_info))
     {
@@ -4007,7 +4008,20 @@ static int Run(const Options& options)
              << "    \"decode_rounded_bytes\": "
              << decode_path_info.rounded_shard_bytes << ",\n"
              << "    \"decode_multi_item_batch\": "
-             << (decode_path_info.multi_item_batch ? "true" : "false");
+             << (decode_path_info.multi_item_batch ? "true" : "false")
+             << ",\n"
+             << "    \"low_pruned_operation_count\": "
+             << reusable_plan_schedule_info.low_operation_count << ",\n"
+             << "    \"low_pruned_full_butterfly_count\": "
+             << reusable_plan_schedule_info.low_full_butterfly_count << ",\n"
+             << "    \"low_pruned_fused_four_group_count\": "
+             << reusable_plan_schedule_info.low_fused_four_group_count << ",\n"
+             << "    \"high_pruned_operation_count\": "
+             << reusable_plan_schedule_info.high_operation_count << ",\n"
+             << "    \"high_pruned_full_butterfly_count\": "
+             << reusable_plan_schedule_info.high_full_butterfly_count << ",\n"
+             << "    \"high_pruned_fused_four_group_count\": "
+             << reusable_plan_schedule_info.high_fused_four_group_count;
         if (options.report_direct_executor)
             json << ",\n"
                  << "    \"selected_direct_executor\": \""

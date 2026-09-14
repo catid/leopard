@@ -17177,16 +17177,47 @@ bool GetDecodePlanPrunedScheduleInfo(
 {
     if (!plan || !info_out)
         return false;
-    DecodePlanPrunedScheduleInfo info;
+    DecodePlanPrunedScheduleInfo info = {};
     info.low_input_plan_count = plan->low_pruned_input_blocks.size();
     info.low_output_plan_count =
         plan->low_pruned_output_plan.size == 0 ? 0 : 1;
     info.high_input_plan_count = plan->high_pruned_input_blocks.size();
     info.high_output_plan_count = 0;
+    for (size_t i = 0; i < plan->low_pruned_input_blocks.size(); ++i)
+    {
+        const PrunedTransformPlan& entry =
+            plan->low_pruned_input_blocks[i].plan;
+        info.low_operation_count += entry.operations.size();
+        info.low_full_butterfly_count += entry.full_butterfly_count;
+        info.low_fused_four_group_count += entry.fused_four_starts.size();
+    }
+    if (plan->low_pruned_output_plan.size != 0)
+    {
+        info.low_operation_count += plan->low_pruned_output_plan.operations.size();
+        info.low_full_butterfly_count +=
+            plan->low_pruned_output_plan.full_butterfly_count;
+        info.low_fused_four_group_count +=
+            plan->low_pruned_output_plan.fused_four_starts.size();
+    }
     for (size_t i = 0; i < plan->high_pruned_output_plans.size(); ++i)
     {
         if (plan->high_pruned_output_plans[i].size != 0)
+        {
             ++info.high_output_plan_count;
+            const PrunedTransformPlan& entry =
+                plan->high_pruned_output_plans[i];
+            info.high_operation_count += entry.operations.size();
+            info.high_full_butterfly_count += entry.full_butterfly_count;
+            info.high_fused_four_group_count += entry.fused_four_starts.size();
+        }
+    }
+    for (size_t i = 0; i < plan->high_pruned_input_blocks.size(); ++i)
+    {
+        const PrunedTransformPlan& entry =
+            plan->high_pruned_input_blocks[i].plan;
+        info.high_operation_count += entry.operations.size();
+        info.high_full_butterfly_count += entry.full_butterfly_count;
+        info.high_fused_four_group_count += entry.fused_four_starts.size();
     }
     *info_out = info;
     return true;
