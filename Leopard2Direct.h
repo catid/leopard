@@ -626,6 +626,14 @@ struct DecodePlanPrunedScheduleInfo
     size_t low_output_plan_count;
     size_t high_input_plan_count;
     size_t high_output_plan_count;
+    // Aggregate structural cost across all retained pruned plans.  These
+    // fields are diagnostic only; they do not alter execution or dispatch.
+    size_t low_operation_count;
+    size_t low_full_butterfly_count;
+    size_t low_fused_four_group_count;
+    size_t high_operation_count;
+    size_t high_full_butterfly_count;
+    size_t high_fused_four_group_count;
 };
 
 bool GetDecodePlanPrunedScheduleInfo(
