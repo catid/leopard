@@ -1222,6 +1222,18 @@ def reproduction_command(args: argparse.Namespace) -> str:
     return shlex.join(command)
 
 
+def archive_safe_paths(value: Any) -> Any:
+    """Replace producer-local roots before evidence is checked in or resumed."""
+    if isinstance(value, str):
+        return value.replace("/home/catid/leopard", "${LEOPARD_SOURCE}") \
+            .replace("/tmp/", "${ATLAS_TMP}/")
+    if isinstance(value, dict):
+        return {key: archive_safe_paths(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [archive_safe_paths(item) for item in value]
+    return value
+
+
 def load_cell_results(raw_root: Path, cell: Mapping[str, Any]) -> dict[str, Any]:
     payloads: dict[str, Any] = {}
     for codec in cell["available_codecs"]:
@@ -1302,7 +1314,7 @@ def run_campaign(args: argparse.Namespace, manifest: Mapping[str, Any]) -> None:
         attestation = attest_leopard2(
             Path(frozen["leopard2"]["path"]), cpu,
             args.address_space_limit, args.timeout, sources["leopard2"])
-        metadata = {
+        metadata = archive_safe_paths({
             "schema": "leopard2-performance-atlas-run-metadata/v1",
             "host": capture_host(cpu, lock_identity, args.address_space_limit),
             "executables": frozen,
@@ -1319,7 +1331,7 @@ def run_campaign(args: argparse.Namespace, manifest: Mapping[str, Any]) -> None:
                 "version": RUNNER_VERSION,
             },
             "reproduction_command": reproduction_command(args),
-        }
+        })
         metadata_path = output_root / "run_metadata.json"
         if metadata_path.exists():
             old = read_json(metadata_path)
