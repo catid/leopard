@@ -37,8 +37,10 @@ be pooled across cells or across source/executable identities.
   exclusive `flock`; do not wrap a runner that acquires this lock in another
   lock.
 - Pin the benchmark to physical CPU 0 and reserve its SMT sibling CPU 64.
-  Record sibling jiffies before and after each cell and reject the cell if the
-  reserved sibling is active.
+  Record sibling **non-idle** jiffies before and after each cell from
+  `/proc/stat` fields `user+nice+system+irq+softirq+steal` (fields 2, 3, 4,
+  7, 8, and 9); idle and iowait fields are excluded. Reject the cell if this
+  reserved-sibling activity delta is nonzero.
 - Use `OMP_NUM_THREADS=1`, `OMP_DYNAMIC=FALSE`, and no other benchmark jobs.
   Record maximum resident set size and process exit status for every run.
 
