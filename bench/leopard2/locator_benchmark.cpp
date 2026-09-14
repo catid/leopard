@@ -28,6 +28,7 @@
 
 #include "LeopardFF8.h"
 #include "LeopardFF16.h"
+#include "Leopard2Backend.h"
 
 #include <algorithm>
 #include <chrono>
@@ -58,6 +59,7 @@ namespace {
 struct Options
 {
     std::string field;
+    std::string backend;
     unsigned n;
     unsigned erasures;
     unsigned calls;
@@ -67,6 +69,7 @@ struct Options
 
     Options()
         : field("gf16")
+        , backend("scalar")
         , n(1024)
         , erasures(5)
         , calls(16)
@@ -113,6 +116,7 @@ static Options ParseOptions(int argc, char** argv)
             std::cout
                 << "Usage: bench_leopard2_locator [options]\n"
                 << "  --field gf8|gf16\n"
+                << "  --backend scalar|avx2 (GF16 only)\n"
                 << "  --n POWER_OF_TWO\n"
                 << "  --erasures N\n"
                 << "  --calls N\n"
@@ -129,6 +133,8 @@ static Options ParseOptions(int argc, char** argv)
         const char* value = argv[++i];
         if (!std::strcmp(argv[i - 1], "--field"))
             options.field = value;
+        else if (!std::strcmp(argv[i - 1], "--backend"))
+            options.backend = value;
         else if (!std::strcmp(argv[i - 1], "--n"))
             options.n = ParseUnsigned(value, "n");
         else if (!std::strcmp(argv[i - 1], "--erasures"))
@@ -148,6 +154,15 @@ static Options ParseOptions(int argc, char** argv)
         }
     }
     return options;
+}
+
+static const leopard::backend::Ops* g_backend_ops = NULL;
+
+static void PrepareGF16Backend(
+    unsigned n, const uint8_t* erasures, leopard::ff16::ffe_t* locator_logs)
+{
+    leopard::ff16::PrepareDecodeWalshActiveWithBackend(
+        *g_backend_ops, n, erasures, locator_logs);
 }
 
 struct Summary
@@ -478,6 +493,17 @@ static int Run(
 int main(int argc, char** argv)
 {
     const Options options = ParseOptions(argc, argv);
+    if (options.backend != "scalar" && options.backend != "avx2")
+    {
+        std::cerr << "invalid backend" << std::endl;
+        return 2;
+    }
+    if (options.backend == "avx2" && options.field != "gf16")
+    {
+        std::cerr << "avx2 backend mode is only available for gf16" <<
+            std::endl;
+        return 2;
+    }
     if (options.field == "gf8")
     {
 #ifdef LEO_HAS_FF8
@@ -494,6 +520,48 @@ int main(int argc, char** argv)
     if (options.field == "gf16")
     {
 #ifdef LEO_HAS_FF16
+        if (options.backend == "avx2")
+        {
+#ifdef LEO_HAS_FF8
+            if (!leopard::ff8::Initialize())
+            {
+                std::cerr << "GF8 initialization failed" << std::endl;
+                return 1;
+            }
+#endif
+            if (!leopard::ff16::Initialize())
+            {
+                std::cerr << "GF16 initialization failed" << std::endl;
+                return 1;
+            }
+            leopard::backend::InitializeArgs args = {};
+#ifdef LEO_HAS_FF8
+            args.ff8_multiply_log = leopard::ff8::MultiplyLogElement;
+            args.ff8_skew_log_storage = leopard::ff8::SkewLogTable();
+#endif
+            args.ff16_multiply_log = leopard::ff16::MultiplyLogElement;
+            if (!leopard::backend::Initialize(args))
+            {
+                std::cerr << "backend initialization failed" << std::endl;
+                return 1;
+            }
+            leopard::backend::QualificationStatus status =
+                leopard::backend::QualificationAvailable;
+            g_backend_ops = leopard::backend::GetQualifiedOps(
+                LEO2_BACKEND_AVX2, &status);
+            if (!g_backend_ops || !g_backend_ops->ff16_walsh_locator)
+            {
+                std::cerr << "qualified AVX2 GF16 locator unavailable" <<
+                    std::endl;
+                return 1;
+            }
+            return Run<leopard::ff16::ffe_t>(options,
+                leopard::ff16::kOrder, leopard::ff16::Initialize,
+                leopard::ff16::PrepareDecodeDirect,
+                PrepareGF16Backend,
+                leopard::ff16::PrepareDecodeWalshReference,
+                leopard::ff16::IsDirectLocatorPreferred);
+        }
         return Run<leopard::ff16::ffe_t>(options, leopard::ff16::kOrder,
             leopard::ff16::Initialize, leopard::ff16::PrepareDecodeDirect,
             leopard::ff16::PrepareDecodeWalshActive,
