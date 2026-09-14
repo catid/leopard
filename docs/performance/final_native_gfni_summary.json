@@ -1,0 +1,24 @@
+{
+  "schema": "leopard2-final-source-native-leopard1-gfni-v20/v1",
+  "status": "valid",
+  "source_commit": "a5d0229f3eb8f4d5516519cc703f9270d5241f08",
+  "baseline_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+  "raw_schema": "leopard2-main-compare-raw/v20",
+  "identity_sampling": "one complete snapshot before and after; sealed executable and reservation checks per child",
+  "cell": "gf16-high-full K=1000 R=200 B=65536 full parity",
+  "host": "AMD Ryzen Threadripper 9980X 64-Core, CPU52 with SMT sibling 116 reserved",
+  "rounds": 3,
+  "ratio_orientation": "native Leopard1 time / Leopard2 time",
+  "encode": {"geometric_speedup": 1.4188287800461807, "ci95": [1.3245121449930493, 1.5198615691801733]},
+  "one_shot_encode": {"geometric_speedup": 1.4194821752355782, "ci95": [1.3252747416142758, 1.520386364081161]},
+  "isolation": {"accepted": true, "reserved_sibling_nonidle_jiffies": 0, "timed_invocations": 12},
+  "binary_sha256": {
+    "leopard1": "dff1249dbc8f8ab9fd6a43656757b3fec9666301f118df92502ad381f6f95b13",
+    "leopard2": "6f8d7e8b9ba229e149bf100c5c28636f74a7cdb64c64b16182f409f8e8ee852c"
+  },
+  "steady_state_measurements": {
+    "cell": "K=1000,R=200,B=65536,one-thread",
+    "full_loss": {"native_leopard1_encode_gb_s": 6.867342, "leopard2_encode_gb_s": 9.70834, "native_leopard1_decode_gb_s": 1.144691, "leopard2_reused_decode_gb_s": 2.895268, "native_encode_work_bytes": 33554432, "leopard2_encode_scratch_bytes": 16808512, "native_decode_work_bytes": 134217728, "leopard2_decode_scratch_bytes": 11722688, "leopard2_codec_setup_us": 3.916, "leopard2_decode_plan_setup_us": 107.441},
+    "one_loss": {"native_leopard1_encode_gb_s": 6.814664, "leopard2_encode_gb_s": 10.95956, "native_leopard1_decode_gb_s": 1.579941, "leopard2_reused_decode_gb_s": 6.525089, "native_encode_work_bytes": 33554432, "leopard2_encode_scratch_bytes": 16808512, "native_decode_work_bytes": 134217728, "leopard2_decode_scratch_bytes": 8460736, "leopard2_codec_setup_us": 4.096, "leopard2_decode_plan_setup_us": 55.793}
+  }
+}

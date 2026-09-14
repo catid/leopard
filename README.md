@@ -50,7 +50,7 @@ comparisons with machine-readable provenance.  Its plots are single-core
 measurements on the recorded host, not universal guarantees.  A final-source
 native-Leopard1 ABBA check reports a 41.9% GF16 encode speedup (95% CI
 32.5–52.0%) at `K=1000,R=200,B=65536`, with zero reserved-SMT activity; the
-compact record is [`a5d0229-final-native-gfni-v20/summary.json`](experiments/leopard2/main_compare/results/a5d0229-final-native-gfni-v20/summary.json).
+compact record is [`final_native_gfni_summary.json`](docs/performance/final_native_gfni_summary.json).
 Separately qualified AUTO routes report 53.7% and 48.4% gains at two GF16
 boundary workloads.  The R199/32-KiB extension remains disabled because its
 cross-process stability control was inconclusive.  See the retained
