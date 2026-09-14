@@ -122,8 +122,13 @@ void check_table_accounting(
         // The GFNI member packs the four 8x8 affine blocks into 32 bytes per
         // GF16 logarithm (2 MiB) instead of the nibble shape's 128 bytes;
         // its GF8 table keeps the 32-byte duplicated-row shape.
+#if defined(NO_LEO_HAS_FF8)
+        require(state.ff8_bytes == 0U,
+            "GFNI GF8 table unexpectedly present in GF16-only build");
+#else
         require(state.ff8_bytes == 8192U,
             "GFNI GF8 table byte accounting changed");
+#endif
         require(state.ff16_bytes == 2097152U,
             "GFNI packed GF16 table byte accounting changed");
     }
@@ -257,8 +262,15 @@ void run_failure_case(leo2_backend backend, const char* stage)
                                   : QualificationOutOfMemory),
         "cached internal qualification status is wrong");
     if (kat)
+    {
+#if defined(NO_LEO_HAS_FF8)
+        require(!failed.ff8_published && failed.ff16_published,
+            "KAT failure did not retain the available immutable GF16 table");
+#else
         require(failed.ff8_published && failed.ff16_published,
             "KAT failure did not retain one complete immutable table pair");
+#endif
+    }
     else
         require(!failed.ff8_published && !failed.ff16_published,
             "allocation failure partially published backend tables");
@@ -488,8 +500,13 @@ void run_auto_gfni_encode_fallback_case(
             failed.failure == (kat ? QualificationSelfTestFailed
                                    : QualificationOutOfMemory),
         "optional GFNI failure was not cached correctly");
+#if defined(NO_LEO_HAS_FF8)
+    require(!failed.ff8_published && failed.ff16_published == kat,
+        "optional GFNI failure partially published the available table");
+#else
     require(failed.ff8_published == kat && failed.ff16_published == kat,
         "optional GFNI failure partially published tables");
+#endif
 
     // Check all fallback output bytes against an explicit AVX2 codec, not
     // merely the success status and the routing diagnostic.

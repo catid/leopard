@@ -1536,7 +1536,8 @@ if(LEO2_BUILD_TESTS)
         add_executable(leopard2_gf16_only_auto_gfni_test
             tests/leopard2/test_backend_failures.cpp)
         target_compile_definitions(leopard2_gf16_only_auto_gfni_test PRIVATE
-            LEO2_ENABLE_TEST_HOOKS=1)
+            LEO2_ENABLE_TEST_HOOKS=1
+            NO_LEO_HAS_FF8=1)
         target_link_libraries(
             leopard2_gf16_only_auto_gfni_test leopard_test_hooks)
         add_test(NAME leopard2_backend_auto_gfni_encode_production

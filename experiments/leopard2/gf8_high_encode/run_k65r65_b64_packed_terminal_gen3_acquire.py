@@ -82,6 +82,8 @@ _MISSING_MODULE_ALIAS = object()
 _LIVE_ARMER_MODULE = _BOOTSTRAP_MODULE_REGISTRY.get(__name__)
 _MAX_CONTROLLER_SOURCE_BYTES = 16 * 1024 * 1024
 _REQUIRED_CONTROLLER_RELATIVE_PATHS = (
+    "experiments/leopard2/main_compare/pair_qualified_v19_contract.py",
+    "experiments/leopard2/main_compare/passive_environment_census.py",
     "experiments/leopard2/main_compare/pair_qualification_contract.py",
     "experiments/leopard2/main_compare/pair_qualification_acquire.py",
     "experiments/leopard2/main_compare/pair_qualification_bridge_contract.py",

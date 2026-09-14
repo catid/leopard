@@ -140,6 +140,8 @@ EXACT_MAIN_EXECUTABLE_SHA256 = \
 V2_MATRIX_SHA256 = \
     "ab9572c4101b2af5eda4b7cfab17e979239f698c4c1196e660cf6f5e3f4af27c"
 REQUIRED_CONTROLLER_PATHS = (
+    "experiments/leopard2/main_compare/pair_qualified_v19_contract.py",
+    "experiments/leopard2/main_compare/passive_environment_census.py",
     "experiments/leopard2/main_compare/pair_qualification_contract.py",
     "experiments/leopard2/main_compare/pair_qualification_acquire.py",
     "experiments/leopard2/main_compare/pair_qualification_bridge_contract.py",

@@ -238,6 +238,18 @@ void CheckProductionPackedScratchMetadata(
     const bool k65r65_terminal =
         original_count == 65 && recovery_count == 65 &&
         transform_side == 128 && kShardBytes == 64;
+    const bool generated_t32_b256_terminal =
+        LEO2_EXPECT_T32_B256_GENERATED && kShardBytes == 256 &&
+        original_count == 32 && recovery_count == 32 &&
+        transform_side == 32;
+    /*
+        The B256 production target also exercises neighboring shapes.  Those
+        deliberately use the mature general path, which stages pointer
+        metadata in public scratch.  Only the exact generated terminal has
+        the no-scratch contract checked here.
+    */
+    if (kShardBytes == 256 && !generated_t32_b256_terminal)
+        return;
     if (!k65r65_terminal)
     {
         Require(std::memcmp(scratch.bytes(), &before[0],
