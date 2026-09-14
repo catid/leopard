@@ -597,6 +597,17 @@ typedef void (*FF8WalshLocator)(
     uint8_t* locator_logs,
     uint32_t n);
 
+// Optional GF16 plan-setup kernel.  It evaluates the active-parent modulo
+// 65535 Walsh convolution used to form locator logarithms.  n is a power of
+// two in [32, 65536].  The erasure mask is byte-sized; the kernel and output
+// contain n uint16_t field-log values.  Ranges may be unaligned and the output
+// must not overlap either input.
+typedef void (*FF16WalshLocator)(
+    const uint8_t* erasures,
+    const uint16_t* transformed_kernel,
+    uint16_t* locator_logs,
+    uint32_t n);
+
 // This table is private to the implementation and immutable.  A backend owns
 // any tables referenced by its functions and publishes this object only after
 // initialization and the startup known-answer tests have succeeded.
@@ -680,6 +691,9 @@ struct Ops
     // must be published together after their startup known-answer test.
     XorMemorySourcesFixed xor_memory_sources_fixed64;
     XorMemorySourcesFixed xor_memory_sources_fixed256;
+    // Optional pure-AVX2 active-parent GF16 locator construction.  Scalar and
+    // other SIMD backends retain the established field implementation.
+    FF16WalshLocator ff16_walsh_locator;
 };
 
 struct X86Features

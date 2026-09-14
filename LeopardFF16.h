@@ -264,6 +264,15 @@ void PrepareDecodeWalshActive(
     const uint8_t* erasures,
     ffe_t* locator_logs); // n elements
 
+// Runtime-backend companion.  A qualified backend may provide the same
+// active-parent convolution directly; unsupported backends and small parents
+// retain PrepareDecodeWalshActive exactly.
+void PrepareDecodeWalshActiveWithBackend(
+    const backend::Ops& ops,
+    unsigned n,
+    const uint8_t* erasures,
+    ffe_t* locator_logs); // n elements
+
 // Scalar active-parent direct product retained as the independent dense-path
 // oracle and selected for sparse erasure sets.
 void PrepareDecodeDirect(

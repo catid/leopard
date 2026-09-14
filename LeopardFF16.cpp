@@ -2801,6 +2801,30 @@ void PrepareDecodeWalshActive(
 }
 
 
+void PrepareDecodeWalshActiveWithBackend(
+    const backend::Ops& ops,
+    unsigned n,
+    const uint8_t* erasures,
+    ffe_t* locator_logs)
+{
+    LEO_DEBUG_ASSERT(n >= 2 && n <= kOrder);
+
+    // The AVX2 setup kernel is qualified only for vector-sized active parents;
+    // small parents retain the scalar path, as do all lower or alternate
+    // backends.  The full parent uses the same precomputed kernel as the
+    // scalar implementation.
+    if (n >= 32 && ops.ff16_walsh_locator)
+    {
+        const ffe_t* transformed_kernel =
+            n == kOrder ? LogWalsh : ActiveLogWalsh + n - 2;
+        ops.ff16_walsh_locator(
+            erasures, transformed_kernel, locator_logs, n);
+        return;
+    }
+    PrepareDecodeWalshActive(n, erasures, locator_logs);
+}
+
+
 static unsigned CountErasures(
     unsigned n,
     const uint8_t* erasures,

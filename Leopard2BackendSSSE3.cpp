@@ -2064,6 +2064,8 @@ static const Ops SSSE3Ops = {
     // xor_memory_sources_fixed64 / xor_memory_sources_fixed256
     , NULL
     , NULL
+    // ff16_walsh_locator
+    , NULL
 };
 
 const Ops* InitializeSSSE3(const InitializeArgs& args)

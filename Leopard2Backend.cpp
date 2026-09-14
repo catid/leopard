@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstring>
 #include <mutex>
+#include <vector>
 
 namespace leopard { namespace backend {
 
@@ -3344,6 +3345,87 @@ static bool TestFF8WalshLocator(const Ops& ops)
 }
 #endif // LEO_HAS_FF8
 
+#ifdef LEO_HAS_FF16
+static uint16_t ReferenceWalshAddMod65535(uint16_t a, uint16_t b)
+{
+    return static_cast<uint16_t>(
+        (static_cast<uint32_t>(a) + static_cast<uint32_t>(b)) % 65535U);
+}
+
+static uint16_t ReferenceWalshSubMod65535(uint16_t a, uint16_t b)
+{
+    return static_cast<uint16_t>(
+        (static_cast<uint32_t>(a) + 65535U - static_cast<uint32_t>(b)) %
+        65535U);
+}
+
+static void ReferenceFF16WalshTransform(std::vector<uint16_t>& values)
+{
+    const uint32_t n = static_cast<uint32_t>(values.size());
+    for (uint32_t distance = 1; distance < n; distance <<= 1)
+    {
+        const uint32_t group_size = distance << 1;
+        for (uint32_t group = 0; group < n; group += group_size)
+            for (uint32_t offset = 0; offset < distance; ++offset)
+            {
+                const uint32_t a_index = group + offset;
+                const uint32_t b_index = a_index + distance;
+                const uint16_t a = values[a_index];
+                const uint16_t b = values[b_index];
+                values[a_index] = ReferenceWalshAddMod65535(a, b);
+                values[b_index] = ReferenceWalshSubMod65535(a, b);
+            }
+    }
+}
+
+static bool TestFF16WalshLocator(const Ops& ops)
+{
+    if (!ops.ff16_walsh_locator)
+        return true;
+    static const uint32_t sizes[] = { 32, 256, 1024, 65536 };
+    for (size_t size_i = 0; size_i < sizeof(sizes) / sizeof(sizes[0]);
+         ++size_i)
+    {
+        const uint32_t n = sizes[size_i];
+        for (unsigned pattern = 0; pattern < 3; ++pattern)
+        {
+            std::vector<uint8_t> erasures(n);
+            std::vector<uint8_t> original_erasures;
+            std::vector<uint16_t> kernel(n), original_kernel(n), expected(n),
+                actual(n);
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                const bool erased = pattern == 0 ? i == n / 3 :
+                    pattern == 1 ? (((i * 13U + n) & 31U) < 7U) :
+                    (((i * 29U + 11U) & 15U) != 0);
+                erasures[i] = erased ? ((i & 1U) ? 0x80U : 0xffU) : 0;
+                kernel[i] = static_cast<uint16_t>(
+                    i * 4093U + pattern * 7919U + n);
+                expected[i] = erased ? 1 : 0;
+            }
+            kernel[0] = 0;
+            kernel[1] = 1;
+            kernel[2] = 65534;
+            kernel[3] = 65535;
+            original_erasures = erasures;
+            original_kernel = kernel;
+            ReferenceFF16WalshTransform(expected);
+            for (uint32_t i = 0; i < n; ++i)
+                expected[i] = static_cast<uint16_t>(
+                    (static_cast<uint32_t>(expected[i]) * kernel[i]) %
+                    65535U);
+            ReferenceFF16WalshTransform(expected);
+            ops.ff16_walsh_locator(
+                erasures.data(), kernel.data(), actual.data(), n);
+            if (erasures != original_erasures || kernel != original_kernel ||
+                actual != expected)
+                return false;
+        }
+    }
+    return true;
+}
+#endif // LEO_HAS_FF16
+
 static bool TestOps(const Ops& ops, const InitializeArgs& args)
 {
     if (!ops.name || !ops.xor_memory || !ops.xor_memory_2to1 ||
@@ -3393,6 +3475,21 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         return false;
     if (ops.xor_memory_sources_fixed64 ||
         ops.xor_memory_sources_fixed256)
+        return false;
+#endif
+#ifdef LEO_HAS_FF16
+#if defined(LEO2_GFNI_VARIANT) && !defined(LEO2_GFNI_MEMBER)
+    const bool expected_ff16_walsh_locator = false;
+#else
+    const bool expected_ff16_walsh_locator =
+        ops.kind == LEO2_BACKEND_AVX2;
+#endif
+    if (expected_ff16_walsh_locator !=
+            (ops.ff16_walsh_locator != NULL) ||
+        !TestFF16WalshLocator(ops))
+        return false;
+#else
+    if (ops.ff16_walsh_locator)
         return false;
 #endif
     if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=

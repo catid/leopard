@@ -1415,6 +1415,8 @@ static const Ops ScalarOps = {
     // xor_memory_sources_fixed64 / xor_memory_sources_fixed256
     , NULL
     , NULL
+    // ff16_walsh_locator
+    , NULL
 };
 
 #if defined(__ELF__) && defined(__GNUC__) && !defined(__clang__)

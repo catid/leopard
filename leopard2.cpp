@@ -2314,6 +2314,28 @@ static void PrepareGF8LocatorKnownCount(
 }
 #endif
 
+#ifdef LEO_HAS_FF16
+static void PrepareGF16LocatorKnownCount(
+    const leo2_codec* codec,
+    const uint8_t* erasures,
+    uint32_t erasure_count,
+    uint16_t* locator_logs)
+{
+    LEO_DEBUG_ASSERT(codec && codec->context && codec->context->ops);
+    if (codec->context->ops->ff16_walsh_locator &&
+        !leopard::ff16::IsDirectLocatorPreferred(
+            codec->parent_count, erasure_count))
+    {
+        leopard::ff16::PrepareDecodeWalshActiveWithBackend(
+            *codec->context->ops, codec->parent_count, erasures,
+            locator_logs);
+        return;
+    }
+    leopard::ff16::PrepareDecodeKnownCount(
+        codec->parent_count, erasures, erasure_count, locator_logs);
+}
+#endif
+
 static bool PlanUsesTranslatedLowDecode(const leo2_decode_plan* plan)
 {
     return plan && plan->translated_low;
@@ -24461,8 +24483,9 @@ static leo2_result DecodePlanCreateInternal(
                     ? codec->translated_low_permanent_erased
                     : codec->permanent_erased;
                 if (permanent_locator.empty())
-                    leopard::ff16::PrepareDecodeKnownCount(
-                        codec->parent_count, &plan->coordinate_erased[0],
+                    PrepareGF16LocatorKnownCount(
+                        codec,
+                        &plan->coordinate_erased[0],
                         total_erasure_count, &plan->locator16[0]);
                 else
                     leopard::ff16::PrepareDecodeWithPermanentKnownCount(
