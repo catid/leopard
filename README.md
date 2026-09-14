@@ -57,6 +57,14 @@ cross-process stability control was inconclusive.  See the retained
 experiment reports under `experiments/` for exact gates and failed
 alternatives; they are excluded from user source archives.
 
+The dense GF16 decode-plan locator setup also has a qualified AVX2-only path:
+the same-process screen measured 3.9×–18.6× lower setup time across six
+active-parent sizes.  This is setup-only evidence, not an end-to-end throughput
+claim; scalar fallback and explicit backend behavior remain unchanged.  See the
+[preregistered method](docs/performance/gf16_walsh_locator_avx2_preregistration_v2.md),
+[results](docs/performance/gf16_walsh_locator_avx2_v2.md), and
+[machine-readable record](docs/performance/gf16_walsh_locator_avx2_v2.json).
+
 Atlas snapshots: [encode speedup](docs/performance/leopard2_atlas/plots/encode_speedup_vs_leopard1.svg),
 [one-loss decode](docs/performance/leopard2_atlas/plots/decode_one_speedup_vs_leopard1.svg),
 and [full-loss decode](docs/performance/leopard2_atlas/plots/decode_full_speedup_vs_leopard1.svg).
