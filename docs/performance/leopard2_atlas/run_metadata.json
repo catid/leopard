@@ -4,44 +4,44 @@
       "archive": {
         "mode": 436,
         "mtime_ns": 1786560984492423944,
-        "path": "/tmp/leopard2-atlas-main-build-5939767/libleopard_main_exact.a",
+        "path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/libleopard_main_exact.a",
         "sha256": "2fb2bd7506e177081f13ff864b31c05b10e43627aa4b8424e5692a4a87dcafbd",
         "size": 944398
       },
       "archive_link_recipe": {
         "mode": 436,
         "mtime_ns": 1786560974647413275,
-        "path": "/tmp/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir/link.txt",
+        "path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir/link.txt",
         "sha256": "620d0dbf2d6edca8a71719e5a4243699453a84314b301ae32ed619fba404829e",
         "size": 384
       },
       "archive_members": [
         {
           "name": "leopard.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir/tmp/leopard-main-exact/leopard.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir${ATLAS_TMP}/leopard-main-exact/leopard.cpp.o",
           "sha256": "6f91bd8649780573d4bdc81cb381dacf3c0d13511126535bc6c39abdd59c50c8",
           "size": 50768
         },
         {
           "name": "LeopardCommon.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir/tmp/leopard-main-exact/LeopardCommon.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir${ATLAS_TMP}/leopard-main-exact/LeopardCommon.cpp.o",
           "sha256": "51064d607209333fe1cb18d8a5016ec3fe4bd52205b6354a108bfc6f00a5180b",
           "size": 89544
         },
         {
           "name": "LeopardFF8.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir/tmp/leopard-main-exact/LeopardFF8.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir${ATLAS_TMP}/leopard-main-exact/LeopardFF8.cpp.o",
           "sha256": "b9c03d398c8cd0d0881a1638d8f874bb929f4b5388211ee8d2bde7a9c1876a41",
           "size": 333760
         },
         {
           "name": "LeopardFF16.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir/tmp/leopard-main-exact/LeopardFF16.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir${ATLAS_TMP}/leopard-main-exact/LeopardFF16.cpp.o",
           "sha256": "0924cd6b6936d6fc451415eabd723279b1c78176434f8ba655b43e4ac92b1085",
           "size": 469072
         }
       ],
-      "build_root": "/tmp/leopard2-atlas-main-build-5939767",
+      "build_root": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767",
       "cache_contract": {
         "CMAKE_BUILD_TYPE": "Release",
         "LEO_MAIN_PURE_AVX2": "ON"
@@ -49,27 +49,27 @@
       "cmake_cache": {
         "mode": 436,
         "mtime_ns": 1786560974646413274,
-        "path": "/tmp/leopard2-atlas-main-build-5939767/CMakeCache.txt",
+        "path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/CMakeCache.txt",
         "sha256": "b5d0d8f8911f5e54c423ff3dd5764ce59181f0d672cc407a5f36fa58a7470692",
         "size": 14947
       },
       "compile_commands": {
         "mode": 436,
         "mtime_ns": 1786560974648413276,
-        "path": "/tmp/leopard2-atlas-main-build-5939767/compile_commands.json",
+        "path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/compile_commands.json",
         "sha256": "32818820d9cfe149589d8bfcbaeb976b609e6dfdcbf03bef3817c2aaff4bb1aa",
         "size": 2569
       },
       "executable": {
         "mode": 509,
-        "path": "/tmp/leopard2-atlas-main-build-5939767/leopard_main_benchmark",
+        "path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/leopard_main_benchmark",
         "sha256": "2f8d1f42d767f97fe6c4d373892d849e679eda07cab2afbc4ec0a521b58516e6",
         "size": 1175184
       },
       "executable_link_recipe": {
         "mode": 436,
         "mtime_ns": 1786560974647413275,
-        "path": "/tmp/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_benchmark.dir/link.txt",
+        "path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_benchmark.dir/link.txt",
         "sha256": "b12487c0cda2da4472706d07ae58e3bc25694e2a7365dee2ab500011170a0ab0",
         "size": 225
       },
@@ -92,14 +92,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786560983073422404,
-              "path": "/tmp/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir/tmp/leopard-main-exact/LeopardCommon.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir${ATLAS_TMP}/leopard-main-exact/LeopardCommon.cpp.o",
               "sha256": "51064d607209333fe1cb18d8a5016ec3fe4bd52205b6354a108bfc6f00a5180b",
               "size": 89544
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1784361330709417618,
-              "path": "/tmp/leopard-main-exact/LeopardCommon.cpp",
+              "path": "${ATLAS_TMP}/leopard-main-exact/LeopardCommon.cpp",
               "sha256": "8328179196ccfc3709c6fc6bef6a56b2245a6351c55589181218e095110039da",
               "size": 20282
             }
@@ -115,14 +115,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786560984468423918,
-              "path": "/tmp/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir/tmp/leopard-main-exact/LeopardFF16.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir${ATLAS_TMP}/leopard-main-exact/LeopardFF16.cpp.o",
               "sha256": "0924cd6b6936d6fc451415eabd723279b1c78176434f8ba655b43e4ac92b1085",
               "size": 469072
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1784361330709417618,
-              "path": "/tmp/leopard-main-exact/LeopardFF16.cpp",
+              "path": "${ATLAS_TMP}/leopard-main-exact/LeopardFF16.cpp",
               "sha256": "f528bccac6d57e142d89e4981657592691428ff3e41f21c9e55ba27ed52d781b",
               "size": 57322
             }
@@ -138,14 +138,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786560983702423086,
-              "path": "/tmp/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir/tmp/leopard-main-exact/LeopardFF8.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir${ATLAS_TMP}/leopard-main-exact/LeopardFF8.cpp.o",
               "sha256": "b9c03d398c8cd0d0881a1638d8f874bb929f4b5388211ee8d2bde7a9c1876a41",
               "size": 333760
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1784361330709417618,
-              "path": "/tmp/leopard-main-exact/LeopardFF8.cpp",
+              "path": "${ATLAS_TMP}/leopard-main-exact/LeopardFF8.cpp",
               "sha256": "6cf5302c29572128a55ffa517b9bbf6bca5ff58ab984bde708f844a84c646032",
               "size": 61080
             }
@@ -161,14 +161,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786560982761422065,
-              "path": "/tmp/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir/tmp/leopard-main-exact/leopard.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_exact.dir${ATLAS_TMP}/leopard-main-exact/leopard.cpp.o",
               "sha256": "6f91bd8649780573d4bdc81cb381dacf3c0d13511126535bc6c39abdd59c50c8",
               "size": 50768
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1784361330716417627,
-              "path": "/tmp/leopard-main-exact/leopard.cpp",
+              "path": "${ATLAS_TMP}/leopard-main-exact/leopard.cpp",
               "sha256": "c3eedfd6a7e8eda2b09aefd671a87ae5e42346796d2bbe7bd1e0fa035cc2ec2f",
               "size": 10298
             }
@@ -186,14 +186,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786560985245424762,
-              "path": "/tmp/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_benchmark.dir/legacy_main_benchmark.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-main-build-5939767/CMakeFiles/leopard_main_benchmark.dir/legacy_main_benchmark.cpp.o",
               "sha256": "f9b705fd7b48f5fc44eadb79889084d107a27e0ecc8d1b344c0414f15bfdc689",
               "size": 1234784
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786560823464253723,
-              "path": "/tmp/leopard2-atlas-src-5939767/experiments/leopard2/main_compare/legacy_main_benchmark.cpp",
+              "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/experiments/leopard2/main_compare/legacy_main_benchmark.cpp",
               "sha256": "a35a7b9e21359ac4ea82c1dbf0d56a020f17815ee484fcee276ee7fee6008df2",
               "size": 29002
             }
@@ -230,7 +230,7 @@
         "links": 1,
         "mode": 33204,
         "mtime_ns": 1786560962093399715,
-        "path": "/tmp/leopard2-atlas-build-5939767/libleopard.a",
+        "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/libleopard.a",
         "sha256": "e1ba62675f1987bc8ea6c69faab09360e4cee9f3c9838cd8e5d2e54e15596c5d",
         "size": 1674578,
         "uid": 1000
@@ -273,7 +273,7 @@
         "links": 1,
         "mode": 33204,
         "mtime_ns": 1786560940493376506,
-        "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/link.txt",
+        "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/link.txt",
         "sha256": "9a237237e25c3686f29ef33823014af75ce55428dc45dbb4be3d05e76fc8c868",
         "size": 1150,
         "uid": 1000
@@ -422,7 +422,7 @@
         "size": 4066232,
         "uid": 0
       },
-      "build_root": "/tmp/leopard2-atlas-build-5939767",
+      "build_root": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
       "c_compiler": {
         "ctime_ns": 1772172123845377517,
         "device": 66307,
@@ -444,7 +444,7 @@
         "links": 1,
         "mode": 33204,
         "mtime_ns": 1786560940490376503,
-        "path": "/tmp/leopard2-atlas-build-5939767/CMakeCache.txt",
+        "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeCache.txt",
         "sha256": "2d4819ec13d287fdecad5af9a653d2adc7bc40ad92463aa2b5147f8c86d71397",
         "size": 24208,
         "uid": 1000
@@ -457,7 +457,7 @@
         "links": 1,
         "mode": 33204,
         "mtime_ns": 1786560940498376511,
-        "path": "/tmp/leopard2-atlas-build-5939767/compile_commands.json",
+        "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/compile_commands.json",
         "sha256": "a61409f363d05e803602fdb75a282f4b9d7cdec41342e57d9ca9a58fc9844796",
         "size": 22546,
         "uid": 1000
@@ -622,7 +622,7 @@
         "links": 1,
         "mode": 33277,
         "mtime_ns": 1786560963217400927,
-        "path": "/tmp/leopard2-atlas-build-5939767/bench_leopard2_allk",
+        "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/bench_leopard2_allk",
         "sha256": "b44be589866e1dfc80d491dd5a68c537b8e80388a1848d87bd30aef3f7944d85",
         "size": 1542304,
         "uid": 1000
@@ -650,7 +650,7 @@
         "links": 1,
         "mode": 33204,
         "mtime_ns": 1786560940495376508,
-        "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/bench_leopard2_allk.dir/link.txt",
+        "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/bench_leopard2_allk.dir/link.txt",
         "sha256": "5fd49179d401e8aec372ae5a94e9ab13ecf4b8e01ea7cdb60171d674b8a8c69e",
         "size": 241,
         "uid": 1000
@@ -682,7 +682,7 @@
         "size": 259808,
         "uid": 0
       },
-      "physical_source_root": "/tmp/leopard2-atlas-src-5939767",
+      "physical_source_root": "${ATLAS_TMP}/leopard2-atlas-src-5939767",
       "ranlib": {
         "ctime_ns": 1775585770102002727,
         "device": 66307,
@@ -716,7 +716,7 @@
               "-DLEO2_HAVE_GFNI_BACKEND=1",
               "-DLEO2_HAVE_SSSE3_BACKEND=1",
               "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -728,11 +728,11 @@
               "-o",
               "CMakeFiles/leopard.dir/Leopard2Backend.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2Backend.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2Backend.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/Leopard2Backend.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2Backend.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2Backend.cpp",
+            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/Leopard2Backend.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2Backend.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2Backend.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_DISABLE_AVX2_CODEGEN=1",
@@ -776,7 +776,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560959413396826,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/Leopard2Backend.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/Leopard2Backend.cpp.o",
             "sha256": "db78da908ae2d9b6d35a5372807998bc17d6d78a0058493cb897054e15fd01f9",
             "size": 177360,
             "uid": 1000
@@ -784,7 +784,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2Backend.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2Backend.cpp",
             "sha256": "4b30e063d6d5cb8482983f1a0bb2dbaf5926c4c4c38d67bb551a80e4c48f0e26",
             "size": 157293
           }
@@ -798,7 +798,7 @@
               "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
               "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
               "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -812,11 +812,11 @@
               "-o",
               "CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2.cpp",
+            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
@@ -853,7 +853,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560951384388187,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o",
             "sha256": "bf615cd0bb211ea3b8fd8a2c7e6c8a9651f5317857cd8ddcd910c03e74fe1e5d",
             "size": 333592,
             "uid": 1000
@@ -861,7 +861,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2.cpp",
             "sha256": "e154659949041d5739b4c85767ac8783d8c65bb5bb95be5cd437cdb9023203ff",
             "size": 341999
           }
@@ -874,7 +874,7 @@
               "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
               "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
               "-DLEO2_HAVE_AVX2_BACKEND=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -888,11 +888,11 @@
               "-o",
               "CMakeFiles/leopard2_backend_avx2_t16_b64.dir/Leopard2BackendAVX2T16B64.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16B64.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16B64.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2_t16_b64.dir/Leopard2BackendAVX2T16B64.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16B64.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16B64.cpp",
+            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2_t16_b64.dir/Leopard2BackendAVX2T16B64.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16B64.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16B64.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
@@ -928,7 +928,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560953326390275,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2_t16_b64.dir/Leopard2BackendAVX2T16B64.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2_t16_b64.dir/Leopard2BackendAVX2T16B64.cpp.o",
             "sha256": "1172975ad2f78bba1bb2a98b7cc55c9bc1c796824fdcab259726e17b7d002044",
             "size": 24152,
             "uid": 1000
@@ -936,7 +936,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16B64.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16B64.cpp",
             "sha256": "9adaae1f92f664455d9db3c64a01858457b53e9242153cbb0bc7584b0cae230b",
             "size": 25289
           }
@@ -949,7 +949,7 @@
               "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
               "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
               "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -963,11 +963,11 @@
               "-o",
               "CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2T16Q2.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16Q2.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16Q2.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2T16Q2.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16Q2.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16Q2.cpp",
+            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2T16Q2.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16Q2.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16Q2.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
@@ -1003,7 +1003,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560952589389482,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2T16Q2.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2T16Q2.cpp.o",
             "sha256": "5bb1cae1fed4a129031164a450208971f0ecdb4161020166a287ddbcf045de5b",
             "size": 81872,
             "uid": 1000
@@ -1011,7 +1011,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16Q2.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T16Q2.cpp",
             "sha256": "556911fd0cd89127102c4a3bbe80ef01f04a275dd9f5d7b30885964ee8af6a4b",
             "size": 17849
           }
@@ -1023,7 +1023,7 @@
               "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
               "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
               "-DLEO2_HAVE_AVX2_BACKEND=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -1037,11 +1037,11 @@
               "-o",
               "CMakeFiles/leopard2_backend_avx2_t2_k4.dir/Leopard2BackendAVX2T2K4.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T2K4.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T2K4.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2_t2_k4.dir/Leopard2BackendAVX2T2K4.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T2K4.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T2K4.cpp",
+            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2_t2_k4.dir/Leopard2BackendAVX2T2K4.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T2K4.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T2K4.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
@@ -1076,7 +1076,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560953613390583,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2_t2_k4.dir/Leopard2BackendAVX2T2K4.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2_t2_k4.dir/Leopard2BackendAVX2T2K4.cpp.o",
             "sha256": "f11676f758b107a094831715e2a5646a567859c491e776bb2a1e051336532ee8",
             "size": 4008,
             "uid": 1000
@@ -1084,7 +1084,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T2K4.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T2K4.cpp",
             "sha256": "bad0df060a9eeb69dae2badba8be5b2de54d70eebb06ef445c733f3b4171290a",
             "size": 12576
           }
@@ -1100,7 +1100,7 @@
               "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
               "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
               "-DLEO2_HAVE_AVX2_BACKEND=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -1114,11 +1114,11 @@
               "-o",
               "CMakeFiles/leopard2_backend_avx2_t32_b256.dir/Leopard2BackendAVX2T32B256.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T32B256.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T32B256.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=0 -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK=0 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1 -DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2_t32_b256.dir/Leopard2BackendAVX2T32B256.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T32B256.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T32B256.cpp",
+            "command": "/usr/bin/c++ -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=0 -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK=0 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1 -DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2_t32_b256.dir/Leopard2BackendAVX2T32B256.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T32B256.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T32B256.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=0",
@@ -1157,7 +1157,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560945672382054,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2_t32_b256.dir/Leopard2BackendAVX2T32B256.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2_t32_b256.dir/Leopard2BackendAVX2T32B256.cpp.o",
             "sha256": "1aa6b7a81e7595d7abb6ec8e6a97563ea540653e78b0657228ba3f2295e51ba0",
             "size": 17736,
             "uid": 1000
@@ -1165,7 +1165,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T32B256.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T32B256.cpp",
             "sha256": "83b2901147ce7a7e5e1e5c685dc4b5d702dea830e95322047fc27926d0db90ec",
             "size": 22817
           }
@@ -1178,7 +1178,7 @@
               "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
               "-DLEO2_HAVE_AVX2_BACKEND=1",
               "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -1193,11 +1193,11 @@
               "-o",
               "CMakeFiles/leopard2_backend_avx2_t8_k8_b1024.dir/Leopard2BackendAVX2T8K8B1024.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T8K8B1024.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T8K8B1024.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -flive-range-shrinkage -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2_t8_k8_b1024.dir/Leopard2BackendAVX2T8K8B1024.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T8K8B1024.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T8K8B1024.cpp",
+            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -flive-range-shrinkage -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2_t8_k8_b1024.dir/Leopard2BackendAVX2T8K8B1024.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T8K8B1024.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T8K8B1024.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
@@ -1234,7 +1234,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560945935382336,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2_t8_k8_b1024.dir/Leopard2BackendAVX2T8K8B1024.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2_t8_k8_b1024.dir/Leopard2BackendAVX2T8K8B1024.cpp.o",
             "sha256": "39d9de7185549ad41be199a16bfc6a21f2057d8baabba536319449fd2e8deab9",
             "size": 4232,
             "uid": 1000
@@ -1242,7 +1242,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2T8K8B1024.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2T8K8B1024.cpp",
             "sha256": "7bfb0f9d183e8e6c79b5406729bbfaa251b3f8a2299aaa18276125a1c9bb3ba4",
             "size": 35509
           }
@@ -1255,7 +1255,7 @@
               "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
               "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
               "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -1269,11 +1269,11 @@
               "-o",
               "CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2Xor.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2Xor.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2Xor.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2Xor.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2Xor.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2Xor.cpp",
+            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2Xor.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2Xor.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2Xor.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
@@ -1309,7 +1309,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560951630388451,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2Xor.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2Xor.cpp.o",
             "sha256": "5580f587b29f29d5c67cb03aafee1629bbafd7661dc6871755b8484a970d66e7",
             "size": 6216,
             "uid": 1000
@@ -1317,7 +1317,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendAVX2Xor.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendAVX2Xor.cpp",
             "sha256": "ea88efd4346f4e1d8eaa4c6d1cfed020c37c94e6246296074024fcedd1a894d0",
             "size": 12494
           }
@@ -1330,7 +1330,7 @@
               "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
               "-DLEO2_HAVE_AVX2_BACKEND=1",
               "-DLEO2_HAVE_GFNI_BACKEND=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -1345,11 +1345,11 @@
               "-o",
               "CMakeFiles/leopard2_backend_gfni.dir/Leopard2BackendGFNI.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2BackendGFNI.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendGFNI.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_GFNI_BACKEND=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mgfni -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_gfni.dir/Leopard2BackendGFNI.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2BackendGFNI.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendGFNI.cpp",
+            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_GFNI_BACKEND=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mgfni -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_backend_gfni.dir/Leopard2BackendGFNI.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendGFNI.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendGFNI.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
@@ -1386,7 +1386,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560947640384165,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_gfni.dir/Leopard2BackendGFNI.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_gfni.dir/Leopard2BackendGFNI.cpp.o",
             "sha256": "dd841fbe033a0ea78c8f01fe99c9d3e3985be1515fb3bc528f717fec44b204c2",
             "size": 162552,
             "uid": 1000
@@ -1394,7 +1394,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendGFNI.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendGFNI.cpp",
             "sha256": "00c6f88be29548c5f876ee10b4f8147b91df7d300809b808845977f267b149b1",
             "size": 446
           }
@@ -1405,7 +1405,7 @@
               "/usr/bin/c++",
               "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
               "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -1418,11 +1418,11 @@
               "-o",
               "CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2BackendSSSE3.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendSSSE3.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mssse3 -mno-avx -o CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2BackendSSSE3.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendSSSE3.cpp",
+            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mssse3 -mno-avx -o CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendSSSE3.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendSSSE3.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
@@ -1455,7 +1455,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560948222384790,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o",
             "sha256": "ac6ce578f1039f73aeeccb7e54ba057b5dd5490244646f98520eafc5b23ab91d",
             "size": 57400,
             "uid": 1000
@@ -1463,7 +1463,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendSSSE3.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendSSSE3.cpp",
             "sha256": "084971371006ca1e4476f5d2b083ddffbea12a74ca7eb91c383c02c3338f9695",
             "size": 75961
           }
@@ -1485,7 +1485,7 @@
               "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
               "-DLEO2_HAVE_GFNI_BACKEND=1",
               "-DLEO2_HAVE_SSSE3_BACKEND=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -1497,11 +1497,11 @@
               "-o",
               "CMakeFiles/leopard.dir/Leopard2BackendScalar.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2BackendScalar.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendScalar.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/Leopard2BackendScalar.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2BackendScalar.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendScalar.cpp",
+            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/Leopard2BackendScalar.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendScalar.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendScalar.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_DISABLE_AVX2_CODEGEN=1",
@@ -1544,7 +1544,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560959808397252,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/Leopard2BackendScalar.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/Leopard2BackendScalar.cpp.o",
             "sha256": "a9c3ed89ce673c2f76a66c0fc33cbcbbecd82c5f45bb33cc3bedfa5835c89d33",
             "size": 39656,
             "uid": 1000
@@ -1552,7 +1552,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2BackendScalar.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2BackendScalar.cpp",
             "sha256": "759fa9c3c3e8bd31340b08fa90d89926f3e97bfb8ad581ad6bbd47e420ec5a4a",
             "size": 49267
           }
@@ -1574,7 +1574,7 @@
               "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
               "-DLEO2_HAVE_GFNI_BACKEND=1",
               "-DLEO2_HAVE_SSSE3_BACKEND=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -1586,11 +1586,11 @@
               "-o",
               "CMakeFiles/leopard.dir/Leopard2CpuFeatures.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2CpuFeatures.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2CpuFeatures.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/Leopard2CpuFeatures.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2CpuFeatures.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2CpuFeatures.cpp",
+            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/Leopard2CpuFeatures.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2CpuFeatures.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2CpuFeatures.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_DISABLE_AVX2_CODEGEN=1",
@@ -1633,7 +1633,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560959893397343,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/Leopard2CpuFeatures.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/Leopard2CpuFeatures.cpp.o",
             "sha256": "cc98f827f98bcdcc9cbb3895ab8499b905ce0f196e53af6e9f4ba775f872e17a",
             "size": 9488,
             "uid": 1000
@@ -1641,7 +1641,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2CpuFeatures.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2CpuFeatures.cpp",
             "sha256": "af05417d465bdf7dcefe2c63aa3daefd5a9561ce5c4555a2a45ace9b143d76d5",
             "size": 21739
           }
@@ -1654,7 +1654,7 @@
               "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
               "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
               "-DLEO2_HAVE_AVX2_BACKEND=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -1668,11 +1668,11 @@
               "-o",
               "CMakeFiles/leopard2_low_p32_b64_avx2.dir/Leopard2LowP32B64AVX2.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2LowP32B64AVX2.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2LowP32B64AVX2.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_low_p32_b64_avx2.dir/Leopard2LowP32B64AVX2.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2LowP32B64AVX2.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2LowP32B64AVX2.cpp",
+            "command": "/usr/bin/c++ -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -mavx2 -mno-avx512f -falign-functions=64 -o CMakeFiles/leopard2_low_p32_b64_avx2.dir/Leopard2LowP32B64AVX2.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2LowP32B64AVX2.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2LowP32B64AVX2.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
@@ -1708,7 +1708,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560952869389783,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard2_low_p32_b64_avx2.dir/Leopard2LowP32B64AVX2.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard2_low_p32_b64_avx2.dir/Leopard2LowP32B64AVX2.cpp.o",
             "sha256": "d39b6aa26ca544c87d95f7e6455d4d027393854f3e36f8361c11858af73dac05",
             "size": 8888,
             "uid": 1000
@@ -1716,7 +1716,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2LowP32B64AVX2.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2LowP32B64AVX2.cpp",
             "sha256": "883a3c0a91bee1f9b08f37eb63859e26431e5876f7dbb16a9c964baa91bd9a32",
             "size": 19226
           }
@@ -1738,7 +1738,7 @@
               "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
               "-DLEO2_HAVE_GFNI_BACKEND=1",
               "-DLEO2_HAVE_SSSE3_BACKEND=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -1750,11 +1750,11 @@
               "-o",
               "CMakeFiles/leopard.dir/Leopard2Plan.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/Leopard2Plan.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2Plan.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/Leopard2Plan.cpp.o -c /tmp/leopard2-atlas-src-5939767/Leopard2Plan.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/Leopard2Plan.cpp",
+            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/Leopard2Plan.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2Plan.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2Plan.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_DISABLE_AVX2_CODEGEN=1",
@@ -1797,7 +1797,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560960302397784,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/Leopard2Plan.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/Leopard2Plan.cpp.o",
             "sha256": "2be89bc4a34b9923a195f242b35eff0e7cb2f42d1426a12bfb3db08fceb71b3d",
             "size": 38664,
             "uid": 1000
@@ -1805,7 +1805,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/Leopard2Plan.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/Leopard2Plan.cpp",
             "sha256": "0dbe8214b31260e072416a7e628c3137e40501702c6aab4b6cf3847dd1462c89",
             "size": 64396
           }
@@ -1827,7 +1827,7 @@
               "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
               "-DLEO2_HAVE_GFNI_BACKEND=1",
               "-DLEO2_HAVE_SSSE3_BACKEND=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -1839,11 +1839,11 @@
               "-o",
               "CMakeFiles/leopard.dir/LeopardCommon.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/LeopardCommon.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/LeopardCommon.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/LeopardCommon.cpp.o -c /tmp/leopard2-atlas-src-5939767/LeopardCommon.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/LeopardCommon.cpp",
+            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/LeopardCommon.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/LeopardCommon.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/LeopardCommon.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_DISABLE_AVX2_CODEGEN=1",
@@ -1886,7 +1886,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560960419397910,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/LeopardCommon.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/LeopardCommon.cpp.o",
             "sha256": "dcd8111b0dbe0a8f00f5861d8b33f57ea84b2e67106b5cff43287bcab5292b22",
             "size": 6288,
             "uid": 1000
@@ -1894,7 +1894,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/LeopardCommon.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/LeopardCommon.cpp",
             "sha256": "fa6e8cd0cae075268854935fd4f81ca1dc6499fffa6aabc93bc14d86fd6f2e88",
             "size": 14636
           }
@@ -1916,7 +1916,7 @@
               "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
               "-DLEO2_HAVE_GFNI_BACKEND=1",
               "-DLEO2_HAVE_SSSE3_BACKEND=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -1928,11 +1928,11 @@
               "-o",
               "CMakeFiles/leopard.dir/LeopardFF16.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/LeopardFF16.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/LeopardFF16.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/LeopardFF16.cpp.o -c /tmp/leopard2-atlas-src-5939767/LeopardFF16.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/LeopardFF16.cpp",
+            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/LeopardFF16.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/LeopardFF16.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/LeopardFF16.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_DISABLE_AVX2_CODEGEN=1",
@@ -1975,7 +1975,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560962068399688,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/LeopardFF16.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/LeopardFF16.cpp.o",
             "sha256": "16fec2ee83b4c9ebd7746f5b935d28ea8b289077798a43ebfb966ebadf9cd4c4",
             "size": 118992,
             "uid": 1000
@@ -1983,7 +1983,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/LeopardFF16.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/LeopardFF16.cpp",
             "sha256": "fd27e72cb09068d83bc32b23acf49c6d133382579f109d6cfa227361c43d8cbf",
             "size": 173709
           }
@@ -2005,7 +2005,7 @@
               "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
               "-DLEO2_HAVE_GFNI_BACKEND=1",
               "-DLEO2_HAVE_SSSE3_BACKEND=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -2017,11 +2017,11 @@
               "-o",
               "CMakeFiles/leopard.dir/LeopardFF8.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/LeopardFF8.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/LeopardFF8.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/LeopardFF8.cpp.o -c /tmp/leopard2-atlas-src-5939767/LeopardFF8.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/LeopardFF8.cpp",
+            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/LeopardFF8.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/LeopardFF8.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/LeopardFF8.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_DISABLE_AVX2_CODEGEN=1",
@@ -2064,7 +2064,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560961174398724,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/LeopardFF8.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/LeopardFF8.cpp.o",
             "sha256": "5998432a2f899fb4db2721e564ad22301ce9c7ab484a750730b42c84338f1862",
             "size": 91384,
             "uid": 1000
@@ -2072,7 +2072,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/LeopardFF8.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/LeopardFF8.cpp",
             "sha256": "dbb41b009416d78c7fc82eec1d5daefeefbef5c1432c268a5bbfdab0f0495a9d",
             "size": 226461
           }
@@ -2094,7 +2094,7 @@
               "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
               "-DLEO2_HAVE_GFNI_BACKEND=1",
               "-DLEO2_HAVE_SSSE3_BACKEND=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -2106,11 +2106,11 @@
               "-o",
               "CMakeFiles/leopard.dir/leopard.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/leopard.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/leopard.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/leopard.cpp.o -c /tmp/leopard2-atlas-src-5939767/leopard.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/leopard.cpp",
+            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/leopard.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/leopard.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/leopard.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_DISABLE_AVX2_CODEGEN=1",
@@ -2153,7 +2153,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560953750390730,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/leopard.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/leopard.cpp.o",
             "sha256": "cf6f31cd127378f3951421cc132feee11f353855d0d2c90bf3824cf46dcc950a",
             "size": 9392,
             "uid": 1000
@@ -2161,7 +2161,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/leopard.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/leopard.cpp",
             "sha256": "6030459f27248c1038daf2611acc6ef0a58379f9936d5818da69cc530839afeb",
             "size": 16079
           }
@@ -2190,7 +2190,7 @@
               "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
               "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1",
               "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -2202,11 +2202,11 @@
               "-o",
               "CMakeFiles/leopard.dir/leopard2.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/leopard2.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/leopard2.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1 -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1 -DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1 -DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1 -DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1 -DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1 -DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/leopard2.cpp.o -c /tmp/leopard2-atlas-src-5939767/leopard2.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/leopard2.cpp",
+            "command": "/usr/bin/c++ -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1 -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1 -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1 -DLEO2_HAVE_GFNI_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1 -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1 -DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1 -DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1 -DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1 -DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1 -DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/leopard.dir/leopard2.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/leopard2.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/leopard2.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_DISABLE_AVX2_CODEGEN=1",
@@ -2256,7 +2256,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560958186395505,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/leopard2.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/leopard.dir/leopard2.cpp.o",
             "sha256": "b0c66d1fc7223c933fe5a990e4dacbb3ae9e89926d6e19ec2eb88d64711a2836",
             "size": 453776,
             "uid": 1000
@@ -2264,7 +2264,7 @@
           "role": "archive",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/leopard2.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/leopard2.cpp",
             "sha256": "3ee71477288c841e5fc055cc1e67847024ea7d3a71f0825b2fc4e716244253ab",
             "size": 909625
           }
@@ -2276,11 +2276,11 @@
               "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=\"1257622ce8334f7670bf55adffbab9ac828a39491b14f2d1e008b7b8214675b7\"",
               "-DLEO2_BENCHMARK_BUILD_TYPE=\"Release\"",
               "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
-              "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER=\"/tmp/leopard2-atlas-build-5939767/generated/leopard2-benchmark-attestation/leopard2_benchmark_source_attestation.h\"",
+              "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER=\"${ATLAS_TMP}/leopard2-atlas-build-5939767/generated/leopard2-benchmark-attestation/leopard2_benchmark_source_attestation.h\"",
               "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
               "-DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1",
               "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
-              "-I/tmp/leopard2-atlas-src-5939767",
+              "-I${ATLAS_TMP}/leopard2-atlas-src-5939767",
               "-Wall",
               "-Wextra",
               "-fopenmp",
@@ -2292,11 +2292,11 @@
               "-o",
               "CMakeFiles/bench_leopard2_allk.dir/bench/leopard2/benchmark.cpp.o",
               "-c",
-              "/tmp/leopard2-atlas-src-5939767/bench/leopard2/benchmark.cpp"
+              "${ATLAS_TMP}/leopard2-atlas-src-5939767/bench/leopard2/benchmark.cpp"
             ],
-            "command": "/usr/bin/c++ -DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=\\\"1257622ce8334f7670bf55adffbab9ac828a39491b14f2d1e008b7b8214675b7\\\" -DLEO2_BENCHMARK_BUILD_TYPE=\\\"Release\\\" -DLEO2_BENCHMARK_SOURCE_ATTESTATION=1 -DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER=\\\"/tmp/leopard2-atlas-build-5939767/generated/leopard2-benchmark-attestation/leopard2_benchmark_source_attestation.h\\\" -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -I/tmp/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/bench_leopard2_allk.dir/bench/leopard2/benchmark.cpp.o -c /tmp/leopard2-atlas-src-5939767/bench/leopard2/benchmark.cpp",
-            "directory": "/tmp/leopard2-atlas-build-5939767",
-            "file": "/tmp/leopard2-atlas-src-5939767/bench/leopard2/benchmark.cpp",
+            "command": "/usr/bin/c++ -DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=\\\"1257622ce8334f7670bf55adffbab9ac828a39491b14f2d1e008b7b8214675b7\\\" -DLEO2_BENCHMARK_BUILD_TYPE=\\\"Release\\\" -DLEO2_BENCHMARK_SOURCE_ATTESTATION=1 -DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER=\\\"${ATLAS_TMP}/leopard2-atlas-build-5939767/generated/leopard2-benchmark-attestation/leopard2_benchmark_source_attestation.h\\\" -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1 -DLEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1 -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1 -I${ATLAS_TMP}/leopard2-atlas-src-5939767  -Wall -Wextra -fopenmp -O3 -DNDEBUG -O3 -std=gnu++11 -fopenmp -o CMakeFiles/bench_leopard2_allk.dir/bench/leopard2/benchmark.cpp.o -c ${ATLAS_TMP}/leopard2-atlas-src-5939767/bench/leopard2/benchmark.cpp",
+            "directory": "${ATLAS_TMP}/leopard2-atlas-build-5939767",
+            "file": "${ATLAS_TMP}/leopard2-atlas-src-5939767/bench/leopard2/benchmark.cpp",
             "normalized_arguments": [
               "/usr/bin/c++",
               "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=\"1257622ce8334f7670bf55adffbab9ac828a39491b14f2d1e008b7b8214675b7\"",
@@ -2333,7 +2333,7 @@
             "links": 1,
             "mode": 33204,
             "mtime_ns": 1786560963184400891,
-            "path": "/tmp/leopard2-atlas-build-5939767/CMakeFiles/bench_leopard2_allk.dir/bench/leopard2/benchmark.cpp.o",
+            "path": "${ATLAS_TMP}/leopard2-atlas-build-5939767/CMakeFiles/bench_leopard2_allk.dir/bench/leopard2/benchmark.cpp.o",
             "sha256": "2d3d522dae98c7b6b5e49c8d74dbdf5d67756e42f6bd92953f4c61dc3138fe14",
             "size": 217152,
             "uid": 1000
@@ -2341,13 +2341,13 @@
           "role": "benchmark",
           "source": {
             "mode": 436,
-            "path": "/tmp/leopard2-atlas-src-5939767/bench/leopard2/benchmark.cpp",
+            "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/bench/leopard2/benchmark.cpp",
             "sha256": "84e6f2cf1271e9111c20d48db39a3634729744978a7991982f22f45bd4f5212b",
             "size": 137233
           }
         }
       ],
-      "source_root": "/tmp/leopard2-atlas-src-5939767",
+      "source_root": "${ATLAS_TMP}/leopard2-atlas-src-5939767",
       "tracked_source_manifest": {
         "files": [
           {
@@ -8856,110 +8856,110 @@
       "archive": {
         "mode": 436,
         "mtime_ns": 1786561008208449778,
-        "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/libwirehair.a",
+        "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/libwirehair.a",
         "sha256": "5c37131bf1f8d5309713c362cf1208b9dfb74283af055cce3587db75d8bc481d",
         "size": 631862
       },
       "archive_link_recipe": {
         "mode": 436,
         "mtime_ns": 1786560993408433635,
-        "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/link.txt",
+        "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/link.txt",
         "sha256": "973e6487cdae4952ffc0cee0854f751ea47b0bf7ef62031c00d463cc7185c7d5",
         "size": 812
       },
       "archive_members": [
         {
           "name": "wirehair.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/wirehair.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/wirehair.cpp.o",
           "sha256": "428b82c20a5a99e4281d4f918791fa6d43eaf64396a3f82138d2c2e6944991f8",
           "size": 15976
         },
         {
           "name": "gf256.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/gf256.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/gf256.cpp.o",
           "sha256": "0121c6cd04b874678e19eb2cda32477f8a676531465d7baa25c603921ff0d652",
           "size": 123648
         },
         {
           "name": "WirehairCodec.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/WirehairCodec.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/WirehairCodec.cpp.o",
           "sha256": "80308a37e80e49100b9f48a3a7dfa386479c80c4a3bca844fed49d6183a8dc58",
           "size": 49656
         },
         {
           "name": "WirehairTools.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/WirehairTools.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/WirehairTools.cpp.o",
           "sha256": "4595a817cc044432de5f730684d25bb0e68d1e10737275d51e3d1a6980855869",
           "size": 20168
         },
         {
           "name": "WirehairV2GF16.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2GF16.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2GF16.cpp.o",
           "sha256": "6c643aaa8e8e36399fbd73bba42ea72c517fd94e3f07aef907e81483b361a1b9",
           "size": 13680
         },
         {
           "name": "WirehairV2Codec.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Codec.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Codec.cpp.o",
           "sha256": "731e64f84b33aef2589dd0f894e68b2c2cc1191cf7ab292a8e40c8b3579861ce",
           "size": 26072
         },
         {
           "name": "WirehairV2Peel.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Peel.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Peel.cpp.o",
           "sha256": "9fa7c8407ceecfcb223cd125b65c03e00c7704df3e0ab8b8588658ffc0d8e7c0",
           "size": 54424
         },
         {
           "name": "WirehairV2Plan.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Plan.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Plan.cpp.o",
           "sha256": "1a8ad0d7d063aced9f56fd516f6ba6e9a223f1bdc8c169cf0f01848b502d039b",
           "size": 4736
         },
         {
           "name": "WirehairV2Policy.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Policy.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Policy.cpp.o",
           "sha256": "ba5ef510f6494f895df894f3313a0005b5ee95e8e7d52de4d970003f875d69b0",
           "size": 6648
         },
         {
           "name": "WirehairV2Precode.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Precode.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Precode.cpp.o",
           "sha256": "5f7eb96ac0d8697241aa9cb03e43ff9e36e2441b586f3a46e20840682674121b",
           "size": 21520
         },
         {
           "name": "WirehairV2PrecodeDecode.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2PrecodeDecode.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2PrecodeDecode.cpp.o",
           "sha256": "3b617470efb0328347029abce699c4109090389a20c46db209deeab86566871c",
           "size": 45528
         },
         {
           "name": "WirehairV2PrecodeEncode.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2PrecodeEncode.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2PrecodeEncode.cpp.o",
           "sha256": "8b1088f64ddadf64bdc132ada6c75521331d9578e6da60a5258118ec3117b8c0",
           "size": 64112
         },
         {
           "name": "WirehairV2Profile.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Profile.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Profile.cpp.o",
           "sha256": "0ed332febb7c2eabbb96a75f40ab1d18f9d81e2ce05b86e39a804567f8a4199e",
           "size": 20344
         },
         {
           "name": "WirehairV2Seeds.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Seeds.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Seeds.cpp.o",
           "sha256": "bf5cfe3fb28a2964d0cdd36c3113c98174e1ad7a445ab9024f02faaa84cab73d",
           "size": 6104
         },
         {
           "name": "WirehairV2Solve.cpp.o",
-          "object_path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Solve.cpp.o",
+          "object_path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Solve.cpp.o",
           "sha256": "f127485948f4082293726ed621c1f01cc30a136db1e9e6839dba97d6ca35423e",
           "size": 136184
         }
       ],
-      "build_root": "/tmp/leopard2-atlas-wirehair-build-5939767",
+      "build_root": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767",
       "cache_contract": {
         "BUILD_CODEC_V2": "OFF",
         "BUILD_TESTS": "OFF",
@@ -8969,27 +8969,27 @@
       "cmake_cache": {
         "mode": 436,
         "mtime_ns": 1786560993403433630,
-        "path": "/tmp/leopard2-atlas-wirehair-build-5939767/CMakeCache.txt",
+        "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/CMakeCache.txt",
         "sha256": "0c9d7de20b3da3a8457391b8a9754e00c946ab69583e81052e8e9a14ce14eb15",
         "size": 24622
       },
       "compile_commands": {
         "mode": 436,
         "mtime_ns": 1786560993412433640,
-        "path": "/tmp/leopard2-atlas-wirehair-build-5939767/compile_commands.json",
+        "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/compile_commands.json",
         "sha256": "574109cdaabced26864e3995f950de1d64146e5f16169bf724562d16f5b6df2d",
         "size": 17643
       },
       "executable": {
         "mode": 509,
-        "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair_v1_benchmark",
+        "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair_v1_benchmark",
         "sha256": "b63b309fa4ac454c37b07e1d6e0096cc39ebeeecd0f7004b569c08f1d0605eae",
         "size": 245256
       },
       "executable_link_recipe": {
         "mode": 436,
         "mtime_ns": 1786560993405433632,
-        "path": "/tmp/leopard2-atlas-wirehair-build-5939767/CMakeFiles/wirehair_v1_benchmark.dir/link.txt",
+        "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/CMakeFiles/wirehair_v1_benchmark.dir/link.txt",
         "sha256": "b251038de50bd196bd27fb0e4bf6ddafecacbd951ea658441bca2f09ed2c0555",
         "size": 152
       },
@@ -9012,14 +9012,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561002566443615,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/WirehairCodec.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/WirehairCodec.cpp.o",
               "sha256": "80308a37e80e49100b9f48a3a7dfa386479c80c4a3bca844fed49d6183a8dc58",
               "size": 49656
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807264020049,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/WirehairCodec.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/WirehairCodec.cpp",
               "sha256": "c97ee05d4153e527ae03beac6f808f0b112fa426f3eb9b549bf1ad73f36f9b37",
               "size": 214133
             }
@@ -9035,14 +9035,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561002856443932,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/WirehairTools.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/WirehairTools.cpp.o",
               "sha256": "4595a817cc044432de5f730684d25bb0e68d1e10737275d51e3d1a6980855869",
               "size": 20168
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807264020049,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/WirehairTools.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/WirehairTools.cpp",
               "sha256": "332454ee04738b30bdc5767133b1d4d8955b5f04734a91f0173762fc8059f889",
               "size": 52089
             }
@@ -9058,14 +9058,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561003533444671,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Codec.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Codec.cpp.o",
               "sha256": "731e64f84b33aef2589dd0f894e68b2c2cc1191cf7ab292a8e40c8b3579861ce",
               "size": 26072
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807267020052,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/codec/WirehairV2Codec.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/codec/WirehairV2Codec.cpp",
               "sha256": "280be5aad6cd88d91d9d5317c4787896ea4cd9dd79f5b63dd5eb47386def1eaf",
               "size": 11299
             }
@@ -9081,14 +9081,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561003172444277,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2GF16.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2GF16.cpp.o",
               "sha256": "6c643aaa8e8e36399fbd73bba42ea72c517fd94e3f07aef907e81483b361a1b9",
               "size": 13680
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807267020052,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/codec/WirehairV2GF16.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/codec/WirehairV2GF16.cpp",
               "sha256": "783272703b22f3eb0c2153d4d18a3755d0a4c81a2fae8f3eba9c0895dbf9f5ab",
               "size": 11307
             }
@@ -9104,14 +9104,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561004272445478,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Peel.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Peel.cpp.o",
               "sha256": "9fa7c8407ceecfcb223cd125b65c03e00c7704df3e0ab8b8588658ffc0d8e7c0",
               "size": 54424
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807267020052,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/codec/WirehairV2Peel.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/codec/WirehairV2Peel.cpp",
               "sha256": "48841366fed102ea304695fadeb82d508c5382b77fd95b8428c9b10c131ac5a7",
               "size": 28549
             }
@@ -9127,14 +9127,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561004329445540,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Plan.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Plan.cpp.o",
               "sha256": "1a8ad0d7d063aced9f56fd516f6ba6e9a223f1bdc8c169cf0f01848b502d039b",
               "size": 4736
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807267020052,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/codec/WirehairV2Plan.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/codec/WirehairV2Plan.cpp",
               "sha256": "b174f67b0be9cc74ce89cd77d1bce7de250f5d010f64696665a218191458d37f",
               "size": 2438
             }
@@ -9150,14 +9150,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561004353445566,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Policy.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Policy.cpp.o",
               "sha256": "ba5ef510f6494f895df894f3313a0005b5ee95e8e7d52de4d970003f875d69b0",
               "size": 6648
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807267020052,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/codec/WirehairV2Policy.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/codec/WirehairV2Policy.cpp",
               "sha256": "42ac60f82c5683ea14e870ea40452a9fc9d8869fc07efa9e554058c0d27f0b43",
               "size": 7752
             }
@@ -9173,14 +9173,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561004735445983,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Precode.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Precode.cpp.o",
               "sha256": "5f7eb96ac0d8697241aa9cb03e43ff9e36e2441b586f3a46e20840682674121b",
               "size": 21520
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807267020052,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/codec/WirehairV2Precode.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/codec/WirehairV2Precode.cpp",
               "sha256": "1504c1cb3170f068a764ed242b4577d6c9c5c19a963664e442f3be70bfa5343c",
               "size": 34763
             }
@@ -9196,14 +9196,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561005264446561,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2PrecodeDecode.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2PrecodeDecode.cpp.o",
               "sha256": "3b617470efb0328347029abce699c4109090389a20c46db209deeab86566871c",
               "size": 45528
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807268020053,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/codec/WirehairV2PrecodeDecode.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/codec/WirehairV2PrecodeDecode.cpp",
               "sha256": "9c218a3dda35eff51a5d7f6a4f3f180ec415ef75c11aec7b165ee483026bed0c",
               "size": 37534
             }
@@ -9219,14 +9219,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561005937447296,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2PrecodeEncode.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2PrecodeEncode.cpp.o",
               "sha256": "8b1088f64ddadf64bdc132ada6c75521331d9578e6da60a5258118ec3117b8c0",
               "size": 64112
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807268020053,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/codec/WirehairV2PrecodeEncode.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/codec/WirehairV2PrecodeEncode.cpp",
               "sha256": "723978b41eff3d04d5c4cf08c1b11ea3309fe0829b9d20e012ed92265785e5ee",
               "size": 68563
             }
@@ -9242,14 +9242,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561006289447681,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Profile.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Profile.cpp.o",
               "sha256": "0ed332febb7c2eabbb96a75f40ab1d18f9d81e2ce05b86e39a804567f8a4199e",
               "size": 20344
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807268020053,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/codec/WirehairV2Profile.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/codec/WirehairV2Profile.cpp",
               "sha256": "de22a6192f3536e9e37c9dfd4bda3f44c3b9bcc940c7f6b9b7bcc48a0b9d98d3",
               "size": 28784
             }
@@ -9265,14 +9265,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561006549447965,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Seeds.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Seeds.cpp.o",
               "sha256": "bf5cfe3fb28a2964d0cdd36c3113c98174e1ad7a445ab9024f02faaa84cab73d",
               "size": 6104
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807268020053,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/codec/WirehairV2Seeds.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/codec/WirehairV2Seeds.cpp",
               "sha256": "feb90d1774ad2c6967ead386ab1c7ce65cfc87883ce5f93561dd57e8f150b1c5",
               "size": 8050
             }
@@ -9288,14 +9288,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561008184449752,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Solve.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/codec/WirehairV2Solve.cpp.o",
               "sha256": "f127485948f4082293726ed621c1f01cc30a136db1e9e6839dba97d6ca35423e",
               "size": 136184
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807268020053,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/codec/WirehairV2Solve.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/codec/WirehairV2Solve.cpp",
               "sha256": "f300051ece62ca1aff0c0af5cce2dd66ef3a545b90cbee2dd4b127790ad3e3c6",
               "size": 222772
             }
@@ -9311,14 +9311,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561001866442851,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/gf256.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/gf256.cpp.o",
               "sha256": "0121c6cd04b874678e19eb2cda32477f8a676531465d7baa25c603921ff0d652",
               "size": 123648
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807284020066,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/gf256.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/gf256.cpp",
               "sha256": "a197f18a74a1a46811e5bf1f2e20f3ecde213360ce79bb937fbf469c34e93c10",
               "size": 134449
             }
@@ -9334,14 +9334,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561000391441242,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/wirehair.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair-source/CMakeFiles/wirehair.dir/wirehair.cpp.o",
               "sha256": "428b82c20a5a99e4281d4f918791fa6d43eaf64396a3f82138d2c2e6944991f8",
               "size": 15976
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786556807286020069,
-              "path": "/home/catid/leopard/.research/leopard2/wirehair-v1/wirehair.cpp",
+              "path": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1/wirehair.cpp",
               "sha256": "7c3198a2f1b57b5dbd901b8c1336039d4e8987e909473206462cd4949e194f8f",
               "size": 17053
             }
@@ -9359,14 +9359,14 @@
             "object": {
               "mode": 436,
               "mtime_ns": 1786561008868450500,
-              "path": "/tmp/leopard2-atlas-wirehair-build-5939767/CMakeFiles/wirehair_v1_benchmark.dir/wirehair_v1_benchmark.cpp.o",
+              "path": "${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/CMakeFiles/wirehair_v1_benchmark.dir/wirehair_v1_benchmark.cpp.o",
               "sha256": "1eb40d6f0fa293d8ad79e29d54f423e165332d9e67d67e8ff3fa1c6980b4fe1f",
               "size": 79272
             },
             "source": {
               "mode": 436,
               "mtime_ns": 1786560823496253756,
-              "path": "/tmp/leopard2-atlas-src-5939767/experiments/leopard2/performance_atlas/wirehair_v1_benchmark.cpp",
+              "path": "${ATLAS_TMP}/leopard2-atlas-src-5939767/experiments/leopard2/performance_atlas/wirehair_v1_benchmark.cpp",
               "sha256": "5c79d5b5ea534283b7c2a7b992d5ba537394a783ff45dea897fa9d723402c4d6",
               "size": 27217
             }
@@ -9398,19 +9398,19 @@
   "executables": {
     "leopard1": {
       "mode": 365,
-      "path": "/home/catid/leopard/.research/leopard2/performance-atlas-run-5939767-cc2e9cb/frozen/leopard1-2f8d1f42d767f97f",
+      "path": "${LEOPARD_SOURCE}/.research/leopard2/performance-atlas-run-5939767-cc2e9cb/frozen/leopard1-2f8d1f42d767f97f",
       "sha256": "2f8d1f42d767f97fe6c4d373892d849e679eda07cab2afbc4ec0a521b58516e6",
       "size": 1175184
     },
     "leopard2": {
       "mode": 365,
-      "path": "/home/catid/leopard/.research/leopard2/performance-atlas-run-5939767-cc2e9cb/frozen/leopard2-b44be589866e1dfc",
+      "path": "${LEOPARD_SOURCE}/.research/leopard2/performance-atlas-run-5939767-cc2e9cb/frozen/leopard2-b44be589866e1dfc",
       "sha256": "b44be589866e1dfc80d491dd5a68c537b8e80388a1848d87bd30aef3f7944d85",
       "size": 1542304
     },
     "wirehair": {
       "mode": 365,
-      "path": "/home/catid/leopard/.research/leopard2/performance-atlas-run-5939767-cc2e9cb/frozen/wirehair-b63b309fa4ac454c",
+      "path": "${LEOPARD_SOURCE}/.research/leopard2/performance-atlas-run-5939767-cc2e9cb/frozen/wirehair-b63b309fa4ac454c",
       "sha256": "b63b309fa4ac454c37b07e1d6e0096cc39ebeeecd0f7004b569c08f1d0605eae",
       "size": 245256
     }
@@ -9451,7 +9451,7 @@
     "canonical_lock": {
       "device": 66307,
       "inode": 111806686,
-      "path": "/tmp/leopard-gf8-authoritative.lock"
+      "path": "${ATLAS_TMP}/leopard-gf8-authoritative.lock"
     },
     "captured_utc": "2026-08-12T19:06:00.668433+00:00",
     "hostname": "ai",
@@ -9476,9 +9476,9 @@
     "source_tree": "4f56f4b72768cd611dc36f3d01c531bfbef7fbbe",
     "t8_full_parity_terminal_diagnostic_disabled": false
   },
-  "reproduction_command": "/usr/bin/python3 /home/catid/leopard/experiments/leopard2/performance_atlas/generate_atlas.py all --output /home/catid/leopard/.research/leopard2/performance-atlas-run-5939767-cc2e9cb --leopard2 /tmp/leopard2-atlas-build-5939767/bench_leopard2_allk --leopard2-build-root /tmp/leopard2-atlas-build-5939767 --leopard2-sha256 b44be589866e1dfc80d491dd5a68c537b8e80388a1848d87bd30aef3f7944d85 --leopard1 /tmp/leopard2-atlas-main-build-5939767/leopard_main_benchmark --leopard1-build-root /tmp/leopard2-atlas-main-build-5939767 --leopard1-sha256 2f8d1f42d767f97fe6c4d373892d849e679eda07cab2afbc4ec0a521b58516e6 --wirehair /tmp/leopard2-atlas-wirehair-build-5939767/wirehair_v1_benchmark --wirehair-build-root /tmp/leopard2-atlas-wirehair-build-5939767 --wirehair-sha256 b63b309fa4ac454c37b07e1d6e0096cc39ebeeecd0f7004b569c08f1d0605eae --leopard-source /tmp/leopard2-atlas-src-5939767 --main-source /tmp/leopard-main-exact --wirehair-source /home/catid/leopard/.research/leopard2/wirehair-v1 --address-space-limit 2147483648 --timeout 300",
+  "reproduction_command": "/usr/bin/python3 ${LEOPARD_SOURCE}/experiments/leopard2/performance_atlas/generate_atlas.py all --output ${LEOPARD_SOURCE}/.research/leopard2/performance-atlas-run-5939767-cc2e9cb --leopard2 ${ATLAS_TMP}/leopard2-atlas-build-5939767/bench_leopard2_allk --leopard2-build-root ${ATLAS_TMP}/leopard2-atlas-build-5939767 --leopard2-sha256 b44be589866e1dfc80d491dd5a68c537b8e80388a1848d87bd30aef3f7944d85 --leopard1 ${ATLAS_TMP}/leopard2-atlas-main-build-5939767/leopard_main_benchmark --leopard1-build-root ${ATLAS_TMP}/leopard2-atlas-main-build-5939767 --leopard1-sha256 2f8d1f42d767f97fe6c4d373892d849e679eda07cab2afbc4ec0a521b58516e6 --wirehair ${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767/wirehair_v1_benchmark --wirehair-build-root ${ATLAS_TMP}/leopard2-atlas-wirehair-build-5939767 --wirehair-sha256 b63b309fa4ac454c37b07e1d6e0096cc39ebeeecd0f7004b569c08f1d0605eae --leopard-source ${ATLAS_TMP}/leopard2-atlas-src-5939767 --main-source ${ATLAS_TMP}/leopard-main-exact --wirehair-source ${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1 --address-space-limit 2147483648 --timeout 300",
   "runner": {
-    "path": "/home/catid/leopard/experiments/leopard2/performance_atlas/generate_atlas.py",
+    "path": "${LEOPARD_SOURCE}/experiments/leopard2/performance_atlas/generate_atlas.py",
     "sha256": "76e7d8cb28228fb41fd0221ea2488bab7706ddf793f5edc371b2532b0b16913e",
     "version": 1
   },
@@ -9486,19 +9486,19 @@
   "sources": {
     "leopard1": {
       "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
-      "root": "/tmp/leopard-main-exact",
+      "root": "${ATLAS_TMP}/leopard-main-exact",
       "tracked_clean": true,
       "tree": "b7c8830d96a978f6ec14fe747095f066e351ae72"
     },
     "leopard2": {
       "commit": "5939767fc9d0ca3cde2ba226119914b7a71f6154",
-      "root": "/tmp/leopard2-atlas-src-5939767",
+      "root": "${ATLAS_TMP}/leopard2-atlas-src-5939767",
       "tracked_clean": true,
       "tree": "4f56f4b72768cd611dc36f3d01c531bfbef7fbbe"
     },
     "wirehair": {
       "commit": "067ca7cdb66aed424ec23f97557429bf791c6f0c",
-      "root": "/home/catid/leopard/.research/leopard2/wirehair-v1",
+      "root": "${LEOPARD_SOURCE}/.research/leopard2/wirehair-v1",
       "tracked_clean": true,
       "tree": "f33407f28dfbd626f8bb797cfc4d5d60951ba663"
     }

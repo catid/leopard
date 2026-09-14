@@ -258,6 +258,28 @@ def external_build_fixture(root: Path, *, nested_archive: bool = False
 
 
 class AtlasTests(unittest.TestCase):
+    def test_checked_in_atlas_metadata_is_archive_safe(self) -> None:
+        """Tracked evidence must not expose the producer's local roots."""
+        evidence_root = Path(__file__).parents[3] / "docs" / "performance" \
+            / "leopard2_atlas"
+        metadata = (evidence_root / "run_metadata.json").read_text()
+        reproduce = (evidence_root / "REPRODUCE.txt").read_text()
+        for text in (metadata, reproduce):
+            self.assertNotIn("/home/catid", text)
+            self.assertNotIn("/tmp/", text)
+        self.assertIn("${LEOPARD_SOURCE}", metadata)
+        self.assertIn("${ATLAS_TMP}", metadata)
+        self.assertIn("${LEOPARD_SOURCE}", reproduce)
+        self.assertIn("${ATLAS_TMP}", reproduce)
+
+    def test_archive_safe_paths_rewrites_nested_metadata(self) -> None:
+        value = {"paths": ["/home/catid/leopard/src", "/tmp/build"],
+                 "number": 7}
+        self.assertEqual(
+            ATLAS.archive_safe_paths(value),
+            {"paths": ["${LEOPARD_SOURCE}/src", "${ATLAS_TMP}/build"],
+             "number": 7})
+
     def test_grid_and_loss_contract(self) -> None:
         self.assertEqual(len(ATLAS.k_values()), 120)
         self.assertEqual(ATLAS.k_values()[-1], 224)

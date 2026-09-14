@@ -160,7 +160,12 @@ Evidence files:
 ## Reproduction
 
 The complete command, including the three required executable SHA-256 values,
-is retained in `REPRODUCE.txt` next to this README. The core workflow is:
+is retained in `REPRODUCE.txt` next to this README.  The checked-in metadata
+uses the literal `${LEOPARD_SOURCE}` and `${ATLAS_TMP}` placeholders for the
+original machine-local source and temporary-build roots; they are provenance
+labels, not required paths.  Set those variables to equivalent paths on the
+machine where the pinned inputs are available before running the command.  The
+core workflow is:
 
     python3 experiments/leopard2/performance_atlas/test_generate_atlas.py -v
     python3 experiments/leopard2/performance_atlas/generate_atlas.py all \
