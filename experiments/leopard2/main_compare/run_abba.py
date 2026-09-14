@@ -11738,11 +11738,18 @@ def validate_fresh_v18_options(options: argparse.Namespace) -> None:
 
 
 def run_campaign(options: argparse.Namespace) -> int:
-    global RAW_SCHEMA
+    global RAW_SCHEMA, MANIFEST_SCHEMA, FAILURE_SCHEMA, FAILURE_EVIDENCE_CONTRACT
     selected_schema = (RAW_SCHEMA_V20 if getattr(options, "snapshot_once", False)
                        else RAW_SCHEMA_V18)
     previous_schema = RAW_SCHEMA
+    previous_manifest_schema = MANIFEST_SCHEMA
+    previous_failure_schema = FAILURE_SCHEMA
+    previous_failure_contract = FAILURE_EVIDENCE_CONTRACT
     RAW_SCHEMA = selected_schema
+    if selected_schema == RAW_SCHEMA_V20:
+        MANIFEST_SCHEMA = MANIFEST_SCHEMA_V20
+        FAILURE_SCHEMA = FAILURE_SCHEMA_V20
+        FAILURE_EVIDENCE_CONTRACT = FAILURE_EVIDENCE_CONTRACT_V20
     try:
         validate_fresh_v18_options(options)
         evidence_directory = EvidenceDirectory.create_new(options.output)
@@ -11752,6 +11759,9 @@ def run_campaign(options: argparse.Namespace) -> int:
             evidence_directory.close()
     finally:
         RAW_SCHEMA = previous_schema
+        MANIFEST_SCHEMA = previous_manifest_schema
+        FAILURE_SCHEMA = previous_failure_schema
+        FAILURE_EVIDENCE_CONTRACT = previous_failure_contract
 
 
 def add_v19_attempt_arguments(command: argparse.ArgumentParser) -> None:
@@ -11909,11 +11919,21 @@ def verified_campaign_bundle(
         expected_raw_schema = MANIFEST_TO_RAW_SCHEMA[manifest_schema]
         require(raw.get("schema") == expected_raw_schema,
                 "manifest/raw schema versions do not match")
-        analysis = validate_raw(
-            raw, output, check_files=True,
-            check_current_inputs=not no_current_input_check,
-            evidence_directory=directory,
-            expected_v19_attempt=expected_v19_attempt)
+        # Select the validator contract from the sealed manifest before
+        # checking the raw payload.  Historical replay remains on its frozen
+        # default, while v20 bundles must propagate their snapshot-once
+        # configuration to every helper whose legacy default is v18.
+        global RAW_SCHEMA
+        previous_raw_schema = RAW_SCHEMA
+        RAW_SCHEMA = expected_raw_schema
+        try:
+            analysis = validate_raw(
+                raw, output, check_files=True,
+                check_current_inputs=not no_current_input_check,
+                evidence_directory=directory,
+                expected_v19_attempt=expected_v19_attempt)
+        finally:
+            RAW_SCHEMA = previous_raw_schema
         require(raw_info.get("payload_digest") == raw.get("digest"),
                 "manifest/raw payload identity mismatch")
         names = ["campaign", "host", "reservation", "identities", "analysis"]
