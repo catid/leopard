@@ -6296,6 +6296,13 @@ def validate_legacy_visual_studio_metadata():
 class LeopardVisualStudioProjectTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # Git archives carry the submodule as a gitlink, not its contents.
+        # The Visual Studio manifest intentionally lists the portability
+        # header, so skip this checkout-only inventory suite when that
+        # optional submodule payload is unavailable in an export archive.
+        if not (ROOT / "sse2neon" / "sse2neon.h").is_file():
+            raise unittest.SkipTest(
+                "sse2neon submodule contents are unavailable in this archive")
         cls.project = ET.parse(str(PROJECT))
         cls.filters = ET.parse(str(FILTERS))
         (cls.expected_sources, cls.expected_headers,
