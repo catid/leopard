@@ -514,6 +514,15 @@ bool R1FixedAVX2XorCandidateEnabledForDiagnostics();
 */
 bool SetOneShotPlanSetupModeForDiagnostics(unsigned mode);
 
+/* Test-only ownership oracle for the one-shot selector dispatcher.  The
+   returned mask contains one bit for each specialized owner that claimed the
+   most recent decode on the calling thread (bit 0 direct repair, bit 1
+   translated-low, bit 2 native-high).  Production dispatch must claim at
+   most one owner for a multi-loss call. */
+bool SetOneShotSelectorOverlapMutationForDiagnostics(bool enabled);
+void ResetOneShotSelectorOwnerMaskForDiagnostics();
+unsigned OneShotSelectorOwnerMaskForDiagnostics();
+
 /*
     Same-executable attribution for the exact GF8/AVX2 Algorithm 4
     P=32/N=64/B=64 terminal.  Enabled/disabled arm a one-call route probe,
