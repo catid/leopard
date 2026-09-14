@@ -22,6 +22,8 @@ experiments/leopard2/non_power_of_two/c7/results/logs/*-CMakeCache.txt whitespac
 # campaigns and their bulky retained evidence repository-only.
 /experiments/leopard2/performance_atlas/ -export-ignore
 /experiments/leopard2/performance_atlas/** -export-ignore
+/experiments/leopard2 -export-ignore
+/experiments/leopard2/performance_atlas -export-ignore
 /AGENTS.md export-ignore
 /CLAUDE.md export-ignore
 /findings.md export-ignore
