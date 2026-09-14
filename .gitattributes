@@ -17,6 +17,11 @@ experiments/leopard2/non_power_of_two/c7/results/logs/*-CMakeCache.txt whitespac
 /.claude/** export-ignore
 /.codex/** export-ignore
 /experiments/** export-ignore
+# The small, dependency-light performance atlas runner is part of the public
+# reproducibility workflow documented in README.md.  Keep other experimental
+# campaigns and their bulky retained evidence repository-only.
+/experiments/leopard2/performance_atlas/ -export-ignore
+/experiments/leopard2/performance_atlas/** -export-ignore
 /AGENTS.md export-ignore
 /CLAUDE.md export-ignore
 /findings.md export-ignore
