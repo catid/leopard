@@ -87,8 +87,12 @@ class CanonicalLibraryDocumentationTest(unittest.TestCase):
                     unclassified.append(f"{relative}:{line}")
 
         self.assertEqual([], unclassified)
+        expected_docs = {
+            relative for relative in LEGACY_REFERENCE_DOCS
+            if (ROOT / relative).is_file()
+        }
         self.assertEqual(
-            LEGACY_REFERENCE_DOCS,
+            expected_docs,
             actual,
             "historical/compatibility documentation allowlist drifted")
 

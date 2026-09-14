@@ -40,6 +40,15 @@ option(LEO2_BUILD_FUZZERS "Build Leopard2 libFuzzer targets" OFF)
 option(LEO2_ENABLE_CUDA "Build the optional Leopard2 CUDA backend" OFF)
 option(LEOPARD_ENABLE_GF8 "Include the GF(2^8) codec" ON)
 option(LEOPARD_ENABLE_GF16 "Include the GF(2^16) codec" ON)
+
+# The public source archive intentionally omits the repository-only
+# experiments/ tree.  Keep a single capability bit so CTest never registers
+# research harnesses whose inputs are unavailable in that archive.
+set(LEO2_HAVE_RESEARCH_SOURCES OFF)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/experiments")
+    set(LEO2_HAVE_RESEARCH_SOURCES ON)
+endif()
+
 option(LEO2_PORTABLE_ISA_RELEASE_AUDIT
     "Require the strict x86-64 portable-ISA release audit" OFF)
 option(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN
@@ -2538,16 +2547,45 @@ if(LEO2_BUILD_TESTS)
             NAME leopard2_backend_auto_gfni_encode_ff8_allocation_fallback
             COMMAND leopard2_backend_failures_test
                 auto-gfni-encode-ff8-allocation-fallback)
-        foreach(boundary 32 r199 r19932)
-            foreach(fault kat ff8-allocation ff16-allocation)
-                set(boundary_test "leopard2_backend_auto_gfni_boundary_${boundary}_${fault}")
-                add_test(NAME ${boundary_test}
-                    COMMAND leopard2_backend_failures_test
-                        "auto-gfni-encode-${fault}-fallback" "boundary-${boundary}")
-                set_tests_properties(${boundary_test} PROPERTIES
-                    ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
-            endforeach()
-        endforeach()
+        add_test(NAME leopard2_backend_auto_gfni_boundary_32_kat
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-kat-fallback boundary-32)
+        add_test(NAME leopard2_backend_auto_gfni_boundary_32_ff8-allocation
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-ff8-allocation-fallback boundary-32)
+        add_test(NAME leopard2_backend_auto_gfni_boundary_32_ff16-allocation
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-ff16-allocation-fallback boundary-32)
+        add_test(NAME leopard2_backend_auto_gfni_boundary_r199_kat
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-kat-fallback boundary-r199)
+        add_test(NAME leopard2_backend_auto_gfni_boundary_r199_ff8-allocation
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-ff8-allocation-fallback boundary-r199)
+        add_test(NAME leopard2_backend_auto_gfni_boundary_r199_ff16-allocation
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-ff16-allocation-fallback boundary-r199)
+        add_test(NAME leopard2_backend_auto_gfni_boundary_r19932_kat
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-kat-fallback boundary-r19932)
+        add_test(NAME leopard2_backend_auto_gfni_boundary_r19932_ff8-allocation
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-ff8-allocation-fallback boundary-r19932)
+        add_test(NAME leopard2_backend_auto_gfni_boundary_r19932_ff16-allocation
+            COMMAND leopard2_backend_failures_test
+                auto-gfni-encode-ff16-allocation-fallback boundary-r19932)
+        set_tests_properties(
+            leopard2_backend_auto_gfni_boundary_32_kat
+            leopard2_backend_auto_gfni_boundary_32_ff8-allocation
+            leopard2_backend_auto_gfni_boundary_32_ff16-allocation
+            leopard2_backend_auto_gfni_boundary_r199_kat
+            leopard2_backend_auto_gfni_boundary_r199_ff8-allocation
+            leopard2_backend_auto_gfni_boundary_r199_ff16-allocation
+            leopard2_backend_auto_gfni_boundary_r19932_kat
+            leopard2_backend_auto_gfni_boundary_r19932_ff8-allocation
+            leopard2_backend_auto_gfni_boundary_r19932_ff16-allocation
+            PROPERTIES ENVIRONMENT
+                "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
     endif()
     set_tests_properties(
         leopard2_backend_failure_scalar_ff8_allocation
@@ -3153,6 +3191,7 @@ if(LEO2_BUILD_TESTS)
         # inheritance and canonical /usr/bin tools.  Keep it out of ordinary
         # codec-only builds and non-FHS/non-Linux CTest inventories.
         if(LEO2_BUILD_BENCHMARKS AND
+           LEO2_HAVE_RESEARCH_SOURCES AND
            CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND
            EXISTS "/usr/bin/cmake" AND EXISTS "/usr/bin/cc" AND
            EXISTS "/usr/bin/c++")
@@ -3180,23 +3219,25 @@ if(LEO2_BUILD_TESTS)
                     $<TARGET_FILE:bench_leopard2_locator>)
             set_tests_properties(leopard2_locator_benchmark_smoke PROPERTIES
                 ENVIRONMENT "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
-            if(TARGET bench_leopard2_allk)
+            if(LEO2_HAVE_RESEARCH_SOURCES AND TARGET bench_leopard2_allk)
                 add_test(
                     NAME leopard2_benchmark_json_regression
                     COMMAND ${LEO2_PYTHON_EXECUTABLE}
                         ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_benchmark_json_test.py
                         $<TARGET_FILE:bench_leopard2>
                         $<TARGET_FILE:bench_leopard2_allk>)
-            else()
+            elseif(LEO2_HAVE_RESEARCH_SOURCES)
                 add_test(
                     NAME leopard2_benchmark_json_regression
                     COMMAND ${LEO2_PYTHON_EXECUTABLE}
                         ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_benchmark_json_test.py
                         $<TARGET_FILE:bench_leopard2>)
             endif()
-            set_tests_properties(leopard2_benchmark_json_regression PROPERTIES
-                ENVIRONMENT
-                    "LEO2_EXPECTED_SOURCE_ATTESTATION_HEADER=${LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER};OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
+            if(LEO2_HAVE_RESEARCH_SOURCES)
+                set_tests_properties(leopard2_benchmark_json_regression PROPERTIES
+                    ENVIRONMENT
+                        "LEO2_EXPECTED_SOURCE_ATTESTATION_HEADER=${LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER};OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
+            endif()
             add_test(
                 NAME leopard2_pruned_transform_benchmark_smoke
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
@@ -3233,28 +3274,30 @@ if(LEO2_BUILD_TESTS)
                     ENVIRONMENT "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
             endif()
         endif()
-        add_test(
+        if(LEO2_HAVE_RESEARCH_SOURCES)
+            add_test(
             NAME leopard2_cost_model_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/cost_model.py
                 self-test)
-        # Pair qualification is a pure, synthetic contract test.  Keep it
-        # outside the Linux-only acquisition block so CI also proves that the
-        # core has no /proc, affinity, clock, or host-topology dependency.
-        add_test(
+            # Pair qualification is a pure, synthetic contract test.  Keep it
+            # outside the Linux-only acquisition block so CI also proves that
+            # the core has no /proc, affinity, clock, or host-topology dependency.
+            add_test(
             NAME leopard2_pair_qualification_contract_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B
                 ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_pair_qualification_contract.py)
-        add_test(
+            add_test(
             NAME leopard2_pair_qualification_contract_optimized_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE} -I -S -B -O
                 ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_pair_qualification_contract.py)
-        set_tests_properties(
-            leopard2_pair_qualification_contract_self_test
-            PROPERTIES TIMEOUT 300)
-        set_tests_properties(
-            leopard2_pair_qualification_contract_optimized_self_test
-            PROPERTIES TIMEOUT 300)
+            set_tests_properties(
+                leopard2_pair_qualification_contract_self_test
+                PROPERTIES TIMEOUT 300)
+            set_tests_properties(
+                leopard2_pair_qualification_contract_optimized_self_test
+                PROPERTIES TIMEOUT 300)
+        endif()
         # Exact-main baseline normalization is likewise a pure JSON/ELF
         # projection contract.  Keep normal and optimized interpreters in the
         # portable inventory so assertions can never carry evidence semantics.
@@ -3294,7 +3337,8 @@ if(LEO2_BUILD_TESTS)
         # attests ELF instrumentation with nm and POSIX alias semantics.  Keep
         # both host-tool tests out of non-Linux CTest inventories; portable
         # codec and Python tests remain registered independently.
-        if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+        if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND
+           LEO2_HAVE_RESEARCH_SOURCES)
             # GNU readelf is an independent test oracle only.  Production
             # normalized identities are derived by the portable byte parser.
             if(EXISTS "/usr/bin/readelf")
@@ -3797,12 +3841,6 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_v19_compiler_execution_optimized_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_compiler_execution.py)
-            set_tests_properties(
-                leopard2_v19_compiler_execution_self_test
-                leopard2_v19_compiler_execution_optimized_self_test
-                PROPERTIES
-                    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
-                    TIMEOUT 60)
             add_test(
                 NAME leopard2_v19_build_tool_execution_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
@@ -3811,12 +3849,6 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_v19_build_tool_execution_optimized_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_build_tool_execution.py)
-            set_tests_properties(
-                leopard2_v19_build_tool_execution_self_test
-                leopard2_v19_build_tool_execution_optimized_self_test
-                PROPERTIES
-                    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
-                    TIMEOUT 60)
             add_test(
                 NAME leopard2_v19_runtime_inventory_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
@@ -3825,12 +3857,6 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_v19_runtime_inventory_optimized_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_runtime_inventory.py)
-            set_tests_properties(
-                leopard2_v19_runtime_inventory_self_test
-                leopard2_v19_runtime_inventory_optimized_self_test
-                PROPERTIES
-                    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
-                    TIMEOUT 60)
             add_test(
                 NAME leopard2_v19_compiler_headers_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
@@ -3839,12 +3865,6 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_v19_compiler_headers_optimized_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_compiler_headers.py)
-            set_tests_properties(
-                leopard2_v19_compiler_headers_self_test
-                leopard2_v19_compiler_headers_optimized_self_test
-                PROPERTIES
-                    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
-                    TIMEOUT 60)
             add_test(
                 NAME leopard2_v19_linker_inputs_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
@@ -3853,12 +3873,6 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_v19_linker_inputs_optimized_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_linker_inputs.py)
-            set_tests_properties(
-                leopard2_v19_linker_inputs_self_test
-                leopard2_v19_linker_inputs_optimized_self_test
-                PROPERTIES
-                    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
-                    TIMEOUT 60)
             add_test(
                 NAME leopard2_v19_compiler_search_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
@@ -3867,12 +3881,6 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_v19_compiler_search_optimized_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_compiler_search.py)
-            set_tests_properties(
-                leopard2_v19_compiler_search_self_test
-                leopard2_v19_compiler_search_optimized_self_test
-                PROPERTIES
-                    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
-                    TIMEOUT 60)
             add_test(
                 NAME leopard2_v19_runtime_dispatch_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
@@ -3882,6 +3890,18 @@ if(LEO2_BUILD_TESTS)
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_v19_runtime_dispatch.py)
             set_tests_properties(
+                leopard2_v19_compiler_execution_self_test
+                leopard2_v19_compiler_execution_optimized_self_test
+                leopard2_v19_build_tool_execution_self_test
+                leopard2_v19_build_tool_execution_optimized_self_test
+                leopard2_v19_runtime_inventory_self_test
+                leopard2_v19_runtime_inventory_optimized_self_test
+                leopard2_v19_compiler_headers_self_test
+                leopard2_v19_compiler_headers_optimized_self_test
+                leopard2_v19_linker_inputs_self_test
+                leopard2_v19_linker_inputs_optimized_self_test
+                leopard2_v19_compiler_search_self_test
+                leopard2_v19_compiler_search_optimized_self_test
                 leopard2_v19_runtime_dispatch_self_test
                 leopard2_v19_runtime_dispatch_optimized_self_test
                 PROPERTIES
@@ -4026,112 +4046,106 @@ if(LEO2_BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_r1_xor_crossover.py
                 self-test)
         add_test(
-            NAME leopard2_external_comparison_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_external_comparison.py
-                self-test)
-        # Pure policy/evidence validation only: this test neither finds nor
-        # links ISA-L.  The actual adapter lives in a standalone default-off
-        # experiment CMake project.
-        add_test(
-            NAME leopard2_isal_comparison_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_isal_compare.py
-                self-test)
-        # Pure policy/evidence validation only: this test never discovers,
-        # compiles, links, or loads Jerasure/GF-Complete.  The real adapter is
-        # an explicitly configured standalone experiment project.
-        add_test(
-            NAME leopard2_jerasure_comparison_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_jerasure_compare.py
-                self-test)
-        add_test(
-            NAME leopard2_jerasure_default_optionality_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_jerasure_compare.py
-                optionality-test)
-        add_test(
             NAME leopard2_operation_counts_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_operation_counts.py
                 self-test)
-        if(LEOPARD_ENABLE_GF8)
+        if(LEO2_HAVE_RESEARCH_SOURCES)
             add_test(
-                NAME leopard2_decode_scratch_crosscheck
+                NAME leopard2_external_comparison_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/operation_counts/test_decode_scratch_crosscheck.py
-                    --probe $<TARGET_FILE:leopard2_decode_scratch_probe>)
-        endif()
-        add_test(
-            NAME leopard2_tiled_high_runner_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/run_tiled_high_abba.py
-                --self-test)
-        add_test(
-            NAME leopard2_high_decode_copy_contract_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/benchmark_contract.py
-                self-test)
-        add_test(
-            NAME leopard2_high_decode_copy_runner_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/run_abba.py
-                self-test)
-        add_test(
-            NAME leopard2_high_decode_copy_composite_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/compose.py
-                self-test)
-        if(TARGET bench_leopard2_high_decode_copy_attribution)
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_external_comparison.py
+                    self-test)
+            # Pure policy/evidence validation only: these adapters remain
+            # repository-only because their source identity needs Git history.
             add_test(
-                NAME leopard2_high_decode_copy_benchmark_smoke
+                NAME leopard2_isal_comparison_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_isal_compare.py
+                    self-test)
+            add_test(
+                NAME leopard2_jerasure_comparison_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_jerasure_compare.py
+                    self-test)
+            add_test(
+                NAME leopard2_jerasure_default_optionality_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_jerasure_compare.py
+                    optionality-test)
+            if(LEOPARD_ENABLE_GF8)
+                add_test(
+                    NAME leopard2_decode_scratch_crosscheck
+                    COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/operation_counts/test_decode_scratch_crosscheck.py
+                        --probe $<TARGET_FILE:leopard2_decode_scratch_probe>)
+            endif()
+            add_test(
+                NAME leopard2_tiled_high_runner_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/run_tiled_high_abba.py
+                    --self-test)
+            add_test(
+                NAME leopard2_high_decode_copy_contract_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/benchmark_contract.py
-                    smoke
-                    --benchmark
-                    $<TARGET_FILE:bench_leopard2_high_decode_copy_attribution>)
-            set_tests_properties(
-                leopard2_high_decode_copy_benchmark_smoke PROPERTIES
-                ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
-            # The build-identity checker authenticates CMake's Unix Makefiles
-            # link.txt recipes.  Ninja expresses the same commands only through
-            # its generated rule graph, so do not register a test that cannot
-            # establish the recipe provenance it promises.
-            if(CMAKE_EXPORT_COMPILE_COMMANDS AND
+                    self-test)
+            add_test(
+                NAME leopard2_high_decode_copy_runner_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/run_abba.py
+                    self-test)
+            add_test(
+                NAME leopard2_high_decode_copy_composite_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/compose.py
+                    self-test)
+            if(TARGET bench_leopard2_high_decode_copy_attribution)
+                add_test(
+                    NAME leopard2_high_decode_copy_benchmark_smoke
+                    COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/benchmark_contract.py
+                        smoke
+                        --benchmark
+                        $<TARGET_FILE:bench_leopard2_high_decode_copy_attribution>)
+                set_tests_properties(
+                    leopard2_high_decode_copy_benchmark_smoke PROPERTIES
+                    ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+                if(CMAKE_EXPORT_COMPILE_COMMANDS AND
                CMAKE_BUILD_TYPE STREQUAL "Release" AND
                CMAKE_GENERATOR STREQUAL "Unix Makefiles")
-                add_test(
-                    NAME leopard2_high_decode_copy_build_identity
-                    COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                        ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/run_abba.py
-                        build-smoke
-                        --source-root ${CMAKE_CURRENT_SOURCE_DIR}
-                        --binary
-                        $<TARGET_FILE:bench_leopard2_high_decode_copy_attribution>
-                        --hook-archive $<TARGET_FILE:leopard_test_hooks>)
+                    add_test(
+                        NAME leopard2_high_decode_copy_build_identity
+                        COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                            ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/run_abba.py
+                            build-smoke
+                            --source-root ${CMAKE_CURRENT_SOURCE_DIR}
+                            --binary
+                            $<TARGET_FILE:bench_leopard2_high_decode_copy_attribution>
+                            --hook-archive $<TARGET_FILE:leopard_test_hooks>)
+                endif()
             endif()
+            add_test(
+                NAME leopard2_tiled_high_analyzer_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/analyze_tiled_high.py
+                    --self-test)
+            add_test(
+                NAME leopard2_balanced_forced_runner_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/run_balanced_abba.py
+                    --self-test)
+            add_test(
+                NAME leopard2_balanced_forced_analyzer_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/analyze_balanced.py
+                    --self-test)
+            add_test(
+                NAME leopard2_balanced_promotion_plan_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/plan_balanced_promotion.py
+                    self-test)
         endif()
-        add_test(
-            NAME leopard2_tiled_high_analyzer_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/analyze_tiled_high.py
-                --self-test)
-        add_test(
-            NAME leopard2_balanced_forced_runner_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/run_balanced_abba.py
-                --self-test)
-        add_test(
-            NAME leopard2_balanced_forced_analyzer_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/analyze_balanced.py
-                --self-test)
-        add_test(
-            NAME leopard2_balanced_promotion_plan_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/plan_balanced_promotion.py
-                self-test)
         add_test(
             NAME leopard2_visual_studio_project_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
