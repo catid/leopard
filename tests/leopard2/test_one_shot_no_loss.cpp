@@ -928,6 +928,12 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     require(leo2_context_backend(avx2) == LEO2_BACKEND_AVX2,
         "raw transient explicit context did not select AVX2");
 
+    // The no-loss prefix scanner may hand a validated multi-loss prefix to
+    // each optimized one-shot owner.  Those owners must decline it so the
+    // next selector can run; returning INTERNAL_ERROR here would reject a
+    // valid multi-loss decode before canonical fallback gets a chance.
+    run_raw_transient_case(avx2, 16, 8, 64, 3, 0, false, true);
+
     const size_t boundary_bytes[] = { 1, 63, 64, 65, 255, 256 };
     for (size_t i = 0;
          i < sizeof(boundary_bytes) / sizeof(boundary_bytes[0]); ++i)

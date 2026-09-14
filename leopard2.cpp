@@ -9272,9 +9272,17 @@ static leo2_result TryOneShotEqualRoundedDirectRepair(
         single_missing_original =
             validated_prefix->single_missing_original;
         if (original_scan_start > codec->original_count ||
-            present_count + missing_count != original_scan_start ||
-            missing_count != 1 ||
-            single_missing_original >= original_scan_start)
+            present_count + missing_count != original_scan_start)
+            return LEO2_INTERNAL_ERROR;
+        // A validated multi-loss prefix belongs to a different one-shot
+        // owner.  Leave handled=false so the dispatcher can continue rather
+        // than converting a valid multi-loss call into INTERNAL_ERROR.
+        if (missing_count != 1)
+        {
+            handled = false;
+            return LEO2_SUCCESS;
+        }
+        if (single_missing_original >= original_scan_start)
             return LEO2_INTERNAL_ERROR;
     }
     else if (!MakeArrayRange(original_present, codec->original_count,
@@ -10681,9 +10689,14 @@ static leo2_result TryOneShotRawTranslatedLowDecode(
         present_count = validated_prefix->present_count;
         missing_original_count = validated_prefix->missing_original_count;
         if (original_scan_start > codec->original_count ||
-            present_count + missing_original_count != original_scan_start ||
-            missing_original_count != 1 ||
-            validated_prefix->single_missing_original >= original_scan_start)
+            present_count + missing_original_count != original_scan_start)
+        {
+            handled = true;
+            return LEO2_INTERNAL_ERROR;
+        }
+        if (missing_original_count != 1)
+            return LEO2_SUCCESS;
+        if (validated_prefix->single_missing_original >= original_scan_start)
         {
             handled = true;
             return LEO2_INTERNAL_ERROR;
@@ -11533,9 +11546,14 @@ static leo2_result TryOneShotRawNativeHighDecode(
         present_count = validated_prefix->present_count;
         missing_original_count = validated_prefix->missing_original_count;
         if (original_scan_start > codec->original_count ||
-            present_count + missing_original_count != original_scan_start ||
-            missing_original_count != 1 ||
-            validated_prefix->single_missing_original >= original_scan_start)
+            present_count + missing_original_count != original_scan_start)
+        {
+            handled = true;
+            return LEO2_INTERNAL_ERROR;
+        }
+        if (missing_original_count != 1)
+            return LEO2_SUCCESS;
+        if (validated_prefix->single_missing_original >= original_scan_start)
         {
             handled = true;
             return LEO2_INTERNAL_ERROR;
