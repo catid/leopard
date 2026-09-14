@@ -47,17 +47,21 @@ explicit padded-odd layout.
 The checked-in [performance atlas](docs/performance/leopard2_atlas/README_PERFORMANCE.md)
 contains reproducible throughput, setup, memory, and native-Leopard1
 comparisons with machine-readable provenance.  Its plots are single-core
-measurements on the recorded host, not universal guarantees.  The separately
-qualified current release routes report 53.7% and 48.4% AUTO throughput gains
-at two GF16 boundary workloads; the R199/32-KiB extension remains disabled
-because its cross-process stability control was inconclusive.  See the
-retained experiment reports under `experiments/` for exact gates and failed
+measurements on the recorded host, not universal guarantees.  A final-source
+native-Leopard1 ABBA check reports a 41.9% GF16 encode speedup (95% CI
+32.5–52.0%) at `K=1000,R=200,B=65536`, with zero reserved-SMT activity; the
+compact record is [`a5d0229-final-native-gfni-v20/summary.json`](experiments/leopard2/main_compare/results/a5d0229-final-native-gfni-v20/summary.json).
+Separately qualified AUTO routes report 53.7% and 48.4% gains at two GF16
+boundary workloads.  The R199/32-KiB extension remains disabled because its
+cross-process stability control was inconclusive.  See the retained
+experiment reports under `experiments/` for exact gates and failed
 alternatives; they are excluded from user source archives.
 
 Atlas snapshots: [encode speedup](docs/performance/leopard2_atlas/plots/encode_speedup_vs_leopard1.svg),
 [one-loss decode](docs/performance/leopard2_atlas/plots/decode_one_speedup_vs_leopard1.svg),
 and [full-loss decode](docs/performance/leopard2_atlas/plots/decode_full_speedup_vs_leopard1.svg).
-These remain labeled atlas evidence until the final-source refresh is complete.
+The final-source GFNI point is shown separately in
+[final_native_gfni_encode_speedup.svg](docs/performance/leopard2_atlas/plots/final_native_gfni_encode_speedup.svg).
 
 For release-archive contents and reproducibility policy, see
 [`docs/release_distribution.md`](docs/release_distribution.md).
