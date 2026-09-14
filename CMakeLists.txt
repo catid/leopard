@@ -1144,7 +1144,8 @@ if(LEO2_BUILD_BENCHMARKS)
             "LEO2_BENCHMARK_BUILD_CONFIGURATION_SCHEMA=\"${LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA}\"")
     endif()
 
-    if(LEOPARD_ENABLE_GF16)
+    if(LEOPARD_ENABLE_GF16 AND EXISTS
+            "${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf16_high_encode/attribution.cpp")
         add_executable(bench_leopard2_gf16_high_attribution
             experiments/leopard2/gf16_high_encode/attribution.cpp)
         target_link_libraries(
@@ -2460,18 +2461,22 @@ if(LEO2_BUILD_TESTS)
         set_tests_properties(leopard2_avx512_gfni_t16_prototype PROPERTIES
             ENVIRONMENT "OMP_NUM_THREADS=1")
 
-        add_executable(leopard2_avx512_gfni_t16_screen EXCLUDE_FROM_ALL
-            experiments/leopard2/gfni_t16/screen.cpp)
-        target_compile_definitions(leopard2_avx512_gfni_t16_screen PRIVATE
-            LEO2_HAVE_AVX2_BACKEND=1
-            LEO2_HAVE_AVX512_GFNI_T16=1
-            LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1)
-        target_link_libraries(leopard2_avx512_gfni_t16_screen leopard)
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gfni_t16/screen.cpp")
+            add_executable(leopard2_avx512_gfni_t16_screen EXCLUDE_FROM_ALL
+                experiments/leopard2/gfni_t16/screen.cpp)
+            target_compile_definitions(leopard2_avx512_gfni_t16_screen PRIVATE
+                LEO2_HAVE_AVX2_BACKEND=1
+                LEO2_HAVE_AVX512_GFNI_T16=1
+                LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1)
+            target_link_libraries(leopard2_avx512_gfni_t16_screen leopard)
+        endif()
 
-        add_executable(leopard2_avx512_gfni_t16_public_screen EXCLUDE_FROM_ALL
-            experiments/leopard2/gfni_t16/public_screen.cpp)
-        target_link_libraries(
-            leopard2_avx512_gfni_t16_public_screen leopard)
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gfni_t16/public_screen.cpp")
+            add_executable(leopard2_avx512_gfni_t16_public_screen EXCLUDE_FROM_ALL
+                experiments/leopard2/gfni_t16/public_screen.cpp)
+            target_link_libraries(
+                leopard2_avx512_gfni_t16_public_screen leopard)
+        endif()
     endif()
 
     add_executable(leopard2_backend_failures_test
