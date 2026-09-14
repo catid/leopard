@@ -1,15 +1,14 @@
 # Leopard-RS
 
 Leopard-RS is a portable C/C++ library for systematic Reed–Solomon erasure
-coding.  Leopard2 adds an object-based API (`leopard2.h`) while preserving the
-original `leopard.h` API and wire format.  It encodes parity shards and
-recovers missing data shards for up to 65,536 originals.
+coding. Leopard2 adds an object-based API while preserving the original
+`leopard.h` API and wire format. It generates parity shards and recovers lost
+data shards for codes with up to 65,536 originals.
 
 ## Quick start
 
-Requirements are CMake 3.16+, a C99/C++11 compiler, and OpenMP when the
-parallel context is used.  A portable release build needs no CPU-specific
-flags:
+Requirements: CMake 3.16 or newer, a C99/C++11 compiler, and OpenMP for the
+parallel context. A portable release build needs no CPU-specific flags:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -17,17 +16,14 @@ cmake --build build --target leopard
 ctest --test-dir build --output-on-failure
 ```
 
-Include `leopard2.h`, call `leo2_context_create`, create a codec with
-`leo2_codec_create`, query scratch with `leo2_encode_scratch_size`, then call
-`leo2_encode`.  Use `leo2_decode_plan_create` and
-`leo2_decode_plan_execute` for recovery.  Every call returns a `leo2_result`;
-the complete signatures, buffer-alias rules, shard layouts, and a recovery
-example are in [`examples/leopard2_minimal.c`](examples/leopard2_minimal.c),
-[`docs/leopard2_api.md`](docs/leopard2_api.md), and
-[`leopard2.h`](leopard2.h).  The original API remains available through
-[`leopard.h`](leopard.h).
+The smallest Leopard2 program includes [`leopard2.h`](leopard2.h), creates a
+context with `leo2_context_create`, creates a codec with `leo2_codec_create`,
+queries scratch with `leo2_encode_scratch_size`, and calls `leo2_encode`.
+Recovery uses `leo2_decode_plan_create` and `leo2_decode_plan_execute`. The
+[minimal example](examples/leopard2_minimal.c), [API guide](docs/leopard2_api.md),
+and header document signatures, layouts, alias rules, and errors.
 
-After building the library, compile and run the example with:
+After building, compile and run the example:
 
 ```sh
 cc -std=c11 -I. -c examples/leopard2_minimal.c -o build/leopard2_minimal.o
@@ -35,414 +31,98 @@ c++ build/leopard2_minimal.o build/libleopard.a -fopenmp -o build/leopard2_minim
 build/leopard2_minimal
 ```
 
-`LEO2_BACKEND_AUTO` is the recommended backend.  Applications may request
-`SCALAR`, `SSSE3`, `AVX2`, `AVX512`, or `GFNI` explicitly; an explicit request
-never silently widens to another ISA.  AUTO's measured GFNI shortcuts are
-bounded to documented AMD model/shape combinations and retain safe fallbacks;
-unknown CPUs use the portable runtime policy.  GF16 odd payloads require the
-explicit padded-odd layout.
+`LEO2_BACKEND_AUTO` is recommended. Applications may explicitly request
+`SCALAR`, `SSSE3`, `AVX2`, `AVX512`, or `GFNI`; an explicit request never
+silently widens to another ISA. GF16 odd payloads require the explicit padded
+odd layout. See [Windows build notes](docs/leopard2_windows_build.md) for the
+legacy Visual Studio project and CMake workflow.
 
 ## Performance evidence
 
 The checked-in [performance atlas](docs/performance/leopard2_atlas/README_PERFORMANCE.md)
 contains reproducible throughput, setup, memory, and native-Leopard1
-comparisons with machine-readable provenance.  Its plots are single-core
-measurements on the recorded host, not universal guarantees.  A final-source
-native-Leopard1 ABBA check reports a 41.9% GF16 encode speedup (95% CI
-32.5–52.0%) at `K=1000,R=200,B=65536`, with zero reserved-SMT activity; the
-compact record is [`final_native_gfni_summary.json`](docs/performance/final_native_gfni_summary.json).
-Separately qualified AUTO routes report 53.7% and 48.4% gains at two GF16
-boundary workloads.  The R199/32-KiB extension remains disabled because its
-cross-process stability control was inconclusive.  See the retained
-experiment reports under `experiments/` for exact gates and failed
-alternatives; they are excluded from user source archives.
+comparisons with machine-readable provenance. Plots are single-core results
+on the recorded host, not universal guarantees.
 
-The dense GF16 decode-plan locator setup also has a qualified AVX2-only path:
+At `K=1000,R=200,B=65536`, a final-source native-Leopard1 ABBA comparison
+reports a 41.9% GF16 encode speedup (95% CI 32.5–52.0%), with zero reserved
+SMT activity. The compact record is
+[`final_native_gfni_summary.json`](docs/performance/final_native_gfni_summary.json).
+Separately qualified AUTO routes report 53.7% and 48.4% gains at two GF16
+boundary workloads. The R199/32-KiB extension remains disabled because its
+cross-process stability control was inconclusive.
+
+Representative plots:
+
+- [Encode speedup vs Leopard1](docs/performance/leopard2_atlas/plots/encode_speedup_vs_leopard1.svg)
+- [One-loss decode speedup](docs/performance/leopard2_atlas/plots/decode_one_speedup_vs_leopard1.svg)
+- [Full-loss decode speedup](docs/performance/leopard2_atlas/plots/decode_full_speedup_vs_leopard1.svg)
+- [Final-source GFNI encode](docs/performance/leopard2_atlas/plots/final_native_gfni_encode_speedup.svg)
+- [Throughput, setup, and memory](docs/performance/leopard2_atlas/plots/final_native_gfni_metrics.svg)
+
+The dense GF16 decode-plan locator has a separately qualified AVX2 setup path:
 the same-process screen measured 3.9×–18.6× lower setup time across six
-active-parent sizes.  This is setup-only evidence, not an end-to-end throughput
-claim; scalar fallback and explicit backend behavior remain unchanged.  See the
-[preregistered method](docs/performance/gf16_walsh_locator_avx2_preregistration_v2.md),
+active-parent sizes. This is setup-only evidence, not an end-to-end throughput
+claim; see the [method](docs/performance/gf16_walsh_locator_avx2_preregistration_v2.md),
 [results](docs/performance/gf16_walsh_locator_avx2_v2.md), and
 [machine-readable record](docs/performance/gf16_walsh_locator_avx2_v2.json).
+Benchmark hardware, workloads, gates, and reproduction commands are recorded
+with each atlas and experiment report.
 
-Atlas snapshots: [encode speedup](docs/performance/leopard2_atlas/plots/encode_speedup_vs_leopard1.svg),
-[one-loss decode](docs/performance/leopard2_atlas/plots/decode_one_speedup_vs_leopard1.svg),
-and [full-loss decode](docs/performance/leopard2_atlas/plots/decode_full_speedup_vs_leopard1.svg).
-The final-source GFNI point is shown separately in
-[final_native_gfni_encode_speedup.svg](docs/performance/leopard2_atlas/plots/final_native_gfni_encode_speedup.svg).
-The paired one-loss/full-loss throughput, setup, and working-memory snapshot
-is [final_native_gfni_metrics.svg](docs/performance/leopard2_atlas/plots/final_native_gfni_metrics.svg);
-these latter figures are standalone medians, not ABBA confidence intervals.
+## Portable builds and backend policy
 
-For release-archive contents and reproducibility policy, see
-[`docs/release_distribution.md`](docs/release_distribution.md).
+The default CMake build is runtime-dispatched and does not add `-march=native`.
+Baseline x86-64 code stays at SSE2; SSSE3, AVX2, AVX-512VL, and GFNI kernels
+are separate translation units selected only after CPU and OS checks. Do not
+use `-march=native` when distributing binaries to other machines.
 
-Windows users should use the CMake workflow described in
-[`docs/leopard2_windows_build.md`](docs/leopard2_windows_build.md).  The
-checked-in Visual Studio 2015-format solution remains available for legacy
-consumers and is structurally checked against the production Leopard2 source
-graph.  Native Visual Studio 2015 load/build validation is still outstanding.
+On the calibrated AMD family 1Ah/model 44h host class, AUTO may use the
+qualified AVX-512VL legacy-high full-output encode for `K >= 8`, `N >= 16`,
+`2 <= R <= 4096`, and 64-byte-aligned shard lengths from 64 bytes through
+4 MiB. On AMD family 1Ah/model 08h, a qualified 256-bit GFNI table is limited
+to the native legacy-high `K=1000,R=200,T=256`, 64-KiB, single-thread
+full-output encode and ordinary one-item batch path. Neighboring shapes,
+decode, reusable/scalable batches, unknown CPUs, and explicit backends retain
+their normal tables and fallbacks.
 
-## Portable builds
-
-The default CMake build is portable for the target platform; it does not add
-`-march=native`.  On x86-64, baseline code stays at the platform's SSE2 floor,
-while SSSE3, AVX2, and AVX-512VL kernels are compiled in
-separate translation units and selected only after runtime CPU and
-operating-system checks.  An `AUTO` context reports the established AVX2
-baseline when it is available.  On the offline-calibrated AMD family
-1Ah/model 44h host class, a legacy-high GF16 codec may use the qualified
-AVX-512VL table for a full-output encode only when `K >= 8`, `N >= 16`,
-`2 <= R <= 4096`, and the shard length is a multiple of 64 bytes from 64 bytes
-through 4 MiB inclusive.  On AMD family 1Ah/model 08h, the exact native
-legacy-high GF16 `K=1000`, `R=200`, `T=256`, 64-KiB, full-output encode with a
-single-thread context may instead use the qualified 256-bit GFNI table.  That
-second policy is limited to `leo2_encode` and the ordinary one-item
-`leo2_encode_batch` path without preflight scratch; scalable-preflight,
-multi-item and reusable batches, decode, neighboring cells, unknown CPUs, and
-explicit backend requests retain their exact context table.  A normal
-distributable build therefore needs no host-CPU option:
-
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target leopard
-```
-
-Do not add `-march=native` when producing binaries for other machines: it can
-allow the compiler to emit unsupported instructions anywhere in the program.
-For cross-compilation, select the destination architecture in a CMake toolchain
-file and keep its baseline compatible with every deployment CPU.  The
-Apple build specifically treats a single `CMAKE_OSX_ARCHITECTURES` entry as the
-target architecture rather than trusting the build host's processor.  Universal
-Apple archives deliberately omit the optional x86 SSSE3/AVX object libraries:
-one object-library compile option cannot safely describe both its x86 and Arm
-slices, so those builds retain the portable scalar/native-Arm graph.
-
-The `LEO2_BACKEND_VARIANT` setting is a diagnostic control for forcing a
-qualified backend during testing; accepted values are `auto`, `scalar`,
-`ssse3`, `avx2`, and `avx512`.  Lower forced variants cap explicit contexts at
-the selected backend, while `avx512` retains access to qualified lower tables.
-This setting is not a portability target or a wire-format choice.  `auto`
-continues to report AVX2 as its context baseline even when a bounded encode
-operation is eligible for one of the model-scoped policies above.
-When its POSIX shell and disassembly tools are available, the normal test build
-registers `leopard2_portable_isa` to audit the x86-64 archive and any available
-build metadata.  Missing audit tools remain non-fatal for ordinary developer,
-cross-platform, and dependency-light builds.
-
-Sanitizer instrumentation is not production ISA evidence: compiler-generated
-ASan/UBSan helpers may use instructions outside the codec object's declared
-floor.  A sanitizer-instrumented build therefore registers
-`leopard2_portable_isa_checker_self_test` to retain all adversarial classifier
-controls, while the archive audit remains exclusive to a clean build.  The
-classification follows the active custom build type and its
-`CMAKE_CXX_FLAGS_<CONFIG>` variable.  Multi-configuration generators classify
-each configuration independently: sanitized configurations run the checker
-self-test, while clean configurations retain the archive audit (select one with
-CTest's `-C` option).  An empty single-config build type remains valid and is
-classified from the general C++ flags.
-
-The strict release-audit option below rejects sanitizer flags instead of
-silently substituting the weaker mode.
-
-```sh
-ctest --test-dir build -R '^leopard2_portable_isa$' --output-on-failure
-```
-
-Release CI can make every part of that evidence mandatory with the default-off
-strict mode:
+`LEO2_BACKEND_VARIANT=auto|scalar|ssse3|avx2|avx512` is a diagnostic control,
+not a portability target or wire-format choice. Release builds can run the
+strict x86-64 archive audit with:
 
 ```sh
 cmake -S . -B build/release-audit -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
   -DLEO2_PORTABLE_ISA_RELEASE_AUDIT=ON
 cmake --build build/release-audit --target leopard
-ctest --test-dir build/release-audit \
-  -R '^leopard2_portable_isa$' --output-on-failure
+ctest --test-dir build/release-audit -R '^leopard2_portable_isa$' --output-on-failure
 ```
 
-This mode fails closed if tests, the static-archive tool, `objdump` or
-`llvm-objdump`, POSIX `sh`, `compile_commands.json`, or the archive audit itself
-is unavailable.  It currently supports native, single-configuration x86-64
-release builds on non-Apple Unix with GCC or Clang.  MSVC/Windows uses the
-portable runtime-dispatch build plus the separately documented Visual Studio
-structural audit; enabling this strict ELF/GNU-archive audit there is an
-intentional configuration error.
+## Fields and reduced builds
 
-## Leopard2 field selection and reduced builds
-
-The new `leopard2.h` API lets an application select `LEO2_FIELD_GF8` or
-`LEO2_FIELD_GF16` explicitly when it creates a codec. `LEO2_FIELD_AUTO` is a
-wire-stable convenience, not a performance tuner: it uses GF8 when the selected
-profile's power-of-two parent has at most 256 coordinates and GF16 otherwise.
-That mapping does not depend on the CPU or on which fields were compiled. In
-particular, explicitly choosing GF16 for a small code changes the persisted
-field/code identity, and an AUTO codec whose canonical field was omitted
-returns `LEO2_UNSUPPORTED` instead of silently emitting different parity.
-
-Both fields are included by default. Applications which only need one may
-reduce code and table footprint with:
+`LEO2_FIELD_AUTO` is a wire-stable convenience: it chooses GF8 for small
+power-of-two parents (at most 256 coordinates) and GF16 otherwise. Both fields
+are included by default; a reduced build may disable one:
 
 ```sh
-cmake -S . -B build-gf8 -DLEOPARD_ENABLE_GF16=OFF  # GF8 only
-cmake -S . -B build-gf16 -DLEOPARD_ENABLE_GF8=OFF  # GF16 only
+cmake -S . -B build-gf8 -DLEOPARD_ENABLE_GF16=OFF
+cmake -S . -B build-gf16 -DLEOPARD_ENABLE_GF8=OFF
 ```
 
-At least one field must remain enabled. Non-CMake builds can use the equivalent
-`NO_LEO_HAS_FF8` and `NO_LEO_HAS_FF16` preprocessor controls. The installed
-CMake package reports `leopard_GF8_ENABLED` and `leopard_GF16_ENABLED`, while
-`leo2_context_field_mask()` reports the fields usable by a successfully created
-context. The legacy `leo_*` API retains its historical canonical field choice;
-if that field is absent, a nontrivial operation returns `Leopard_Platform`
-rather than switching wire formats.
-
-GF8 has much smaller initialization tables and accepts arbitrary positive shard
-byte lengths. GF16 supports larger parent codes and its native layout requires
-complete two-byte symbols. Passing an odd physical `shard_bytes` value to a
-native explicit-GF16 codec deterministically returns `LEO2_UNSUPPORTED`; it is
-never silently padded or projected to one byte. For an odd application payload
-of `B` bytes, explicitly select `LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1`, query the
-physical `B+1` size, and retain that extra byte in every parity shard. Relative
-throughput depends on the code shape, shard size, backend, and target CPU;
-neither field is universally faster.
-
-## MDS Reed-Solomon Erasure Correction Codes for Large Data in C
-
-Leopard-RS is a fast library for Erasure Correction Coding.
-From a block of equally sized original data pieces, it generates recovery
-symbols that can be used to recover lost original data.
-
-
-#### Motivation:
-
-It gets slower as O(N Log N) in the input data size, and its inner loops are
-vectorized using the best approaches available on modern processors, using the
-fastest finite fields (8-bit or 16-bit Galois fields with Cantor basis {2}).
-
-It sets new speed records for MDS encoding and decoding of large data,
-achieving over 1.2 GB/s to encode with the AVX2 instruction set on a single core.
-
-Example applications are data recovery software and data center replication.
-
-
-#### Encoder API:
-
-Preconditions:
-
-* The original and recovery data must not exceed 65536 pieces.
-* The recovery_count <= original_count.
-* The buffer_bytes must be a multiple of 64.
-* Each buffer should have the same number of bytes.
-* Even the last piece must be rounded up to the block size.
-
-```
-#include "leopard.h"
-```
-
-For full documentation please read `leopard.h`.
-
-+ `leo_init()` : Initialize library.
-+ `leo_encode_work_count()` : Calculate the number of work_data buffers to provide to leo_encode().
-+ `leo_encode()`: Generate recovery data.
-
-
-#### Decoder API:
-
-For full documentation please read `leopard.h`.
-
-+ `leo_init()` : Initialize library.
-+ `leo_decode_work_count()` : Calculate the number of work_data buffers to provide to leo_decode().
-+ `leo_decode()` : Recover original data.
-
-
-#### Benchmarks:
-
-On the the MacBook Pro 15-Inch (Mid-2015) featuring a 22 nm "Haswell/Crystalwell" 2.8 GHz Intel Core i7-4980HQ processor, compiled with Visual Studio 2017 RC:
-
-~~~
-Leopard Encoder(8.192 MB in 128 pieces, 128 losses): Input=2102.67 MB/s, Output=2102.67 MB/s
-Leopard Decoder(8.192 MB in 128 pieces, 128 losses): Input=686.212 MB/s, Output=686.212 MB/s
-
-Leopard Encoder(64 MB in 1000 pieces, 200 losses): Input=2194.94 MB/s, Output=438.988 MB/s
-Leopard Decoder(64 MB in 1000 pieces, 200 losses): Input=455.633 MB/s, Output=91.1265 MB/s
-
-Leopard Encoder(2097.15 MB in 32768 pieces, 32768 losses): Input=451.168 MB/s, Output=451.168 MB/s
-Leopard Decoder(2097.15 MB in 32768 pieces, 32768 losses): Input=190.471 MB/s, Output=190.471 MB/s
-~~~
-
-2 GB of 64 KB pieces encoded in 4.6 seconds, and worst-case recovery in 11 seconds.
-
-More benchmark results are available here:
-[https://github.com/catid/leopard/blob/master/Benchmarks.md](https://github.com/catid/leopard/blob/master/Benchmarks.md)
-
-The reproducible Leopard2 all-K comparison against the exact Leopard `main`
-codec and shipping Wirehair, including 39 graphs and machine-readable evidence,
-is available in the
-[Leopard2 performance atlas](docs/performance/leopard2_atlas/README_PERFORMANCE.md).
-
-
-#### Comparisons:
-
-There is another library `FastECC` by Bulat-Ziganshin that should have similar performance:
-[https://github.com/Bulat-Ziganshin/FastECC](https://github.com/Bulat-Ziganshin/FastECC).
-Both libraries implement the same high-level algorithm in {3}, while Leopard implements the
-newer polynomial basis GF(2^r) approach outlined in {1}, and FastECC uses complex finite fields
-modulo special primes.  There are trade-offs that may make either approach preferable based
-on the application:
-+ Older processors do not support SSSE3 and FastECC supports these processors better.
-+ FastECC supports data sets above 65,536 pieces as it uses 32-bit finite field math.  
-+ Leopard does not require expanding the input or output data to make it fit in the field, so it can be more space efficient.
-
-
-#### FFT Data Layout:
-
-We pack the data into memory in this order:
-
-~~~
-[Recovery Data (Power of Two = M)] [Original Data] [Zero Padding out to 65536]
-~~~
-
-For encoding, the placement is implied instead of actual memory layout.
-For decoding, the layout is explicitly used.
-
-
-#### Encoder algorithm:
-
-The encoder is described in {3}.  Operations are done O(K Log M),
-where K is the original data size, and M is up to twice the
-size of the recovery set.
-
-Roughly in brief:
-
-~~~
-Recovery = FFT( IFFT(Data_0) xor IFFT(Data_1) xor ... )
-~~~
-
-It walks the original data M chunks at a time performing the IFFT.
-Each IFFT intermediate result is XORed together into the first M chunks of
-the data layout.  Finally the FFT is performed.
-
-
-Encoder optimizations:
-* The first IFFT can be performed directly in the first M chunks.
-* The zero padding can be skipped while performing the final IFFT.
-Unrolling is used in the code to accomplish both these optimizations.
-* The final FFT can be truncated also if recovery set is not a power of 2.
-It is easy to truncate the FFT by ending the inner loop early.
-* The decimation-in-time (DIT) FFT is employed to calculate two layers at a time, rather than writing each layer out and reading it back in for the next layer of the FFT.
-
-
-#### Decoder algorithm:
-
-The decoder is described in {1}.  Operations are done O(N Log N), where N is up
-to twice the size of the original data as described below.
-
-Roughly in brief:
-
-~~~
-Original = -ErrLocator * FFT( Derivative( IFFT( ErrLocator * ReceivedData ) ) )
-~~~
-
-
-#### Precalculations:
-
-At startup initialization, FFTInitialize() precalculates FWT(L) as
-described by equation (92) in {1}, where L = Log[i] for i = 0..Order,
-Order = 256 or 65536 for FF8/16.  This is stored in the LogWalsh vector.
-
-It also precalculates the FFT skew factors (s_i) as described by
-equation (28).  This is stored in the FFTSkew vector.
-
-For memory workspace N data chunks are needed, where N is a power of two
-at or above M + K.  K is the original data size and M is the next power
-of two above the recovery data size.  For example for K = 200 pieces of
-data and 10% redundancy, there are 20 redundant pieces, which rounds up
-to 32 = M.  M + K = 232 pieces, so N rounds up to 256.
-
-
-#### Online calculations:
-
-At runtime, the error locator polynomial is evaluated using the
-Fast Walsh-Hadamard transform as described in {1} equation (92).
-
-At runtime the data is explicit laid out in workspace memory like this:
-~~~
-[Recovery Data (Power of Two = M)] [Original Data (K)] [Zero Padding out to N]
-~~~
-
-Data that was lost is replaced with zeroes.
-Data that was received, including recovery data, is multiplied by the error
-locator polynomial as it is copied into the workspace.
-
-The IFFT is applied to the entire workspace of N chunks.
-Since the IFFT starts with pairs of inputs and doubles in width at each
-iteration, the IFFT is optimized by skipping zero padding at the end until
-it starts mixing with non-zero data.
-
-The formal derivative is applied to the entire workspace of N chunks.
-
-The FFT is applied to the entire workspace of N chunks.
-The FFT is optimized by only performing intermediate calculations required
-to recover lost data.  Since it starts wide and ends up working on adjacent
-pairs, at some point the intermediate results are not needed for data that
-will not be read by the application.  This optimization is implemented by
-the ErrorBitfield class.
-
-Finally, only recovered data is multiplied by the negative of the
-error locator polynomial as it is copied into the front of the
-workspace for the application to retrieve.
-
-
-#### Finite field arithmetic optimizations:
-
-For faster finite field multiplication, large tables are precomputed and
-applied during encoding/decoding on 64 bytes of data at a time using
-SSSE3 or AVX2 vector instructions and the ALTMAP approach from Jerasure.
-
-Addition in this finite field is XOR, and a vectorized memory XOR routine
-is also used.
-
-
-#### References:
-
-This library implements an MDS erasure code introduced in this paper:
-
-~~~
-    {1} S.-J. Lin, T. Y. Al-Naffouri, Y. S. Han, and W.-H. Chung,
-    "Novel Polynomial Basis with Fast Fourier Transform
-	and Its Application to Reed-Solomon Erasure Codes"
-    IEEE Trans. on Information Theory, pp. 6284-6299, November, 2016.
-~~~
-
-~~~
-    {2} D. G. Cantor, "On arithmetical algorithms over finite fields",
-    Journal of Combinatorial Theory, Series A, vol. 50, no. 2, pp. 285-300, 1989.
-~~~
-
-~~~
-    {3} Sian-Jheng Lin, Wei-Ho Chung, "An Efficient (n, k) Information
-    Dispersal Algorithm for High Code Rate System over Fermat Fields,"
-    IEEE Commun. Lett., vol.16, no.12, pp. 2036-2039, Dec. 2012.
-~~~
-
-~~~
-    {4} Plank, J. S., Greenan, K. M., Miller, E. L., "Screaming fast Galois Field
-    arithmetic using Intel SIMD instructions."  In: FAST-2013: 11th Usenix
-    Conference on File and Storage Technologies, San Jose, 2013
-~~~
-	
-Some papers are mirrored in the /docs/ folder.
-
-
-#### Credits
-
-Inspired by discussion with:
-
-+ Sian-Jhen Lin <sjhenglin@gmail.com> : Author of {1} {3}, basis for Leopard
-+ Bulat Ziganshin <bulat.ziganshin@gmail.com> : Author of FastECC
-+ Yutaka Sawada <tenfon@outlook.jp> : Author of MultiPar
-
-Software by Christopher A. Taylor <mrcatid@gmail.com>
-
-Please reach out if you need support or would like to collaborate on a project.
+At least one field must remain enabled. GF8 accepts arbitrary positive shard
+lengths. Native GF16 requires complete two-byte symbols; an odd physical size
+returns `LEO2_UNSUPPORTED`. For an odd application payload, use
+`LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1` and retain the extra physical byte in
+every parity shard.
+
+## Legacy API and release contents
+
+The original `leo_*` API remains available through [`leopard.h`](leopard.h),
+with its historical compatibility and layout rules. Older API details and
+benchmark history are in [`Benchmarks.md`](Benchmarks.md); the new API contract
+is in [`docs/leopard2_api.md`](docs/leopard2_api.md).
+
+User source archives contain library sources, headers, CMake files, tests,
+examples, benchmark tooling, portability support, license, documentation, and
+the lightweight atlas runner. Research bundles, generated builds, and session
+metadata remain in Git history but are excluded from archives; see
+[`docs/release_distribution.md`](docs/release_distribution.md).
