@@ -5,6 +5,7 @@ the qualified v3 implementation and changes only the Beads identity and fresh
 paths, so a new readiness-true preregistration cannot accidentally reuse the
 old attempt directory.
 """
+import json
 import subprocess
 
 import paired_epoch_campaign as _base
@@ -118,7 +119,13 @@ def qualification_gate(pins):
     previous = _base.BEAD
     previous_plan = _base.PLAN
     _base.BEAD = QUALIFICATION_BEAD
-    _base.PLAN = _original['PLAN']
+    # The inherited qualification has the original file set; compare only
+    # that intersection while retaining the v4 plan key for the timing pins.
+    qualified_pin_path = _base.Path(QUALIFIED_ROOT) / 'qualification-v2' / 'pins.json'
+    qualified_pins = json.loads(qualified_pin_path.read_text())
+    pins = dict(pins, files={name: digest for name, digest in pins['files'].items()
+                             if name in qualified_pins['files']})
+    _base.PLAN = PLAN
     try:
         return _old_qualification_gate(pins)
     finally:
