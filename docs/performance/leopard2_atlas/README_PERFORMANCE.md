@@ -10,17 +10,16 @@ left blank rather than interpolated.
 > Values above 1× in speedup graphs mean Leopard2 is faster. These are
 > single-core results on one recorded host, not universal performance claims.
 
-> **Current-source regression closure (2026-08-18):** the plots below retain
-> the original full-atlas evidence identity recorded later in this file.  Five
-> subsequent GF8 encoder/decoder fixes were checked on a predeclared union of
-> 97 formerly losing and boundary-control workloads.  A fresh standalone
-> 75-round campaign at commit `970107e` found zero exact-main regressions in
-> all 97 encode and all 97 setup-inclusive decode comparisons; the weakest
-> lower 95% confidence bounds were 1.031× and 1.054× respectively.  Every
-> identical-binary control interval also remained inside ±2%.  See
-> [optimization report 38](../../../experiments/leopard2/optimization_log/38-current-atlas-final97-regression-closure.md)
-> for the exact scope and reproducible evidence.  This targeted closure does
-> not silently replace or extrapolate the remaining full-atlas cells.
+## Artifact identity
+
+This release refresh was measured from Leopard2 commit `150e38dd1d55bb31c32aeced9254d33979b67dce`
+(tree `d3d4b82b767403f783134b2c257bf0e074cf08f8`), against exact Leopard
+`main` commit `6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198` and Wirehair commit
+`067ca7cdb66aed424ec23f97557429bf791c6f0c`. The executable SHA-256 values,
+compiler, host, manifest, and raw results are recorded in
+[`run_metadata.json`](run_metadata.json), [`manifest.json`](manifest.json),
+and [`summary.json`](summary.json). The superseded 2026-08-18 atlas remains
+available in [`historical/2026-08-18`](historical/2026-08-18/README_PERFORMANCE.md).
 
 ## Headline graphs
 
@@ -34,8 +33,8 @@ left blank rather than interpolated.
 
 | Baseline | Comparable cells | Median full-message speedup | Cells faster |
 | --- | --- | --- | --- |
-| Leopard main | 400 | 1.110× | 96.2% |
-| Wirehair (shipping) | 476 | 5.645× | 100.0% |
+| Leopard main | 400 | 1.155× | 99.5% |
+| Wirehair (shipping) | 476 | 5.743× | 100.0% |
 
 ### Decode with setup included
 
@@ -49,14 +48,14 @@ left blank rather than interpolated.
 
 | Loss regime | Baseline | Comparable cells | Median speedup | Cells faster | Worst observed cell |
 | --- | --- | --- | --- | --- | --- |
-| 1 random source erasure | Leopard main | 400 | 10.401× | 100.0% | K=221, 64 B, 1.926× |
-| 1 random source erasure | Wirehair (shipping) | 476 | 41.443× | 100.0% | K=2, 64 B, 6.481× |
-| 2 random source erasures | Leopard main | 400 | 2.064× | 99.0% | K=95, 1 KiB, 0.981× |
-| 2 random source erasures | Wirehair (shipping) | 476 | 8.775× | 100.0% | K=37, 1 KiB, 2.488× |
-| 10% random source erasures | Leopard main | 400 | 1.573× | 96.2% | K=91, 1 KiB, 0.874× |
-| 10% random source erasures | Wirehair (shipping) | 476 | 7.407× | 100.0% | K=33, 1 KiB, 2.589× |
-| maximum random source erasures | Leopard main | 400 | 1.451× | 96.2% | K=93, 64 B, 0.924× |
-| maximum random source erasures | Wirehair (shipping) | 476 | 6.454× | 100.0% | K=39, 4 KiB, 2.617× |
+| 1 random source erasure | Leopard main | 400 | 10.110× | 100.0% | K=223, 64 B, 1.975× |
+| 1 random source erasure | Wirehair (shipping) | 476 | 38.556× | 100.0% | K=5, 64 B, 6.511× |
+| 2 random source erasures | Leopard main | 400 | 2.061× | 100.0% | K=91, 64 B, 1.035× |
+| 2 random source erasures | Wirehair (shipping) | 476 | 9.855× | 100.0% | K=19, 1 MiB, 2.389× |
+| 10% random source erasures | Leopard main | 400 | 1.639× | 100.0% | K=73, 64 B, 1.084× |
+| 10% random source erasures | Wirehair (shipping) | 476 | 8.082× | 100.0% | K=19, 1 MiB, 2.389× |
+| maximum random source erasures | Leopard main | 400 | 1.457× | 100.0% | K=87, 4 KiB, 1.051× |
+| maximum random source erasures | Wirehair (shipping) | 476 | 6.842× | 100.0% | K=39, 4 KiB, 2.665× |
 
 ## Complete graph index
 
@@ -141,13 +140,13 @@ Leopard-main speedup, Wirehair speedup, and Wirehair overhead plots:
 
 ## Evidence identity
 
-Host `ai`, kernel `6.8.0-134-generic`, pinned CPU
-`0`, allowed CPU set `[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]`.
+Host `work`, kernel `6.8.0-139-generic`, pinned CPU
+`0`, allowed CPU set `[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127]`.
 
 | Component | Source commit | Source tree | Executable SHA-256 |
 | --- | --- | --- | --- |
-| Leopard2 | 5939767fc9d0ca3cde2ba226119914b7a71f6154 | 4f56f4b72768cd611dc36f3d01c531bfbef7fbbe | b44be589866e1dfc80d491dd5a68c537b8e80388a1848d87bd30aef3f7944d85 |
-| Leopard main | 6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198 | b7c8830d96a978f6ec14fe747095f066e351ae72 | 2f8d1f42d767f97fe6c4d373892d849e679eda07cab2afbc4ec0a521b58516e6 |
+| Leopard2 | 150e38dd1d55bb31c32aeced9254d33979b67dce | d3d4b82b767403f783134b2c257bf0e074cf08f8 | b8d55951258aa6d5dcf1d76d1eac720ef1dd194fb3758efd02f877e5b189f9a0 |
+| Leopard main | 6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198 | b7c8830d96a978f6ec14fe747095f066e351ae72 | 3ff92aacb646b27069285ae769918fcf90ce9f12fbaa665d1d26bf03cf247801 |
 | Wirehair shipping codec | 067ca7cdb66aed424ec23f97557429bf791c6f0c | f33407f28dfbd626f8bb797cfc4d5d60951ba663 | b63b309fa4ac454c37b07e1d6e0096cc39ebeeecd0f7004b569c08f1d0605eae |
 
 Evidence files:
@@ -160,12 +159,7 @@ Evidence files:
 ## Reproduction
 
 The complete command, including the three required executable SHA-256 values,
-is retained in `REPRODUCE.txt` next to this README.  The checked-in metadata
-uses the literal `${LEOPARD_SOURCE}` and `${ATLAS_TMP}` placeholders for the
-original machine-local source and temporary-build roots; they are provenance
-labels, not required paths.  Set those variables to equivalent paths on the
-machine where the pinned inputs are available before running the command.  The
-core workflow is:
+is retained in `REPRODUCE.txt` next to this README. The core workflow is:
 
     python3 experiments/leopard2/performance_atlas/test_generate_atlas.py -v
     python3 experiments/leopard2/performance_atlas/generate_atlas.py all \
