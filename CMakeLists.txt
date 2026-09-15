@@ -41,11 +41,15 @@ option(LEO2_ENABLE_CUDA "Build the optional Leopard2 CUDA backend" OFF)
 option(LEOPARD_ENABLE_GF8 "Include the GF(2^8) codec" ON)
 option(LEOPARD_ENABLE_GF16 "Include the GF(2^16) codec" ON)
 
-# The public source archive intentionally omits the repository-only
-# experiments/ tree.  Keep a single capability bit so CTest never registers
-# research harnesses whose inputs are unavailable in that archive.
+# The public source archive retains only the lightweight performance-atlas
+# runner under experiments/.  Treat the full research harness as available
+# only when its repository-only cost model and comparison tree are present;
+# otherwise CTest must not register tests whose inputs were export-ignored.
+# This keeps a fresh archive's test inventory self-contained while preserving
+# the complete research suite in a checkout.
 set(LEO2_HAVE_RESEARCH_SOURCES OFF)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/experiments")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/cost_model.py" AND
+   IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare")
     set(LEO2_HAVE_RESEARCH_SOURCES ON)
 endif()
 
