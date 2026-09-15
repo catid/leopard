@@ -10,6 +10,7 @@ import subprocess
 
 import paired_epoch_campaign as _base
 import run_paired_epoch_campaign as _runner
+import replay_paired_epoch_campaign as _replay
 
 BEAD = 'leopard-79h.38.5.4.19.1.5'
 QUALIFICATION_BEAD = 'leopard-79h.38.5.4.19.1.4.4'
@@ -131,7 +132,21 @@ def qualification_gate(pins):
     pins = dict(pins, files=files)
     _base.PLAN = PLAN
     try:
-        return _old_qualification_gate(pins)
+        original_verify = _replay.verify
+
+        def verify_inherited(*args, **kwargs):
+            verify_plan = _base.PLAN
+            _base.PLAN = _original['PLAN']
+            try:
+                return original_verify(*args, **kwargs)
+            finally:
+                _base.PLAN = verify_plan
+
+        _replay.verify = verify_inherited
+        try:
+            return _old_qualification_gate(pins)
+        finally:
+            _replay.verify = original_verify
     finally:
         _base.BEAD = previous
         _base.PLAN = previous_plan
