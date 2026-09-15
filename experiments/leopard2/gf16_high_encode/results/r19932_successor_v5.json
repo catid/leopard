@@ -1,0 +1,20 @@
+{
+  "bead": "leopard-79h.38.5.4.19.1.6",
+  "decision": "inconclusive_controls",
+  "default_enabled": false,
+  "preflights": 27,
+  "timed_processes": 318,
+  "sibling_delta": 0,
+  "memory_peak": 184995840,
+  "memory_max": 268435456,
+  "memory_events": [0, 0, 0, 0, 0, 0],
+  "swap_max": 0,
+  "target_ratios": {
+    "epoch0": {"ordinary_off": 1.517985916568491, "batch_off": 1.5253851387359973, "ordinary_native": 1.4235696828516844, "batch_native": 1.414403325671366},
+    "epoch1": {"ordinary_off": 1.5214774811443281, "batch_off": 1.5243792255187225, "ordinary_native": 1.4248965042011923, "batch_native": 1.4174841994767904},
+    "epoch2": {"ordinary_off": 1.5237601716595397, "batch_off": 1.5336819628845177, "ordinary_native": 1.4173135321410337, "batch_native": 1.410721107064909}
+  },
+  "resource_sha256": "06e9f980a89986894908d5763f4af2385e9b53bb9dd9daf4deb7537aca1f4812",
+  "attempt_sha256": "b6a58f5b2e0bfebd56eefeb4f707b6b2ce58e42dd8059911d5792c76113c6fc4",
+  "launches_sha256": "0d596dd3847948b6e34af30ec00666f13cff9d7eb7eae5cf1ebea89116658638"
+}
