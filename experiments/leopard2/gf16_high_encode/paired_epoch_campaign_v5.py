@@ -36,7 +36,9 @@ _v4._base.FILES = (_v4._base.SOURCES | _v4._base.ASSETS |
 
 
 def plan(ready=False):
-    return _v4.plan(ready)
+    value = _v4.plan(ready)
+    value['frontend_commit'] = 'paired-epoch-v5-resource-capture'
+    return value
 
 
 def preregistration(bundle, commit):
@@ -49,6 +51,9 @@ def inputs(bundle, **kwargs):
 
 def qualification_gate(pins):
     return _v4.qualification_gate(pins)
+
+
+_v4._base.plan = plan
 
 
 def controller_command(bundle, output, qualification, commit=None):
