@@ -22,7 +22,7 @@ _old_plan = _base.plan
 _old_inputs = _base.inputs
 _original = dict(BEAD=_base.BEAD, PLAN=_base.PLAN, SOURCES=set(_base.SOURCES),
                  SOURCE_ROOTS=_base.SOURCE_ROOTS, FILES=set(_base.FILES),
-                 EXTRA=set(_base.EXTRA))
+                 EXTRA=set(_base.EXTRA), ROOT=_base.ROOT, plan=_base.plan)
 
 
 def plan(ready=False):
@@ -89,11 +89,14 @@ def inputs(bundle, **kwargs):
     # task.  Validate it under that identity, then restore this successor's
     # identity before the caller records timing state.
     previous = {key: getattr(_base, key) for key in
-                ('BEAD', 'PLAN', 'SOURCES', 'SOURCE_ROOTS', 'FILES', 'EXTRA')}
+                ('BEAD', 'PLAN', 'SOURCES', 'SOURCE_ROOTS', 'FILES', 'EXTRA',
+                 'ROOT', 'plan')}
     is_v4 = (_base.Path(bundle) / PLAN).is_file()
     _base.BEAD = QUALIFICATION_BEAD
     if not is_v4:
         _base.PLAN = _original['PLAN']
+        _base.ROOT = _base.Path(QUALIFIED_ROOT)
+        _base.plan = _old_plan
         _base.SOURCES = _original['SOURCES']
         _base.SOURCE_ROOTS = _original['SOURCE_ROOTS']
         _base.FILES = _original['FILES']
