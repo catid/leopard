@@ -50,7 +50,10 @@ SMT activity. The compact record is
 [`final_native_gfni_summary.json`](docs/performance/final_native_gfni_summary.json).
 Separately qualified AUTO routes report 53.7% and 48.4% gains at two GF16
 boundary workloads. The R199/32-KiB extension remains disabled because its
-cross-process stability control was inconclusive.
+cross-process stability control was inconclusive. A later resource-captured
+successor measured roughly 1.52× versus the disabled route and 1.42× versus
+native Leopard1, but its fixed ±2% controls still failed; see the
+[retained diagnostic report](experiments/leopard2/gf16_high_encode/r19932_successor_v5.md).
 
 Representative plots:
 

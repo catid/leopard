@@ -20,6 +20,9 @@ compiler, host, manifest, and raw results are recorded in
 [`run_metadata.json`](run_metadata.json), [`manifest.json`](manifest.json),
 and [`summary.json`](summary.json). The superseded 2026-08-18 atlas remains
 available in [`historical/2026-08-18`](historical/2026-08-18/README_PERFORMANCE.md).
+The separate AUTO R199/32 KiB diagnostic remains disabled after a valid
+resource-captured successor found positive target gains but failed its fixed
+control gate; see the [retained report](../../../experiments/leopard2/gf16_high_encode/r19932_successor_v5.md).
 
 ## Headline graphs
 
