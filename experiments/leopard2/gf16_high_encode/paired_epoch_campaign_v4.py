@@ -116,11 +116,14 @@ _old_qualification_gate = _runner.qualification_gate
 
 def qualification_gate(pins):
     previous = _base.BEAD
+    previous_plan = _base.PLAN
     _base.BEAD = QUALIFICATION_BEAD
+    _base.PLAN = _original['PLAN']
     try:
         return _old_qualification_gate(pins)
     finally:
         _base.BEAD = previous
+        _base.PLAN = previous_plan
 
 
 _runner.qualification_gate = qualification_gate
