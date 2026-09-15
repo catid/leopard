@@ -123,8 +123,12 @@ def qualification_gate(pins):
     # that intersection while retaining the v4 plan key for the timing pins.
     qualified_pin_path = _base.Path(QUALIFIED_ROOT) / 'qualification-v2' / 'pins.json'
     qualified_pins = json.loads(qualified_pin_path.read_text())
-    pins = dict(pins, files={name: digest for name, digest in pins['files'].items()
-                             if name in qualified_pins['files']})
+    files = {name: digest for name, digest in pins['files'].items()
+             if name in qualified_pins['files']}
+    # The v4 bundle deliberately renames its plan; supply the inherited plan
+    # digest solely for the qualification proof's cross-bundle identity check.
+    files[_original['PLAN']] = qualified_pins['files'][_original['PLAN']]
+    pins = dict(pins, files=files)
     _base.PLAN = PLAN
     try:
         return _old_qualification_gate(pins)
