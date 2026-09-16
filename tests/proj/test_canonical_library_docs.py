@@ -59,6 +59,36 @@ def legacy_references(text):
 
 class CanonicalLibraryDocumentationTest(unittest.TestCase):
 
+    def test_release_readme_builds_tests_and_supports_documented_cmake(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        quickstart = readme.split("```sh", 1)[1].split("```", 1)[0]
+        self.assertIn("cmake --build build\n", quickstart)
+        self.assertIn("(cd build && ctest --output-on-failure)", quickstart)
+        # ctest --test-dir was added in 3.20, later than the stated 3.16 floor.
+        self.assertNotIn("ctest --test-dir", readme)
+
+    def test_release_readme_links_resolve_without_research_tree(self):
+        documents = (
+            ROOT / "README.md",
+            ROOT / "docs/performance/leopard2_atlas/README_PERFORMANCE.md",
+            ROOT / "docs/performance/r19932_successor_v5.md",
+        )
+        for path in documents:
+            text = path.read_text(encoding="utf-8")
+            for target in re.findall(r"\]\(([^)]+)\)", text):
+                if re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", target):
+                    continue
+                target = target.split("#", 1)[0]
+                if not target:
+                    continue
+                resolved = (path.parent / target).resolve()
+                with self.subTest(document=str(path), target=target):
+                    self.assertTrue(resolved.exists())
+                    relative = resolved.relative_to(ROOT).as_posix()
+                    if relative.startswith("experiments/"):
+                        self.assertTrue(relative.startswith(
+                            "experiments/leopard2/performance_atlas/"))
+
     def test_current_commands_use_canonical_target_and_archive(self):
         stale = []
         for path in documentation_files():

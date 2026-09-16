@@ -1198,6 +1198,7 @@ class CMakeProductionGraph(object):
     )
     _required_python_test_registrations = Counter({
         "leopard2_build_provenance_compiler_replay": 1,
+        "leopard2_performance_atlas_self_test": 1,
         "leopard2_locator_benchmark_smoke": 1,
         "leopard2_benchmark_json_regression": 2,
         "leopard2_pruned_transform_benchmark_smoke": 1,
@@ -1455,8 +1456,14 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "9c7585e721f7edb37166e1f8d542cd5ced1ddff5820b569994c121ea60633681"
+        "c0531aeaad8cd4f47dcb573d68c710cc78ac302b14d3d236d048d482b33ca32d"
     _required_python_test_property_commands = Counter({
+        ("set_tests_properties", (
+            "leopard2_performance_atlas_self_test", "PROPERTIES",
+            "RUN_SERIAL", "TRUE", "ENVIRONMENT",
+            "PYTHONDONTWRITEBYTECODE=1;"
+            "PYTHONWARNINGS=error::ResourceWarning",
+            "TIMEOUT", "120")): 1,
         ("set_tests_properties", (
             "leopard2_build_provenance_compiler_replay", "PROPERTIES",
             "RUN_SERIAL", "TRUE", "ENVIRONMENT",
@@ -2724,6 +2731,15 @@ class CMakeProductionGraph(object):
             "CMAKE_HOST_SYSTEM_NAME",
             "unsupported comparison of symbolic CMake boolean",
         )
+        if name == "leopard2_performance_atlas_self_test":
+            atlas = ("predicate:EXISTS:${CMAKE_CURRENT_SOURCE_DIR}/"
+                     "experiments/leopard2/performance_atlas/")
+            return ((bool_and(
+                benchmark, bool_atom("external:CMAKE_HOST_UNIX"),
+                bool_atom(atlas + "test_generate_atlas.py"),
+                bool_atom(atlas + "generate_atlas.py")), (
+                    "unmodeled CMake conditional variable: CMAKE_HOST_UNIX",
+                    "unsupported CMake conditional predicate: EXISTS",)),)
         if name == "leopard2_build_provenance_compiler_replay":
             return ((
                 bool_and(
@@ -6571,6 +6587,22 @@ class CMakeGraphMutationTest(unittest.TestCase):
         return production_graph(
             text, require_files=False,
             require_mutation_contract=require_mutation_contract)
+
+    def test_atlas_registration_requires_posix_host_and_retained_scripts(self):
+        predicates = (
+            "CMAKE_HOST_UNIX AND",
+            'EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/'
+            'performance_atlas/test_generate_atlas.py"',
+            'EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/'
+            'performance_atlas/generate_atlas.py"',
+        )
+        for predicate in predicates:
+            self.assertEqual(1, self.cmake.count(predicate))
+            replacement = "TRUE AND" if predicate.endswith(" AND") else "TRUE"
+            with self.subTest(predicate=predicate):
+                text = self.cmake.replace(predicate, replacement, 1)
+                with self.assertRaisesRegex(ContractError, "guard drift"):
+                    self.resolve_text(text, require_mutation_contract=True)
 
     def test_small_direct_exhaustive_target_remains_gf8_only_reachable(self):
         condition = (

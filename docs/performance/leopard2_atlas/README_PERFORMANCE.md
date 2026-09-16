@@ -22,7 +22,7 @@ and [`summary.json`](summary.json). The superseded 2026-08-18 atlas remains
 available in [`historical/2026-08-18`](historical/2026-08-18/README_PERFORMANCE.md).
 The separate AUTO R199/32 KiB diagnostic remains disabled after a valid
 resource-captured successor found positive target gains but failed its fixed
-control gate; see the [retained report](../../../experiments/leopard2/gf16_high_encode/r19932_successor_v5.md).
+control gate; see the [limitation report](../r19932_successor_v5.md).
 
 ## Headline graphs
 
@@ -160,6 +160,12 @@ Evidence files:
 - `run_metadata.json` — host, source, lock, runner, and executable identities
 
 ## Reproduction
+
+New benchmark runs require a full Git checkout, including the repository-only
+`experiments/leopard2/main_compare` adapter and clean Git source identities.
+Source archives retain the plots, evidence, and atlas unit tests, but do not
+contain every input needed to collect new measurements. The Python runner
+requires Python 3.10 or newer on a POSIX host.
 
 The complete command, including the three required executable SHA-256 values,
 is retained in `REPRODUCE.txt` next to this README. The core workflow is:

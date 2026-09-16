@@ -3216,6 +3216,23 @@ if(LEO2_BUILD_TESTS)
                 TIMEOUT 300)
         endif()
         if(LEO2_BUILD_BENCHMARKS)
+            # The archive retains this runner and its evidence. It imports
+            # fcntl, so register it only on POSIX hosts, using the Python 3.10+
+            # interpreter selected above. It does not need the research tree.
+            if(CMAKE_HOST_UNIX AND
+               EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/performance_atlas/test_generate_atlas.py" AND
+               EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/performance_atlas/generate_atlas.py")
+                add_test(
+                    NAME leopard2_performance_atlas_self_test
+                    COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/performance_atlas/test_generate_atlas.py
+                        -v)
+                set_tests_properties(
+                    leopard2_performance_atlas_self_test PROPERTIES
+                    RUN_SERIAL TRUE
+                    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
+                    TIMEOUT 120)
+            endif()
             add_test(
                 NAME leopard2_locator_benchmark_smoke
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}

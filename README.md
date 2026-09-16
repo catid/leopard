@@ -3,7 +3,7 @@
 Leopard-RS is a portable C/C++ library for systematic Reed–Solomon erasure
 coding. Leopard2 adds an object-based API while preserving the original
 `leopard.h` API and wire format. It generates parity shards and recovers lost
-data shards for codes with up to 65,536 originals.
+data shards for codes with up to 65,535 originals (with one recovery shard).
 
 ## Quick start
 
@@ -12,8 +12,8 @@ parallel context. A portable release build needs no CPU-specific flags:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target leopard
-ctest --test-dir build --output-on-failure
+cmake --build build
+(cd build && ctest --output-on-failure)
 ```
 
 The smallest Leopard2 program includes [`leopard2.h`](leopard2.h), creates a
@@ -23,7 +23,7 @@ Recovery uses `leo2_decode_plan_create` and `leo2_decode_plan_execute`. The
 [minimal example](examples/leopard2_minimal.c), [API guide](docs/leopard2_api.md),
 and header document signatures, layouts, alias rules, and errors.
 
-After building, compile and run the example:
+After building, compile and run the example on POSIX systems with GCC:
 
 ```sh
 cc -std=c11 -I. -c examples/leopard2_minimal.c -o build/leopard2_minimal.o
@@ -53,7 +53,7 @@ boundary workloads. The R199/32-KiB extension remains disabled because its
 cross-process stability control was inconclusive. A later resource-captured
 successor measured roughly 1.52× versus the disabled route and 1.42× versus
 native Leopard1, but its fixed ±2% controls still failed; see the
-[retained diagnostic report](experiments/leopard2/gf16_high_encode/r19932_successor_v5.md).
+[diagnostic limitation report](docs/performance/r19932_successor_v5.md).
 
 Representative plots:
 
@@ -82,11 +82,12 @@ use `-march=native` when distributing binaries to other machines.
 On the calibrated AMD family 1Ah/model 44h host class, AUTO may use the
 qualified AVX-512VL legacy-high full-output encode for `K >= 8`, `N >= 16`,
 `2 <= R <= 4096`, and 64-byte-aligned shard lengths from 64 bytes through
-4 MiB. On AMD family 1Ah/model 08h, a qualified 256-bit GFNI table is limited
-to the native legacy-high `K=1000,R=200,T=256`, 64-KiB, single-thread
-full-output encode and ordinary one-item batch path. Neighboring shapes,
-decode, reusable/scalable batches, unknown CPUs, and explicit backends retain
-their normal tables and fallbacks.
+4 MiB. On AMD family 1Ah/model 08h, a qualified 256-bit GFNI table serves
+native legacy-high `K=1000,T=256`, single-thread full-output encoding and the
+ordinary one-item batch path for exactly these recovery counts and shard sizes:
+`R=200` at 32 or 64 KiB, and `R=199` at 64 KiB. `R=199` at 32 KiB remains
+disabled. Other shapes, decode, reusable/scalable batches, unknown CPUs, and
+explicit backends retain their normal tables and fallbacks.
 
 `LEO2_BACKEND_VARIANT=auto|scalar|ssse3|avx2|avx512` is a diagnostic control,
 not a portability target or wire-format choice. Release builds can run the
@@ -97,7 +98,7 @@ cmake -S . -B build/release-audit -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
   -DLEO2_PORTABLE_ISA_RELEASE_AUDIT=ON
 cmake --build build/release-audit --target leopard
-ctest --test-dir build/release-audit -R '^leopard2_portable_isa$' --output-on-failure
+(cd build/release-audit && ctest -R '^leopard2_portable_isa$' --output-on-failure)
 ```
 
 ## Fields and reduced builds

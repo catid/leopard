@@ -13,6 +13,13 @@ The runner deliberately does not add Wirehair to Leopard's normal build. The
 adapter is compiled as a separate process against a pinned checkout, preserving
 both projects' license boundaries and keeping Wirehair entirely optional.
 
+New measurements require a full Git checkout: the `main_compare` adapter and
+Git source identities used below are not included in downloadable source
+archives. Archives retain this runner, its unit tests, and the published
+evidence; they are sufficient to inspect the results and run the unit tests,
+not the complete benchmark collection workflow. Use Python 3.10 or newer on a
+POSIX host.
+
 ## Matrix
 
 `R=32`; `K` is every odd value through 223 plus every power of two and endpoint
