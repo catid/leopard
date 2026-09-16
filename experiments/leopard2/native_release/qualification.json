@@ -1,0 +1,83 @@
+{
+  "schema": "leopard-native-release-encode-qualification/v1",
+  "issue": "leopard-79h.57.12.1",
+  "date": "2026-09-16",
+  "candidate_commit": "e35b1f0c3a5ef9f241ad3b174b0fbfdb61bbccab",
+  "baseline_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+  "baseline_profile": "original native Release; -march=native -Wall -Wextra -fopenmp -g -O0 -O3; no -DNDEBUG",
+  "candidate_profile": "default production Release, both fields and default available backends; no test hooks",
+  "compiler": "GCC 13.3.0",
+  "host": "AMD Ryzen Threadripper 9980X 64-Cores, Linux x86-64",
+  "timings": false,
+  "performance_conclusion": null,
+  "promotion": false,
+  "checks": {
+    "cells": 8,
+    "positive_processes": 32,
+    "clock_guard_controls": 3,
+    "cli_rejections": 20,
+    "full_parity_bytes_per_variant": 41030144,
+    "plain_and_guard_records_identical": true,
+    "all_full_parity_files_equal_to_native": true,
+    "source_worktrees_clean_before_and_after": true,
+    "artifact_hashes_and_metadata_unchanged": true,
+    "pure_unit_tests_normal": 6,
+    "pure_unit_tests_optimized_python": 6,
+    "review": "local read-only Codex static review; no remaining concrete finding; not an independent-model CONVERGED gate"
+  },
+  "resources": {
+    "canonical_lock_serialized": true,
+    "fresh_build_cap_bytes": 536870912,
+    "fresh_build_peak_bytes": 395300864,
+    "probe_build_peak_bytes": 57372672,
+    "check_cap_bytes": 268435456,
+    "native_checks_peak_bytes": 201424896,
+    "unit_tests_peak_bytes": 18235392,
+    "build_and_check_scope_memory_events_zero": true,
+    "all_scope_swap_current_and_max_zero": true,
+    "compiler_parallelism": 1,
+    "retention_peak_bytes": 268435456,
+    "retention_memory_max_events": 491,
+    "retention_oom_events": 0,
+    "retention_exit_code": 0
+  },
+  "artifact_sha256": {
+    "main": "78073e00d96fae4820804198a98c734f71ba921998d9a8daf4b0f662b2aff258",
+    "current": "2c4e5a0e7401b489e94d219e629061780e9d186c717989dcff086abd0e0b4d7c",
+    "main-guard": "33075e02e0665004503949fecffa4bff77b50fd53c9bc6fbcf40027df01a22ae",
+    "current-guard": "b4581234752c64331101f01d123b48b6d25e9ed5015dc3c7227438bde58717d7",
+    "guard-control": "adfb964736522a5ad7f98f82707e507f4d4d7a705013d62e180699044193dafe",
+    "main.a": "b183093f2d6dd935cc1119a33fac5e08dec8c654836402b5152a1dc85ae2b285",
+    "current.a": "d78cf8ef942b3ee93063b69c186e1512d8fd224e31aa2ae60ab72da8b6374847"
+  },
+  "evidence_sha256": {
+    "retained_pre_retention_report_bundle.tar.gz": "a6b3b4aa1ce57dc23a91479fd05fc94dd0edbbff5645870ea461392a5a58e450",
+    "build.log": "2d1d93b167ac8d8b471a6ce0183592d6130b24825656071f641760106ad13f65",
+    "probe-build.log": "3aeba4da6df6f3dc75e450059295f04ad5479086a00f1c5f8c0ed970172e4050",
+    "candidate_compile_commands.json": "2138eab30a1eb62e7c91a0b93a7f18950cea160b530afda5ccfe75e592c683f4",
+    "baseline_compile_commands.json": "62e7e8b3e4e9855f96965521005f9e61ac2d2234c1f9155556d95a50e9861f20",
+    "result.json": "e729df155466778b2d1c2a9abc4ed7ab4fab1d1b8a8bd2b457ba7a6afda3cc88",
+    "records.json": "dc97ce966bc489d8ac90a1f90b61df346fc817333a518dc26979a9eeb6609687",
+    "checks-resource.log": "437926ecf8ed57ac3e3234288d1096b68d6c3fb96a3551ebcf593c79be740d57",
+    "SHA256SUMS": "b9924e10ff7fdccb522b2eb1862176eb77145512d32989c2487e4b0942f8b3d2"
+  },
+  "storage_columns": ["id", "native_work_bytes_including_output", "current_scratch_bytes", "current_separate_output_bytes"],
+  "storage": [
+    ["copy", 4096, 0, 4096],
+    ["small", 1024, 1664, 512],
+    ["gf8-high", 2097152, 2103424, 1048576],
+    ["gf8-balanced", 16777216, 16784384, 8388608],
+    ["gf16-inflation", 8388608, 8395264, 3276800],
+    ["gf16-gfni-region", 33554432, 16808512, 13107200],
+    ["gf16-explicit-avx2", 33554432, 16808512, 13107200],
+    ["gf16-large", 4194304, 4308992, 2097152]
+  ],
+  "limitations": [
+    "Encode-only correctness and caller-owned storage; no throughput, setup or decode measurement.",
+    "Storage excludes input, context/codec allocations, global tables, pointer metadata and probe verification copies.",
+    "Context backend was AVX2 in all current checks; no operation-specific ISA attestation is claimed.",
+    "Clock guards cover only direct references to clock_gettime, gettimeofday and clock, not shared-library private calls or other clocks.",
+    "Original native baseline compiler array-bounds warnings are retained in build.log; baseline sources were not changed.",
+    "These checks do not complete final archive validation, native timing qualification or release publication."
+  ]
+}
