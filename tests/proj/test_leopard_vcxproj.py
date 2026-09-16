@@ -1335,6 +1335,7 @@ class CMakeProductionGraph(object):
         "leopard2_balanced_promotion_plan_self_test": 1,
         "leopard2_visual_studio_project_self_test": 1,
         "leopard2_canonical_library_docs_self_test": 1,
+        "leopard2_native_snapshot_plots_self_test": 1,
     })
     _linux_python_test_registrations = frozenset({
         "leopard2_allk_gap_identity_self_test",
@@ -1456,7 +1457,7 @@ class CMakeProductionGraph(object):
     # mutation could otherwise replace the script with ``-c pass`` or add a
     # CONFIGURATIONS clause while preserving the apparent inventory.
     _required_python_test_command_sha256 = \
-        "c0531aeaad8cd4f47dcb573d68c710cc78ac302b14d3d236d048d482b33ca32d"
+        "171b479f2f1c4642b6299443e1b54250e15afc557501c763d9ea13bb61c638cc"
     _required_python_test_property_commands = Counter({
         ("set_tests_properties", (
             "leopard2_performance_atlas_self_test", "PROPERTIES",
@@ -3860,7 +3861,18 @@ class CMakeProductionGraph(object):
                     "-P", "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/"
                     "test_cuda_optional.cmake",
                 )
-                if tuple(tokens) == approved_cuda_optional_test:
+                approved_api_group_contract = (
+                    "NAME", "leopard2_api_group_contract", "COMMAND",
+                    "${CMAKE_COMMAND}",
+                    "-DLEO2_API_EXECUTABLE=$<TARGET_FILE:leopard2_api_test>",
+                    "-P", "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/"
+                    "test_api_groups.cmake",
+                )
+                if ("leopard2_api_group_contract" in tokens and
+                        tuple(tokens) != approved_api_group_contract):
+                    raise ContractError("API group CLI contract drift")
+                if tuple(tokens) in (
+                        approved_cuda_optional_test, approved_api_group_contract):
                     test_tokens = []
                 else:
                     try:
@@ -6845,6 +6857,23 @@ set(LIB_SOURCE_FILES ${SAVED_LIB_SOURCE_FILES})"""
                         "graph proof|unapproved CMake (?:graph|package)|"
                         "dynamic command"):
                     self.resolve(mutation)
+
+    def test_api_group_contract_is_exact_and_groups_are_explicit(self):
+        for group in ("dispatch", "compat", "decode", "repair", "expanded",
+                      "large-high", "large-low"):
+            self.assertIn(
+                f"add_test(NAME leopard2_api_{group} COMMAND "
+                f"leopard2_api_test {group})", self.cmake)
+        self.resolve_text(self.cmake, require_mutation_contract=True)
+        for old, new in (
+                ("$<TARGET_FILE:leopard2_api_test>", "$<TARGET_FILE:bench_leopard2>"),
+                ("test_api_groups.cmake)", "test_api_groups.cmake extra)"),
+                ("test_api_groups.cmake)", "injected.cmake)")):
+            with self.subTest(mutation=new):
+                changed = self.cmake.replace(old, new, 1)
+                self.assertNotEqual(changed, self.cmake)
+                with self.assertRaisesRegex(ContractError, "API group CLI contract drift"):
+                    self.resolve_text(changed)
 
     def test_approved_package_targets_cannot_be_locally_shadowed(self):
         mutations = (

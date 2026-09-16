@@ -2729,14 +2729,19 @@ if(LEO2_BUILD_TESTS)
     # 1 MiB calls, while isolating sections in separate serial processes.
     # The large cases need more memory than the ordinary sections; splitting
     # does not change their call sizes or imply a smaller memory requirement.
-    set(LEO2_API_TEST_GROUPS dispatch compat decode repair expanded
-        large-high large-low)
-    foreach(group IN LISTS LEO2_API_TEST_GROUPS)
-        add_test(NAME leopard2_api_${group} COMMAND leopard2_api_test ${group})
-        set_tests_properties(leopard2_api_${group} PROPERTIES
-            RUN_SERIAL TRUE
-            ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
-    endforeach()
+    # Explicit registrations also keep the portable source-graph proof static.
+    add_test(NAME leopard2_api_dispatch COMMAND leopard2_api_test dispatch)
+    add_test(NAME leopard2_api_compat COMMAND leopard2_api_test compat)
+    add_test(NAME leopard2_api_decode COMMAND leopard2_api_test decode)
+    add_test(NAME leopard2_api_repair COMMAND leopard2_api_test repair)
+    add_test(NAME leopard2_api_expanded COMMAND leopard2_api_test expanded)
+    add_test(NAME leopard2_api_large-high COMMAND leopard2_api_test large-high)
+    add_test(NAME leopard2_api_large-low COMMAND leopard2_api_test large-low)
+    set_tests_properties(leopard2_api_dispatch leopard2_api_compat
+        leopard2_api_decode leopard2_api_repair leopard2_api_expanded
+        leopard2_api_large-high leopard2_api_large-low PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
     add_test(NAME leopard2_api_group_contract
         COMMAND ${CMAKE_COMMAND}
             -DLEO2_API_EXECUTABLE=$<TARGET_FILE:leopard2_api_test>
@@ -4190,6 +4195,10 @@ if(LEO2_BUILD_TESTS)
             NAME leopard2_canonical_library_docs_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/proj/test_canonical_library_docs.py)
+        add_test(
+            NAME leopard2_native_snapshot_plots_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/proj/test_native_snapshot_plots.py)
     endif()
     endif()
 endif()

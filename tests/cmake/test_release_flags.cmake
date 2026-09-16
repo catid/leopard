@@ -76,9 +76,11 @@ if(NOT debug_marker EQUAL -1)
     message(FATAL_ERROR "caller-supplied Debug flags leaked into Release")
 endif()
 
+# Keep this nested build serial so the test does not multiply compiler memory
+# use independently of the outer CTest/build concurrency limit.
 execute_process(
     COMMAND "${CMAKE_COMMAND}" --build "${LEO2_BINARY_DIR}"
-        --target leopard --parallel 2
+        --target leopard --parallel 1
     RESULT_VARIABLE build_result
     OUTPUT_VARIABLE build_stdout
     ERROR_VARIABLE build_stderr)

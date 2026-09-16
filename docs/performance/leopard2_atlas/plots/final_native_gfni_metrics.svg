@@ -1,18 +1,56 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="520" viewBox="0 0 900 520">
-<rect width="900" height="520" fill="white"/>
-<text x="450" y="30" text-anchor="middle" font-family="sans-serif" font-size="20">Final-source GF16 metrics vs native Leopard1</text>
-<text x="225" y="70" text-anchor="middle" font-family="sans-serif" font-size="15">Encode throughput (GB/s)</text>
-<line x1="60" y1="300" x2="390" y2="300" stroke="#222"/><line x1="60" y1="90" x2="60" y2="300" stroke="#222"/>
-<rect x="95" y="165" width="55" height="135" fill="#777"/><rect x="155" y="109" width="55" height="191" fill="#2b6cb0"/><rect x="255" y="167" width="55" height="133" fill="#777"/><rect x="315" y="83" width="55" height="217" fill="#2b6cb0"/>
-<text x="122" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L1 one</text><text x="182" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L2 one</text><text x="282" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L1 full</text><text x="342" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L2 full</text>
-<text x="122" y="157" text-anchor="middle" font-family="sans-serif" font-size="12">6.81</text><text x="182" y="101" text-anchor="middle" font-family="sans-serif" font-size="12">10.96</text><text x="282" y="159" text-anchor="middle" font-family="sans-serif" font-size="12">6.87</text><text x="342" y="75" text-anchor="middle" font-family="sans-serif" font-size="12">9.71</text>
-<text x="675" y="70" text-anchor="middle" font-family="sans-serif" font-size="15">Working memory per stripe (MiB)</text>
-<line x1="500" y1="300" x2="850" y2="300" stroke="#222"/><line x1="500" y1="90" x2="500" y2="300" stroke="#222"/>
-<rect x="540" y="90" width="65" height="210" fill="#777"/><rect x="610" y="195" width="65" height="105" fill="#2b6cb0"/><rect x="730" y="90" width="65" height="210" fill="#777"/><rect x="800" y="226" width="65" height="74" fill="#2b6cb0"/>
-<text x="572" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L1 enc</text><text x="642" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L2 enc</text><text x="762" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L1 dec</text><text x="832" y="320" text-anchor="middle" font-family="sans-serif" font-size="12">L2 dec</text>
-<text x="572" y="82" text-anchor="middle" font-family="sans-serif" font-size="12">32</text><text x="642" y="187" text-anchor="middle" font-family="sans-serif" font-size="12">16.0</text><text x="762" y="82" text-anchor="middle" font-family="sans-serif" font-size="12">128</text><text x="832" y="218" text-anchor="middle" font-family="sans-serif" font-size="12">11.2</text>
-<text x="450" y="380" text-anchor="middle" font-family="sans-serif" font-size="14">L2 setup: 3.9–4.1 µs codec creation; 55.8–107.4 µs decode-plan setup</text>
-<text x="450" y="405" text-anchor="middle" font-family="sans-serif" font-size="12">One-loss and full-loss workloads, K=1000/R=200, 64 KiB shards, one thread</text>
-<text x="450" y="430" text-anchor="middle" font-family="sans-serif" font-size="12">Gray = native Leopard1 work allocation; blue = Leopard2 scratch allocation</text>
-<text x="450" y="470" text-anchor="middle" font-family="sans-serif" font-size="12">Standalone medians from the same immutable release artifacts; setup and memory are not ABBA ratios</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="530" viewBox="0 0 960 530">
+<rect width="960" height="530" fill="white"/>
+<text x="480.0" y="30.000" text-anchor="middle" font-family="sans-serif" font-size="19">GF16 metrics vs native Leopard1 — measured snapshot</text>
+<text x="260" y="68.000" text-anchor="middle" font-family="sans-serif" font-size="15">Encode throughput (GB/s)</text>
+<text x="730" y="68.000" text-anchor="middle" font-family="sans-serif" font-size="15">Work / scratch allocation (MiB)</text>
+<line x1="75" y1="300.000" x2="455" y2="300.000" stroke="#ddd"/>
+<text x="67" y="304.000" text-anchor="end" font-family="sans-serif" font-size="12">0</text>
+<line x1="75" y1="230.000" x2="455" y2="230.000" stroke="#ddd"/>
+<text x="67" y="234.000" text-anchor="end" font-family="sans-serif" font-size="12">4</text>
+<line x1="75" y1="160.000" x2="455" y2="160.000" stroke="#ddd"/>
+<text x="67" y="164.000" text-anchor="end" font-family="sans-serif" font-size="12">8</text>
+<line x1="75" y1="90.000" x2="455" y2="90.000" stroke="#ddd"/>
+<text x="67" y="94.000" text-anchor="end" font-family="sans-serif" font-size="12">12</text>
+<line x1="75" y1="90.000" x2="75" y2="300.000" stroke="#222"/>
+<line x1="550" y1="300.000" x2="930" y2="300.000" stroke="#ddd"/>
+<text x="542" y="304.000" text-anchor="end" font-family="sans-serif" font-size="12">0</text>
+<line x1="550" y1="247.500" x2="930" y2="247.500" stroke="#ddd"/>
+<text x="542" y="251.500" text-anchor="end" font-family="sans-serif" font-size="12">32</text>
+<line x1="550" y1="195.000" x2="930" y2="195.000" stroke="#ddd"/>
+<text x="542" y="199.000" text-anchor="end" font-family="sans-serif" font-size="12">64</text>
+<line x1="550" y1="142.500" x2="930" y2="142.500" stroke="#ddd"/>
+<text x="542" y="146.500" text-anchor="end" font-family="sans-serif" font-size="12">96</text>
+<line x1="550" y1="90.000" x2="930" y2="90.000" stroke="#ddd"/>
+<text x="542" y="94.000" text-anchor="end" font-family="sans-serif" font-size="12">128</text>
+<line x1="550" y1="90.000" x2="550" y2="300.000" stroke="#222"/>
+<rect id="l1-one" x="105" y="180.743" width="45" height="119.257" fill="#777"/>
+<text x="127.5" y="172.743" text-anchor="middle" font-family="sans-serif" font-size="12">6.81</text>
+<text x="127.5" y="320.000" text-anchor="middle" font-family="sans-serif" font-size="12">L1 one</text>
+<rect id="l2-one" x="185" y="108.208" width="45" height="191.792" fill="#2b6cb0"/>
+<text x="207.5" y="100.208" text-anchor="middle" font-family="sans-serif" font-size="12">10.96</text>
+<text x="207.5" y="320.000" text-anchor="middle" font-family="sans-serif" font-size="12">L2 one</text>
+<rect id="l1-full" x="305" y="179.822" width="45" height="120.178" fill="#777"/>
+<text x="327.5" y="171.822" text-anchor="middle" font-family="sans-serif" font-size="12">6.87</text>
+<text x="327.5" y="320.000" text-anchor="middle" font-family="sans-serif" font-size="12">L1 full</text>
+<rect id="l2-full" x="385" y="130.104" width="45" height="169.896" fill="#2b6cb0"/>
+<text x="407.5" y="122.104" text-anchor="middle" font-family="sans-serif" font-size="12">9.71</text>
+<text x="407.5" y="320.000" text-anchor="middle" font-family="sans-serif" font-size="12">L2 full</text>
+<rect id="l1-enc" x="580" y="247.500" width="45" height="52.500" fill="#777"/>
+<text x="602.5" y="239.500" text-anchor="middle" font-family="sans-serif" font-size="12">32.00</text>
+<text x="602.5" y="320.000" text-anchor="middle" font-family="sans-serif" font-size="12">L1 enc</text>
+<rect id="l2-enc" x="660" y="273.701" width="45" height="26.299" fill="#2b6cb0"/>
+<text x="682.5" y="265.701" text-anchor="middle" font-family="sans-serif" font-size="12">16.03</text>
+<text x="682.5" y="320.000" text-anchor="middle" font-family="sans-serif" font-size="12">L2 enc</text>
+<rect id="l1-dec" x="780" y="90.000" width="45" height="210.000" fill="#777"/>
+<text x="802.5" y="82.000" text-anchor="middle" font-family="sans-serif" font-size="12">128.00</text>
+<text x="802.5" y="320.000" text-anchor="middle" font-family="sans-serif" font-size="12">L1 dec</text>
+<rect id="l2-dec" x="860" y="281.658" width="45" height="18.342" fill="#2b6cb0"/>
+<text x="882.5" y="273.658" text-anchor="middle" font-family="sans-serif" font-size="12">11.18</text>
+<text x="882.5" y="320.000" text-anchor="middle" font-family="sans-serif" font-size="12">L2 dec</text>
+<text x="480" y="360.000" text-anchor="middle" font-family="sans-serif" font-size="12">K=1000, R=200, 64 KiB; one thread; one/full = decode loss scenario</text>
+<text x="480" y="385.000" text-anchor="middle" font-family="sans-serif" font-size="12">Memory panel: full-loss scenario, common linear scale; not total resident memory</text>
+<text x="480" y="415.000" text-anchor="middle" font-family="sans-serif" font-size="12">L2 codec setup 3.916–4.096 µs; decode-plan setup 55.793–107.441 µs</text>
+<text x="480" y="440.000" text-anchor="middle" font-family="sans-serif" font-size="12">Standalone medians, not ABBA speedups; gray = native L1, blue = L2</text>
+<text x="480" y="475.000" text-anchor="middle" font-family="sans-serif" font-size="11">Measured L2 a5d0229f3eb8; native L1 6e5725ebdf9d; not a later-release claim</text>
+<text x="480" y="500.000" text-anchor="middle" font-family="sans-serif" font-size="11">Setup values predate the later GF16 Walsh-locator optimization</text>
 </svg>

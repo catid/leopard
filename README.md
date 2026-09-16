@@ -40,13 +40,14 @@ legacy Visual Studio project and CMake workflow.
 ## Performance evidence
 
 The checked-in [performance atlas](docs/performance/leopard2_atlas/README_PERFORMANCE.md)
-contains reproducible throughput, setup, memory, and native-Leopard1
-comparisons with machine-readable provenance. Plots are single-core results
-on the recorded host, not universal guarantees.
+contains reproducible throughput, setup, and memory comparisons with an
+**AVX2-restricted Leopard1**, not the native product comparator. These are
+single-core diagnostics on the recorded host, not universal guarantees.
 
-At `K=1000,R=200,B=65536`, a final-source native-Leopard1 ABBA comparison
-reports a 41.9% GF16 encode speedup (95% CI 32.5–52.0%), with zero reserved
-SMT activity. The compact record is
+Separately, snapshot `a5d0229` at `K=1000,R=200,B=65536` measured a 41.9%
+GF16 encode speedup versus native Leopard1 (95% CI 32.5–52.0%), with zero
+reserved SMT activity. This predates later codec changes, including the
+Walsh-locator optimization; it is not final-release evidence. The record is
 [`final_native_gfni_summary.json`](docs/performance/final_native_gfni_summary.json).
 Separately qualified AUTO routes report 53.7% and 48.4% gains at two GF16
 boundary workloads. The R199/32-KiB extension remains disabled because its
@@ -57,11 +58,15 @@ native Leopard1, but its fixed ±2% controls still failed; see the
 
 Representative plots:
 
-- [Encode speedup vs Leopard1](docs/performance/leopard2_atlas/plots/encode_speedup_vs_leopard1.svg)
-- [One-loss decode speedup](docs/performance/leopard2_atlas/plots/decode_one_speedup_vs_leopard1.svg)
-- [Full-loss decode speedup](docs/performance/leopard2_atlas/plots/decode_full_speedup_vs_leopard1.svg)
-- [Final-source GFNI encode](docs/performance/leopard2_atlas/plots/final_native_gfni_encode_speedup.svg)
-- [Throughput, setup, and memory](docs/performance/leopard2_atlas/plots/final_native_gfni_metrics.svg)
+- [AVX2-restricted encode comparison](docs/performance/leopard2_atlas/plots/encode_speedup_vs_leopard1.svg)
+- [AVX2-restricted one-loss decode](docs/performance/leopard2_atlas/plots/decode_one_speedup_vs_leopard1.svg)
+- [AVX2-restricted full-loss decode](docs/performance/leopard2_atlas/plots/decode_full_speedup_vs_leopard1.svg)
+- [Native GFNI encode, snapshot a5d0229](docs/performance/leopard2_atlas/plots/final_native_gfni_encode_speedup.svg)
+- [Snapshot throughput, setup, and memory](docs/performance/leopard2_atlas/plots/final_native_gfni_metrics.svg)
+
+Current-release native comparisons, including representative remaining losses,
+are still pending. Regenerate the two snapshot plots with
+`python3 tools/leopard2_native_snapshot_plots.py`; the measured JSON is unchanged.
 
 The dense GF16 decode-plan locator has a separately qualified AVX2 setup path:
 the same-process screen measured 3.9×–18.6× lower setup time across six

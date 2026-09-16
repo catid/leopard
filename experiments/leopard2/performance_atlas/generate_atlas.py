@@ -43,7 +43,7 @@ BLOCK_BYTES = (64, 1024, 4096, 1024 * 1024)
 CODECS = ("leopard2", "leopard1", "wirehair")
 CODEC_LABELS = {
     "leopard2": "Leopard2",
-    "leopard1": "Leopard main",
+    "leopard1": "Leopard main (AVX2-restricted)",
     "wirehair": "Wirehair (shipping)",
 }
 CODEC_COLORS = {
@@ -1806,12 +1806,14 @@ def render_plot(summary: Mapping[str, Any], spec: PlotSpec, path: Path) -> None:
         svg_text(width / 2, 35, spec.title, size=23, anchor="middle", weight="600"),
         svg_text(width / 2, 61, spec.subtitle, size=13, anchor="middle", color="#57606a"),
     ]
-    legend_x = width / 2 - (len(spec.codecs) * 145) / 2
-    for index, codec in enumerate(spec.codecs):
-        x = legend_x + index * 145
+    legend_widths = [max(145, 45 + 7 * len(CODEC_LABELS[codec]))
+                     for codec in spec.codecs]
+    x = (width - sum(legend_widths)) / 2
+    for codec, legend_width in zip(spec.codecs, legend_widths):
         elements.append(f'<line x1="{x:.1f}" y1="82" x2="{x + 28:.1f}" y2="82" '
                         f'stroke="{CODEC_COLORS[codec]}" stroke-width="3"/>')
         elements.append(svg_text(x + 35, 86, CODEC_LABELS[codec], size=12))
+        x += legend_width
 
     for panel_index, block_bytes in enumerate(BLOCK_BYTES):
         column = panel_index % 2
@@ -1923,7 +1925,7 @@ def render_plot(summary: Mapping[str, Any], spec: PlotSpec, path: Path) -> None:
 
 
 def plot_specs() -> list[PlotSpec]:
-    common = "R=32; every odd K plus powers of two through K=224; pinned single core"
+    common = "AVX2-restricted L2 and L1; R=32; odd K + powers of two through 224; single core"
     specs = [
         PlotSpec("encode_execution_message_gbps.svg", "Full-message encode throughput",
                  common, "encode_execution_message_GBps", "message GB/s"),
@@ -2105,8 +2107,9 @@ def generate_performance_readme(summary: Mapping[str, Any],
     relative_summary = os.path.relpath(summary_path, destination.parent)
     text = f"""# Leopard2 performance atlas
 
-This atlas compares Leopard2 against the exact Leopard `main` baseline and the
-shipping Wirehair codec over **120 K values**, **four shard sizes**, and **four
+This atlas compares AVX2-restricted Leopard2 against an AVX2-restricted exact
+Leopard `main` baseline and the shipping Wirehair codec over **120 K values**,
+**four shard sizes**, and **four
 source-erasure regimes**. It contains {len(manifest['cells']):,} unique workload
 cells and {len(summary['rows']):,} validated codec results. All graphs are
 generated from the checked-in machine-readable evidence; unavailable cells are
@@ -2114,6 +2117,7 @@ left blank rather than interpolated.
 
 > Values above 1× in speedup graphs mean Leopard2 is faster. These are
 > single-core results on one recorded host, not universal performance claims.
+> The ISA-restricted comparison is diagnostic, not a native-Leopard1 product comparison.
 
 ## Headline graphs
 

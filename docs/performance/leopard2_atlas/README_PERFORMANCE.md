@@ -1,7 +1,8 @@
 # Leopard2 performance atlas
 
-This atlas compares Leopard2 against the exact Leopard `main` baseline and the
-shipping Wirehair codec over **120 K values**, **four shard sizes**, and **four
+This atlas compares AVX2-restricted Leopard2 against an AVX2-restricted exact
+Leopard `main` baseline and the shipping Wirehair codec over **120 K values**,
+**four shard sizes**, and **four
 source-erasure regimes**. It contains 1,852 unique workload
 cells and 5,300 validated codec results. All graphs are
 generated from the checked-in machine-readable evidence; unavailable cells are
@@ -9,10 +10,11 @@ left blank rather than interpolated.
 
 > Values above 1× in speedup graphs mean Leopard2 is faster. These are
 > single-core results on one recorded host, not universal performance claims.
+> The ISA-restricted comparison is diagnostic, not a native-Leopard1 product comparison.
 
 ## Artifact identity
 
-This release refresh was measured from Leopard2 commit `150e38dd1d55bb31c32aeced9254d33979b67dce`
+This snapshot was measured from Leopard2 commit `150e38dd1d55bb31c32aeced9254d33979b67dce`
 (tree `d3d4b82b767403f783134b2c257bf0e074cf08f8`), against exact Leopard
 `main` commit `6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198` and Wirehair commit
 `067ca7cdb66aed424ec23f97557429bf791c6f0c`. The executable SHA-256 values,
@@ -36,7 +38,7 @@ control gate; see the [limitation report](../r19932_successor_v5.md).
 
 | Baseline | Comparable cells | Median full-message speedup | Cells faster |
 | --- | --- | --- | --- |
-| Leopard main | 400 | 1.155× | 99.5% |
+| Leopard main (AVX2-restricted) | 400 | 1.155× | 99.5% |
 | Wirehair (shipping) | 476 | 5.743× | 100.0% |
 
 ### Decode with setup included
@@ -51,13 +53,13 @@ control gate; see the [limitation report](../r19932_successor_v5.md).
 
 | Loss regime | Baseline | Comparable cells | Median speedup | Cells faster | Worst observed cell |
 | --- | --- | --- | --- | --- | --- |
-| 1 random source erasure | Leopard main | 400 | 10.110× | 100.0% | K=223, 64 B, 1.975× |
+| 1 random source erasure | Leopard main (AVX2-restricted) | 400 | 10.110× | 100.0% | K=223, 64 B, 1.975× |
 | 1 random source erasure | Wirehair (shipping) | 476 | 38.556× | 100.0% | K=5, 64 B, 6.511× |
-| 2 random source erasures | Leopard main | 400 | 2.061× | 100.0% | K=91, 64 B, 1.035× |
+| 2 random source erasures | Leopard main (AVX2-restricted) | 400 | 2.061× | 100.0% | K=91, 64 B, 1.035× |
 | 2 random source erasures | Wirehair (shipping) | 476 | 9.855× | 100.0% | K=19, 1 MiB, 2.389× |
-| 10% random source erasures | Leopard main | 400 | 1.639× | 100.0% | K=73, 64 B, 1.084× |
+| 10% random source erasures | Leopard main (AVX2-restricted) | 400 | 1.639× | 100.0% | K=73, 64 B, 1.084× |
 | 10% random source erasures | Wirehair (shipping) | 476 | 8.082× | 100.0% | K=19, 1 MiB, 2.389× |
-| maximum random source erasures | Leopard main | 400 | 1.457× | 100.0% | K=87, 4 KiB, 1.051× |
+| maximum random source erasures | Leopard main (AVX2-restricted) | 400 | 1.457× | 100.0% | K=87, 4 KiB, 1.051× |
 | maximum random source erasures | Wirehair (shipping) | 476 | 6.842× | 100.0% | K=39, 4 KiB, 2.665× |
 
 ## Complete graph index
