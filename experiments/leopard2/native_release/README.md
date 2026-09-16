@@ -1,7 +1,8 @@
 # Current native release comparison — preparation
 
 Tracked by Beads `leopard-79h.57.12` (clock-free checks: `.12.1`).
-This directory contains **no new performance results or timing authorization**.
+This directory contains **no new performance results**. The timing plan below
+must be committed and pushed before its one fixed attempt can be launched.
 It does not replace or relax any historical experiment's contract.
 
 The comparator is original Leopard1 commit
@@ -37,7 +38,7 @@ source revision; define `LEO_NATIVE_RELEASE_BASELINE` only for Leopard1. This
 macro is a label, not proof: retain the archive, source and build identities too.
 Compare the complete parity files between implementations, not just their hashes.
 
-The probe has no timing interface. An optional `clock_guard.cpp` link uses
+The default probe has no timing interface. An optional `clock_guard.cpp` link uses
 `--wrap=clock_gettime,--wrap=gettimeofday,--wrap=clock` to reject direct clock
 references from the executable/static codec. It does not claim to interpose
 private clock calls inside shared libraries, or other clocks/instructions
@@ -94,3 +95,93 @@ versus 2,097,152 bytes of Leopard1 work including output. K1000/R200/64-KiB uses
 tables or setup allocations. These are current API storage requirements, not
 timings or total-memory claims. Failed/inconclusive historical timing attempts
 remain unchanged; the release timing and final archive gates remain open.
+
+## Qualified grouped timer and one-attempt plan
+
+Beads `leopard-79h.57.12.2`; [exact plan](timing_plan_v1.json).
+`encode_timing.cpp` adds separate `--measure`, `--synthetic` and `--exercise`
+interfaces while retaining the default clock-free probe. Each implementation's
+single driver object is linked with steady, synthetic and aborting clocks.
+Synthetic-only public API wrappers independently count actual calls at every
+clock endpoint. The steady executable has no public-call wrapper.
+
+The eight workloads above use respectively 4,194,304; 1,048,576; 256; 256; 256;
+16; 16; and 128 encodes per group. Each process performs two untimed parity
+checks, four warmup calls and nine timed groups. Every group must last at least
+20 ms. Allocations, input generation, scratch poisoning, parity comparisons and
+hashing are outside the timed region; the public encode, result check, loop and
+timer-adapter overhead are included, with no subtraction. This measures reused
+encoding, not setup, one-shot latency or decoding.
+
+The fixed cell-major schedule has three rounds per cell. Each round runs
+native/current/current/native, native/native/native/native and
+current/current/current/current, for 288 measured processes after 16 clock-free
+preflights. Use the median normalized group time per process, the square root of
+`slot0*slot3/(slot1*slot2)` per round, and the geometric mean across three rounds.
+Every same-binary aggregate must lie within `[1/1.02, 1.02]`; any failure makes
+the entire campaign inconclusive. An advantage or deficit additionally needs
+all three comparison rounds to agree in direction and an aggregate beyond the
+reciprocal-2% boundary. No confidence intervals or production promotion follow.
+
+Controller CPU 0, worker CPU 52 and its SMT sibling 116 are fixed. A single
+10-second passive gate and every measured child require zero sibling busy ticks;
+each child must also record positive worker busy ticks. Resource limits are
+256 MiB/no swap with zero memory-event counters, and each child has a 180-second
+CPU/wall limit, 256-MiB address-space limit and 1-MiB output-file limit. The runner
+owns both canonical and pair locks: **do not wrap it in another `flock`**.
+An existing attempt directory is never reused. Retain failures; do not adjust
+groups, choose another CPU, resume, pool runs or analyze a partial attempt.
+
+`timing_plan_v1.json` pins the immutable archives/executables, qualified records,
+collector sources, observed dynamic libraries, launcher tools, host and exact
+compiled source/object identities. File hashes and metadata are checked around
+every child. This is not a hermetic runtime or an operation-specific ISA audit.
+The compiled header retained in the qualification archive differs from the
+tracked header only in a comment clarifying timer overhead; its actual build
+hash is recorded separately. No library sources changed after `e35b1f0`.
+
+### Qualification evidence (2026-09-16)
+
+- 94 native qualification invocations passed: 2 helper unit programs (26 cases
+  each, including ASan+UBSan), 48 clock-free checks, 16 synthetic full-group
+  runs, 4 abort-clock exercises, 2 positive abort guards, 10 clock faults and
+  12 invalid CLI cases. All full synthetic parity files equal the previously
+  qualified native files. No real benchmark clock was read.
+- The corrected exact-inventory guard audited all 94 saved invocations and
+  complete parity again in normal and optimized Python without codec reruns.
+  Static review found and fixed replay observation reuse and missing-event
+  acceptance; 17 contract tests plus 4 full mocked collector/replay tests pass
+  both Python modes, including retained failure and no-retry checks.
+- Default non-timing probe syntax checks pass for both implementations. Timer
+  build peak: 67,526,656/512 MiB; native qualification: 175,947,776/256 MiB;
+  final tests/audit: 42,819,584/256 MiB; default syntax: 47,173,632/512 MiB;
+  launch-envelope checks: 132,366,336/256 MiB. All events and swap were zero.
+  The final five-test collector/preregistration gate (including exact tracked
+  plan-to-source hashes) also passes both Python modes: 34,353,152/256 MiB,
+  zero events/swap; its log is retained beside the qualification archive.
+- Read-only qualification archive SHA-256:
+  `be0dc1bfbe6e4d4ff8b3703b193f12d8bb27d9ee1f125ea407941ddbd19721f2`.
+  Retention peak: 194,641,920/256 MiB, zero events/swap. Its exact local path
+  and the 12-input campaign manifest are in the plan. Raw artifacts remain
+  local, excluded from source releases; method and pins are tracked in Git.
+
+Local read-only Codex review found no remaining blocking defect. Claude was
+explicitly opted out; this is not an independent-model `CONVERGED` claim.
+
+After publication, run the fixed attempt with the actual preregistration commit:
+
+```sh
+systemd-run --user --scope --expand-environment=no \
+  -p MemoryMax=256M -p MemorySwapMax=0 \
+  bash experiments/leopard2/gf16_high_encode/tower_public_scope.sh \
+  python3 -B experiments/leopard2/native_release/run_timing.py run \
+  --plan experiments/leopard2/native_release/timing_plan_v1.json \
+  --preregistration-commit COMMITTED_AND_PUSHED_40_HEX_COMMIT
+```
+
+`run_timing.py replay --plan PLAN --output RETAINED_ATTEMPT --bundle ARTIFACTS`
+checks canonical raw observation labels, qualified preflights, full schedule,
+resource/CPU observations and final analysis. Run replay normally and with
+`python3 -O` before reporting measured results. The plan is machine-specific;
+reproduction elsewhere requires its own declared host and fresh qualification,
+not an unrecorded change to this attempt.

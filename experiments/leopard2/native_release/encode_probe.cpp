@@ -1,5 +1,9 @@
 // Clock-free public-API qualification for leopard-79h.57.12.1.
-// This is not a benchmark and intentionally has no --measure option.
+// The default build has no --measure option. encode_timing.cpp adds a separate
+// interface with the same initialization/checks and a poison-free timed loop.
+#ifdef LEO_NATIVE_RELEASE_TIMING
+#include "EncodeTiming.h"
+#endif
 #ifdef LEO_NATIVE_RELEASE_BASELINE
 #include "leopard.h"
 #else
@@ -83,8 +87,29 @@ int main(int argc, char** argv)
 {
     try
     {
+        bool run_groups = false;
+        bool sample_groups = false;
+#ifdef LEO_NATIVE_RELEASE_TIMING
+        Require(argc == 3 || argc == 4, "timing probe requires mode and cell");
+        const bool measure = std::strcmp(argv[1], "--measure") == 0;
+        const bool synthetic = std::strcmp(argv[1], "--synthetic") == 0;
+        const bool exercise = std::strcmp(argv[1], "--exercise") == 0;
+        const bool check = std::strcmp(argv[1], "--check") == 0;
+        Require(measure || synthetic || exercise || check, "invalid timing mode");
+        Require(!measure || argc == 3, "measured parity dump is forbidden");
+        Require(!measure || std::strcmp(NativeClockKind(), "steady") == 0 ||
+                std::strcmp(NativeClockKind(), "abort") == 0,
+                "--measure requires the real or deliberately aborting clock");
+        Require(!synthetic || std::strcmp(NativeClockKind(), "synthetic") == 0,
+                "--synthetic requires the synthetic clock");
+        run_groups = !check;
+        sample_groups = measure || synthetic;
+#else
         Require((argc == 3 || argc == 4) && std::strcmp(argv[1], "--check") == 0,
                 "usage: encode_probe --check cell[0..7] [new_parity_file]");
+        (void)run_groups;
+        (void)sample_groups;
+#endif
         Require(std::strlen(argv[2]) == 1 && argv[2][0] >= '0' && argv[2][0] <= '7',
                 "invalid cell");
         const unsigned index = static_cast<unsigned>(argv[2][0] - '0');
@@ -119,8 +144,8 @@ int main(int argc, char** argv)
         std::vector<void*> work(work_count);
         for (unsigned i = 0; i < work_count; ++i)
             work[i] = static_cast<uint8_t*>(scratch.data) + i * cell.bytes;
-        const auto encode = [&](unsigned char poison) {
-            scratch.Poison(poison);
+        const auto encode = [&](int poison) {
+            if (poison >= 0) scratch.Poison(static_cast<unsigned char>(poison));
             Require(leo_encode(cell.bytes, cell.k, cell.r, work_count,
                 inputs.data(), work.data()) == Leopard_Success, "Leopard1 encode failed");
         };
@@ -157,9 +182,11 @@ int main(int argc, char** argv)
         std::vector<void*> outputs(cell.r);
         for (unsigned i = 0; i < cell.r; ++i)
             outputs[i] = static_cast<uint8_t*>(output.data) + i * cell.bytes;
-        const auto encode = [&](unsigned char poison) {
-            scratch.Poison(poison);
-            output.Poison(poison);
+        const auto encode = [&](int poison) {
+            if (poison >= 0) {
+                scratch.Poison(static_cast<unsigned char>(poison));
+                output.Poison(static_cast<unsigned char>(poison));
+            }
             Require(leo2_encode(codec.get(), cell.bytes, inputs.data(), outputs.data(),
                 scratch.data, scratch.bytes) == LEO2_SUCCESS, "Leopard2 encode failed");
         };
@@ -170,25 +197,66 @@ int main(int argc, char** argv)
         encode(0x5a);
         Require(std::memcmp(first.data(), parity, output_bytes) == 0,
                 "repeated encode differs");
+#ifdef LEO_NATIVE_RELEASE_TIMING
+        std::vector<uint64_t> elapsed;
+        if (run_groups) {
+            elapsed = native_release::Run(native_release::kGroups[index], sample_groups,
+                [&]() { encode(-1); }, []() { return NativeNow(); });
+            Require(std::memcmp(first.data(), parity, output_bytes) == 0,
+                    "grouped encode parity differs");
+        }
+#endif
         random = UINT64_C(20260916);
         for (size_t i = 0; i < input_bytes; ++i)
             Require(source_bytes[i] == static_cast<uint8_t>(Next(random) >> 56),
                     "input changed");
         if (argc == 4) Dump(argv[3], parity, output_bytes);
-        std::printf("{\"schema\":\"leopard-native-release-encode-check/v1\","
+        const char* schema = "leopard-native-release-encode-check/v1";
+        uint64_t public_calls = 2;
+#ifdef LEO_NATIVE_RELEASE_TIMING
+        if (run_groups) {
+            schema = "leopard-native-release-encode-timing/v1";
+            public_calls += native_release::kWarmup +
+                static_cast<uint64_t>(native_release::kSamples) * native_release::kGroups[index];
+        }
+#endif
+        std::printf("{\"schema\":\"%s\","
             "\"codec_commit\":\"%s\",\"implementation\":\"%s\","
             "\"cell\":%u,\"id\":\"%s\",\"k\":%u,\"r\":%u,\"bytes\":%zu,"
             "\"requested_backend\":\"%s\",\"context_backend\":%d,\"threads\":1,"
             "\"input_bytes\":%zu,\"parity_bytes\":%zu,"
             "\"workspace_bytes\":%zu,\"separate_output_bytes\":%zu,"
             "\"output_layout\":\"%s\",\"input_unchanged\":true,"
-            "\"repeated_encode_equal\":true,\"public_encode_calls\":2,"
-            "\"input_hash\":\"%016llx\",\"parity_hash\":\"%016llx\"}\n",
-            LEO_NATIVE_RELEASE_CODEC_COMMIT, implementation, index, cell.id,
+            "\"repeated_encode_equal\":true,\"public_encode_calls\":%llu,"
+            "\"input_hash\":\"%016llx\",\"parity_hash\":\"%016llx\"",
+            schema, LEO_NATIVE_RELEASE_CODEC_COMMIT, implementation, index, cell.id,
             cell.k, cell.r, cell.bytes, request, context_backend, input_bytes,
             output_bytes, workspace_bytes, separate_output_bytes, layout,
+            static_cast<unsigned long long>(public_calls),
             static_cast<unsigned long long>(Hash(source.data, input_bytes)),
             static_cast<unsigned long long>(Hash(parity, output_bytes)));
+#ifdef LEO_NATIVE_RELEASE_TIMING
+        if (run_groups) {
+            std::printf(",\"grouped_timing\":{\"schema\":\"native-encode-groups/v1\","
+                "\"mode\":\"%s\",\"clock_kind\":\"%s\",\"group_calls\":%u,"
+                "\"warmup_calls\":%u,\"total_public_calls\":%llu,\"clock_calls\":%u,"
+                "\"elapsed_ns\":[", argv[1] + 2, NativeClockKind(),
+                native_release::kGroups[index], native_release::kWarmup,
+                static_cast<unsigned long long>(2 + native_release::kWarmup +
+                    static_cast<uint64_t>(native_release::kSamples) * native_release::kGroups[index]),
+                NativeClockCalls());
+            for (size_t i = 0; i < elapsed.size(); ++i)
+                std::printf("%s%llu", i ? "," : "", static_cast<unsigned long long>(elapsed[i]));
+            std::printf("],\"public_calls_at_clock\":[");
+            if (std::strcmp(NativeClockKind(), "synthetic") == 0) {
+                for (unsigned i = 0; i < NativeClockCalls(); ++i)
+                    std::printf("%s%llu", i ? "," : "",
+                        static_cast<unsigned long long>(NativeClockWitnessAt(i)));
+            }
+            std::printf("]}");
+        }
+#endif
+        std::puts("}");
         return 0;
     }
     catch (const std::exception& error)

@@ -1,0 +1,178 @@
+{
+  "schema": "native-release-encode-plan/v1",
+  "tracker": "leopard-79h.57.12.2",
+  "candidate_commit": "e35b1f0c3a5ef9f241ad3b174b0fbfdb61bbccab",
+  "baseline_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+  "cpu": 52,
+  "sibling": 116,
+  "controller_cpu": 0,
+  "passive_seconds": 10,
+  "rounds": 3,
+  "samples": 9,
+  "attempt_budget": 1,
+  "groups": [
+    4194304,
+    1048576,
+    256,
+    256,
+    256,
+    16,
+    16,
+    128
+  ],
+  "minimum_group_ns": 20000000,
+  "control_factor": 1.02,
+  "warmup_calls": 4,
+  "initial_checks": 2,
+  "child_cpu_seconds": 180,
+  "child_timeout_seconds": 180,
+  "child_address_space_bytes": 268435456,
+  "child_file_bytes": 1048576,
+  "promotion": false,
+  "cells": [
+    [
+      "copy",
+      1,
+      1,
+      4096
+    ],
+    [
+      "small",
+      16,
+      8,
+      64
+    ],
+    [
+      "gf8-high",
+      240,
+      16,
+      65536
+    ],
+    [
+      "gf8-balanced",
+      128,
+      128,
+      65536
+    ],
+    [
+      "gf16-inflation",
+      200,
+      50,
+      65536
+    ],
+    [
+      "gf16-gfni-region",
+      1000,
+      200,
+      65536
+    ],
+    [
+      "gf16-explicit-avx2",
+      1000,
+      200,
+      65536
+    ],
+    [
+      "gf16-large",
+      4096,
+      512,
+      4096
+    ]
+  ],
+  "comparisons": [
+    [
+      "native_vs_current",
+      [
+        "main",
+        "current",
+        "current",
+        "main"
+      ]
+    ],
+    [
+      "same_native",
+      [
+        "main",
+        "main",
+        "main",
+        "main"
+      ]
+    ],
+    [
+      "same_current",
+      [
+        "current",
+        "current",
+        "current",
+        "current"
+      ]
+    ]
+  ],
+  "source_sha256": {
+    "run_timing.py": "364c23d3b9c7b8bdc4f9a5851a852abc55a49da46c6587a20dfd400fb7e113b8",
+    "timing_contract.py": "4d5b31f0ff5842d2dc5401d1cf395f83ef377b71ebd150959126f8e68ffd1af3",
+    "check_encode.py": "4f06c87feb7411b86bf8babd3b5894a6d25a8887e961ba64724ea7c57e0ebcda",
+    "frozen_inputs.py": "8bfb4cfbd8076b0b54cb7ea746d4a3150f05d53b11665aaabcf8f2b66e7f57a9"
+  },
+  "runtime_sha256": {
+    "/lib/x86_64-linux-gnu/libc.so.6": "3a15d66867d83762c7f2f1e37359cb8f6c5743edb369c65285cb0b1c4f7498bf",
+    "/lib/x86_64-linux-gnu/libgcc_s.so.1": "d93224d2b0dab4247598be683adca02f5cf00586f99c187579cd7e92058fb7cb",
+    "/lib/x86_64-linux-gnu/libgomp.so.1": "135f3c8f006d2fe5e68e51281c7974cb991a03de3bfb3593d68d174dfcf854d1",
+    "/lib/x86_64-linux-gnu/libm.so.6": "fce00b6f25f459cf4ae0b7fae4257909a1a8a86f9149e7c029a5d617baf1ccd0",
+    "/lib/x86_64-linux-gnu/libstdc++.so.6": "1fd75fe70354a416d75aef22bcae68c47bd25d20e2d0568c30b1a9838cf62f11",
+    "/lib64/ld-linux-x86-64.so.2": "c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da",
+    "/usr/bin/prlimit": "17064f67e650d6152a6902b013aab496b54c87587c8eea6f5023aafee6154069",
+    "/usr/bin/python3.12": "e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f",
+    "/usr/bin/taskset": "a431738fadddc2e2326c8ab81843e72f4011658379381aef1502a6ddb1c1115b"
+  },
+  "artifact_sha256": {
+    "current-abort": "da1284917fed39c38cba1284640a995845fddd21fc115002f493a21f617afeab",
+    "current-steady": "1d6add8c2f636eca5fb229eaeae70afea5cbe7338105c33a97fa92f4c1c1a426",
+    "current-synthetic": "05ba0a95ac104fbb70d12621fed406b9f4955abc56781fa6506471fbff735fb9",
+    "current.a": "d78cf8ef942b3ee93063b69c186e1512d8fd224e31aa2ae60ab72da8b6374847",
+    "expected.json": "3b0918445525da472ba318f65abb7b370cb2cb442c9f2355058abac55fc0aa72",
+    "main-abort": "edd2044e2c55df49570b549ed8ce3f8a0a3e762c79dd2b6abc1a25383ebc8608",
+    "main-steady": "c6dd2fda8c149a9c8e96ce844dfde2fae3953d67e2d8cc8253686e5fd6fb5fbf",
+    "main-synthetic": "6feaf2ca1f6354587cc7783b5265149a761b9429da3182254546c1fcacc61dbe",
+    "main.a": "b183093f2d6dd935cc1119a33fac5e08dec8c654836402b5152a1dc85ae2b285",
+    "qualification.json": "3bf841527644f0a6f3cf18f747904e6f5e16ff8ce89fdfde49dfb4461ef6a04f",
+    "timing-unit": "dd19125802db6275969abfe628bb7b5ea04e6704f5a1091941c8234848b3abe6",
+    "timing-unit-sanitized": "da2654773e2b38b9b2192eeb72050269b4d202bbecd4d33bba2e89782c33602c"
+  },
+  "artifact_manifest_sha256": "07d213446da8d188e5e8f80c1d641967c9ffd9e3ab8448c92940db4ff3a5faa3",
+  "artifact_directory": ".research/leopard-79h/native-release-timing-v1.FsMiNz/artifacts",
+  "attempt_directory": ".research/leopard-79h/native-release-timing-v1.FsMiNz/attempt-1",
+  "host": {
+    "vendor_id": "AuthenticAMD",
+    "cpu family": "26",
+    "model": "8",
+    "model name": "AMD Ryzen Threadripper 9980X 64-Cores",
+    "microcode": "0xb008121",
+    "hostname": "work",
+    "kernel": "6.8.0-139-generic"
+  },
+  "qualification_archive": ".research/leopard-79h/native-release-timing-v1.FsMiNz/timing-qualification.tar.gz",
+  "qualification_archive_sha256": "be0dc1bfbe6e4d4ff8b3703b193f12d8bb27d9ee1f125ea407941ddbd19721f2",
+  "build_source_sha256": {
+    "EncodeTiming.h": "e607ae29966c48e5a4529fb0e5bab1591d34e667427666120af5bf1d69a2681e",
+    "encode_probe.cpp": "c158a1c277720a02dd49f6ce7912e14c6031c589b4d13909a087ee877af2ce02",
+    "encode_timing.cpp": "04183b3778ddeb5650fcc902b1d4510854fb693f0fe68abcb69409fb1ecfa162",
+    "test_encode_timing.cpp": "4201aab86b8aea70d70ed99b807baacaf7bfd344cfaf1f1523e6ab9b104d87ac",
+    "timing_clock.cpp": "4a62e9b726769539749df039882cf3d73198d6761dc87266d600f3d199028104",
+    "timing_witness.cpp": "7650e0c756b66b550b52246ca47b05650b4f8dbe95909c118e5ab9db7fac09e7"
+  },
+  "build_object_sha256": {
+    "clock-abort.o": "af9687630ef3f767e6cc56484d86f0e5e6ee9377902802e678000efef87fbb72",
+    "clock-steady.o": "23bfb7a226db7e58c412483e60e1e7a813ea0af47cb16d684217e75029882260",
+    "clock-synthetic.o": "8a28062f9e1883bc1e0114487abca6e2a233eb5a47b8f31030b76dfb102b0431",
+    "current.o": "4f35f45198774b158e386f3619d7ab14e8a14eaf2df37e4a53bf79c12163edec",
+    "main.o": "3ddeb1283fd4096d51c3aad52615d58d6e43291a6f0c59d7e06ba5a0776a780a",
+    "witness-current.o": "c321ab1ae8e039b9d1a6b8f49fb0dc0114932fa02d64b9978e6a153921297450",
+    "witness-main.o": "c084f53881153d004869ab06cc6eed663f38807e01f49764f0116f42302b1309"
+  },
+  "cost_boundary": "Ordinary public full encode; setup, allocation, input generation, hashing, poisoning and parity checks excluded. API result checks, loop and timer-adapter overhead included, no subtraction.",
+  "classification": "Median of nine normalized groups per process; ABBA geometric ratio per round, geometric mean of three rounds. Every same-native/current aggregate within reciprocal 2 percent or entire campaign inconclusive. Directional classification also requires all three comparison rounds agree.",
+  "failure_policy": "One attempt, no resume, retries, group adaptation, pooling, partial performance analysis, CI, production promotion or R19932 retry.",
+  "build_source_note": "Exact compiled EncodeTiming.h is retained. The tracked header only clarifies an overhead comment; compiled bytes are identified here, not asserted equal to comment-updated source.",
+  "provenance_scope": "Same compiled driver object per codec across steady/synthetic/abort links. Public-call wrappers only in synthetic links. SHA+metadata checks around children, not hermetic runtime or operation-specific ISA attestation."
+}
