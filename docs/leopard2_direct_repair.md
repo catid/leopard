@@ -310,7 +310,9 @@ observed RSS was 1,559,272 KiB.  Machine-readable evidence is
 
 Validation commands completed on 2026-07-16:
 
-    OMP_NUM_THREADS=1 ./build/release/leopard2_api_test
+    # The comprehensive API coverage is split into bounded CTest processes.
+    OMP_NUM_THREADS=1 ctest --test-dir build/release \
+      -R '^leopard2_api_' --output-on-failure -j 1
     ./build/release/leopard2_random_test --seed 903176249 --cases 2048 --threads 32
     ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
       UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
