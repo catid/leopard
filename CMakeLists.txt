@@ -2725,81 +2725,22 @@ if(LEO2_BUILD_TESTS)
     endif()
     target_include_directories(leopard2_api_test PRIVATE tests/leopard2)
     target_link_libraries(leopard2_api_test leopard_test_hooks)
-    # Keep the comprehensive API coverage, but execute it as independently
-    # bounded processes.  The former monolithic invocation could exceed the
-    # release test memory budget even though each API section is bounded on
-    # its own.  ``all`` remains available for local debugging; CTest uses the
-    # bounded groups so a fresh archive can run every case without relaxing
-    # coverage or limits.
-    add_test(NAME leopard2_api_dispatch
-        COMMAND leopard2_api_test dispatch)
-    add_test(NAME leopard2_api_compat
-        COMMAND leopard2_api_test compat)
-    add_test(NAME leopard2_api_large
-        COMMAND leopard2_api_test large)
-    add_test(NAME leopard2_api_decode
-        COMMAND leopard2_api_test decode)
-    add_test(NAME leopard2_api_repair_no_loss
-        COMMAND leopard2_api_test repair-no-loss)
-    add_test(NAME leopard2_api_repair_dispatch
-        COMMAND leopard2_api_test repair-dispatch)
-    add_test(NAME leopard2_api_repair_cache
-        COMMAND leopard2_api_test repair-cache)
-    add_test(NAME leopard2_api_repair_general_one_small
-        COMMAND leopard2_api_test repair-general-one-small)
-    add_test(NAME leopard2_api_repair_general_one_heavy
-        COMMAND leopard2_api_test repair-general-one-heavy)
-    add_test(NAME leopard2_api_repair_general_four
-        COMMAND leopard2_api_test repair-general-four)
-    add_test(NAME leopard2_api_repair_general_shapes_small
-        COMMAND leopard2_api_test repair-general-shapes-small)
-    add_test(NAME leopard2_api_repair_general_shapes_heavy
-        COMMAND leopard2_api_test repair-general-shapes-heavy)
-    add_test(NAME leopard2_api_repair_general_parity
-        COMMAND leopard2_api_test repair-general-parity)
-    add_test(NAME leopard2_api_repair_basic_cases
-        COMMAND leopard2_api_test repair-basic-cases)
-    add_test(NAME leopard2_api_repair_source_major
-        COMMAND leopard2_api_test repair-source-major)
-    add_test(NAME leopard2_api_repair_equal_rounded
-        COMMAND leopard2_api_test repair-equal-rounded)
-    add_test(NAME leopard2_api_repair_concurrent_plan
-        COMMAND leopard2_api_test repair-concurrent-plan)
-    add_test(NAME leopard2_api_repair_exact_127
-        COMMAND leopard2_api_test repair-exact-127)
-    add_test(NAME leopard2_api_repair_recovery_matrix
-        COMMAND leopard2_api_test repair-recovery-matrix)
-    add_test(NAME leopard2_api_repair_rounded
-        COMMAND leopard2_api_test repair-rounded)
-    add_test(NAME leopard2_api_repair_field
-        COMMAND leopard2_api_test repair-field)
-    add_test(NAME leopard2_api_repair_overlap
-        COMMAND leopard2_api_test repair-overlap)
-    add_test(NAME leopard2_api_repair_alias
-        COMMAND leopard2_api_test repair-alias)
-    add_test(NAME leopard2_api_repair_gf16
-        COMMAND leopard2_api_test repair-gf16)
-    set_tests_properties(
-        leopard2_api_dispatch leopard2_api_compat leopard2_api_large
-        leopard2_api_decode leopard2_api_repair_no_loss
-        leopard2_api_repair_dispatch leopard2_api_repair_cache
-        leopard2_api_repair_general_one_small
-        leopard2_api_repair_general_one_heavy
-        leopard2_api_repair_general_four
-        leopard2_api_repair_general_shapes_small
-        leopard2_api_repair_general_shapes_heavy
-        leopard2_api_repair_general_parity
-        leopard2_api_repair_basic_cases
-        leopard2_api_repair_source_major
-        leopard2_api_repair_equal_rounded
-        leopard2_api_repair_concurrent_plan
-        leopard2_api_repair_exact_127
-        leopard2_api_repair_recovery_matrix
-        leopard2_api_repair_rounded leopard2_api_repair_field
-        leopard2_api_repair_overlap leopard2_api_repair_alias
-        leopard2_api_repair_gf16
-        PROPERTIES ENVIRONMENT
-            "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+    # Preserve the complete API case matrix, including the two full-size
+    # 1 MiB calls, while isolating sections in separate serial processes.
+    # The large cases need more memory than the ordinary sections; splitting
+    # does not change their call sizes or imply a smaller memory requirement.
+    set(LEO2_API_TEST_GROUPS dispatch compat decode repair expanded
+        large-high large-low)
+    foreach(group IN LISTS LEO2_API_TEST_GROUPS)
+        add_test(NAME leopard2_api_${group} COMMAND leopard2_api_test ${group})
+        set_tests_properties(leopard2_api_${group} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+    endforeach()
+    add_test(NAME leopard2_api_group_contract
+        COMMAND ${CMAKE_COMMAND}
+            -DLEO2_API_EXECUTABLE=$<TARGET_FILE:leopard2_api_test>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_api_groups.cmake)
 
     add_executable(leopard2_public_api_contract_test
         tests/leopard2/test_public_api_contract.cpp)

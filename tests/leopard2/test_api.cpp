@@ -74,7 +74,21 @@
 
 namespace {
 
-extern std::string g_api_selected_group;
+enum ApiGroup
+{
+    kAll, kDispatch, kCompat, kDecode, kRepair, kExpanded,
+    kLargeHigh, kLargeLow
+};
+
+const char* const kApiGroups[] = {
+    "all", "dispatch", "compat", "decode", "repair", "expanded",
+    "large-high", "large-low"
+};
+
+bool selected_group(ApiGroup selected, ApiGroup group)
+{
+    return selected == kAll || selected == group;
+}
 
 using leopard2_test::BinaryField;
 using leopard2_test::Element;
@@ -525,116 +539,6 @@ void compare_low_gf16_with_oracle(
     leo2_codec_destroy(codec);
 }
 
-/*
- * Large one-loss cases used to retain the automatic plan, its scratch,
- * output, and the forced-generic plan/output simultaneously.  That made the
- * monolithic API executable exceed the release memory budget.  Keep the
- * exact same automatic-vs-generic checks, but run the two decoders in
- * separate scopes and compare each result directly with the source shard.
- */
-void run_single_loss_case_memory_bounded(
-    leo2_context* context,
-    unsigned k,
-    unsigned r,
-    leo2_profile profile,
-    leo2_field field,
-    size_t bytes,
-    unsigned missing_original,
-    const std::vector<unsigned>& missing_recovery,
-    TestCounts* counts)
-{
-    leo2_codec* codec = make_codec(context, k, r, profile, field);
-    const Shards source = make_originals(
-        k, bytes, 0xc001d00dULL + k * 11u + r);
-    const Shards parity = encode_new(codec, source, bytes);
-    /* Encoding may populate backend caches that are not needed by decode;
-       release that state before constructing the decoder's codec. */
-    leo2_codec_destroy(codec);
-    codec = make_codec(context, k, r, profile, field);
-    std::vector<uint8_t> original_present(k, 1);
-    std::vector<uint8_t> recovery_present(r, 1);
-    original_present[missing_original] = 0;
-    for (size_t i = 0; i < missing_recovery.size(); ++i)
-        recovery_present[missing_recovery[i]] = 0;
-
-    {
-        leo2_decode_plan* plan = NULL;
-        require_result(leo2_decode_plan_create(codec, &original_present[0],
-            &recovery_present[0], &plan), "bounded decode plan create");
-        size_t scratch_bytes = 0;
-        require_result(leo2_decode_plan_scratch_size(
-            plan, bytes, &scratch_bytes), "bounded decode scratch query");
-        AlignedBuffer scratch(scratch_bytes);
-        std::vector<uint8_t> restored(bytes, 0);
-        std::vector<const void*> original_ptrs(k, NULL);
-        std::vector<const void*> recovery_ptrs(r, NULL);
-        std::vector<void*> restored_ptrs(k, NULL);
-        for (unsigned i = 0; i < k; ++i)
-            original_ptrs[i] = original_present[i] ? &source[i][0] : NULL;
-        restored_ptrs[missing_original] = &restored[0];
-        for (unsigned i = 0; i < r; ++i)
-            if (recovery_present[i])
-                recovery_ptrs[i] = &parity[i][0];
-        for (unsigned repeat = 0; repeat < 2; ++repeat)
-        {
-            require_result(leo2_decode_plan_execute(
-                plan, bytes, &original_ptrs[0], &recovery_ptrs[0],
-                &restored_ptrs[0], scratch.data, scratch.bytes),
-                "bounded automatic decode execute");
-            require(restored == source[missing_original],
-                "bounded automatic recovery mismatch");
-            ++counts->plan_executions;
-            ++counts->recovered_shards;
-        }
-        leo2_decode_plan_destroy(plan);
-    }
-    leo2_codec_destroy(codec);
-
-    codec = NULL;
-    leo2_codec_options generic_options;
-    memset(&generic_options, 0, sizeof(generic_options));
-    generic_options.struct_size = sizeof(generic_options);
-    generic_options.flags = LEO2_CODEC_FORCE_GENERIC_DECODE;
-    require_result(leo2_codec_create(context, k, r, profile, field,
-        &generic_options, &codec), "bounded generic codec create");
-    {
-        leo2_decode_plan* plan = NULL;
-        require_result(leo2_decode_plan_create(codec, &original_present[0],
-            &recovery_present[0], &plan), "bounded generic plan create");
-        size_t scratch_bytes = 0;
-        const size_t chunk_bytes = std::min<size_t>(bytes, 64 * 1024);
-        require_result(leo2_decode_plan_scratch_size(
-            plan, chunk_bytes, &scratch_bytes),
-            "bounded generic scratch query");
-        AlignedBuffer scratch(scratch_bytes);
-        std::vector<uint8_t> restored(bytes, 0);
-        std::vector<const void*> original_ptrs(k, NULL);
-        std::vector<const void*> recovery_ptrs(r, NULL);
-        std::vector<void*> restored_ptrs(k, NULL);
-        for (size_t offset = 0; offset < bytes; offset += chunk_bytes)
-        {
-            const size_t current = std::min(chunk_bytes, bytes - offset);
-            for (unsigned i = 0; i < k; ++i)
-                original_ptrs[i] = original_present[i]
-                    ? &source[i][offset] : NULL;
-            restored_ptrs[missing_original] = &restored[offset];
-            for (unsigned i = 0; i < r; ++i)
-                if (recovery_present[i])
-                    recovery_ptrs[i] = &parity[i][offset];
-            require_result(leo2_decode_plan_execute(
-                plan, current, &original_ptrs[0], &recovery_ptrs[0],
-                &restored_ptrs[0], scratch.data, scratch.bytes),
-                "bounded generic decode execute");
-        }
-        require(restored == source[missing_original],
-            "bounded generic recovery mismatch");
-        leo2_decode_plan_destroy(plan);
-    }
-    leo2_codec_destroy(codec);
-    if ((bytes & 63u) != 0)
-        ++counts->tail_cases;
-}
-
 void run_decode_case(
     leo2_context* context,
     unsigned k,
@@ -646,12 +550,6 @@ void run_decode_case(
     const std::vector<unsigned>& missing_recovery,
     TestCounts* counts)
 {
-    if (missing_originals.size() == 1 && bytes >= 1024 * 1024)
-    {
-        run_single_loss_case_memory_bounded(context, k, r, profile, field,
-            bytes, missing_originals[0], missing_recovery, counts);
-        return;
-    }
     leo2_codec* codec = make_codec(context, k, r, profile, field);
     const Shards source = make_originals(k, bytes, 0xc001d00dULL + k * 11u + r);
     const Shards parity = encode_new(codec, source, bytes);
@@ -672,7 +570,11 @@ void run_decode_case(
     require_result(leo2_decode_plan_scratch_size(plan, bytes, &scratch_bytes),
         "decode scratch query");
     AlignedBuffer scratch(scratch_bytes);
-    Shards restored(k, std::vector<uint8_t>(bytes, 0));
+    // Only missing rows are supplied as output pointers.  Do not allocate
+    // unused rows (128 MiB per output set in the large one-loss cases).
+    Shards restored(k);
+    for (size_t i = 0; i < missing_originals.size(); ++i)
+        restored[missing_originals[i]].assign(bytes, 0);
     std::vector<const void*> original_ptrs(k, NULL);
     std::vector<const void*> recovery_ptrs(r, NULL);
     std::vector<void*> restored_ptrs(k, NULL);
@@ -731,7 +633,9 @@ void run_decode_case(
             generic_plan, bytes, &generic_scratch_bytes),
             "generic scratch query");
         AlignedBuffer generic_scratch(generic_scratch_bytes);
-        Shards generic_restored(k, std::vector<uint8_t>(bytes, 0));
+        Shards generic_restored(k);
+        for (size_t i = 0; i < missing_originals.size(); ++i)
+            generic_restored[missing_originals[i]].assign(bytes, 0);
         std::vector<void*> generic_restored_ptrs(k, NULL);
         for (size_t i = 0; i < missing_originals.size(); ++i)
             generic_restored_ptrs[missing_originals[i]] =
@@ -1422,7 +1326,8 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
 #if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
 void test_generalized_one_loss_direct_repair_execution(
     leo2_context* context,
-    TestCounts* counts)
+    TestCounts* counts,
+    ApiGroup selected)
 {
     struct Case
     {
@@ -1447,29 +1352,15 @@ void test_generalized_one_loss_direct_repair_execution(
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
     {
-        const bool one_loss_small =
-            g_api_selected_group == "repair-general" ||
-            g_api_selected_group == "repair-general-one" ||
-            g_api_selected_group == "repair-general-one-small";
-        const bool one_loss_heavy =
-            g_api_selected_group == "repair-general-one-heavy";
-        if (!one_loss_small && !one_loss_heavy)
-            break;
-        if (g_api_selected_group == "repair-general-one-small" && i >= 11)
-            break;
-        if (g_api_selected_group == "repair-general-one-heavy" && i != 11)
-            continue;
         const Case& test = cases[i];
+        if (!selected_group(selected,
+                test.bytes == 1024 * 1024 ? kLargeHigh : kExpanded))
+            continue;
         run_decode_case(context, test.k, test.r,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
             test.bytes, std::vector<unsigned>{test.missing_original},
             std::vector<unsigned>{0, test.r / 2, test.r - 1}, counts);
     }
-
-    if (g_api_selected_group == "repair-general-one" ||
-        g_api_selected_group == "repair-general-one-small" ||
-        g_api_selected_group == "repair-general-one-heavy")
-        return;
 
     struct GeneralCase
     {
@@ -1499,21 +1390,10 @@ void test_generalized_one_loss_direct_repair_execution(
     for (size_t i = 0;
          i < sizeof(general_cases) / sizeof(general_cases[0]); ++i)
     {
-        const bool run_general_shapes =
-            g_api_selected_group == "repair-general" ||
-            g_api_selected_group == "repair-general-one" ||
-            g_api_selected_group == "repair-general-shapes-small" ||
-            g_api_selected_group == "repair-general-shapes-heavy";
-        if (!run_general_shapes)
-            break;
-        const bool heavy_shape = i == 7 || i == 8 || i == 13 || i == 14;
-        if (g_api_selected_group == "repair-general-shapes-small" &&
-            heavy_shape)
-            continue;
-        if (g_api_selected_group == "repair-general-shapes-heavy" &&
-            !heavy_shape)
-            continue;
         const GeneralCase& test = general_cases[i];
+        if (!selected_group(selected,
+                test.bytes == 1024 * 1024 ? kLargeLow : kExpanded))
+            continue;
         leo2_test_reset_direct_pair_calls();
         run_decode_case(context, test.k, test.r, test.profile,
             LEO2_FIELD_GF8, test.bytes,
@@ -1563,13 +1443,11 @@ void test_generalized_one_loss_direct_repair_execution(
         { 31, 200, LEO2_PROFILE_LOW_V1, 0, 0 },
         { 31, 200, LEO2_PROFILE_LOW_V1, 30, 199 }
     };
-    if (g_api_selected_group == "repair-general-shapes-small" ||
-        g_api_selected_group == "repair-general-shapes-heavy")
-        return;
-
     for (size_t i = 0;
          i < sizeof(parity_row_cases) / sizeof(parity_row_cases[0]); ++i)
     {
+        if (!selected_group(selected, kExpanded))
+            break;
         const ParityRowCase& test = parity_row_cases[i];
         std::vector<unsigned> missing_recovery;
         missing_recovery.reserve(test.r - 1);
@@ -2148,10 +2026,7 @@ void test_concurrent_expanded_direct_repair_cache(
     }
 }
 
-bool api_expanded_phase_selected(const char* phase);
-bool api_expanded_phase_only(const char* phase);
-
-void test_expanded_direct_repair_execution(TestCounts* counts)
+void test_expanded_direct_repair_execution(TestCounts* counts, ApiGroup selected)
 {
     leo2_context_options options;
     memset(&options, 0, sizeof(options));
@@ -2172,47 +2047,27 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
             leo2_context_backend(context) == LEO2_BACKEND_AVX2,
         "explicit AVX2 direct-repair context selected the wrong backend");
 
-    if (api_expanded_phase_only("cache"))
+    if (selected_group(selected, kExpanded))
     {
         test_concurrent_expanded_direct_repair_cache(context, counts);
-        leo2_context_destroy(context);
-        return;
-    }
-    if (api_expanded_phase_only("dispatch"))
-    {
         test_direct_repair_dispatch_bounds(context);
+    }
+#if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
+    test_generalized_one_loss_direct_repair_execution(context, counts, selected);
+#endif
+    if (!selected_group(selected, kExpanded))
+    {
         leo2_context_destroy(context);
         return;
     }
 #if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
-    if (api_expanded_phase_selected("general") ||
-        api_expanded_phase_only("general-one") ||
-        api_expanded_phase_only("general-one-small") ||
-        api_expanded_phase_only("general-one-heavy") ||
-        api_expanded_phase_only("general-shapes-small") ||
-        api_expanded_phase_only("general-shapes-heavy") ||
-        api_expanded_phase_only("general-parity"))
-        test_generalized_one_loss_direct_repair_execution(context, counts);
 #if !defined(LEO2_GFNI_VARIANT)
-    if (api_expanded_phase_selected("general") ||
-        api_expanded_phase_only("general-four"))
-        test_generalized_four_tiny_unaligned(context, counts);
+    test_generalized_four_tiny_unaligned(context, counts);
 #endif
 #endif
 #if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
-    if (api_expanded_phase_selected("small"))
-        test_experimental_small_direct_repair_execution(context, counts);
+    test_experimental_small_direct_repair_execution(context, counts);
 #endif
-    if (g_api_selected_group == "repair-general" ||
-        g_api_selected_group == "repair-general-one" ||
-        g_api_selected_group == "repair-general-one-small" ||
-        g_api_selected_group == "repair-general-one-heavy" ||
-        g_api_selected_group == "repair-general-four" ||
-        g_api_selected_group == "repair-small")
-    {
-        leo2_context_destroy(context);
-        return;
-    }
     const std::vector<unsigned> missing_originals = {
         0, 1, 7, 16, 32, 48, 63, 64
     };
@@ -2221,7 +2076,6 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
         1, 7, 31, 63, 64, 65, 127, 128, 1024, 1025,
         2048, 2049, 4099, 65536
     };
-    if (api_expanded_phase_selected("basic-cases"))
     for (size_t i = 0;
          i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++i)
     {
@@ -2234,14 +2088,8 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
        composition at the exact 2 KiB dispatch boundary and with an unaligned
        vector tail, comparing each result with the independent forced-generic
        decoder inside run_decode_case. */
-    if (g_api_selected_group == "repair-basic-cases")
-    {
-        leo2_context_destroy(context);
-        return;
-    }
     static const size_t source_major_bytes[] = { 2048, 2049 };
     static const size_t source_major_losses[] = { 2, 3, 4, 5, 6, 7, 8 };
-    if (api_expanded_phase_selected("source-major"))
     for (size_t loss_i = 0;
          loss_i < sizeof(source_major_losses) /
              sizeof(source_major_losses[0]); ++loss_i)
@@ -2267,7 +2115,6 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
     static const size_t equal_rounded_bytes[] = {
         1, 7, 31, 32, 33, 63, 64, 65, 2047, 2048, 2049
     };
-    if (api_expanded_phase_selected("equal-rounded"))
     for (size_t count_i = 0;
          count_i < sizeof(equal_rounded_counts) /
              sizeof(equal_rounded_counts[0]); ++count_i)
@@ -2295,15 +2142,7 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
         }
     }
 #endif
-    if (api_expanded_phase_selected("concurrent-plan"))
-        test_concurrent_preformatted_source_major_plan(context, counts);
-    if (g_api_selected_group == "repair-source-major" ||
-        g_api_selected_group == "repair-equal-rounded" ||
-        g_api_selected_group == "repair-concurrent-plan")
-    {
-        leo2_context_destroy(context);
-        return;
-    }
+    test_concurrent_preformatted_source_major_plan(context, counts);
 
     /*
         Exercise the public 127-byte source boundary that the native-high
@@ -2314,8 +2153,6 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
         127-byte vector allocations also place any source[127] read in the
         allocator redzone.
     */
-    if (api_expanded_phase_selected("exact-127"))
-    {
     std::vector<unsigned> burst_missing(28);
     for (unsigned i = 0; i < burst_missing.size(); ++i)
         burst_missing[i] = i;
@@ -2363,12 +2200,6 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
     run_decode_case(context, 65, 127,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
         63, missing_originals, std::vector<unsigned>{0, 64, 126}, counts);
-    }
-    if (!api_expanded_phase_selected("recovery-matrix"))
-    {
-        leo2_context_destroy(context);
-        return;
-    }
     const unsigned recovery_counts[] = { 65, 66, 96, 128 };
     const unsigned loss_counts[] = { 1, 2, 3, 4, 5, 6, 7, 8 };
     for (size_t recovery_i = 0;
@@ -3914,77 +3745,29 @@ void test_balanced_family_forced_equivalence(leo2_context* context)
 
 } // namespace
 
-namespace {
-
-std::string g_api_selected_group = "all";
-
-bool api_group_selected(const std::string& selected, const char* group)
-{
-    return selected == "all" || selected == group;
-}
-
-bool api_expanded_phase_selected(const char* phase)
-{
-    return g_api_selected_group == "repair-expanded" ||
-        g_api_selected_group == std::string("repair-") + phase;
-}
-
-bool api_expanded_phase_only(const char* phase)
-{
-    return g_api_selected_group == std::string("repair-") + phase;
-}
-
-bool api_expanded_group_selected(const std::string& selected)
-{
-    static const char* const groups[] = {
-        "repair-expanded", "repair-cache", "repair-general",
-        "repair-general-one", "repair-general-four",
-        "repair-general-one-small", "repair-general-one-heavy",
-        "repair-general-shapes-small", "repair-general-shapes-heavy",
-        "repair-general-parity",
-        "repair-small", "repair-basic-cases", "repair-source-major",
-        "repair-equal-rounded", "repair-concurrent-plan",
-        "repair-exact-127", "repair-recovery-matrix"
-    };
-    for (size_t i = 0; i < sizeof(groups) / sizeof(groups[0]); ++i)
-        if (selected == groups[i])
-            return true;
-    return false;
-}
-
-bool api_group_name_valid(const std::string& selected)
-{
-    return selected == "all" || selected == "dispatch" ||
-        selected == "compat" || selected == "large" ||
-        selected == "decode" || selected == "repair" ||
-        selected == "repair-no-loss" || selected == "repair-dispatch" ||
-        selected == "repair-expanded" || selected == "repair-rounded" ||
-        selected == "repair-field" || selected == "repair-overlap" ||
-        selected == "repair-alias" || selected == "repair-gf16" ||
-        selected == "repair-cache" || selected == "repair-general" ||
-        selected == "repair-general-one" || selected == "repair-general-four" ||
-        selected == "repair-general-one-small" ||
-        selected == "repair-general-one-heavy" ||
-        selected == "repair-general-shapes-small" ||
-        selected == "repair-general-shapes-heavy" ||
-        selected == "repair-general-parity" ||
-        selected == "repair-small" || selected == "repair-basic-cases" ||
-        selected == "repair-source-major" || selected == "repair-equal-rounded" ||
-        selected == "repair-concurrent-plan" || selected == "repair-exact-127" ||
-        selected == "repair-recovery-matrix";
-}
-
-} // namespace
-
 int main(int argc, char** argv)
 {
     try
     {
-        const std::string selected = argc > 1 ? argv[1] : "all";
-        require(api_group_name_valid(selected),
-            "unknown API test group (expected all, dispatch, compat, large, decode, or repair-*)");
+        require(argc <= 2, "expected zero arguments or one API group");
+        if (argc == 2 && std::string(argv[1]) == "--list")
+        {
+            for (size_t i = 1; i < sizeof(kApiGroups) / sizeof(kApiGroups[0]); ++i)
+                std::cout << kApiGroups[i] << '\n';
+            return 0;
+        }
+        ApiGroup selected = kAll;
+        if (argc == 2)
+        {
+            size_t i = 0;
+            for (; i < sizeof(kApiGroups) / sizeof(kApiGroups[0]); ++i)
+                if (std::string(argv[1]) == kApiGroups[i])
+                    break;
+            require(i < sizeof(kApiGroups) / sizeof(kApiGroups[0]),
+                "unknown API group; use --list");
+            selected = static_cast<ApiGroup>(i);
+        }
         TestCounts counts;
-        g_api_selected_group = selected;
         leo2_context* context = NULL;
         leo2_context_options options;
         memset(&options, 0, sizeof(options));
@@ -3993,7 +3776,7 @@ int main(int argc, char** argv)
         require_result(leo2_context_create(&options, &context), "context create");
         require(context != NULL && leo2_context_backend(context) != LEO2_BACKEND_AUTO,
             "context backend introspection failed");
-        if (api_group_selected(selected, "dispatch"))
+        if (selected_group(selected, kDispatch))
         {
             test_forced_backend(context);
             test_codec_flag_validation(context);
@@ -4008,7 +3791,7 @@ int main(int argc, char** argv)
             test_batch_materialized_capacity(context);
         }
 
-        if (api_group_selected(selected, "compat"))
+        if (selected_group(selected, kCompat))
         {
             test_profile_metadata(context);
             compare_high_with_legacy(context, 3, 2,
@@ -4018,6 +3801,8 @@ int main(int argc, char** argv)
             compare_high_with_legacy(context, 129, 2,
                 std::vector<size_t>{7, 64}, &counts);
             compare_high_with_legacy(context, 240, 16,
+                std::vector<size_t>{64}, &counts);
+            compare_high_with_legacy(context, 1000, 200,
                 std::vector<size_t>{64}, &counts);
             compare_avx2_fused_high_with_legacy(&counts);
 
@@ -4033,126 +3818,116 @@ int main(int argc, char** argv)
             compare_low_gf16_with_oracle(context, gf16, 1026, &counts);
         }
 
-        if (api_group_selected(selected, "large"))
-            compare_high_with_legacy(context, 1000, 200,
-                std::vector<size_t>{64}, &counts);
-
-        if (api_group_selected(selected, "decode"))
+        if (selected_group(selected, kDecode))
         {
-          run_decode_case(context, 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1,
-            LEO2_FIELD_GF8, 17, std::vector<unsigned>{0, 4, 8},
-            std::vector<unsigned>{5, 6}, &counts);
-        run_decode_case(context, 3, 5, LEO2_PROFILE_LOW_V1,
-            LEO2_FIELD_GF8, 65, std::vector<unsigned>{0, 2},
-            std::vector<unsigned>{1, 3, 4}, &counts);
-        run_decode_case(context, 3, 5, LEO2_PROFILE_LOW_V1,
-            LEO2_FIELD_GF8, 129, std::vector<unsigned>{0, 1, 2},
-            std::vector<unsigned>{3, 4}, &counts);
-        run_decode_case(context, 257, 33, LEO2_PROFILE_LEGACY_HIGH_V1,
-            LEO2_FIELD_GF16, 64, std::vector<unsigned>{1, 64, 128, 256},
-            std::vector<unsigned>{29, 30, 31, 32}, &counts);
-        const size_t gf16_boundaries[] = { 2, 32, 34, 62, 64, 66, 1024, 1026 };
-        for (size_t count_i = 0;
-             count_i < sizeof(gf16_boundaries) / sizeof(gf16_boundaries[0]);
-             ++count_i)
-        {
-            const size_t bytes = gf16_boundaries[count_i];
-            compare_high_gf16_compact_with_legacy(
-                context, 257, 33, bytes, &counts);
-            run_decode_case(context, 257, 33, LEO2_PROFILE_LEGACY_HIGH_V1,
-                LEO2_FIELD_GF16, bytes, std::vector<unsigned>{1, 128, 256},
-                std::vector<unsigned>{31, 32}, &counts);
-            run_decode_case(context, 100, 156, LEO2_PROFILE_LOW_V1,
-                LEO2_FIELD_GF16, bytes, std::vector<unsigned>{0, 37, 99},
-                std::vector<unsigned>{151, 152, 155}, &counts);
-        }
-        run_decode_case(context, 257, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
-            LEO2_FIELD_GF16, 66, std::vector<unsigned>{128},
-            std::vector<unsigned>(), &counts);
-        run_decode_case(context, 1, 300, LEO2_PROFILE_LOW_V1,
-            LEO2_FIELD_GF16, 66, std::vector<unsigned>{0},
-            std::vector<unsigned>{0, 299}, &counts);
-        run_decode_case(context, 8, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
-            LEO2_FIELD_GF8, 33, std::vector<unsigned>{3},
-            std::vector<unsigned>(), &counts);
-        run_decode_case(context, 1, 5, LEO2_PROFILE_LOW_V1,
-            LEO2_FIELD_GF8, 31, std::vector<unsigned>{0},
-            std::vector<unsigned>{0, 1, 3, 4}, &counts);
-
-        std::vector<unsigned> balanced_full_recovery(128);
-        for (size_t i = 0; i < balanced_full_recovery.size(); ++i)
-            balanced_full_recovery[i] = static_cast<unsigned>(i);
-        leo2_test_reset_generic_reveal_counts();
-        leo2_test_reset_low_reveal_counts();
-        run_decode_case(context, 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1,
-            LEO2_FIELD_GF8, 257, balanced_full_recovery,
-            std::vector<unsigned>(), &counts);
-        require(leo2_test_generic_direct_reveal_shards() == 0,
-            "small balanced decode unexpectedly fused reveal/scatter");
-        require(leo2_test_low_direct_reveal_shards() == 128 * 3,
-            "small balanced AUTO did not use translated Algorithm 4 reveal");
-
-        leo2_test_reset_generic_reveal_counts();
-        leo2_test_reset_low_reveal_counts();
-        run_decode_case(context, 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1,
-            LEO2_FIELD_GF8, 4097, balanced_full_recovery,
-            std::vector<unsigned>(), &counts);
-        const leo2_backend balanced_backend = leo2_context_backend(context);
-        const uint64_t expected_direct_reveals =
-            balanced_backend == LEO2_BACKEND_SSSE3 ||
-            balanced_backend == LEO2_BACKEND_AVX2 ||
-            balanced_backend == LEO2_BACKEND_AVX512
-                ? 128
-                : 0;
-        require(leo2_test_generic_direct_reveal_shards() ==
-                expected_direct_reveals,
-            "forced generic reveal/scatter did not match backend policy");
-        require(leo2_test_low_direct_reveal_shards() == 128 * 3,
-            "balanced AUTO did not use translated Algorithm 4 reveal");
-
-          const size_t direct_gf16_boundaries[] = { 2, 34, 64, 66, 1026 };
-          for (size_t count_i = 0;
-             count_i < sizeof(direct_gf16_boundaries) /
-                 sizeof(direct_gf16_boundaries[0]);
-             ++count_i)
-        {
-            const size_t bytes = direct_gf16_boundaries[count_i];
             run_decode_case(context, 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1,
-                LEO2_FIELD_GF16, bytes, std::vector<unsigned>{0, 4, 8},
-                std::vector<unsigned>{0, 2, 6}, &counts);
-            run_decode_case(context, 5, 11, LEO2_PROFILE_LOW_V1,
-                LEO2_FIELD_GF16, bytes, std::vector<unsigned>{0, 1, 3, 4},
-                std::vector<unsigned>{0, 2, 10}, &counts);
-          }
+                LEO2_FIELD_GF8, 17, std::vector<unsigned>{0, 4, 8},
+                std::vector<unsigned>{5, 6}, &counts);
+            run_decode_case(context, 3, 5, LEO2_PROFILE_LOW_V1,
+                LEO2_FIELD_GF8, 65, std::vector<unsigned>{0, 2},
+                std::vector<unsigned>{1, 3, 4}, &counts);
+            run_decode_case(context, 3, 5, LEO2_PROFILE_LOW_V1,
+                LEO2_FIELD_GF8, 129, std::vector<unsigned>{0, 1, 2},
+                std::vector<unsigned>{3, 4}, &counts);
+            run_decode_case(context, 257, 33, LEO2_PROFILE_LEGACY_HIGH_V1,
+                LEO2_FIELD_GF16, 64, std::vector<unsigned>{1, 64, 128, 256},
+                std::vector<unsigned>{29, 30, 31, 32}, &counts);
+            const size_t gf16_boundaries[] = { 2, 32, 34, 62, 64, 66, 1024, 1026 };
+            for (size_t count_i = 0;
+                 count_i < sizeof(gf16_boundaries) / sizeof(gf16_boundaries[0]);
+                 ++count_i)
+            {
+                const size_t bytes = gf16_boundaries[count_i];
+                compare_high_gf16_compact_with_legacy(
+                    context, 257, 33, bytes, &counts);
+                run_decode_case(context, 257, 33, LEO2_PROFILE_LEGACY_HIGH_V1,
+                    LEO2_FIELD_GF16, bytes, std::vector<unsigned>{1, 128, 256},
+                    std::vector<unsigned>{31, 32}, &counts);
+                run_decode_case(context, 100, 156, LEO2_PROFILE_LOW_V1,
+                    LEO2_FIELD_GF16, bytes, std::vector<unsigned>{0, 37, 99},
+                    std::vector<unsigned>{151, 152, 155}, &counts);
+            }
+            run_decode_case(context, 257, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
+                LEO2_FIELD_GF16, 66, std::vector<unsigned>{128},
+                std::vector<unsigned>(), &counts);
+            run_decode_case(context, 1, 300, LEO2_PROFILE_LOW_V1,
+                LEO2_FIELD_GF16, 66, std::vector<unsigned>{0},
+                std::vector<unsigned>{0, 299}, &counts);
+            run_decode_case(context, 8, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
+                LEO2_FIELD_GF8, 33, std::vector<unsigned>{3},
+                std::vector<unsigned>(), &counts);
+            run_decode_case(context, 1, 5, LEO2_PROFILE_LOW_V1,
+                LEO2_FIELD_GF8, 31, std::vector<unsigned>{0},
+                std::vector<unsigned>{0, 1, 3, 4}, &counts);
+
+            std::vector<unsigned> balanced_full_recovery(128);
+            for (size_t i = 0; i < balanced_full_recovery.size(); ++i)
+                balanced_full_recovery[i] = static_cast<unsigned>(i);
+            leo2_test_reset_generic_reveal_counts();
+            leo2_test_reset_low_reveal_counts();
+            run_decode_case(context, 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1,
+                LEO2_FIELD_GF8, 257, balanced_full_recovery,
+                std::vector<unsigned>(), &counts);
+            require(leo2_test_generic_direct_reveal_shards() == 0,
+                "small balanced decode unexpectedly fused reveal/scatter");
+            require(leo2_test_low_direct_reveal_shards() == 128 * 3,
+                "small balanced AUTO did not use translated Algorithm 4 reveal");
+
+            leo2_test_reset_generic_reveal_counts();
+            leo2_test_reset_low_reveal_counts();
+            run_decode_case(context, 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1,
+                LEO2_FIELD_GF8, 4097, balanced_full_recovery,
+                std::vector<unsigned>(), &counts);
+            const leo2_backend balanced_backend = leo2_context_backend(context);
+            const uint64_t expected_direct_reveals =
+                balanced_backend == LEO2_BACKEND_SSSE3 ||
+                balanced_backend == LEO2_BACKEND_AVX2 ||
+                balanced_backend == LEO2_BACKEND_AVX512
+                    ? 128
+                    : 0;
+            require(leo2_test_generic_direct_reveal_shards() ==
+                    expected_direct_reveals,
+                "forced generic reveal/scatter did not match backend policy");
+            require(leo2_test_low_direct_reveal_shards() == 128 * 3,
+                "balanced AUTO did not use translated Algorithm 4 reveal");
+
+            const size_t direct_gf16_boundaries[] = { 2, 34, 64, 66, 1026 };
+            for (size_t count_i = 0;
+                 count_i < sizeof(direct_gf16_boundaries) /
+                     sizeof(direct_gf16_boundaries[0]);
+                 ++count_i)
+            {
+                const size_t bytes = direct_gf16_boundaries[count_i];
+                run_decode_case(context, 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1,
+                    LEO2_FIELD_GF16, bytes, std::vector<unsigned>{0, 4, 8},
+                    std::vector<unsigned>{0, 2, 6}, &counts);
+                run_decode_case(context, 5, 11, LEO2_PROFILE_LOW_V1,
+                    LEO2_FIELD_GF16, bytes, std::vector<unsigned>{0, 1, 3, 4},
+                    std::vector<unsigned>{0, 2, 10}, &counts);
+            }
         }
 
-        if (api_group_selected(selected, "repair") ||
-            api_group_selected(selected, "repair-no-loss"))
+        if (selected_group(selected, kRepair))
+        {
             test_no_loss_no_op(context);
-        if (api_group_selected(selected, "repair") ||
-            api_group_selected(selected, "repair-dispatch"))
             test_direct_repair_dispatch_bounds(context);
-        if (api_group_selected(selected, "repair") ||
-            api_expanded_group_selected(selected))
-            test_expanded_direct_repair_execution(&counts);
-        if (api_group_selected(selected, "repair") ||
-            api_group_selected(selected, "repair-rounded"))
+        }
+
+        if (selected_group(selected, kExpanded) ||
+            selected == kLargeHigh || selected == kLargeLow)
+            test_expanded_direct_repair_execution(&counts, selected);
+        if (selected_group(selected, kRepair))
+        {
             test_equal_rounded_multi_loss_backend_scope();
-        if (api_group_selected(selected, "repair") ||
-            api_group_selected(selected, "repair-field"))
             test_direct_repair_field_helpers();
-        if (api_group_selected(selected, "repair") ||
-            api_group_selected(selected, "repair-overlap"))
             test_overlap_rejection(context);
-        if (api_group_selected(selected, "repair") ||
-            api_group_selected(selected, "repair-alias"))
             test_decode_late_scratch_alias_failure_atomicity(context);
-        if (api_group_selected(selected, "repair") ||
-            api_group_selected(selected, "repair-gf16"))
             test_gf16_byte_granularity(context);
+        }
+
         leo2_context_destroy(context);
 
-        std::cout << "high_compatibility_bytes=" << counts.high_compatibility
+        std::cout << "group=" << kApiGroups[selected] << " high_compatibility_bytes=" << counts.high_compatibility
                   << " low_oracle_symbols=" << counts.low_oracle_symbols
                   << " recovered_shards=" << counts.recovered_shards
                   << " plan_executions=" << counts.plan_executions
