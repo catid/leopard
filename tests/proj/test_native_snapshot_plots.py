@@ -90,6 +90,20 @@ class NativeSnapshotPlotsTest(unittest.TestCase):
         for path in (atlas / "plots").glob("*speedup_vs_leopard1.svg"):
             self.assertIn("AVX2-restricted", path.read_text(encoding="utf-8"))
 
+    def test_readme_embeds_multi_size_leopard_comparisons(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        expected = (
+            "docs/performance/leopard2_atlas/plots/encode_speedup_vs_leopard1.svg",
+            "docs/performance/leopard2_atlas/plots/decode_one_speedup_vs_leopard1.svg",
+            "docs/performance/leopard2_atlas/plots/decode_full_speedup_vs_leopard1.svg",
+        )
+        for relative in expected:
+            self.assertIn(f"]({relative})", readme)
+            svg = (ROOT / relative).read_text(encoding="utf-8")
+            for size in ("64 B", "1 KiB", "4 KiB", "1 MiB"):
+                self.assertIn(f">{size}</text>", svg)
+        self.assertIn("not native-Leopard1 release claims", readme)
+
 
 class CurrentNativeTimingPlotTest(unittest.TestCase):
     def setUp(self):

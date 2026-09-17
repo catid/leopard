@@ -64,6 +64,18 @@ Representative plots:
 - [Native GFNI encode, snapshot a5d0229](docs/performance/leopard2_atlas/plots/final_native_gfni_encode_speedup.svg)
 - [Snapshot throughput, setup, and memory](docs/performance/leopard2_atlas/plots/final_native_gfni_metrics.svg)
 
+The following views make the Leopard1-versus-Leopard2 comparison visible in
+the README. Each graph has one panel for each measured shard size (64 B,
+1 KiB, 4 KiB, and 1 MiB); values above 1× mean Leopard2 is faster. These are
+the same AVX2-restricted atlas measurements linked above, so they show size
+trends but are not native-Leopard1 release claims.
+
+![Leopard2 versus Leopard1 encode speedup at four shard sizes](docs/performance/leopard2_atlas/plots/encode_speedup_vs_leopard1.svg)
+
+![Leopard2 versus Leopard1 one-loss decode speedup at four shard sizes](docs/performance/leopard2_atlas/plots/decode_one_speedup_vs_leopard1.svg)
+
+![Leopard2 versus Leopard1 full-loss decode speedup at four shard sizes](docs/performance/leopard2_atlas/plots/decode_full_speedup_vs_leopard1.svg)
+
 Current-release native comparisons, including potential remaining-loss cases,
 are now recorded in a separate **inconclusive** attempt. The fixed same-binary
 controls failed for `copy`, `small`, and explicit-AVX2, so its ratios are
