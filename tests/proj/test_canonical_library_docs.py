@@ -89,6 +89,40 @@ class CanonicalLibraryDocumentationTest(unittest.TestCase):
                         self.assertTrue(relative.startswith(
                             "experiments/leopard2/performance_atlas/"))
 
+    def test_release_readme_retains_paper_references_and_credits(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        flat = " ".join(readme.split())
+        self.assertIn("## References", flat)
+        self.assertIn("Novel Polynomial Basis with Fast Fourier Transform", flat)
+        self.assertIn("On arithmetical algorithms over finite fields", flat)
+        self.assertIn("An Efficient (n, k) Information", flat)
+        self.assertIn("Screaming fast Galois Field arithmetic", flat)
+        self.assertIn("Two Fast Erasure Decoding Algorithms for Reed-Solomon", flat)
+        self.assertIn("https://i4ai.org/hanyunghsiang/IT2026.pdf", flat)
+        self.assertIn("https://github.com/fastecc/xdrs", flat)
+        self.assertIn("docs/NovelPolynomialBasisFFT2016.pdf", flat)
+        self.assertIn("docs/plank-fast13.pdf", flat)
+        self.assertIn("## Credits", flat)
+        for credit in (
+                "Sian-Jhen Lin <sjhenglin@gmail.com>",
+                "Bulat Ziganshin <bulat.ziganshin@gmail.com>",
+                "Yutaka Sawada <tenfon@outlook.jp>",
+                "Christopher A. Taylor <mrcatid@gmail.com>"):
+            self.assertIn(credit, flat)
+
+    def test_release_readme_explains_decoder_profiles_and_limits(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        flat = " ".join(readme.split())
+        for phrase in (
+                "## Decoder profiles",
+                "low-rate profile for `R > K`",
+                "K + R <= 65536",
+                "shortening and puncturing",
+                "message-side transform",
+                "redundancy-side transform",
+                "GF(2¹⁶)"):
+            self.assertIn(phrase, flat)
+
     def test_current_commands_use_canonical_target_and_archive(self):
         stale = []
         for path in documentation_files():

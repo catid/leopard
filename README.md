@@ -39,22 +39,27 @@ legacy Visual Studio project and CMake workflow.
 
 ## Performance evidence
 
-The checked-in [performance atlas](docs/performance/leopard2_atlas/README_PERFORMANCE.md)
-contains reproducible throughput, setup, and memory comparisons with an
-**AVX2-restricted Leopard1**, not the native product comparator. These are
-single-core diagnostics on the recorded host, not universal guarantees.
+Read the results in this order:
 
-Separately, snapshot `a5d0229` at `K=1000,R=200,B=65536` measured a 41.9%
-GF16 encode speedup versus native Leopard1 (95% CI 32.5–52.0%), with zero
-reserved SMT activity. This predates later codec changes, including the
-Walsh-locator optimization; it is not final-release evidence. The record is
-[`final_native_gfni_summary.json`](docs/performance/final_native_gfni_summary.json).
-Separately qualified AUTO routes report 53.7% and 48.4% gains at two GF16
-boundary workloads. The R199/32-KiB extension remains disabled because its
-cross-process stability control was inconclusive. A later resource-captured
-successor measured roughly 1.52× versus the disabled route and 1.42× versus
-native Leopard1, but its fixed ±2% controls still failed; see the
-[diagnostic limitation report](docs/performance/r19932_successor_v5.md).
+- **Shipped in `master`:** On the calibrated AMD family 1Ah/model 08h host,
+  AUTO includes [qualified GF16/GFNI routes](docs/leopard2_gfni_codec.md) for
+  `K=1000,R=200` at 32 or 64 KiB and `K=1000,R=199` at 64 KiB. The two new
+  boundary routes measured 1.537× and 1.484× versus their previous AUTO
+  routes (53.7% and 48.4%); `R=199` at 32 KiB is still default-off.
+- **Measured context:** the checked-in [performance atlas](docs/performance/leopard2_atlas/README_PERFORMANCE.md)
+  compares single-core, AVX2-restricted Leopard2 with AVX2-restricted
+  Leopard1. It shows size trends, not native-Leopard1 release guarantees.
+- **Historical GF(2¹⁶) snapshot:** snapshot `a5d0229` at `K=1000,R=200,B=65536`
+  measured 1.419× encode versus native Leopard1 (95% CI 1.325–1.520). It
+  predates later codec and Walsh-locator changes, so it is **not final-release
+  evidence**: [plot](docs/performance/leopard2_atlas/plots/final_native_gfni_encode_speedup.svg)
+  · [record](docs/performance/final_native_gfni_summary.json).
+
+Only the shipped routes above affect defaults. The [current-native timing
+attempt](docs/performance/native_release_encode_timing_v1.md) and the
+[R199/32-KiB limitation](docs/performance/r19932_successor_v5.md) are retained
+research records: both were inconclusive, changed no selector, and are not
+product performance claims.
 
 Representative plots:
 
@@ -76,16 +81,6 @@ trends but are not native-Leopard1 release claims.
 
 ![Leopard2 versus Leopard1 full-loss decode speedup at four shard sizes](docs/performance/leopard2_atlas/plots/decode_full_speedup_vs_leopard1.svg)
 
-Current-release native comparisons, including potential remaining-loss cases,
-are now recorded in a separate **inconclusive** attempt. The fixed same-binary
-controls failed for `copy`, `small`, and explicit-AVX2, so its ratios are
-descriptive observations, not qualified wins/losses or promotion evidence:
-[method and results](docs/performance/native_release_encode_timing_v1.md),
-[observed ratio plot](docs/performance/native_release_encode_timing_v1.svg).
-The explicit-AVX2 bar is a nominal remaining-loss direction only; no selector
-was changed. Regenerate the two snapshot plots with
-`python3 tools/leopard2_native_snapshot_plots.py`; the measured JSON is unchanged.
-
 The dense GF16 decode-plan locator has a separately qualified AVX2 setup path:
 the same-process screen measured 3.9×–18.6× lower setup time across six
 active-parent sizes. This is setup-only evidence, not an end-to-end throughput
@@ -94,6 +89,22 @@ claim; see the [method](docs/performance/gf16_walsh_locator_avx2_preregistration
 [machine-readable record](docs/performance/gf16_walsh_locator_avx2_v2.json).
 Benchmark hardware, workloads, gates, and reproduction commands are recorded
 with each atlas and experiment report.
+
+## Decoder profiles
+
+Leopard1's public API accepted only the high-rate shape `R <= K`. Leopard2
+keeps that legacy-high profile (and its compatible parity where tested) and
+adds a low-rate profile for `R > K`. AUTO selects high-rate when `R <= K` and
+low-rate otherwise. Both profiles accept positive, non-power-of-two `K` and
+`R` through shortening and puncturing; the maximum transmitted code length is
+unchanged at `K + R <= 65536`.
+
+The decoder algorithms follow the low/high LCH-FFT constructions in Chen et al.
+(see [References](#references)). AUTO uses the message-side transform for the
+low-rate profile and the redundancy-side transform for high-rate. Field AUTO
+uses GF8 for parents through 256 coordinates and GF(2¹⁶) for larger parents,
+up to 65,536 coordinates. These are parameter-range and decoder-path
+extensions, not a larger field or shard-count limit.
 
 ## Portable builds and backend policy
 
@@ -153,3 +164,42 @@ examples, benchmark tooling, portability support, license, documentation, and
 the lightweight atlas runner. Research bundles, generated builds, and session
 metadata remain in Git history but are excluded from archives; see
 [`docs/release_distribution.md`](docs/release_distribution.md).
+
+## References
+
+The algorithms and finite-field implementation draw on these papers:
+
+1. S.-J. Lin, T. Y. Al-Naffouri, Y. S. Han, and W.-H. Chung, “Novel
+   Polynomial Basis with Fast Fourier Transform and Its Application to
+   Reed-Solomon Erasure Codes,” *IEEE Transactions on Information Theory*,
+   62(11), 6284–6299 (2016). [Paper PDF](docs/NovelPolynomialBasisFFT2016.pdf)
+   · [arXiv:1404.3458](https://arxiv.org/abs/1404.3458)
+2. D. G. Cantor, “On arithmetical algorithms over finite fields,” *Journal of
+   Combinatorial Theory, Series A*, 50(2), 285–300 (1989).
+3. Sian-Jheng Lin and Wei-Ho Chung, “An Efficient (n, k) Information
+   Dispersal Algorithm for High Code Rate System over Fermat Fields,” *IEEE
+   Communications Letters*, 16(12), 2036–2039 (2012).
+4. J. S. Plank, K. M. Greenan, and E. L. Miller, “Screaming fast Galois Field
+   arithmetic using Intel SIMD instructions,” in *FAST 2013*. [Paper PDF](docs/plank-fast13.pdf)
+5. Chao Chen et al., “Two Fast Erasure Decoding Algorithms for Reed-Solomon
+   Codes Based on LCH-FFT,” *IT2026*. [Paper PDF](https://i4ai.org/hanyunghsiang/IT2026.pdf)
+
+The [extended literature and source bibliography](docs/leopard2_math_and_sources.md)
+records additional related work and comparison implementations. The related
+[XDRS implementation](https://github.com/fastecc/xdrs) is a reference project,
+not a paper; its coordinate and wire conventions differ from Leopard2. A more
+detailed algorithm comparison is in
+[`docs/leopard2_it2026_algorithm_audit.md`](docs/leopard2_it2026_algorithm_audit.md).
+
+## Credits
+
+Inspired by discussion with:
+
+- Sian-Jhen Lin <sjhenglin@gmail.com>: author of references 1 and 3, and the
+  basis for Leopard
+- Bulat Ziganshin <bulat.ziganshin@gmail.com>: author of [FastECC](https://github.com/Bulat-Ziganshin/FastECC)
+- Yutaka Sawada <tenfon@outlook.jp>: author of [MultiPar](https://github.com/YutakaSawada/MultiPar)
+
+Software by Christopher A. Taylor <mrcatid@gmail.com>.
+
+Please reach out if you need support or would like to collaborate on a project.

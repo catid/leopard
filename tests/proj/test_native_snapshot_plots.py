@@ -81,9 +81,13 @@ class NativeSnapshotPlotsTest(unittest.TestCase):
 
     def test_native_and_restricted_claims_are_distinct(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("AVX2-restricted Leopard1", readme)
-        self.assertIn("not final-release evidence", readme)
-        self.assertIn("potential remaining-loss cases", readme)
+        flat = " ".join(readme.split())
+        self.assertIn("AVX2-restricted Leopard1", flat)
+        self.assertIn("not final-release evidence", flat)
+        self.assertIn("Shipped in `master`", flat)
+        self.assertIn("retained research records", flat)
+        self.assertNotIn("1.52×", flat)
+        self.assertNotIn("cross-process stability control was inconclusive", flat)
         atlas = ROOT / "docs/performance/leopard2_atlas"
         metadata = json.loads((atlas / "run_metadata.json").read_text(encoding="utf-8"))
         self.assertEqual("ON", metadata["build_closures"]["leopard1"]["cache_contract"]["LEO_MAIN_PURE_AVX2"])
