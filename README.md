@@ -65,7 +65,13 @@ Representative plots:
 - [Snapshot throughput, setup, and memory](docs/performance/leopard2_atlas/plots/final_native_gfni_metrics.svg)
 
 Current-release native comparisons, including representative remaining losses,
-are still pending. Regenerate the two snapshot plots with
+are now recorded in a separate **inconclusive** attempt. The fixed same-binary
+controls failed for `copy`, `small`, and explicit-AVX2, so its ratios are
+descriptive observations, not qualified wins/losses or promotion evidence:
+[method and results](docs/performance/native_release_encode_timing_v1.md),
+[observed ratio plot](docs/performance/native_release_encode_timing_v1.svg).
+The explicit-AVX2 bar is a nominal remaining-loss direction only; no selector
+was changed. Regenerate the two snapshot plots with
 `python3 tools/leopard2_native_snapshot_plots.py`; the measured JSON is unchanged.
 
 The dense GF16 decode-plan locator has a separately qualified AVX2 setup path:

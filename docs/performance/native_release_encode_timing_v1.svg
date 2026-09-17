@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="430" viewBox="0 0 900 430" role="img" aria-labelledby="title desc">
+  <title id="title">Observed native/current encode ratios, inconclusive controls</title>
+  <desc id="desc">Eight fixed release workloads. Ratios above one nominally favor Leopard2, below one Leopard1, but same-binary controls failed and no performance claim is made.</desc>
+  <rect width="900" height="430" fill="white"/>
+  <text x="450" y="25" text-anchor="middle" font-family="sans-serif" font-size="18" font-weight="bold">Current release vs native Leopard1 (inconclusive controls)</text>
+  <text x="450" y="47" text-anchor="middle" font-family="sans-serif" font-size="12">Observed native/current ratio · no qualified win/loss claim</text>
+  <line x1="95" y1="350" x2="865" y2="350" stroke="#333"/>
+  <line x1="95" y1="86" x2="95" y2="350" stroke="#333"/>
+  <line x1="95" y1="258" x2="865" y2="258" stroke="#ddd"/>
+  <line x1="95" y1="166" x2="865" y2="166" stroke="#ddd"/>
+  <line x1="95" y1="267" x2="865" y2="267" stroke="#c33" stroke-dasharray="5,4"/>
+  <text x="84" y="354" text-anchor="end" font-family="sans-serif" font-size="11">0.8</text>
+  <text x="84" y="262" text-anchor="end" font-family="sans-serif" font-size="11">1.0</text>
+  <text x="84" y="170" text-anchor="end" font-family="sans-serif" font-size="11">1.2</text>
+  <text x="84" y="88" text-anchor="end" font-family="sans-serif" font-size="11">1.4</text>
+  <text x="855" y="263" text-anchor="end" font-family="sans-serif" font-size="10" fill="#a22">1/1.02 gate</text>
+  <line x1="95" y1="258" x2="865" y2="258" stroke="#222" stroke-width="2"/>
+  <g font-family="sans-serif" font-size="10" text-anchor="middle">
+    <rect x="120" y="255.4" width="62" height="2.6" fill="#777"/><text x="151" y="372">copy</text><text x="151" y="247">1.006</text>
+    <rect x="215" y="53" width="62" height="205" fill="#3973ac"/><text x="246" y="372">small</text><text x="246" y="46">1.445</text>
+    <rect x="310" y="191" width="62" height="67" fill="#3973ac"/><text x="341" y="372">gf8-high</text><text x="341" y="184">1.146</text>
+    <rect x="405" y="218" width="62" height="40" fill="#3973ac"/><text x="436" y="372">gf8-balanced</text><text x="436" y="211">1.087</text>
+    <rect x="500" y="236" width="62" height="22" fill="#3973ac"/><text x="531" y="372">gf16-inflation</text><text x="531" y="229">1.047</text>
+    <rect x="595" y="65" width="62" height="193" fill="#3973ac"/><text x="626" y="372">gf16-gfni</text><text x="626" y="58">1.419</text>
+    <rect x="690" y="258" width="62" height="9" fill="#b85c5c"/><text x="721" y="372">explicit-avx2</text><text x="721" y="281">0.981</text>
+    <rect x="785" y="250" width="62" height="8" fill="#777"/><text x="816" y="372">gf16-large</text><text x="816" y="243">1.018</text>
+  </g>
+  <text x="450" y="410" text-anchor="middle" font-family="sans-serif" font-size="11">Values are normalized medians from the fixed ABBA attempt; controls failed for copy, small and explicit-AVX2.</text>
+</svg>
