@@ -5,6 +5,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import re
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -82,12 +83,73 @@ class NativeSnapshotPlotsTest(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("AVX2-restricted Leopard1", readme)
         self.assertIn("not final-release evidence", readme)
-        self.assertIn("representative remaining losses", readme)
+        self.assertIn("potential remaining-loss cases", readme)
         atlas = ROOT / "docs/performance/leopard2_atlas"
         metadata = json.loads((atlas / "run_metadata.json").read_text(encoding="utf-8"))
         self.assertEqual("ON", metadata["build_closures"]["leopard1"]["cache_contract"]["LEO_MAIN_PURE_AVX2"])
         for path in (atlas / "plots").glob("*speedup_vs_leopard1.svg"):
             self.assertIn("AVX2-restricted", path.read_text(encoding="utf-8"))
+
+
+class CurrentNativeTimingPlotTest(unittest.TestCase):
+    def setUp(self):
+        report = ROOT / "docs/performance/native_release_encode_timing_v1.md"
+        svg = report.with_suffix(".svg")
+        self.report = report.read_text(encoding="utf-8")
+        self.svg = svg.read_text(encoding="utf-8")
+        self.root = ET.fromstring(self.svg)
+        self.elements = {e.attrib["id"]: e for e in self.root.iter() if "id" in e.attrib}
+        self.ratios = dict((name, float(value)) for name, value in re.findall(
+            r"^\| ([a-z0-9-]+) \| ([0-9.]+) \|", self.report, re.M))
+
+    def check_geometry(self):
+        expected_names = {"copy", "small", "gf8-high", "gf8-balanced", "gf16-inflation",
+                          "gf16-gfni-region", "gf16-explicit-avx2", "gf16-large"}
+        self.assertEqual(set(self.ratios), expected_names)
+        self.assertEqual({name[4:] for name in self.elements if name.startswith("bar-")}, expected_names)
+        baseline = self.elements["native-current-baseline"].attrib
+        self.assertEqual(float(baseline["y1"]), 276)
+        self.assertEqual(float(baseline["y2"]), 276)
+        for tick in (0.8, 1.0, 1.2, 1.4, 1.5):
+            line = self.elements[f"tick-{tick:.1f}"].attrib
+            self.assertAlmostEqual(float(line["y1"]), 276 - (tick-1)*370)
+            self.assertEqual(line["y1"], line["y2"])
+        for name, ratio in self.ratios.items():
+            bar = self.elements[f"bar-{name}"].attrib
+            top, height = float(bar["y"]), float(bar["height"])
+            expected_y = 276 - (ratio-1)*370
+            self.assertAlmostEqual(top, min(276, expected_y), delta=0.001)
+            self.assertAlmostEqual(height, abs(expected_y-276), delta=0.001)
+            self.assertGreaterEqual(top, 91)
+            self.assertLessEqual(top+height, 350)
+            self.assertEqual(bar["fill"], "#777")  # Inconclusive, not win/loss colors.
+            value = self.elements[f"value-{name}"]
+            self.assertEqual(value.text, f"{ratio:.3f}")
+            # Keep values clear of title/subtitle and workload labels.
+            self.assertGreaterEqual(float(value.attrib["y"]), 80)
+            self.assertLessEqual(float(value.attrib["y"]), 350)
+
+    def test_geometry_and_labels_match_all_eight_report_rows(self):
+        self.check_geometry()
+
+    def test_old_axis_and_title_overlap_regressions_are_detected(self):
+        for identifier, field, value in (("tick-1.4", "y1", "86"),
+                                          ("bar-small", "height", "205"),
+                                          ("value-small", "y", "46")):
+            element = self.elements[identifier]
+            previous = element.attrib[field]
+            element.set(field, value)
+            with self.assertRaises(AssertionError):
+                self.check_geometry()
+            element.set(field, previous)
+
+    def test_provenance_and_inconclusive_boundary_remain_explicit(self):
+        self.assertIn("preregistration/attempt commit", self.report)
+        self.assertIn("`15756b1`", self.report)
+        self.assertIn("`e35b1f0c3a5ef9f241ad3b174b0fbfdb61bbccab`", self.report)
+        self.assertIn("inconclusive_controls", self.report)
+        self.assertIn("no qualified win/loss claim", self.svg)
+        self.assertNotIn("1/1.02 gate", self.svg)  # This gate applies to controls, not these ratios.
 
 
 if __name__ == "__main__":

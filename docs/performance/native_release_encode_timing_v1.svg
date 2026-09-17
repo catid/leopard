@@ -5,26 +5,27 @@
   <text x="450" y="25" text-anchor="middle" font-family="sans-serif" font-size="18" font-weight="bold">Current release vs native Leopard1 (inconclusive controls)</text>
   <text x="450" y="47" text-anchor="middle" font-family="sans-serif" font-size="12">Observed native/current ratio · no qualified win/loss claim</text>
   <line x1="95" y1="350" x2="865" y2="350" stroke="#333"/>
-  <line x1="95" y1="28" x2="95" y2="350" stroke="#333"/>
-  <line x1="95" y1="258" x2="865" y2="258" stroke="#ddd"/>
-  <line x1="95" y1="74" x2="865" y2="74" stroke="#ddd"/>
-  <line x1="95" y1="166" x2="865" y2="166" stroke="#ddd"/>
-  <line x1="95" y1="268" x2="865" y2="268" stroke="#c33" stroke-dasharray="5,4"/>
+  <line x1="95" y1="91" x2="95" y2="350" stroke="#333"/>
+  <line id="tick-0.8" x1="95" y1="350" x2="865" y2="350" stroke="#ddd"/>
+  <line id="tick-1.0" x1="95" y1="276" x2="865" y2="276" stroke="#ddd"/>
+  <line id="tick-1.2" x1="95" y1="202" x2="865" y2="202" stroke="#ddd"/>
+  <line id="tick-1.4" x1="95" y1="128" x2="865" y2="128" stroke="#ddd"/>
+  <line id="tick-1.5" x1="95" y1="91" x2="865" y2="91" stroke="#ddd"/>
   <text x="84" y="354" text-anchor="end" font-family="sans-serif" font-size="11">0.8</text>
-  <text x="84" y="262" text-anchor="end" font-family="sans-serif" font-size="11">1.0</text>
-  <text x="84" y="170" text-anchor="end" font-family="sans-serif" font-size="11">1.2</text>
-  <text x="84" y="78" text-anchor="end" font-family="sans-serif" font-size="11">1.4</text>
-  <text x="855" y="264" text-anchor="end" font-family="sans-serif" font-size="10" fill="#a22">1/1.02 gate</text>
-  <line x1="95" y1="258" x2="865" y2="258" stroke="#222" stroke-width="2"/>
+  <text x="84" y="280" text-anchor="end" font-family="sans-serif" font-size="11">1.0</text>
+  <text x="84" y="206" text-anchor="end" font-family="sans-serif" font-size="11">1.2</text>
+  <text x="84" y="132" text-anchor="end" font-family="sans-serif" font-size="11">1.4</text>
+  <text x="84" y="95" text-anchor="end" font-family="sans-serif" font-size="11">1.5</text>
+  <line id="native-current-baseline" x1="95" y1="276" x2="865" y2="276" stroke="#222" stroke-width="2"/>
   <g font-family="sans-serif" font-size="10" text-anchor="middle">
-    <rect x="120" y="255.4" width="62" height="2.6" fill="#777"/><text x="151" y="372">copy</text><text x="151" y="247">1.006</text>
-    <rect x="215" y="53" width="62" height="205" fill="#3973ac"/><text x="246" y="372">small</text><text x="246" y="46">1.445</text>
-    <rect x="310" y="191" width="62" height="67" fill="#3973ac"/><text x="341" y="372">gf8-high</text><text x="341" y="184">1.146</text>
-    <rect x="405" y="218" width="62" height="40" fill="#3973ac"/><text x="436" y="372">gf8-balanced</text><text x="436" y="211">1.087</text>
-    <rect x="500" y="236" width="62" height="22" fill="#3973ac"/><text x="531" y="372">gf16-inflation</text><text x="531" y="229">1.047</text>
-    <rect x="595" y="65" width="62" height="193" fill="#3973ac"/><text x="626" y="372">gf16-gfni</text><text x="626" y="58">1.419</text>
-    <rect x="690" y="258" width="62" height="9" fill="#b85c5c"/><text x="721" y="372">explicit-avx2</text><text x="721" y="281">0.981</text>
-    <rect x="785" y="250" width="62" height="8" fill="#777"/><text x="816" y="372">gf16-large</text><text x="816" y="243">1.018</text>
+    <rect id="bar-copy" x="120" y="273.939" width="62" height="2.061" fill="#777"/><text x="151" y="372">copy</text><text id="value-copy" x="151" y="265.939">1.006</text>
+    <rect id="bar-small" x="215" y="111.451" width="62" height="164.549" fill="#777"/><text x="246" y="372">small</text><text id="value-small" x="246" y="103.451">1.445</text>
+    <rect id="bar-gf8-high" x="310" y="222.013" width="62" height="53.987" fill="#777"/><text x="341" y="372">gf8-high</text><text id="value-gf8-high" x="341" y="214.013">1.146</text>
+    <rect id="bar-gf8-balanced" x="405" y="243.824" width="62" height="32.176" fill="#777"/><text x="436" y="372">gf8-balanced</text><text id="value-gf8-balanced" x="436" y="235.824">1.087</text>
+    <rect id="bar-gf16-inflation" x="500" y="258.712" width="62" height="17.288" fill="#777"/><text x="531" y="372">gf16-inflation</text><text id="value-gf16-inflation" x="531" y="250.712">1.047</text>
+    <rect id="bar-gf16-gfni-region" x="595" y="120.938" width="62" height="155.062" fill="#777"/><text x="626" y="372">gf16-gfni</text><text id="value-gf16-gfni-region" x="626" y="112.938">1.419</text>
+    <rect id="bar-gf16-explicit-avx2" x="690" y="276" width="62" height="6.862" fill="#777"/><text x="721" y="372">explicit-avx2</text><text id="value-gf16-explicit-avx2" x="721" y="295">0.981</text>
+    <rect id="bar-gf16-large" x="785" y="269.387" width="62" height="6.613" fill="#777"/><text x="816" y="372">gf16-large</text><text id="value-gf16-large" x="816" y="261.387">1.018</text>
   </g>
   <text x="450" y="410" text-anchor="middle" font-family="sans-serif" font-size="11">Values are normalized medians from the fixed ABBA attempt; controls failed for copy, small and explicit-AVX2.</text>
 </svg>

@@ -64,7 +64,7 @@ Representative plots:
 - [Native GFNI encode, snapshot a5d0229](docs/performance/leopard2_atlas/plots/final_native_gfni_encode_speedup.svg)
 - [Snapshot throughput, setup, and memory](docs/performance/leopard2_atlas/plots/final_native_gfni_metrics.svg)
 
-Current-release native comparisons, including representative remaining losses,
+Current-release native comparisons, including potential remaining-loss cases,
 are now recorded in a separate **inconclusive** attempt. The fixed same-binary
 controls failed for `copy`, `small`, and explicit-AVX2, so its ratios are
 descriptive observations, not qualified wins/losses or promotion evidence:

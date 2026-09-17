@@ -3,7 +3,7 @@
 This is a retained measurement from the preregistration/attempt commit
 `15756b1`; the candidate Leopard2 codec is `e35b1f0c3a5ef9f241ad3b174b0fbfdb61bbccab`
 (`e35b1f0`), with original native
-Leopard1 `6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`). It uses the eight fixed
+Leopard1 `6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`. It uses the eight fixed
 workloads in the repository-only `experiments/leopard2/native_release/timing_plan_v1.json`
 and the original native Leopard1 build. The run was on an AMD Ryzen
 Threadripper 9980X (family 26/model 8), one worker (CPU 52), its sibling 116
@@ -41,7 +41,7 @@ native Leopard1; that directional reading is not a release claim here.
 The timed boundary is ordinary public full encode with setup, allocation,
 input generation, poisoning, parity copies and hashing excluded. API result
 checks, loop and timer-adapter overhead are included. Each process used four
-warmups and nine groups whose minimum duration was 20 ms. This is not setup,
+warmups and nine measured groups, each at least 20 ms. This is not setup,
 one-shot latency, decoding, total process memory, or an operation-specific ISA
 attestation. No production selector was changed and no route was promoted.
 
