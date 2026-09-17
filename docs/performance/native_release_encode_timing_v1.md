@@ -1,7 +1,8 @@
 # Current-release native encode timing (v1)
 
-This is a retained measurement of the release commit `15756b1`
-(`e35b1f0c3a5ef9f241ad3b174b0fbfdb61bbccab` Leopard2, original native
+This is a retained measurement from the preregistration/attempt commit
+`15756b1`; the candidate Leopard2 codec is `e35b1f0c3a5ef9f241ad3b174b0fbfdb61bbccab`
+(`e35b1f0`), with original native
 Leopard1 `6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`). It uses the eight fixed
 workloads in the repository-only `experiments/leopard2/native_release/timing_plan_v1.json`
 and the original native Leopard1 build. The run was on an AMD Ryzen
